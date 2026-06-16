@@ -1,0 +1,16 @@
+[package]
+name = "fulgur-chart"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+resvg = { workspace = true }
+usvg = { workspace = true }
+ttf-parser = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
