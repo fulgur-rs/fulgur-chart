@@ -65,6 +65,7 @@ insta = { version = "1", features = ["yaml"] }
 name = "fulgur-chart"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
@@ -96,6 +97,7 @@ pub fn version() -> &'static str {
 name = "fulgur-chart-cli"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
