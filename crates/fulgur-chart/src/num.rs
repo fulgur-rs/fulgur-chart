@@ -29,11 +29,11 @@ mod tests {
     #[test]
     fn formats_with_two_decimals() {
         assert_eq!(fmt_num(1.0), "1");
-        assert_eq!(fmt_num(1.005), "1");      // f64表現上 1.00499… のため "1" に丸まる
+        assert_eq!(fmt_num(1.005), "1"); // f64表現上 1.00499… のため "1" に丸まる
         assert_eq!(fmt_num(1.5), "1.5");
         assert_eq!(fmt_num(1.25), "1.25");
         assert_eq!(fmt_num(1.234), "1.23");
-        assert_eq!(fmt_num(-0.0), "0");        // 負ゼロを正規化
+        assert_eq!(fmt_num(-0.0), "0"); // 負ゼロを正規化
         assert_eq!(fmt_num(100.0), "100");
     }
 

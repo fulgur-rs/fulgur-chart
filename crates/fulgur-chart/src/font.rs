@@ -1,8 +1,7 @@
 //! 同梱フォントの提供。計測と描画で同一バイト列を使い、三者一致を保証する。
 
 /// バイナリに埋め込んだ既定フォント（Noto Sans JP Regular, static OTF/CFF）。
-pub static DEFAULT_FONT: &[u8] =
-    include_bytes!("../assets/fonts/NotoSansJP-Regular.otf");
+pub static DEFAULT_FONT: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-Regular.otf");
 
 #[cfg(test)]
 mod tests {
