@@ -29,7 +29,10 @@ fn mixed_has_bars_line_and_markers() {
         "折れ線(polyline/path)が無い"
     );
     // 折れ線のマーカー(circle)を各点に。
-    assert!(svg.matches("<circle").count() >= 3, "マーカー(circle)が足りない");
+    assert!(
+        svg.matches("<circle").count() >= 3,
+        "マーカー(circle)が足りない"
+    );
     // カテゴリラベル。
     assert!(
         svg.contains("1月") && svg.contains("3月"),
