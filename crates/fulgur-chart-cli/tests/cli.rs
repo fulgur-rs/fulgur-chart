@@ -144,3 +144,140 @@ fn tempfile_dir() -> std::path::PathBuf {
     std::fs::create_dir_all(&base).unwrap();
     base
 }
+
+// バッチ用 tempdir: テスト名ごとに固定ディレクトリを使い、開始時に消してクリーンスレートにする。
+fn batch_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("fulgur_batch_{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+const MINIMAL_BAR_A: &str =
+    r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#;
+const MINIMAL_BAR_B: &str =
+    r#"{"type":"bar","data":{"labels":["x","y","z"],"datasets":[{"data":[3,4,5]}]}}"#;
+
+#[test]
+fn batch_renders_multiple_svgs() {
+    let dir = batch_dir("batch_renders_multiple_svgs");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+    let a = in_dir.join("a.json");
+    let b = in_dir.join("b.json");
+    std::fs::write(&a, MINIMAL_BAR_A).unwrap();
+    std::fs::write(&b, MINIMAL_BAR_B).unwrap();
+
+    bin()
+        .args([
+            "render",
+            a.to_str().unwrap(),
+            b.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let sa = std::fs::read_to_string(out_dir.join("a.svg")).unwrap();
+    let sb = std::fs::read_to_string(out_dir.join("b.svg")).unwrap();
+    assert!(sa.starts_with("<svg"));
+    assert!(sb.starts_with("<svg"));
+}
+
+#[test]
+fn batch_renders_png() {
+    let dir = batch_dir("batch_renders_png");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+    let a = in_dir.join("a.json");
+    let b = in_dir.join("b.json");
+    std::fs::write(&a, MINIMAL_BAR_A).unwrap();
+    std::fs::write(&b, MINIMAL_BAR_B).unwrap();
+
+    bin()
+        .args([
+            "render",
+            a.to_str().unwrap(),
+            b.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--format",
+            "png",
+        ])
+        .assert()
+        .success();
+
+    let bytes = std::fs::read(out_dir.join("a.png")).unwrap();
+    assert_eq!(&bytes[0..4], &[0x89, b'P', b'N', b'G']);
+}
+
+#[test]
+fn batch_matches_single() {
+    let dir = batch_dir("batch_matches_single");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+    let a = in_dir.join("a.json");
+    std::fs::write(&a, MINIMAL_BAR_A).unwrap();
+
+    // バッチ出力。
+    bin()
+        .args([
+            "render",
+            a.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let batch_bytes = std::fs::read(out_dir.join("a.svg")).unwrap();
+
+    // 単一モード(stdout)出力。
+    let single = bin()
+        .args(["render", a.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .success();
+    let single_bytes = single.get_output().stdout.clone();
+
+    // バッチと単一はバイト一致。
+    assert_eq!(batch_bytes, single_bytes);
+}
+
+#[test]
+fn batch_requires_out_dir_for_multiple() {
+    let dir = batch_dir("batch_requires_out_dir_for_multiple");
+    let a = dir.join("a.json");
+    let b = dir.join("b.json");
+    std::fs::write(&a, MINIMAL_BAR_A).unwrap();
+    std::fs::write(&b, MINIMAL_BAR_B).unwrap();
+
+    bin()
+        .args(["render", a.to_str().unwrap(), b.to_str().unwrap()])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn out_dir_conflicts_with_output() {
+    let dir = batch_dir("out_dir_conflicts_with_output");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+    let a = in_dir.join("a.json");
+    std::fs::write(&a, MINIMAL_BAR_A).unwrap();
+
+    bin()
+        .args([
+            "render",
+            a.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "-o",
+            "x.svg",
+        ])
+        .assert()
+        .failure();
+}

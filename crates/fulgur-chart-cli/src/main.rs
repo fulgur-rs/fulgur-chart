@@ -18,14 +18,21 @@ enum Command {
 
 #[derive(Parser)]
 struct RenderArgs {
-    /// spec ファイルパス。`-` で標準入力から読み込む。
-    spec: String,
+    /// spec ファイルパス(1 つ以上)。`-` で標準入力から読み込む。
+    /// 複数指定時は --out-dir が必須(`-` は不可)。
+    #[arg(num_args = 1..)]
+    spec: Vec<String>,
 
-    /// 出力先パス。`-` で標準出力へ書き出す。
+    /// 出力先パス。`-` で標準出力へ書き出す。単一 spec 時に必須。
     #[arg(short, long)]
-    output: String,
+    output: Option<String>,
+
+    /// 複数 spec を一括出力するディレクトリ。各 spec は `<out-dir>/<stem>.<ext>` に書き出す。
+    #[arg(long)]
+    out_dir: Option<String>,
 
     /// 出力フォーマット。省略時は output 拡張子で判定する(.png→png, それ以外/stdout→svg)。
+    /// --out-dir 指定時は省略すると svg。
     #[arg(long, value_enum)]
     format: Option<Format>,
 
@@ -74,45 +81,9 @@ fn run_render(args: RenderArgs) {
         std::process::exit(1);
     }
 
-    // 2. spec 読み込み。`-` は stdin、それ以外はファイル。読めなければ exit 1。
-    let json = match read_spec(&args.spec) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("入力読み込みエラー: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    // 3. パース(非strict)。構造/JSON/type エラーは exit 1。
-    let mut spec_ir = match fulgur_chart::frontend::chartjs::parse(&json, false) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("入力エラー: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    // 4. strict 指定時は再パースして未知キーを検出。違反は exit 2。
-    if args.strict {
-        if let Err(e) = fulgur_chart::frontend::chartjs::parse(&json, true) {
-            eprintln!("strict 違反: {e}");
-            std::process::exit(2);
-        }
-    }
-
-    // 5. width/height 上書き。
-    if let Some(w) = args.width {
-        spec_ir.width = w;
-    }
-    if let Some(h) = args.height {
-        spec_ir.height = h;
-    }
-
-    // 6. format 決定: --format 明示 > output 拡張子(.png→png) > 既定 svg。
-    let format = args.format.unwrap_or_else(|| detect_format(&args.output));
-
-    // 7. フォント読込: --font 指定時はファイルを1度だけ読み、計測/SVG/PNG の三者で
+    // 2. フォント読込: --font 指定時はファイルを1度だけ読み、計測/SVG/PNG の三者で
     //    同一バイト列を使う。未指定なら同梱フォント(従来動作で byte 一致)。
+    //    バッチ時も全ファイルで同じバイト列を使い回す(再読込しない)。
     let font_bytes: Option<Vec<u8>> = match &args.font {
         Some(path) => match std::fs::read(path) {
             Ok(b) => Some(b),
@@ -124,41 +95,172 @@ fn run_render(args: RenderArgs) {
         None => None,
     };
 
-    // 8. 出力生成。SVG を生成し、PNG 指定時はラスタライズする。
-    let svg = match &font_bytes {
-        Some(bytes) => match fulgur_chart::render::render_chart_with_font(&spec_ir, bytes) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("レンダリングエラー: {e}");
-                std::process::exit(1);
-            }
-        },
-        None => fulgur_chart::render::render_chart(&spec_ir),
-    };
-    let bytes = match format {
-        Format::Svg => svg.into_bytes(),
-        Format::Png => {
-            let res = match &font_bytes {
-                Some(fb) => fulgur_chart::raster::svg_to_png_with_font(&svg, args.scale, fb),
-                None => fulgur_chart::raster::svg_to_png(&svg, args.scale),
-            };
-            match res {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("PNG 変換エラー: {e}");
-                    std::process::exit(3);
-                }
-            }
+    // 3. モード判定: --out-dir 指定の有無でバッチ/単一を分岐。
+    match &args.out_dir {
+        None => run_single(&args, &font_bytes),
+        Some(out_dir) => run_batch(&args, out_dir, &font_bytes),
+    }
+}
+
+/// 単一モード: spec を 1 つだけ受け取り、output(`-`=stdout)へ書き出す。
+/// 出力バイト列は従来動作と完全一致する。
+fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
+    // spec はちょうど 1 つでなければならない。複数は --out-dir が必要。
+    if args.spec.len() > 1 {
+        eprintln!("複数 spec には --out-dir が必要です");
+        std::process::exit(1);
+    }
+    let spec_path = &args.spec[0];
+
+    // output(`-o`)は必須。
+    let output = match &args.output {
+        Some(o) => o,
+        None => {
+            eprintln!("単一 spec には --output(-o)が必要です");
+            std::process::exit(1);
         }
     };
 
-    // 9. 書き出し。`-` は stdout、それ以外はファイル。IO 失敗は exit 3。
-    if let Err(e) = write_output(&args.output, &bytes) {
+    // spec 読み込み。`-` は stdin、それ以外はファイル。読めなければ exit 1。
+    let json = match read_spec(spec_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("入力読み込みエラー: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // format 決定: --format 明示 > output 拡張子(.png→png) > 既定 svg。
+    let format = args.format.clone().unwrap_or_else(|| detect_format(output));
+
+    // 出力生成。
+    let bytes = match render_one(&json, args, &format, font_bytes) {
+        Ok(b) => b,
+        Err((code, msg)) => {
+            eprintln!("{msg}");
+            std::process::exit(code);
+        }
+    };
+
+    // 書き出し。`-` は stdout、それ以外はファイル。IO 失敗は exit 3。
+    if let Err(e) = write_output(output, &bytes) {
         eprintln!("出力エラー: {e}");
         std::process::exit(3);
     }
+}
 
-    // 10. 正常終了(暗黙の exit 0)。
+/// バッチモード: 複数 spec を out_dir へ `<stem>.<ext>` で一括出力する。
+/// 入力順に処理し、最初のエラーで該当コード(input=1/strict=2/IO・png=3)で打ち切る。
+fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
+    // --out-dir と --output(-o)は併用不可。
+    if args.output.is_some() {
+        eprintln!("--out-dir と --output は併用できません");
+        std::process::exit(1);
+    }
+
+    // バッチでは output 拡張子が無いので、--format(既定 svg)から拡張子を決める。
+    let format = args.format.clone().unwrap_or(Format::Svg);
+    let ext = match format {
+        Format::Svg => "svg",
+        Format::Png => "png",
+    };
+
+    // 出力ディレクトリを作成。失敗は exit 3。
+    if let Err(e) = std::fs::create_dir_all(out_dir) {
+        eprintln!("出力ディレクトリ作成エラー: {out_dir}: {e}");
+        std::process::exit(3);
+    }
+
+    // 各 spec を入力順に処理(決定的)。fail-fast。
+    for spec_path in &args.spec {
+        // バッチでは stdin(`-`)は不可。
+        if spec_path == "-" {
+            eprintln!("バッチモードでは標準入力(`-`)は使えません");
+            std::process::exit(1);
+        }
+
+        // 実在ファイルから出力ファイル名のステムを得る。
+        let stem = match std::path::Path::new(spec_path).file_stem() {
+            Some(s) => s.to_string_lossy().into_owned(),
+            None => {
+                eprintln!("ファイル名を決定できません: {spec_path}");
+                std::process::exit(1);
+            }
+        };
+
+        // spec 読み込み(ファイルのみ)。読めなければ exit 1。
+        let json = match std::fs::read_to_string(spec_path) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("入力読み込みエラー: {spec_path}: {e}");
+                std::process::exit(1);
+            }
+        };
+
+        // 出力生成。
+        let bytes = match render_one(&json, args, &format, font_bytes) {
+            Ok(b) => b,
+            Err((code, msg)) => {
+                eprintln!("{spec_path}: {msg}");
+                std::process::exit(code);
+            }
+        };
+
+        // 書き出し: <out_dir>/<stem>.<ext>。IO 失敗は exit 3。
+        let out_path = std::path::Path::new(out_dir).join(format!("{stem}.{ext}"));
+        if let Err(e) = std::fs::write(&out_path, &bytes) {
+            eprintln!("出力エラー: {}: {e}", out_path.display());
+            std::process::exit(3);
+        }
+    }
+}
+
+/// 1 つの spec(JSON 文字列)と引数から出力バイト列を生成する。
+/// 単一/バッチ両モードで共有し、同一入力なら同一バイト列を返す(決定的)。
+/// 失敗時は `(exit_code, message)` を返す。input/render=1, strict=2, png=3。
+fn render_one(
+    json: &str,
+    args: &RenderArgs,
+    format: &Format,
+    font_bytes: &Option<Vec<u8>>,
+) -> Result<Vec<u8>, (i32, String)> {
+    // パース(非strict)。構造/JSON/type エラーは exit 1。
+    let mut spec_ir = fulgur_chart::frontend::chartjs::parse(json, false)
+        .map_err(|e| (1, format!("入力エラー: {e}")))?;
+
+    // strict 指定時は再パースして未知キーを検出。違反は exit 2。
+    // (検証用のゲートであり、レンダリングは非strict の ir から行う。)
+    if args.strict {
+        fulgur_chart::frontend::chartjs::parse(json, true)
+            .map_err(|e| (2, format!("strict 違反: {e}")))?;
+    }
+
+    // width/height 上書き。
+    if let Some(w) = args.width {
+        spec_ir.width = w;
+    }
+    if let Some(h) = args.height {
+        spec_ir.height = h;
+    }
+
+    // SVG 生成。
+    let svg = match font_bytes {
+        Some(bytes) => fulgur_chart::render::render_chart_with_font(&spec_ir, bytes)
+            .map_err(|e| (1, format!("レンダリングエラー: {e}")))?,
+        None => fulgur_chart::render::render_chart(&spec_ir),
+    };
+
+    // PNG 指定時はラスタライズ。
+    match format {
+        Format::Svg => Ok(svg.into_bytes()),
+        Format::Png => {
+            let res = match font_bytes {
+                Some(fb) => fulgur_chart::raster::svg_to_png_with_font(&svg, args.scale, fb),
+                None => fulgur_chart::raster::svg_to_png(&svg, args.scale),
+            };
+            res.map_err(|e| (3, format!("PNG 変換エラー: {e}")))
+        }
+    }
 }
 
 fn read_spec(path: &str) -> std::io::Result<String> {
