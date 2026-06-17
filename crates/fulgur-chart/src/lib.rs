@@ -3,6 +3,7 @@
 pub mod font;
 pub mod ir;
 pub mod num;
+pub mod palette;
 pub mod text;
 
 pub fn version() -> &'static str {
