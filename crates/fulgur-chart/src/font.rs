@@ -2,7 +2,7 @@
 
 /// バイナリに埋め込んだ既定フォント（Noto Sans JP Regular, static OTF/CFF）。
 pub static DEFAULT_FONT: &[u8] =
-    include_bytes!("../../../assets/fonts/NotoSansJP-Regular.otf");
+    include_bytes!("../assets/fonts/NotoSansJP-Regular.otf");
 
 #[cfg(test)]
 mod tests {
@@ -15,7 +15,7 @@ mod tests {
     }
 
     #[test]
-    fn default_font_covers_ascii_and_kana() {
+    fn default_font_covers_ascii_kana_and_kanji() {
         let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
         assert!(face.glyph_index('A').is_some());
         assert!(face.glyph_index('あ').is_some());

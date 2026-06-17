@@ -253,7 +253,7 @@ fulgur-chart/
   crates/
     fulgur-chart/            # コアlib: frontend/ir/layout/svg/raster
     fulgur-chart-cli/        # CLIバイナリ（薄いラッパ）
-  assets/fonts/NotoSansJP... # 同梱フォント
+    fulgur-chart/assets/fonts/NotoSansJP... # 同梱フォント（クレート内に格納）
   tests/                     # snapshot + golden
   examples/                  # サンプル spec & 期待出力
   README.md  CHANGELOG.md  LICENSE(MIT or Apache-2.0)
