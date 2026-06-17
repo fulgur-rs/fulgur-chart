@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "fulgur_chart",
+  "project_id": "73e39f7a-3c97-4fcc-a7fc-7e78c4da2c1b"
+}
