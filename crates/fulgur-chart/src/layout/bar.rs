@@ -21,6 +21,10 @@ pub fn build(spec: &ChartSpec) -> Scene {
 }
 
 fn build_vertical(spec: &ChartSpec) -> Scene {
+    use super::common::{INK, LABEL_FONT};
+    use crate::num::fmt_num;
+    use crate::scene::Anchor;
+
     let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
     let frame = super::common::compute(spec, &m);
 
@@ -53,6 +57,23 @@ fn build_vertical(spec: &ChartSpec) -> Scene {
                 h,
                 fill: ser.fill_at(i),
             });
+            if spec.data_labels && v.is_finite() {
+                let cx = bx + (bar_w * BAR_FILL_RATIO) / 2.0;
+                // 正(上向き)は棒上端の上、負は棒下端の下。
+                let label_y = if v >= base_v {
+                    y_top - 4.0
+                } else {
+                    y_top + h + LABEL_FONT
+                };
+                items.push(Prim::Text {
+                    x: cx,
+                    y: label_y,
+                    size: LABEL_FONT,
+                    anchor: Anchor::Middle,
+                    fill: INK,
+                    content: fmt_num(v),
+                });
+            }
         }
     }
 
