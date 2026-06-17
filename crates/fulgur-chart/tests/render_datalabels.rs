@@ -45,3 +45,15 @@ fn vertical_bar_without_datalabels_has_no_value_text() {
         "無効時は値ラベルを描かない"
     );
 }
+
+#[test]
+fn horizontal_bar_datalabels_render_values() {
+    let json = r#"{
+      "type":"bar",
+      "data":{"labels":["a","b"],"datasets":[{"data":[123,87]}]},
+      "options":{"indexAxis":"y","plugins":{"datalabels":{"display":true}}}
+    }"#;
+    let svg = render(json);
+    assert!(svg.contains(">123</text>"));
+    assert!(svg.contains(">87</text>"));
+}

@@ -214,6 +214,16 @@ fn build_horizontal(spec: &ChartSpec) -> Scene {
                 h: (bar_h * BAR_FILL_RATIO).max(0.0),
                 fill: ser.fill_at(i),
             });
+            if spec.data_labels && v.is_finite() {
+                let cy = by + (bar_h * BAR_FILL_RATIO) / 2.0 + LABEL_FONT * TEXT_BASELINE_RATIO;
+                // 正は棒右端の右(Start)、負は左端の左(End)に LABEL_GAP 分離す。
+                let (lx, anchor) = if v >= base_v {
+                    (vx + LABEL_GAP, Anchor::Start)
+                } else {
+                    (vx - LABEL_GAP, Anchor::End)
+                };
+                items.push(value_label(lx, cy, anchor, INK, v));
+            }
         }
     }
 
