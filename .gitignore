@@ -4,3 +4,6 @@
 .dolt/
 *.db
 .beads-credential-key
+
+# git worktrees
+/.worktrees/
