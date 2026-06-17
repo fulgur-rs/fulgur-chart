@@ -100,3 +100,61 @@ fn bar_datalabels_skip_missing_values() {
     );
     assert!(svg.contains(">123</text>"));
 }
+
+#[test]
+fn doughnut_datalabels_render_values() {
+    // doughnut は内径>0 でラベル半径分岐((inner+radius)/2)を通る。
+    let json = r#"{
+      "type":"doughnut",
+      "data":{"labels":["a","b","c"],"datasets":[{"data":[30,50,20]}]},
+      "options":{"plugins":{"datalabels":{"display":true}}}
+    }"#;
+    let svg = render(json);
+    assert!(svg.contains(">30</text>"));
+    assert!(svg.contains(">50</text>"));
+    assert!(svg.contains(">20</text>"));
+}
+
+#[test]
+fn pie_datalabels_skip_zero_and_negative() {
+    // 0 と負値のスライスは描画もラベルもスキップされる(正値のみラベル)。
+    let json = r#"{
+      "type":"pie",
+      "data":{"labels":["a","b","c","d"],"datasets":[{"data":[123,0,-5,87]}]},
+      "options":{"plugins":{"datalabels":{"display":true}}}
+    }"#;
+    let svg = render(json);
+    assert!(svg.contains(">123</text>"));
+    assert!(svg.contains(">87</text>"));
+    // pie は軸が無いので、0 や -5 のラベルは存在しない(スキップ分岐)。
+    assert!(!svg.contains(">0</text>"), "0 スライスにラベルを描かない");
+    assert!(!svg.contains(">-5</text>"), "負スライスにラベルを描かない");
+}
+
+#[test]
+fn horizontal_bar_datalabels_render_negative_value() {
+    // 横棒の負値は左端に Anchor::End で描く分岐の検証。
+    let json = r#"{
+      "type":"bar",
+      "data":{"labels":["a"],"datasets":[{"data":[-87]}]},
+      "options":{"indexAxis":"y","plugins":{"datalabels":{"display":true}}}
+    }"#;
+    assert!(render(json).contains(">-87</text>"));
+}
+
+#[test]
+fn line_datalabels_skip_missing_values() {
+    // categories(3) > values(1): 欠損カテゴリに spurious な "0" ラベルを描かない。
+    let json = r#"{
+      "type":"line",
+      "data":{"labels":["a","b","c"],"datasets":[{"data":[123]}]},
+      "options":{"plugins":{"datalabels":{"display":true}}}
+    }"#;
+    let svg = render(json);
+    let zero_labels = svg.matches(">0</text>").count();
+    assert_eq!(
+        zero_labels, 1,
+        "欠損カテゴリにラベルを描かない(0目盛りのみ)"
+    );
+    assert!(svg.contains(">123</text>"));
+}
