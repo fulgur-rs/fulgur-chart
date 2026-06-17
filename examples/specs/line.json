@@ -1,0 +1,26 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["月", "火", "水", "木", "金", "土", "日"],
+    "datasets": [
+      {
+        "label": "東京",
+        "data": [12, 15, 14, 18, 22, 25, 21],
+        "borderColor": "#ff6384",
+        "tension": 0.4
+      },
+      {
+        "label": "大阪",
+        "data": [14, 16, 17, 19, 24, 27, 23],
+        "borderColor": "#36a2eb",
+        "tension": 0.4
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "週間気温 (°C)" },
+      "legend": { "display": true, "position": "top" }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "type": "pie",
+  "data": {
+    "labels": ["デスクトップ", "モバイル", "タブレット", "その他"],
+    "datasets": [
+      {
+        "label": "アクセス割合",
+        "data": [55, 30, 12, 3]
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "デバイス別アクセス割合" },
+      "legend": { "display": true, "position": "top" }
+    }
+  }
+}

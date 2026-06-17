@@ -64,6 +64,14 @@ mod tests {
     }
 
     #[test]
+    fn png_is_byte_deterministic() {
+        // 同一 SVG を 2 回ラスタライズしてバイト一致（決定的出力の回帰テスト）。
+        let a = svg_to_png(MIN_SVG, 1.0).unwrap();
+        let b = svg_to_png(MIN_SVG, 1.0).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
     fn renders_text_with_bundled_font() {
         // 日本語テキストを含む SVG がフォント解決でき、ラスタが空でないこと
         let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"30\"><text x=\"0\" y=\"20\" font-family=\"Noto Sans JP, sans-serif\" font-size=\"16\" fill=\"#000000\">売上</text></svg>";

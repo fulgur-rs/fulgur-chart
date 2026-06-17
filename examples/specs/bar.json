@@ -1,0 +1,19 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": ["1月", "2月", "3月", "4月", "5月"],
+    "datasets": [
+      {
+        "label": "売上 (万円)",
+        "data": [120, 200, 150, 280, 240],
+        "backgroundColor": "#36a2eb"
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "月次売上" },
+      "legend": { "display": true, "position": "top" }
+    }
+  }
+}

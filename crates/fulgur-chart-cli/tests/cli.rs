@@ -89,6 +89,19 @@ fn renders_bar_to_png_file() {
 }
 
 #[test]
+fn renders_to_png_stdout() {
+    // -o - かつ --format png のとき、stdout 先頭 4 バイトが PNG シグネチャ。
+    let spec = r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#;
+    let out = bin()
+        .args(["render", "-", "-o", "-", "--format", "png"])
+        .write_stdin(spec)
+        .assert()
+        .success();
+    let bytes = &out.get_output().stdout;
+    assert_eq!(&bytes[0..4], &[0x89, b'P', b'N', b'G']);
+}
+
+#[test]
 fn missing_input_file_exits_1() {
     bin()
         .args(["render", "/nonexistent/xyz.json", "-o", "-"])

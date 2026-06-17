@@ -1,0 +1,21 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["Q1", "Q2", "Q3", "Q4"],
+    "datasets": [
+      {
+        "label": "累計ユーザー数 (千人)",
+        "data": [30, 75, 130, 210],
+        "borderColor": "#4bc0c0",
+        "backgroundColor": "#4bc0c0",
+        "fill": true,
+        "tension": 0.3
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "ユーザー数の推移" }
+    }
+  }
+}

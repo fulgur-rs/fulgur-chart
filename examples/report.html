@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>fulgur-chart サンプルレポート</title>
+  <style>
+    body {
+      font-family: "Noto Sans JP", sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      color: #222;
+    }
+    h1 { border-bottom: 2px solid #36a2eb; padding-bottom: 0.3rem; }
+    section { margin: 2rem 0; }
+    img { max-width: 100%; height: auto; border: 1px solid #eee; }
+    .caption { color: #666; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>月次レポート</h1>
+  <p>fulgur-chart が生成した静的 SVG を埋め込んだ最小レポートです。
+     <code>fulgur render</code> で PDF 化すると、ベクターのまま埋め込まれます。</p>
+
+  <section>
+    <h2>売上</h2>
+    <img src="out/bar.svg" alt="月次売上の棒グラフ">
+    <p class="caption">月次の売上推移（棒グラフ）。</p>
+  </section>
+
+  <section>
+    <h2>気温</h2>
+    <img src="out/line.svg" alt="週間気温の折れ線グラフ">
+    <p class="caption">2 都市の週間気温（折れ線グラフ）。</p>
+  </section>
+
+  <section>
+    <h2>ユーザー数</h2>
+    <img src="out/area.svg" alt="累計ユーザー数のエリアチャート">
+    <p class="caption">累計ユーザー数の推移（エリアチャート）。</p>
+  </section>
+
+  <section>
+    <h2>デバイス内訳</h2>
+    <img src="out/pie.svg" alt="デバイス別アクセス割合の円グラフ">
+    <p class="caption">デバイス別アクセス割合（円グラフ）。</p>
+  </section>
+</body>
+</html>

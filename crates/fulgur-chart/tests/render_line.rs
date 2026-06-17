@@ -47,3 +47,19 @@ fn line_snapshot() {
     );
     insta::assert_snapshot!(svg);
 }
+
+#[test]
+fn area_snapshot() {
+    let svg = render(
+        r#"{"type":"line","data":{"labels":["Q1","Q2","Q3"],"datasets":[{"label":"累計","data":[30,75,130],"fill":true}]}}"#,
+    );
+    insta::assert_snapshot!(svg);
+}
+
+#[test]
+fn tension_snapshot() {
+    let svg = render(
+        r#"{"type":"line","data":{"labels":["A","B","C","D"],"datasets":[{"label":"曲線","data":[1,3,2,4],"tension":0.4}]}}"#,
+    );
+    insta::assert_snapshot!(svg);
+}
