@@ -223,3 +223,22 @@ fn strict_accepts_scatter() {
     let json = r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2}]}]}}"#;
     assert!(chartjs::parse(json, true).is_ok());
 }
+
+#[test]
+fn parses_bubble_point_data_with_radius() {
+    // bubble は scatter と同じ点データだが、第3次元 r を保持する。
+    let json = r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2,"r":10}]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Bubble));
+    assert_eq!(spec.series[0].points[0].r, Some(10.0));
+    assert_eq!(
+        spec.series[0].points[0],
+        Point {
+            x: 1.0,
+            y: 2.0,
+            r: Some(10.0)
+        }
+    );
+    // 点ベースなので数値配列は使わない。
+    assert!(spec.series[0].values.is_empty());
+}

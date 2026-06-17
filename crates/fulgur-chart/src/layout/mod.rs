@@ -15,7 +15,8 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::Bar { .. } => bar::build(spec, m),
         ChartKind::Line => line::build(spec, m),
         ChartKind::Pie { .. } => pie::build(spec, m),
-        ChartKind::Scatter => scatter::build(spec, m),
+        // bubble は scatter と同じレイアウト。半径だけ point.r を使う(scatter.rs 内で分岐)。
+        ChartKind::Scatter | ChartKind::Bubble => scatter::build(spec, m),
     };
 
     // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。

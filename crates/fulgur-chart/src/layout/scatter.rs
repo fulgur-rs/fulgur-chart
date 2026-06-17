@@ -6,19 +6,33 @@ use super::common::{
     LEGEND_BAND, OUTER_PAD, TEXT_BASELINE_RATIO, TITLE_BAND, TITLE_FONT, X_LABEL_BAND,
     X_LABEL_CENTER_RATIO, draw_vertical_legend, legend_band_width_vertical, legend_entry_width,
 };
-use crate::ir::{ChartSpec, Color, LegendPos, Point, Series};
+use crate::ir::{ChartKind, ChartSpec, Color, LegendPos, Point};
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, nice_ticks};
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 
-/// 点(マーカー)の既定半径。chart.js scatter の pointRadius 既定値 ~3.0。
+/// scatter のマーカー既定半径。chart.js scatter の pointRadius 既定値 ~3.0。
 const DEFAULT_POINT_R: f64 = 3.0;
 
-/// ある系列の 1 点の半径を返す。今は固定の既定値。
-/// bubble(spv.4)では `point.r` を使うため、ここを差し替える。
-fn point_radius(_series: &Series, _point: &Point) -> f64 {
-    DEFAULT_POINT_R
+/// bubble で `point.r` が無い場合の既定半径。bubble は通常 r を持つが保険。
+const DEFAULT_BUBBLE_R: f64 = 5.0;
+
+/// 1 点の半径を返す。bubble はデータの第3次元 `point.r` を半径に使い、
+/// scatter は固定の既定値を使う(scatter 出力を従来どおり byte 一致に保つ)。
+/// 非有限/負の半径は不正な SVG を避けるため既定値にフォールバックする。
+fn point_radius(kind: &ChartKind, point: &Point) -> f64 {
+    match kind {
+        ChartKind::Bubble => {
+            let r = point.r.unwrap_or(DEFAULT_BUBBLE_R);
+            if r.is_finite() && r >= 0.0 {
+                r
+            } else {
+                DEFAULT_BUBBLE_R
+            }
+        }
+        _ => DEFAULT_POINT_R,
+    }
 }
 
 /// 凡例の有無(Top/Bottom/Left/Right かつ名前付き系列が 1 つ以上)。
@@ -196,7 +210,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             items.push(Prim::Circle {
                 cx: xs.map(p.x),
                 cy: ys.map(p.y),
-                r: point_radius(ser, p),
+                r: point_radius(&spec.kind, p),
                 fill: ser.fill_at(i),
             });
         }

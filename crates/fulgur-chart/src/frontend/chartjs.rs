@@ -214,6 +214,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         "pie" => ChartKind::Pie { donut_ratio: 0.0 },
         "doughnut" => ChartKind::Pie { donut_ratio: 0.5 },
         "scatter" => ChartKind::Scatter,
+        "bubble" => ChartKind::Bubble,
         other => return Err(format!("未対応の type: {other}")),
     };
 
@@ -227,20 +228,21 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let theme = build_theme(raw.options.theme);
 
     let is_pie = matches!(kind, ChartKind::Pie { .. });
-    let is_scatter = matches!(kind, ChartKind::Scatter);
+    // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
+    let is_point_based = matches!(kind, ChartKind::Scatter | ChartKind::Bubble);
     let series = raw
         .data
         .datasets
         .into_iter()
         .enumerate()
         .map(|(i, ds)| {
-            // scatter は点データ、それ以外は数値配列を採る。`data` は一度だけ消費する。
-            let (values, points) = if is_scatter {
+            // 点ベースは点データ、それ以外は数値配列を採る。`data` は一度だけ消費する。
+            let (values, points) = if is_point_based {
                 (vec![], ds.data.into_points())
             } else {
                 (ds.data.into_values(), vec![])
             };
-            let n = if is_scatter {
+            let n = if is_point_based {
                 points.len()
             } else {
                 values.len()
@@ -260,9 +262,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         })
         .collect();
 
-    // scatter は線形×線形軸でゼロ起点を強制しない(データ由来のドメインを使う)。
+    // scatter/bubble は線形×線形軸でゼロ起点を強制しない(データ由来のドメインを使う)。
     // カテゴリ系は従来どおり y のみゼロ起点。
-    let y_begin_at_zero = !is_scatter;
+    let y_begin_at_zero = !is_point_based;
 
     Ok(ChartSpec {
         kind,
