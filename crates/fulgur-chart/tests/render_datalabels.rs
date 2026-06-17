@@ -69,3 +69,16 @@ fn line_datalabels_render_values() {
     assert!(svg.contains(">123</text>"));
     assert!(svg.contains(">87</text>"));
 }
+
+#[test]
+fn pie_datalabels_render_values() {
+    let json = r#"{
+      "type":"pie",
+      "data":{"labels":["a","b","c"],"datasets":[{"data":[30,50,20]}]},
+      "options":{"plugins":{"datalabels":{"display":true}}}
+    }"#;
+    let svg = render(json);
+    assert!(svg.contains(">30</text>"));
+    assert!(svg.contains(">50</text>"));
+    assert!(svg.contains(">20</text>"));
+}

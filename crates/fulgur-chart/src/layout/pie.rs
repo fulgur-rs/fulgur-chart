@@ -17,6 +17,14 @@ const SLICE_STROKE: Color = Color {
     a: 1.0,
 };
 
+/// データラベルの文字色(スライス上で読めるよう白)。
+const LABEL_COLOR: Color = Color {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 1.0,
+};
+
 pub fn build(spec: &ChartSpec) -> Scene {
     let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
     let mut items: Vec<Prim> = Vec::new();
@@ -111,6 +119,7 @@ pub fn build(spec: &ChartSpec) -> Scene {
 
     // 4. スライス。正の有限値のみ合計。
     let total: f64 = values.iter().filter(|v| v.is_finite() && **v > 0.0).sum();
+    let mut labels: Vec<Prim> = Vec::new();
     if total > 0.0 && radius > 0.0 {
         let mut a0 = -PI / 2.0; // 12 時方向。
         for (i, &v) in values.iter().enumerate() {
@@ -135,9 +144,27 @@ pub fn build(spec: &ChartSpec) -> Scene {
             } else {
                 items.push(make_slice(&g, a0, a1, fill));
             }
+            if spec.data_labels {
+                let amid = (a0 + a1) / 2.0;
+                let label_r = if inner > 0.0 {
+                    (inner + radius) / 2.0
+                } else {
+                    radius * 0.6
+                };
+                labels.push(common::value_label(
+                    cx + label_r * amid.cos(),
+                    cy + label_r * amid.sin() + common::LABEL_FONT * common::TEXT_BASELINE_RATIO,
+                    Anchor::Middle,
+                    LABEL_COLOR,
+                    v,
+                ));
+            }
             a0 = a1;
         }
     }
+
+    // ラベルは全スライスの上に描く（最後に push）。
+    items.extend(labels);
 
     Scene {
         width: spec.width,
