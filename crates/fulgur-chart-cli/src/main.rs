@@ -146,7 +146,7 @@ fn detect_format(output: &str) -> Format {
     if output != "-"
         && std::path::Path::new(output)
             .extension()
-            .is_some_and(|e| e == "png")
+            .is_some_and(|e| e.eq_ignore_ascii_case("png"))
     {
         Format::Png
     } else {
