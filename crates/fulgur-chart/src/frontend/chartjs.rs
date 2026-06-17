@@ -84,6 +84,9 @@ struct RawData {
 struct RawDataset {
     #[serde(default)]
     label: String,
+    /// dataset 別の描画種別("bar"/"line")。混合チャートで使う。未指定なら chart 基本型に従う。
+    #[serde(rename = "type", default)]
+    dataset_type: Option<String>,
     data: DataField,
     #[serde(rename = "backgroundColor")]
     background_color: Option<ScalarOrArray<String>>,
@@ -205,18 +208,53 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         })
         .unwrap_or(false);
 
-    let kind = match raw.chart_type.as_str() {
-        "bar" => ChartKind::Bar {
-            horizontal: raw.options.index_axis.as_deref() == Some("y"),
-            stacked,
-        },
-        "line" => ChartKind::Line,
-        "pie" => ChartKind::Pie { donut_ratio: 0.0 },
-        "doughnut" => ChartKind::Pie { donut_ratio: 0.5 },
-        "scatter" => ChartKind::Scatter,
-        "bubble" => ChartKind::Bubble,
-        "radar" => ChartKind::Radar,
-        other => return Err(format!("未対応の type: {other}")),
+    // chart 基本型。bar/line のときだけ dataset 別 type による混合が起こりうる。
+    // 基本型は SeriesType のフォールバックにも使う(bar→Bar, line→Line, それ以外→Bar(未使用))。
+    let base_series_type = match raw.chart_type.as_str() {
+        "line" => SeriesType::Line,
+        _ => SeriesType::Bar,
+    };
+
+    // dataset の実効描画種別を解決する。
+    // type が "bar"/"line" ならそれを優先し、無ければ chart 基本型に従う。
+    let resolve_series_type = |dt: &Option<String>| -> SeriesType {
+        match dt.as_deref() {
+            Some("bar") => SeriesType::Bar,
+            Some("line") => SeriesType::Line,
+            _ => base_series_type,
+        }
+    };
+
+    // 各 dataset の実効種別。Mixed 判定と Series.series_type の双方に使う。
+    let series_types: Vec<SeriesType> = raw
+        .data
+        .datasets
+        .iter()
+        .map(|ds| resolve_series_type(&ds.dataset_type))
+        .collect();
+
+    // 混合判定: 基本型が bar/line で、解決後の種別が Bar/Line を両方含むなら Mixed。
+    let is_mixable_base = matches!(raw.chart_type.as_str(), "bar" | "line");
+    let is_mixed = is_mixable_base
+        && series_types.contains(&SeriesType::Bar)
+        && series_types.contains(&SeriesType::Line);
+
+    let kind = if is_mixed {
+        ChartKind::Mixed
+    } else {
+        match raw.chart_type.as_str() {
+            "bar" => ChartKind::Bar {
+                horizontal: raw.options.index_axis.as_deref() == Some("y"),
+                stacked,
+            },
+            "line" => ChartKind::Line,
+            "pie" => ChartKind::Pie { donut_ratio: 0.0 },
+            "doughnut" => ChartKind::Pie { donut_ratio: 0.5 },
+            "scatter" => ChartKind::Scatter,
+            "bubble" => ChartKind::Bubble,
+            "radar" => ChartKind::Radar,
+            other => return Err(format!("未対応の type: {other}")),
+        }
     };
 
     // datalabels: キーが存在し display!=false なら有効。
@@ -250,15 +288,19 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             };
             let fill = resolve_colors(ds.background_color, is_pie, i, n, &theme.palette);
             let stroke = resolve_colors(ds.border_color, is_pie, i, n, &theme.palette);
+            // 実効描画種別。線の既定線幅(3.0)を chart 基本型でなく系列種別で決めるため、
+            // 単一種別(全 Line→3.0 / 全 Bar→1.0)では従来と byte 一致し、混合では line だけ太くなる。
+            let series_type = series_types[i];
             Series {
                 name: ds.label,
                 values,
                 points,
                 fill,
                 stroke,
-                stroke_width: ds.border_width.unwrap_or(default_border_width(&kind)),
+                stroke_width: ds.border_width.unwrap_or(default_border_width(series_type)),
                 area: ds.fill.is_filled(),
                 tension: ds.tension,
+                series_type,
             }
         })
         .collect();
@@ -332,10 +374,13 @@ fn build_theme(raw: Option<RawTheme>) -> Theme {
     theme
 }
 
-fn default_border_width(kind: &ChartKind) -> f64 {
-    match kind {
-        ChartKind::Line => 3.0,
-        _ => 1.0,
+/// 系列の既定線幅。line 系列は太く(3.0)、bar 系列は細い(1.0)。
+/// chart 基本型でなく系列種別で決めることで、混合チャートの line 系列も正しく太くなる。
+/// 単一種別では従来挙動(全 Line→3.0 / 非 Line→1.0)と byte 一致する。
+fn default_border_width(series_type: SeriesType) -> f64 {
+    match series_type {
+        SeriesType::Line => 3.0,
+        SeriesType::Bar => 1.0,
     }
 }
 
@@ -412,6 +457,7 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                         ds,
                         &[
                             "label",
+                            "type",
                             "data",
                             "backgroundColor",
                             "borderColor",

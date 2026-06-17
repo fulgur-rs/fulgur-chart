@@ -1,5 +1,5 @@
 use fulgur_chart::frontend::chartjs;
-use fulgur_chart::ir::{ChartKind, Point};
+use fulgur_chart::ir::{ChartKind, Point, SeriesType};
 
 #[test]
 fn parses_minimal_bar_spec() {
@@ -271,4 +271,44 @@ fn parses_bubble_point_data_with_radius() {
     );
     // 点ベースなので数値配列は使わない。
     assert!(spec.series[0].values.is_empty());
+}
+
+#[test]
+fn bar_base_with_line_dataset_is_mixed() {
+    // 基本型 bar + dataset 別 type:"line" → Mixed、種別は [Bar, Line]。
+    let json = r#"{"type":"bar","data":{"labels":["a","b","c"],
+      "datasets":[{"label":"棒","data":[1,2,3]},{"type":"line","label":"折れ線","data":[4,5,6]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Mixed));
+    assert_eq!(spec.series[0].series_type, SeriesType::Bar);
+    assert_eq!(spec.series[1].series_type, SeriesType::Line);
+}
+
+#[test]
+fn all_bar_without_type_stays_bar() {
+    // dataset 別 type 未指定の全棒は従来どおり Bar(混合に昇格しない)。
+    let json = r#"{"type":"bar","data":{"labels":["a","b"],
+      "datasets":[{"data":[1,2]},{"data":[3,4]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Bar { .. }));
+    assert_eq!(spec.series[0].series_type, SeriesType::Bar);
+    assert_eq!(spec.series[1].series_type, SeriesType::Bar);
+}
+
+#[test]
+fn line_base_with_bar_dataset_is_mixed() {
+    // 基本型 line + dataset 別 type:"bar" でも混合になる(対称性の確認)。
+    let json = r#"{"type":"line","data":{"labels":["a","b"],
+      "datasets":[{"data":[1,2]},{"type":"bar","data":[3,4]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Mixed));
+    assert_eq!(spec.series[0].series_type, SeriesType::Line);
+    assert_eq!(spec.series[1].series_type, SeriesType::Bar);
+}
+
+#[test]
+fn strict_accepts_dataset_type() {
+    let json = r#"{"type":"bar","data":{"labels":["a"],
+      "datasets":[{"data":[1]},{"type":"line","data":[2]}]}}"#;
+    assert!(chartjs::parse(json, true).is_ok());
 }

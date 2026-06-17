@@ -18,6 +18,14 @@ pub struct Point {
     pub r: Option<f64>,
 }
 
+/// 系列ごとの描画種別。混合チャート(bar+line)で dataset 別 type を表す。
+/// 単一種別チャートでは全系列が同じ値になる(描画に影響しない既定は Bar)。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SeriesType {
+    Bar,
+    Line,
+}
+
 /// 色は**データ点ごと**に持てる（pie のスライス別色が標準形のため）。
 /// 長さ 1 のときは全点へブロードキャストする。`fill_at`/`stroke_at` で安全に参照する。
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +39,8 @@ pub struct Series {
     pub stroke_width: f64,
     pub area: bool,   // line のとき塗りつぶすか
     pub tension: f64, // 0.0 = 直線
+    /// 描画種別。混合チャートでのみ意味を持つ(単一種別では未使用)。
+    pub series_type: SeriesType,
 }
 
 impl Series {
@@ -82,6 +92,7 @@ pub enum ChartKind {
     Scatter,                  // 線形 x × 線形 y。点データ(Series.points)を使う
     Bubble,                   // scatter と同じ枠組み。半径は point.r(第3次元)を使う
     Radar,                    // 極座標。カテゴリ=スポーク、系列ごとに多角形を重ねる
+    Mixed, // 共有カテゴリ x・線形 y に bar+line を重ねる。種別は Series.series_type
 }
 
 /// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。
@@ -158,6 +169,7 @@ mod tests {
             stroke_width: 1.0,
             area: false,
             tension: 0.0,
+            series_type: SeriesType::Bar,
         };
         assert_eq!(s.fill_at(0), c(1, 2, 3));
         assert_eq!(s.fill_at(2), c(1, 2, 3)); // ブロードキャスト
@@ -174,6 +186,7 @@ mod tests {
             stroke_width: 1.0,
             area: false,
             tension: 0.0,
+            series_type: SeriesType::Bar,
         };
         assert_eq!(s.fill_at(0), c(10, 0, 0));
         assert_eq!(s.fill_at(1), c(0, 20, 0));
@@ -191,6 +204,7 @@ mod tests {
             stroke_width: 1.0,
             area: false,
             tension: 0.0,
+            series_type: SeriesType::Bar,
         };
         assert_eq!(s.stroke_at(0), c(0, 0, 0));
     }
