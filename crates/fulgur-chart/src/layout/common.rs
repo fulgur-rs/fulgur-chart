@@ -11,6 +11,8 @@ pub const TITLE_FONT: f64 = 16.0;
 pub const LABEL_FONT: f64 = 12.0;
 pub const TITLE_BAND: f64 = 28.0;
 pub const LEGEND_BAND: f64 = 26.0;
+/// 縦置き凡例(Left/Right)の 1 行の高さ(px)。
+pub const LEGEND_ROW_H: f64 = 18.0;
 pub const X_LABEL_BAND: f64 = 22.0;
 pub const TEXT_BASELINE_RATIO: f64 = 0.35;
 pub const X_LABEL_CENTER_RATIO: f64 = 0.7;
@@ -39,10 +41,12 @@ pub struct Frame {
     pub ys: LinearScale,
 }
 
-/// 凡例の有無を判定する（Top/Bottom かつ名前付き系列が 1 つ以上）。
+/// 凡例の有無を判定する（Top/Bottom/Left/Right かつ名前付き系列が 1 つ以上）。
 fn has_legend(spec: &ChartSpec) -> bool {
-    matches!(spec.legend, LegendPos::Top | LegendPos::Bottom)
-        && spec.series.iter().any(|s| !s.name.is_empty())
+    matches!(
+        spec.legend,
+        LegendPos::Top | LegendPos::Bottom | LegendPos::Left | LegendPos::Right
+    ) && spec.series.iter().any(|s| !s.name.is_empty())
 }
 
 /// 値ドメイン(begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
@@ -114,8 +118,20 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     } else {
         0.0
     };
-    let plot_left = OUTER_PAD + y_axis_w;
-    let plot_right = spec.width - OUTER_PAD;
+    // Left/Right の凡例帯幅(系列名から算出)。Top/Bottom 時は 0。
+    let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+    let legend_left = if legend && spec.legend == LegendPos::Left {
+        legend_band_width_vertical(m, &series_names)
+    } else {
+        0.0
+    };
+    let legend_right = if legend && spec.legend == LegendPos::Right {
+        legend_band_width_vertical(m, &series_names)
+    } else {
+        0.0
+    };
+    let plot_left = OUTER_PAD + y_axis_w + legend_left;
+    let plot_right = spec.width - OUTER_PAD - legend_right;
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
 
@@ -209,8 +225,8 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         }
     }
 
-    // 5. 凡例。
-    if has_legend(spec) {
+    // 5. 凡例(Top/Bottom: 横並び)。
+    if has_legend(spec) && matches!(spec.legend, LegendPos::Top | LegendPos::Bottom) {
         // 各エントリ幅と合計（末尾間隔 16 を最後だけ除く）。
         let mut total = 0.0_f64;
         for (k, ser) in spec.series.iter().enumerate() {
@@ -246,6 +262,77 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             let ew = legend_entry_width(m, &ser.name);
             cursor += ew;
         }
+    }
+
+    // 5b. 凡例(Left/Right: 縦並び)。
+    if has_legend(spec) && matches!(spec.legend, LegendPos::Left | LegendPos::Right) {
+        let entries: Vec<(String, Color)> = spec
+            .series
+            .iter()
+            .map(|s| (s.name.clone(), s.fill_at(0)))
+            .collect();
+        let names: Vec<String> = entries.iter().map(|(n, _)| n.clone()).collect();
+        let band_w = legend_band_width_vertical(m, &names);
+        let band_x = if spec.legend == LegendPos::Left {
+            OUTER_PAD
+        } else {
+            spec.width - OUTER_PAD - band_w
+        };
+        draw_vertical_legend(
+            items,
+            &entries,
+            band_x,
+            frame.plot_top,
+            frame.plot_bottom,
+            m,
+        );
+    }
+}
+
+/// 縦置き凡例(Left/Right)の帯幅: swatch(12) + gap(4) + 最大ラベル幅 + パディング(16)。
+/// 名前が空の系列も含めて算出する(レイアウトの確保量を呼び出し側と一致させるため)。
+pub fn legend_band_width_vertical(m: &TextMeasurer, names: &[String]) -> f64 {
+    let mut max_w = 0.0_f64;
+    for name in names {
+        let w = m.width(name, LABEL_FONT as f32) as f64;
+        if w > max_w {
+            max_w = w;
+        }
+    }
+    12.0 + 4.0 + max_w + 16.0
+}
+
+/// 縦置き凡例(Left/Right)を描く。entries は (名前, swatch色) の解決済みペア。
+/// プロットの縦スパン中央にエントリ群を配置する。
+pub fn draw_vertical_legend(
+    items: &mut Vec<Prim>,
+    entries: &[(String, Color)],
+    band_x: f64,
+    plot_top: f64,
+    plot_bottom: f64,
+    _m: &TextMeasurer,
+) {
+    let n = entries.len();
+    let group_h = n as f64 * LEGEND_ROW_H;
+    let start_y = (plot_top + plot_bottom) / 2.0 - group_h / 2.0;
+    for (i, (name, color)) in entries.iter().enumerate() {
+        let row_top = start_y + i as f64 * LEGEND_ROW_H;
+        let row_center = row_top + LEGEND_ROW_H / 2.0;
+        items.push(Prim::Rect {
+            x: band_x,
+            y: row_center - 6.0,
+            w: 12.0,
+            h: 12.0,
+            fill: *color,
+        });
+        items.push(Prim::Text {
+            x: band_x + 16.0,
+            y: row_center + LABEL_FONT * TEXT_BASELINE_RATIO,
+            size: LABEL_FONT,
+            anchor: Anchor::Start,
+            fill: INK,
+            content: name.clone(),
+        });
     }
 }
 

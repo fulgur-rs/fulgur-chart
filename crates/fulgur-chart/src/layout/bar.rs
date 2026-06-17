@@ -100,10 +100,13 @@ fn build_horizontal(spec: &ChartSpec) -> Scene {
     }
     let cat_w = max_cat_w as f64 + 10.0;
 
-    // 凡例の有無(縦棒と同じ判定)。
+    // 凡例の有無(縦棒と同じ判定: Top/Bottom/Left/Right かつ名前付き系列あり)。
     let has_legend = matches!(
         spec.legend,
-        crate::ir::LegendPos::Top | crate::ir::LegendPos::Bottom
+        crate::ir::LegendPos::Top
+            | crate::ir::LegendPos::Bottom
+            | crate::ir::LegendPos::Left
+            | crate::ir::LegendPos::Right
     ) && spec.series.iter().any(|s| !s.name.is_empty());
 
     let title_band = if spec.title.is_some() {
@@ -121,9 +124,21 @@ fn build_horizontal(spec: &ChartSpec) -> Scene {
     } else {
         0.0
     };
+    // Left/Right の凡例帯幅(系列名から算出)。
+    let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+    let legend_left = if has_legend && spec.legend == crate::ir::LegendPos::Left {
+        legend_band_width_vertical(&m, &series_names)
+    } else {
+        0.0
+    };
+    let legend_right = if has_legend && spec.legend == crate::ir::LegendPos::Right {
+        legend_band_width_vertical(&m, &series_names)
+    } else {
+        0.0
+    };
 
-    let plot_left = OUTER_PAD + cat_w;
-    let plot_right = spec.width - OUTER_PAD;
+    let plot_left = OUTER_PAD + cat_w + legend_left;
+    let plot_right = spec.width - OUTER_PAD - legend_right;
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
 
@@ -227,8 +242,13 @@ fn build_horizontal(spec: &ChartSpec) -> Scene {
         }
     }
 
-    // 5. 凡例(common::draw_frame の配置を踏襲)。
-    if has_legend {
+    // 5. 凡例(Top/Bottom: common::draw_frame の配置を踏襲)。
+    if has_legend
+        && matches!(
+            spec.legend,
+            crate::ir::LegendPos::Top | crate::ir::LegendPos::Bottom
+        )
+    {
         let mut total = 0.0_f64;
         for (k, ser) in spec.series.iter().enumerate() {
             let ew = legend_entry_width(&m, &ser.name);
@@ -262,6 +282,26 @@ fn build_horizontal(spec: &ChartSpec) -> Scene {
             });
             cursor += legend_entry_width(&m, &ser.name);
         }
+    }
+
+    // 5b. 凡例(Left/Right: 縦並び)。
+    if has_legend
+        && matches!(
+            spec.legend,
+            crate::ir::LegendPos::Left | crate::ir::LegendPos::Right
+        )
+    {
+        let entries: Vec<(String, crate::ir::Color)> = spec
+            .series
+            .iter()
+            .map(|s| (s.name.clone(), s.fill_at(0)))
+            .collect();
+        let band_x = if spec.legend == crate::ir::LegendPos::Left {
+            OUTER_PAD
+        } else {
+            spec.width - OUTER_PAD - legend_right
+        };
+        draw_vertical_legend(&mut items, &entries, band_x, plot_top, plot_bottom, &m);
     }
 
     Scene {

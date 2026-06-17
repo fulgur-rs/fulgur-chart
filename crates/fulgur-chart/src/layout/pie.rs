@@ -57,8 +57,10 @@ pub fn build(spec: &ChartSpec) -> Scene {
     }
 
     // 2. 凡例(カテゴリ別)。
-    let has_legend = matches!(spec.legend, LegendPos::Top | LegendPos::Bottom)
-        && spec.categories.iter().any(|c| !c.is_empty());
+    let has_legend = matches!(
+        spec.legend,
+        LegendPos::Top | LegendPos::Bottom | LegendPos::Left | LegendPos::Right
+    ) && spec.categories.iter().any(|c| !c.is_empty());
     let legend_top = if has_legend && spec.legend == LegendPos::Top {
         common::LEGEND_BAND
     } else {
@@ -69,7 +71,18 @@ pub fn build(spec: &ChartSpec) -> Scene {
     } else {
         0.0
     };
-    if has_legend {
+    // Left/Right の凡例帯幅(カテゴリ名から算出)。
+    let legend_left = if has_legend && spec.legend == LegendPos::Left {
+        common::legend_band_width_vertical(&m, &spec.categories)
+    } else {
+        0.0
+    };
+    let legend_right = if has_legend && spec.legend == LegendPos::Right {
+        common::legend_band_width_vertical(&m, &spec.categories)
+    } else {
+        0.0
+    };
+    if has_legend && matches!(spec.legend, LegendPos::Top | LegendPos::Bottom) {
         // 各カテゴリのエントリ幅と合計（末尾の trailing 16 を最後だけ除く）。
         let mut total = 0.0_f64;
         let n = spec.categories.len();
@@ -107,11 +120,38 @@ pub fn build(spec: &ChartSpec) -> Scene {
         }
     }
 
+    // 2b. 凡例(Left/Right: 縦並び、カテゴリ別)。
+    if has_legend && matches!(spec.legend, LegendPos::Left | LegendPos::Right) {
+        let entries: Vec<(String, Color)> = spec
+            .categories
+            .iter()
+            .enumerate()
+            .map(|(i, cat)| {
+                let swatch = series.map(|s| s.fill_at(i)).unwrap_or(common::INK);
+                (cat.clone(), swatch)
+            })
+            .collect();
+        let band_w = if spec.legend == LegendPos::Left {
+            legend_left
+        } else {
+            legend_right
+        };
+        let band_x = if spec.legend == LegendPos::Left {
+            common::OUTER_PAD
+        } else {
+            spec.width - common::OUTER_PAD - band_w
+        };
+        // 円の縦スパン(area_top..area_bottom)中央に揃える。
+        let area_top = common::OUTER_PAD + title_band + legend_top;
+        let area_bottom = spec.height - common::OUTER_PAD - legend_bottom;
+        common::draw_vertical_legend(&mut items, &entries, band_x, area_top, area_bottom, &m);
+    }
+
     // 3. 円の領域。
     let area_top = common::OUTER_PAD + title_band + legend_top;
     let area_bottom = spec.height - common::OUTER_PAD - legend_bottom;
-    let area_left = common::OUTER_PAD;
-    let area_right = spec.width - common::OUTER_PAD;
+    let area_left = common::OUTER_PAD + legend_left;
+    let area_right = spec.width - common::OUTER_PAD - legend_right;
     let cx = (area_left + area_right) / 2.0;
     let cy = (area_top + area_bottom) / 2.0;
     let radius = ((area_right - area_left).min(area_bottom - area_top) / 2.0 * 0.9).max(0.0);
