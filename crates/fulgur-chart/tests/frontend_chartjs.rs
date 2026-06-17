@@ -11,7 +11,13 @@ fn parses_minimal_bar_spec() {
       }
     }"#;
     let spec = chartjs::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Bar { horizontal: false }));
+    assert!(matches!(
+        spec.kind,
+        ChartKind::Bar {
+            horizontal: false,
+            ..
+        }
+    ));
     assert_eq!(spec.categories, vec!["1月", "2月", "3月"]);
     assert_eq!(spec.series.len(), 1);
     assert_eq!(spec.series[0].name, "売上");
@@ -27,7 +33,13 @@ fn horizontal_bar_via_index_axis_y() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"indexAxis":"y"} }"#;
     let spec = chartjs::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Bar { horizontal: true }));
+    assert!(matches!(
+        spec.kind,
+        ChartKind::Bar {
+            horizontal: true,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -133,4 +145,42 @@ fn strict_rejects_unknown_datalabels_key() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"plugins":{"datalabels":{"foo":1}}} }"#;
     assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
+fn scales_y_stacked_true_marks_bar_stacked() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"y":{"stacked":true}}} }"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Bar { stacked: true, .. }));
+}
+
+#[test]
+fn scales_x_stacked_true_marks_bar_stacked() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"x":{"stacked":true}}} }"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Bar { stacked: true, .. }));
+}
+
+#[test]
+fn scales_absent_is_not_stacked() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]} }"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Bar { stacked: false, .. }));
+}
+
+#[test]
+fn scales_stacked_false_is_not_stacked() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"y":{"stacked":false}}} }"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Bar { stacked: false, .. }));
+}
+
+#[test]
+fn strict_accepts_scales_stacked() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"y":{"stacked":true}}} }"#;
+    assert!(chartjs::parse(json, true).is_ok());
 }

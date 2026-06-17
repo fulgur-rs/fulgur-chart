@@ -65,7 +65,7 @@ pub enum LegendPos {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChartKind {
-    Bar { horizontal: bool },
+    Bar { horizontal: bool, stacked: bool },
     Line,                     // area/tension は Series 側
     Pie { donut_ratio: f64 }, // 0.0 = pie, >0 = doughnut
 }

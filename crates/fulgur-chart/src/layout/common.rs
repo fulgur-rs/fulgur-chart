@@ -54,14 +54,39 @@ fn has_legend(spec: &ChartSpec) -> bool {
 pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
-    for s in &spec.series {
-        for &v in &s.values {
-            if v.is_finite() {
-                if v < data_min {
-                    data_min = v;
+    if matches!(spec.kind, crate::ir::ChartKind::Bar { stacked: true, .. }) {
+        // 積み上げ: カテゴリごとに正値の和(上限)・負値の和(下限)をとる。
+        for i in 0..spec.categories.len() {
+            let mut pos_sum = 0.0_f64;
+            let mut neg_sum = 0.0_f64;
+            for ser in &spec.series {
+                if let Some(&v) = ser.values.get(i) {
+                    if v.is_finite() {
+                        if v >= 0.0 {
+                            pos_sum += v;
+                        } else {
+                            neg_sum += v;
+                        }
+                    }
                 }
-                if v > data_max {
-                    data_max = v;
+            }
+            if pos_sum > data_max {
+                data_max = pos_sum;
+            }
+            if neg_sum < data_min {
+                data_min = neg_sum;
+            }
+        }
+    } else {
+        for s in &spec.series {
+            for &v in &s.values {
+                if v.is_finite() {
+                    if v < data_min {
+                        data_min = v;
+                    }
+                    if v > data_max {
+                        data_max = v;
+                    }
                 }
             }
         }

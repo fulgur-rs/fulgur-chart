@@ -21,8 +21,7 @@ struct RawOptions {
     plugins: RawPlugins,
     #[serde(default)]
     theme: Option<RawTheme>,
-    // 受理するが v1 の IR には未マップ（Task 9 のスケール対応時に使う）。
-    #[allow(dead_code)]
+    // scales.{x,y}.stacked のみ navigate する(積み上げ判定)。それ以外は未マップ。
     #[serde(default)]
     scales: Option<serde_json::Value>,
 }
@@ -147,9 +146,27 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     }
     let raw: RawSpec = serde_json::from_str(json).map_err(|e| e.to_string())?;
 
+    // 積み上げ判定: options.scales.x.stacked または options.scales.y.stacked が true。
+    // scales は緩く型付けされた serde_json::Value のまま navigate する(深い検証はしない)。
+    let stacked = raw
+        .options
+        .scales
+        .as_ref()
+        .map(|s| {
+            let f = |axis: &str| {
+                s.get(axis)
+                    .and_then(|a| a.get("stacked"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            };
+            f("x") || f("y")
+        })
+        .unwrap_or(false);
+
     let kind = match raw.chart_type.as_str() {
         "bar" => ChartKind::Bar {
             horizontal: raw.options.index_axis.as_deref() == Some("y"),
+            stacked,
         },
         "line" => ChartKind::Line,
         "pie" => ChartKind::Pie { donut_ratio: 0.0 },
