@@ -98,3 +98,39 @@ fn strict_rejects_unknown_dataset_key() {
     assert!(chartjs::parse(json, true).is_err());
     assert!(chartjs::parse(json, false).is_ok());
 }
+
+#[test]
+fn datalabels_key_present_enables() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"plugins":{"datalabels":{}}} }"#;
+    assert!(chartjs::parse(json, false).unwrap().data_labels);
+}
+#[test]
+fn datalabels_display_true_enables() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"plugins":{"datalabels":{"display":true}}} }"#;
+    assert!(chartjs::parse(json, false).unwrap().data_labels);
+}
+#[test]
+fn datalabels_display_false_disables() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"plugins":{"datalabels":{"display":false}}} }"#;
+    assert!(!chartjs::parse(json, false).unwrap().data_labels);
+}
+#[test]
+fn datalabels_absent_is_false() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]} }"#;
+    assert!(!chartjs::parse(json, false).unwrap().data_labels);
+}
+#[test]
+fn strict_accepts_known_datalabels_keys() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"plugins":{"datalabels":{"display":true}}} }"#;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+#[test]
+fn strict_rejects_unknown_datalabels_key() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"plugins":{"datalabels":{"foo":1}}} }"#;
+    assert!(chartjs::parse(json, true).is_err());
+}

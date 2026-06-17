@@ -30,6 +30,13 @@ struct RawOptions {
 struct RawPlugins {
     title: Option<RawTitle>,
     legend: Option<RawLegend>,
+    datalabels: Option<RawDataLabels>,
+}
+
+#[derive(Deserialize)]
+struct RawDataLabels {
+    #[serde(default)]
+    display: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +141,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         other => return Err(format!("未対応の type: {other}")),
     };
 
+    // datalabels: キーが存在し display!=false なら有効。
+    let data_labels = match &raw.options.plugins.datalabels {
+        Some(dl) => dl.display != Some(false),
+        None => false,
+    };
+
     let is_pie = matches!(kind, ChartKind::Pie { .. });
     let series = raw
         .data
@@ -183,6 +196,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             .map(|t| t.text),
         width: 800.0,
         height: 450.0,
+        data_labels,
     })
 }
 
@@ -286,6 +300,9 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                 &["title", "legend", "datalabels"],
                 "options.plugins",
             )?;
+            if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
+                check_object(dl, &["display"], "options.plugins.datalabels")?;
+            }
         }
     }
 

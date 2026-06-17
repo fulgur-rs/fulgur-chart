@@ -81,6 +81,8 @@ pub struct ChartSpec {
     pub title: Option<String>,
     pub width: f64,
     pub height: f64,
+    /// データラベルを描画するか(frontend で解決済み)。
+    pub data_labels: bool,
 }
 
 #[cfg(test)]
