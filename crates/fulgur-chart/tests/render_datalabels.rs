@@ -82,3 +82,21 @@ fn pie_datalabels_render_values() {
     assert!(svg.contains(">50</text>"));
     assert!(svg.contains(">20</text>"));
 }
+
+#[test]
+fn bar_datalabels_skip_missing_values() {
+    // categories(3) > values(1): 欠損カテゴリに spurious な "0" ラベルを描かない。
+    let json = r#"{
+      "type":"bar",
+      "data":{"labels":["a","b","c"],"datasets":[{"data":[123]}]},
+      "options":{"plugins":{"datalabels":{"display":true}}}
+    }"#;
+    let svg = render(json);
+    // ">0</text>" は y 軸の 0 目盛り 1 個のみ。欠損カテゴリの 0 ラベルは出ない。
+    let zero_labels = svg.matches(">0</text>").count();
+    assert_eq!(
+        zero_labels, 1,
+        "欠損値にはデータラベルを描かない(0目盛りのみ)"
+    );
+    assert!(svg.contains(">123</text>"));
+}
