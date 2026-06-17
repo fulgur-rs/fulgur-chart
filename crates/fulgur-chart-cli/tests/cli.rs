@@ -68,14 +68,24 @@ fn strict_unknown_key_exits_2() {
 }
 
 #[test]
-fn png_not_supported_exits_3() {
-    let spec = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#;
+fn renders_bar_to_png_file() {
+    let dir = tempfile_dir();
+    let out = dir.join("out.png");
+    let spec = r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#;
     bin()
-        .args(["render", "-", "-o", "-", "--format", "png"])
+        .args([
+            "render",
+            "-",
+            "-o",
+            out.to_str().unwrap(),
+            "--format",
+            "png",
+        ])
         .write_stdin(spec)
         .assert()
-        .failure()
-        .code(3);
+        .success();
+    let bytes = std::fs::read(&out).unwrap();
+    assert_eq!(&bytes[0..4], &[0x89, b'P', b'N', b'G']);
 }
 
 #[test]

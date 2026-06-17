@@ -7,6 +7,7 @@ pub mod ir;
 pub mod layout;
 pub mod num;
 pub mod palette;
+pub mod raster;
 pub mod render;
 pub mod scale;
 pub mod scene;

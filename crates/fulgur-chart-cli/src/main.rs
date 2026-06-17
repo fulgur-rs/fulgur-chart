@@ -44,6 +44,10 @@ struct RenderArgs {
     /// 入力 DSL。既定は chartjs。
     #[arg(long, default_value = "chartjs")]
     dsl: String,
+
+    /// PNG 出力時の解像度倍率（1.0=等倍）。
+    #[arg(long, default_value_t = 1.0)]
+    scale: f32,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -103,13 +107,17 @@ fn run_render(args: RenderArgs) {
     // 6. format 決定: --format 明示 > output 拡張子(.png→png) > 既定 svg。
     let format = args.format.unwrap_or_else(|| detect_format(&args.output));
 
-    // 7. 出力生成。PNG は未対応なので render の前で短絡する。
+    // 7. 出力生成。SVG を生成し、PNG 指定時はラスタライズする。
+    let svg = fulgur_chart::render::render_chart(&spec_ir);
     let bytes = match format {
-        Format::Png => {
-            eprintln!("PNG 出力は未対応です (Task 15 で実装予定)");
-            std::process::exit(3);
-        }
-        Format::Svg => fulgur_chart::render::render_chart(&spec_ir).into_bytes(),
+        Format::Svg => svg.into_bytes(),
+        Format::Png => match fulgur_chart::raster::svg_to_png(&svg, args.scale) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("PNG 変換エラー: {e}");
+                std::process::exit(3);
+            }
+        },
     };
 
     // 8. 書き出し。`-` は stdout、それ以外はファイル。IO 失敗は exit 3。
