@@ -6,6 +6,7 @@ pub mod frontend;
 pub mod ir;
 pub mod num;
 pub mod palette;
+pub mod scale;
 pub mod text;
 
 pub fn version() -> &'static str {
