@@ -2,6 +2,7 @@
 
 pub mod color;
 pub mod font;
+pub mod frontend;
 pub mod ir;
 pub mod num;
 pub mod palette;
