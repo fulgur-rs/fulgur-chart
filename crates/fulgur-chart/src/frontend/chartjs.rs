@@ -179,9 +179,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             .options
             .plugins
             .title
-            .as_ref()
             .filter(|t| t.display)
-            .map(|t| t.text.clone()),
+            .map(|t| t.text),
         width: 800.0,
         height: 450.0,
     })
@@ -196,6 +195,7 @@ fn default_border_width(kind: &ChartKind) -> f64 {
 
 /// 指定色(スカラ/配列)を点ごとの Vec<Color> に解決する。
 /// 未指定: pie はスライス別パレット(n色)、それ以外は系列インデックスの 1 色。
+/// 不正色のフォールバックも pie はスライス位置色・非pieは系列色で、未指定時と一貫させる。
 fn resolve_colors(
     spec: Option<ScalarOrArray<String>>,
     is_pie: bool,
@@ -206,7 +206,16 @@ fn resolve_colors(
         Some(s) => s
             .into_vec()
             .iter()
-            .map(|c| parse_color(c).unwrap_or_else(|| palette_color(series_index)))
+            .enumerate()
+            .map(|(idx, c)| {
+                parse_color(c).unwrap_or_else(|| {
+                    if is_pie {
+                        palette_color(idx)
+                    } else {
+                        palette_color(series_index)
+                    }
+                })
+            })
             .collect(),
         None if is_pie => (0..n).map(palette_color).collect(),
         None => vec![palette_color(series_index)],
