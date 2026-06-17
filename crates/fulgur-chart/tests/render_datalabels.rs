@@ -23,6 +23,17 @@ fn vertical_bar_datalabels_render_values() {
 }
 
 #[test]
+fn vertical_bar_datalabels_render_negative_value() {
+    let json = r#"{
+      "type":"bar",
+      "data":{"labels":["a"],"datasets":[{"data":[-87]}]},
+      "options":{"plugins":{"datalabels":{"display":true}}}
+    }"#;
+    // 負値分岐(棒下端の下にラベル)の検証。-87 は nice_ticks 目盛りにならない番兵。
+    assert!(render(json).contains(">-87</text>"));
+}
+
+#[test]
 fn vertical_bar_without_datalabels_has_no_value_text() {
     let json = r#"{
       "type":"bar",

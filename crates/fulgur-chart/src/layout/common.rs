@@ -14,6 +14,8 @@ pub const LEGEND_BAND: f64 = 26.0;
 pub const X_LABEL_BAND: f64 = 22.0;
 pub const TEXT_BASELINE_RATIO: f64 = 0.35;
 pub const X_LABEL_CENTER_RATIO: f64 = 0.7;
+/// データラベルの軸方向ギャップ(棒の端からラベルまでの余白, px)。
+pub const LABEL_GAP: f64 = 4.0;
 pub const GRID: Color = Color {
     r: 224,
     g: 224,
@@ -250,4 +252,17 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
 /// 凡例 1 エントリの占有幅: swatch幅(12) + gap(4) + ラベル幅 + trailing間隔(16)。
 pub fn legend_entry_width(m: &TextMeasurer, name: &str) -> f64 {
     12.0 + 4.0 + m.width(name, LABEL_FONT as f32) as f64 + 16.0
+}
+
+/// 値ラベルの Prim::Text を生成する(フォント=LABEL_FONT、内容=fmt_num(v))。
+/// 全チャート種でデータラベル生成を一元化する。x/y/anchor/fill は呼び出し側が決める。
+pub fn value_label(x: f64, y: f64, anchor: Anchor, fill: Color, v: f64) -> Prim {
+    Prim::Text {
+        x,
+        y,
+        size: LABEL_FONT,
+        anchor,
+        fill,
+        content: fmt_num(v),
+    }
 }
