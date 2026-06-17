@@ -4,7 +4,7 @@ use super::common;
 use crate::font::DEFAULT_FONT;
 use crate::ir::{ChartSpec, Color};
 use crate::num::fmt_num;
-use crate::scene::{Prim, Scene};
+use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 use std::fmt::Write;
 
@@ -93,6 +93,23 @@ pub fn build(spec: &ChartSpec) -> Scene {
                 r: MARKER_R,
                 fill: ser.stroke_at(0),
             });
+        }
+
+        // データラベル(点の上、マーカー半径ぶん+余白だけ上)。
+        if spec.data_labels {
+            for (i, (x, y)) in pts.iter().enumerate() {
+                if let Some(&v) = ser.values.get(i) {
+                    if v.is_finite() {
+                        items.push(common::value_label(
+                            *x,
+                            *y - MARKER_R - common::LABEL_GAP,
+                            Anchor::Middle,
+                            common::INK,
+                            v,
+                        ));
+                    }
+                }
+            }
         }
     }
 

@@ -57,3 +57,15 @@ fn horizontal_bar_datalabels_render_values() {
     assert!(svg.contains(">123</text>"));
     assert!(svg.contains(">87</text>"));
 }
+
+#[test]
+fn line_datalabels_render_values() {
+    let json = r#"{
+      "type":"line",
+      "data":{"labels":["a","b","c"],"datasets":[{"data":[123,87,151]}]},
+      "options":{"plugins":{"datalabels":{"display":true}}}
+    }"#;
+    let svg = render(json);
+    assert!(svg.contains(">123</text>"));
+    assert!(svg.contains(">87</text>"));
+}
