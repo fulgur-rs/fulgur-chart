@@ -5,7 +5,7 @@ use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use std::fmt::Write;
 
-pub fn render_svg(scene: &Scene) -> String {
+pub fn render_svg(scene: &Scene, font_family: &str) -> String {
     let mut s = String::new();
     let w = fmt_num(scene.width);
     let h = fmt_num(scene.height);
@@ -15,7 +15,7 @@ pub fn render_svg(scene: &Scene) -> String {
     )
     .unwrap();
     for item in &scene.items {
-        write_prim(&mut s, item);
+        write_prim(&mut s, item, font_family);
     }
     s.push_str("</svg>\n");
     s
@@ -36,7 +36,7 @@ fn opacity_attr(name: &str, a: f32) -> String {
     }
 }
 
-fn write_prim(s: &mut String, prim: &Prim) {
+fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
     match prim {
         Prim::Rect { x, y, w, h, fill } => {
             let x = fmt_num(*x);
@@ -159,7 +159,7 @@ fn write_prim(s: &mut String, prim: &Prim) {
             let escaped = xml_escape(content);
             write!(
                 s,
-                r#"<text x="{x}" y="{y}" font-family="Noto Sans JP, sans-serif" font-size="{size}" text-anchor="{anchor}" fill="{hex}"{op}>{escaped}</text>"#
+                r#"<text x="{x}" y="{y}" font-family="{font_family}" font-size="{size}" text-anchor="{anchor}" fill="{hex}"{op}>{escaped}</text>"#
             )
             .unwrap();
         }
@@ -203,7 +203,7 @@ mod tests {
             height: 50.0,
             items: vec![],
         };
-        let svg = render_svg(&scene);
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
         assert!(svg.starts_with(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"50\" viewBox=\"0 0 100 50\">"
         ));
@@ -223,7 +223,7 @@ mod tests {
                 fill: blue(),
             }],
         };
-        let svg = render_svg(&scene);
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
         assert!(
             svg.contains(r##"<rect x="1" y="2" width="10" height="20" fill="#36a2eb"/>"##),
             "got: {svg}"
@@ -248,7 +248,7 @@ mod tests {
                 },
             }],
         };
-        let svg = render_svg(&scene);
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
         assert!(
             svg.contains(r##"fill="#010203" fill-opacity="0.5"/>"##),
             "got: {svg}"
@@ -269,7 +269,7 @@ mod tests {
                 content: "a<b & c>d".into(),
             }],
         };
-        let svg = render_svg(&scene);
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
         assert!(svg.contains(r#"font-family="Noto Sans JP, sans-serif""#));
         assert!(svg.contains(r#"font-size="12""#));
         assert!(svg.contains(r#"text-anchor="middle""#));
@@ -300,7 +300,7 @@ mod tests {
                 },
             ],
         };
-        let svg = render_svg(&scene);
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
         assert!(svg.contains(r#"text-anchor="start""#), "got: {svg}");
         assert!(svg.contains(r#"text-anchor="end""#), "got: {svg}");
     }
@@ -332,7 +332,7 @@ mod tests {
                 },
             ],
         };
-        let svg = render_svg(&scene);
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
         assert!(
             svg.contains(
                 r##"<line x1="0" y1="0" x2="10" y2="20" stroke="#000000" stroke-width="1"/>"##
@@ -367,7 +367,7 @@ mod tests {
                 stroke_width: 1.0,
             }],
         };
-        let svg = render_svg(&scene);
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
         assert!(
             svg.contains(r#"stroke-width="1" stroke-opacity="0.25"/>"#),
             "got: {svg}"
@@ -393,7 +393,7 @@ mod tests {
                 stroke_width: 2.0,
             }],
         };
-        let svg = render_svg(&scene);
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
         assert!(
             svg.contains(r#"stroke-width="2" stroke-opacity="0.75"/>"#),
             "got: {svg}"
@@ -420,7 +420,7 @@ mod tests {
                 },
             ],
         };
-        let svg = render_svg(&scene);
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
         assert!(
             svg.contains(r##"<path d="M0 0 L10 0 L10 10 Z" fill="#36a2eb" stroke="none"/>"##),
             "got: {svg}"
@@ -455,7 +455,7 @@ mod tests {
                 stroke_width: 2.0,
             }],
         };
-        let svg = render_svg(&scene);
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
         assert!(
             svg.contains(
                 r##"<path d="M0 0 L1 1" fill="#010203" stroke="#040506" stroke-width="2" fill-opacity="0.5" stroke-opacity="0.25"/>"##
@@ -477,7 +477,10 @@ mod tests {
                 fill: blue(),
             }],
         };
-        assert_eq!(render_svg(&scene), render_svg(&scene));
+        assert_eq!(
+            render_svg(&scene, "Noto Sans JP, sans-serif"),
+            render_svg(&scene, "Noto Sans JP, sans-serif")
+        );
     }
 
     #[test]
@@ -511,6 +514,6 @@ mod tests {
             r##"<text x="1" y="2" font-family="Noto Sans JP, sans-serif" font-size="8" text-anchor="start" fill="#000000">x</text>"##,
             "</svg>\n",
         );
-        assert_eq!(render_svg(&scene), expected);
+        assert_eq!(render_svg(&scene, "Noto Sans JP, sans-serif"), expected);
     }
 }

@@ -1,7 +1,6 @@
 //! bar チャートのレイアウト: ChartSpec → Scene。
 //! 縦棒・横棒に対応。決定的に組み立て、NaN/Inf/panic を出さない。
 
-use crate::font::DEFAULT_FONT;
 use crate::ir::ChartSpec;
 use crate::scene::{Prim, Scene};
 use crate::text::TextMeasurer;
@@ -13,22 +12,21 @@ const BAND_PAD_RATIO: f64 = 0.1;
 /// bar 幅の塗り比。
 const BAR_FILL_RATIO: f64 = 0.9;
 
-pub fn build(spec: &ChartSpec) -> Scene {
+pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     match spec.kind {
-        crate::ir::ChartKind::Bar { horizontal: true } => build_horizontal(spec),
-        _ => build_vertical(spec),
+        crate::ir::ChartKind::Bar { horizontal: true } => build_horizontal(spec, m),
+        _ => build_vertical(spec, m),
     }
 }
 
-fn build_vertical(spec: &ChartSpec) -> Scene {
+fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     use super::common::{INK, LABEL_FONT, LABEL_GAP, value_label};
     use crate::scene::Anchor;
 
-    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
-    let frame = super::common::compute(spec, &m);
+    let frame = super::common::compute(spec, m);
 
     let mut items: Vec<Prim> = Vec::new();
-    super::common::draw_frame(&mut items, spec, &frame, &m);
+    super::common::draw_frame(&mut items, spec, &frame, m);
 
     // bar 本体: カテゴリ band 内に系列グループの矩形を重ねる。
     let n = spec.categories.len().max(1);
@@ -80,13 +78,12 @@ fn build_vertical(spec: &ChartSpec) -> Scene {
 
 /// 横棒(indexAxis:"y"): 値軸=X(左→右非反転)、カテゴリ軸=Y(上→下)。
 /// 縦向き前提の common::compute/draw_frame は使わず、転置レイアウトを自前で描く。
-fn build_horizontal(spec: &ChartSpec) -> Scene {
+fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     use crate::layout::common::*;
     use crate::num::fmt_num;
     use crate::scale::{LinearScale, nice_ticks};
     use crate::scene::Anchor;
 
-    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
     let (dmin, dmax) = value_domain(spec);
     let ticks = nice_ticks(dmin, dmax, 5);
 
@@ -127,12 +124,12 @@ fn build_horizontal(spec: &ChartSpec) -> Scene {
     // Left/Right の凡例帯幅(系列名から算出)。
     let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
     let legend_left = if has_legend && spec.legend == crate::ir::LegendPos::Left {
-        legend_band_width_vertical(&m, &series_names)
+        legend_band_width_vertical(m, &series_names)
     } else {
         0.0
     };
     let legend_right = if has_legend && spec.legend == crate::ir::LegendPos::Right {
-        legend_band_width_vertical(&m, &series_names)
+        legend_band_width_vertical(m, &series_names)
     } else {
         0.0
     };
@@ -251,7 +248,7 @@ fn build_horizontal(spec: &ChartSpec) -> Scene {
     {
         let mut total = 0.0_f64;
         for (k, ser) in spec.series.iter().enumerate() {
-            let ew = legend_entry_width(&m, &ser.name);
+            let ew = legend_entry_width(m, &ser.name);
             total += ew;
             if k == spec.series.len() - 1 {
                 total -= 16.0;
@@ -280,7 +277,7 @@ fn build_horizontal(spec: &ChartSpec) -> Scene {
                 fill: INK,
                 content: ser.name.clone(),
             });
-            cursor += legend_entry_width(&m, &ser.name);
+            cursor += legend_entry_width(m, &ser.name);
         }
     }
 
@@ -301,7 +298,7 @@ fn build_horizontal(spec: &ChartSpec) -> Scene {
         } else {
             spec.width - OUTER_PAD - legend_right
         };
-        draw_vertical_legend(&mut items, &entries, band_x, plot_top, plot_bottom, &m);
+        draw_vertical_legend(&mut items, &entries, band_x, plot_top, plot_bottom, m);
     }
 
     Scene {

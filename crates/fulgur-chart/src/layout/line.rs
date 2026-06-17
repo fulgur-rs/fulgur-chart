@@ -1,7 +1,6 @@
 //! line / area チャート。共有フレーム(common)の上に折れ線・面・マーカーを重ねる。
 
 use super::common;
-use crate::font::DEFAULT_FONT;
 use crate::ir::{ChartSpec, Color};
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
@@ -13,12 +12,11 @@ const AREA_FILL_ALPHA: f32 = 0.3;
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
 
-pub fn build(spec: &ChartSpec) -> Scene {
-    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
-    let frame = common::compute(spec, &m);
+pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
+    let frame = common::compute(spec, m);
 
     let mut items: Vec<Prim> = Vec::new();
-    common::draw_frame(&mut items, spec, &frame, &m);
+    common::draw_frame(&mut items, spec, &frame, m);
 
     let n = spec.categories.len().max(1);
 

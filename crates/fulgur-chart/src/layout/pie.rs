@@ -1,7 +1,6 @@
 //! pie / doughnut チャート。軸・グリッドを持たず、タイトルと凡例(カテゴリ別)を自前で描く。
 
 use super::common;
-use crate::font::DEFAULT_FONT;
 use crate::ir::{ChartKind, ChartSpec, Color, LegendPos};
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
@@ -25,8 +24,7 @@ const LABEL_COLOR: Color = Color {
     a: 1.0,
 };
 
-pub fn build(spec: &ChartSpec) -> Scene {
-    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let mut items: Vec<Prim> = Vec::new();
 
     // doughnut の内径比。
@@ -73,12 +71,12 @@ pub fn build(spec: &ChartSpec) -> Scene {
     };
     // Left/Right の凡例帯幅(カテゴリ名から算出)。
     let legend_left = if has_legend && spec.legend == LegendPos::Left {
-        common::legend_band_width_vertical(&m, &spec.categories)
+        common::legend_band_width_vertical(m, &spec.categories)
     } else {
         0.0
     };
     let legend_right = if has_legend && spec.legend == LegendPos::Right {
-        common::legend_band_width_vertical(&m, &spec.categories)
+        common::legend_band_width_vertical(m, &spec.categories)
     } else {
         0.0
     };
@@ -87,7 +85,7 @@ pub fn build(spec: &ChartSpec) -> Scene {
         let mut total = 0.0_f64;
         let n = spec.categories.len();
         for (k, cat) in spec.categories.iter().enumerate() {
-            total += common::legend_entry_width(&m, cat);
+            total += common::legend_entry_width(m, cat);
             if k == n - 1 {
                 total -= 16.0;
             }
@@ -116,7 +114,7 @@ pub fn build(spec: &ChartSpec) -> Scene {
                 fill: common::INK,
                 content: cat.clone(),
             });
-            cursor += common::legend_entry_width(&m, cat);
+            cursor += common::legend_entry_width(m, cat);
         }
     }
 
@@ -144,7 +142,7 @@ pub fn build(spec: &ChartSpec) -> Scene {
         // 円の縦スパン(area_top..area_bottom)中央に揃える。
         let area_top = common::OUTER_PAD + title_band + legend_top;
         let area_bottom = spec.height - common::OUTER_PAD - legend_bottom;
-        common::draw_vertical_legend(&mut items, &entries, band_x, area_top, area_bottom, &m);
+        common::draw_vertical_legend(&mut items, &entries, band_x, area_top, area_bottom, m);
     }
 
     // 3. 円の領域。

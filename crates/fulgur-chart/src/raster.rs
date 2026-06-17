@@ -10,13 +10,27 @@ use crate::font::DEFAULT_FONT;
 /// `scale` が正の有限値でない場合（0 以下・負・NaN）は 1.0 にフォールバックする。
 /// 失敗は `Err(String)` に変換し、panic しない。
 pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, String> {
+    // 既定パス: 同梱フォントを fontdb に載せる。出力は従来と完全一致。
+    svg_to_png_with_font(svg, scale, DEFAULT_FONT)
+}
+
+/// SVG 文字列を PNG バイト列にラスタライズする。`font_bytes` を fontdb にロードする。
+///
+/// `svg_to_png` との違いはロードするフォントのみ。`scale` ガード・寸法計算・
+/// レンダリングは同一で、決定的・非 panic。
+pub fn svg_to_png_with_font(svg: &str, scale: f32, font_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    // フォント検証: 計測(TextMeasurer)・SVG family・ラスタの三者で「有効フォント」の
+    // 判定を一致させるため、計測層と同一の ttf_parser::Face::parse でゲートする。
+    // (usvg fontdb は不正バイトを黙って無視し Err を返さないため、ここで弾く。)
+    ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("フォント解析失敗: {e}"))?;
+
     // scale ガード: `> 0.0` 形で 0/負/NaN をまとめて 1.0 に倒す。
     // 以後この `scale` を pixmap 寸法と Transform の両方で同一に使う。
     let scale = if scale > 0.0 { scale } else { 1.0 };
 
-    // usvg::Options に同梱フォントをロード（決定性のため同梱1本のみ。system fonts は読まない）。
+    // usvg::Options に指定フォントをロード（決定性のため1本のみ。system fonts は読まない）。
     let mut opt = usvg::Options::default();
-    opt.fontdb_mut().load_font_data(DEFAULT_FONT.to_vec());
+    opt.fontdb_mut().load_font_data(font_bytes.to_vec());
 
     let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| format!("SVG 解析失敗: {e}"))?;
 
@@ -77,5 +91,19 @@ mod tests {
         let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"30\"><text x=\"0\" y=\"20\" font-family=\"Noto Sans JP, sans-serif\" font-size=\"16\" fill=\"#000000\">売上</text></svg>";
         let png = svg_to_png(svg, 1.0).unwrap();
         assert_eq!(&png[0..4], &[0x89, b'P', b'N', b'G']);
+    }
+
+    #[test]
+    fn with_font_rasterizes_to_valid_png() {
+        use crate::font::DEFAULT_FONT;
+        let png = svg_to_png_with_font(MIN_SVG, 1.0, DEFAULT_FONT).unwrap();
+        assert_eq!(&png[0..4], &[0x89, b'P', b'N', b'G']);
+    }
+
+    #[test]
+    fn with_invalid_font_is_err() {
+        // フォントが usvg fontdb にロードできないバイト列のとき Err（panic しない）。
+        let err = svg_to_png_with_font(MIN_SVG, 1.0, b"not a font");
+        assert!(err.is_err());
     }
 }

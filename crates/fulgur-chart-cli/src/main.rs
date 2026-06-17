@@ -48,6 +48,10 @@ struct RenderArgs {
     /// PNG 出力時の解像度倍率（1.0=等倍）。
     #[arg(long, default_value_t = 1.0)]
     scale: f32,
+
+    /// 計測・SVG・PNG で使うフォントファイルパス。省略時は同梱フォント。
+    #[arg(long)]
+    font: Option<String>,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -107,26 +111,54 @@ fn run_render(args: RenderArgs) {
     // 6. format 決定: --format 明示 > output 拡張子(.png→png) > 既定 svg。
     let format = args.format.unwrap_or_else(|| detect_format(&args.output));
 
-    // 7. 出力生成。SVG を生成し、PNG 指定時はラスタライズする。
-    let svg = fulgur_chart::render::render_chart(&spec_ir);
-    let bytes = match format {
-        Format::Svg => svg.into_bytes(),
-        Format::Png => match fulgur_chart::raster::svg_to_png(&svg, args.scale) {
-            Ok(b) => b,
+    // 7. フォント読込: --font 指定時はファイルを1度だけ読み、計測/SVG/PNG の三者で
+    //    同一バイト列を使う。未指定なら同梱フォント(従来動作で byte 一致)。
+    let font_bytes: Option<Vec<u8>> = match &args.font {
+        Some(path) => match std::fs::read(path) {
+            Ok(b) => Some(b),
             Err(e) => {
-                eprintln!("PNG 変換エラー: {e}");
-                std::process::exit(3);
+                eprintln!("フォント読み込みエラー: {path}: {e}");
+                std::process::exit(1);
             }
         },
+        None => None,
     };
 
-    // 8. 書き出し。`-` は stdout、それ以外はファイル。IO 失敗は exit 3。
+    // 8. 出力生成。SVG を生成し、PNG 指定時はラスタライズする。
+    let svg = match &font_bytes {
+        Some(bytes) => match fulgur_chart::render::render_chart_with_font(&spec_ir, bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("レンダリングエラー: {e}");
+                std::process::exit(1);
+            }
+        },
+        None => fulgur_chart::render::render_chart(&spec_ir),
+    };
+    let bytes = match format {
+        Format::Svg => svg.into_bytes(),
+        Format::Png => {
+            let res = match &font_bytes {
+                Some(fb) => fulgur_chart::raster::svg_to_png_with_font(&svg, args.scale, fb),
+                None => fulgur_chart::raster::svg_to_png(&svg, args.scale),
+            };
+            match res {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("PNG 変換エラー: {e}");
+                    std::process::exit(3);
+                }
+            }
+        }
+    };
+
+    // 9. 書き出し。`-` は stdout、それ以外はファイル。IO 失敗は exit 3。
     if let Err(e) = write_output(&args.output, &bytes) {
         eprintln!("出力エラー: {e}");
         std::process::exit(3);
     }
 
-    // 9. 正常終了(暗黙の exit 0)。
+    // 10. 正常終了(暗黙の exit 0)。
 }
 
 fn read_spec(path: &str) -> std::io::Result<String> {

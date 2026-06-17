@@ -7,11 +7,12 @@ pub mod pie;
 
 use crate::ir::{ChartKind, ChartSpec};
 use crate::scene::Scene;
+use crate::text::TextMeasurer;
 
-pub fn build_scene(spec: &ChartSpec) -> Scene {
+pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     match spec.kind {
-        ChartKind::Bar { .. } => bar::build(spec),
-        ChartKind::Line => line::build(spec),
-        ChartKind::Pie { .. } => pie::build(spec),
+        ChartKind::Bar { .. } => bar::build(spec, m),
+        ChartKind::Line => line::build(spec, m),
+        ChartKind::Pie { .. } => pie::build(spec, m),
     }
 }

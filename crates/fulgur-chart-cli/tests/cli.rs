@@ -110,6 +110,34 @@ fn missing_input_file_exits_1() {
         .code(1);
 }
 
+/// 同梱フォントの絶対パス(CLI クレートから見た相対で解決)。
+const BUNDLED_FONT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../fulgur-chart/assets/fonts/NotoSansJP-Regular.otf"
+);
+
+#[test]
+fn font_flag_with_bundled_font_succeeds() {
+    let spec = r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#;
+    let out = bin()
+        .args(["render", "-", "-o", "-", "--font", BUNDLED_FONT])
+        .write_stdin(spec)
+        .assert()
+        .success();
+    let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(s.starts_with("<svg"));
+}
+
+#[test]
+fn font_flag_missing_file_fails() {
+    let spec = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#;
+    bin()
+        .args(["render", "-", "-o", "-", "--font", "/no/such.ttf"])
+        .write_stdin(spec)
+        .assert()
+        .failure();
+}
+
 // tempdir ヘルパ: tempfile クレートを使わず std::env::temp_dir に一意ディレクトリを作る
 fn tempfile_dir() -> std::path::PathBuf {
     let base = std::env::temp_dir().join(format!("fulgur_chart_cli_test_{}", std::process::id()));
