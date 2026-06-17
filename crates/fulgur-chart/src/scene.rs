@@ -36,6 +36,8 @@ pub enum Prim {
     },
     /// 任意パス。area塗り・pie扇形・曲線に使う。fill/strokeは任意。
     Path {
+        /// SVG path data。`fmt_num` 整形済みのトークンとパスコマンドのみを含むこと。
+        /// 生のユーザ文字列(系列名・ラベル等)を補間してはならない(無エスケープで出力される)。
         d: String,
         fill: Option<Color>,
         stroke: Option<Color>,
