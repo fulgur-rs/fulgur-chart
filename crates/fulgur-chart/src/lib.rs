@@ -2,6 +2,7 @@
 
 pub mod font;
 pub mod num;
+pub mod text;
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
