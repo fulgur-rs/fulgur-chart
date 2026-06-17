@@ -51,3 +51,25 @@ fn bar_snapshot() {
     );
     insta::assert_snapshot!(svg);
 }
+
+#[test]
+fn horizontal_bar_differs_from_vertical_and_is_valid() {
+    let vert =
+        render(r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]}}"#);
+    let horiz = render(
+        r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},"options":{"indexAxis":"y"}}"#,
+    );
+    assert_ne!(vert, horiz, "横棒は縦棒と異なる出力になるべき");
+    assert!(horiz.matches("<rect").count() >= 2);
+    assert!(!horiz.contains("NaN") && !horiz.contains("inf"));
+    assert!(horiz.contains(">A</text>") && horiz.contains(">B</text>"));
+    assert!(horiz.starts_with("<svg") && horiz.trim_end().ends_with("</svg>"));
+}
+
+#[test]
+fn horizontal_bar_snapshot() {
+    let svg = render(
+        r#"{"type":"bar","data":{"labels":["東","西","南"],"datasets":[{"label":"売上","data":[120,200,150]}]},"options":{"indexAxis":"y","plugins":{"title":{"display":true,"text":"地域別"}}}}"#,
+    );
+    insta::assert_snapshot!(svg);
+}

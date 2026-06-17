@@ -43,9 +43,9 @@ fn has_legend(spec: &ChartSpec) -> bool {
         && spec.series.iter().any(|s| !s.name.is_empty())
 }
 
-/// spec から y ドメイン(begin_at_zero尊重)・nice_ticks・y軸ラベル幅・プロット領域・凡例帯を計算。
-pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
-    // y ドメイン。
+/// 値ドメイン(begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
+/// 縦棒(compute)と横棒(build_horizontal)が同一の値域計算を共有する。
+pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
     for s in &spec.series {
@@ -73,6 +73,13 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     if domain_max <= domain_min {
         domain_max = domain_min + 1.0;
     }
+    (domain_min, domain_max)
+}
+
+/// spec から y ドメイン(begin_at_zero尊重)・nice_ticks・y軸ラベル幅・プロット領域・凡例帯を計算。
+pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
+    // y ドメイン。
+    let (domain_min, domain_max) = value_domain(spec);
     let ticks = nice_ticks(domain_min, domain_max, 5);
 
     // y 軸ラベル幅。
