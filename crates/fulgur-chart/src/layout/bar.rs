@@ -15,6 +15,17 @@ const TITLE_BAND: f64 = 28.0;
 const LEGEND_BAND: f64 = 26.0;
 const X_LABEL_BAND: f64 = 22.0;
 
+/// band 内のグループ幅比。
+const GROUP_RATIO: f64 = 0.8;
+/// band 左右パディング比。
+const BAND_PAD_RATIO: f64 = 0.1;
+/// bar 幅の塗り比。
+const BAR_FILL_RATIO: f64 = 0.9;
+/// テキストの縦ベースライン係数（フォントサイズに対する比）。
+const TEXT_BASELINE_RATIO: f64 = 0.35;
+/// x ラベルの帯内縦位置比。
+const X_LABEL_CENTER_RATIO: f64 = 0.7;
+
 const GRID: Color = Color {
     r: 224,
     g: 224,
@@ -27,6 +38,11 @@ const INK: Color = Color {
     b: 102,
     a: 1.0,
 };
+
+/// 凡例 1 エントリの占有幅: swatch幅(12) + gap(4) + ラベル幅 + trailing間隔(16)。
+fn legend_entry_width(m: &crate::text::TextMeasurer, name: &str) -> f64 {
+    12.0 + 4.0 + m.width(name, LABEL_FONT as f32) as f64 + 16.0
+}
 
 pub fn build(spec: &ChartSpec) -> Scene {
     let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
@@ -127,7 +143,7 @@ pub fn build(spec: &ChartSpec) -> Scene {
         });
         items.push(Prim::Text {
             x: plot_left - 6.0,
-            y: y + LABEL_FONT * 0.35,
+            y: y + LABEL_FONT * TEXT_BASELINE_RATIO,
             size: LABEL_FONT,
             anchor: Anchor::End,
             fill: INK,
@@ -149,7 +165,7 @@ pub fn build(spec: &ChartSpec) -> Scene {
     let n = spec.categories.len().max(1);
     let band_w = (plot_right - plot_left) / n as f64;
     let s = spec.series.len().max(1);
-    let group_w = band_w * 0.8;
+    let group_w = band_w * GROUP_RATIO;
     let bar_w = group_w / s as f64;
 
     let base_v = 0.0_f64.clamp(nt.min, nt.max);
@@ -162,7 +178,7 @@ pub fn build(spec: &ChartSpec) -> Scene {
         if !cat.is_empty() {
             items.push(Prim::Text {
                 x: center,
-                y: plot_bottom + X_LABEL_BAND * 0.7,
+                y: plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
                 size: LABEL_FONT,
                 anchor: Anchor::Middle,
                 fill: INK,
@@ -171,7 +187,7 @@ pub fn build(spec: &ChartSpec) -> Scene {
         }
 
         for (sidx, ser) in spec.series.iter().enumerate() {
-            let bx = band_left + band_w * 0.1 + sidx as f64 * bar_w;
+            let bx = band_left + band_w * BAND_PAD_RATIO + sidx as f64 * bar_w;
             let v = ser.values.get(i).copied().unwrap_or(0.0);
             let vy = ys.map(v);
             let y_top = vy.min(baseline_y);
@@ -179,7 +195,7 @@ pub fn build(spec: &ChartSpec) -> Scene {
             items.push(Prim::Rect {
                 x: bx,
                 y: y_top,
-                w: (bar_w * 0.9).max(0.0),
+                w: (bar_w * BAR_FILL_RATIO).max(0.0),
                 h,
                 fill: ser.fill_at(i),
             });
@@ -191,7 +207,7 @@ pub fn build(spec: &ChartSpec) -> Scene {
         // 各エントリ幅と合計（末尾間隔 16 を最後だけ除く）。
         let mut total = 0.0_f64;
         for (k, ser) in spec.series.iter().enumerate() {
-            let ew = 12.0 + 4.0 + m.width(&ser.name, LABEL_FONT as f32) as f64 + 16.0;
+            let ew = legend_entry_width(&m, &ser.name);
             total += ew;
             if k == spec.series.len() - 1 {
                 total -= 16.0;
@@ -214,13 +230,13 @@ pub fn build(spec: &ChartSpec) -> Scene {
             });
             items.push(Prim::Text {
                 x: cursor + 16.0,
-                y: legend_cy + LABEL_FONT * 0.35,
+                y: legend_cy + LABEL_FONT * TEXT_BASELINE_RATIO,
                 size: LABEL_FONT,
                 anchor: Anchor::Start,
                 fill: INK,
                 content: ser.name.clone(),
             });
-            let ew = 12.0 + 4.0 + m.width(&ser.name, LABEL_FONT as f32) as f64 + 16.0;
+            let ew = legend_entry_width(&m, &ser.name);
             cursor += ew;
         }
     }
