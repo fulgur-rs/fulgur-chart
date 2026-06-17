@@ -101,8 +101,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                         items.push(common::value_label(
                             *x,
                             *y - MARKER_R - common::LABEL_GAP,
+                            spec.theme.font_size,
                             Anchor::Middle,
-                            common::INK,
+                            spec.theme.text_color,
                             v,
                         ));
                     }

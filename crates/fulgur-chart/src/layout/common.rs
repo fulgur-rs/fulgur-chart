@@ -92,7 +92,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     let mut max_w = 0.0_f32;
     for &t in &ticks.ticks {
         let s = fmt_num(t);
-        let w = m.width(&s, LABEL_FONT as f32);
+        let w = m.width(&s, spec.theme.font_size as f32);
         if w > max_w {
             max_w = w;
         }
@@ -121,12 +121,12 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // Left/Right の凡例帯幅(系列名から算出)。Top/Bottom 時は 0。
     let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
     let legend_left = if legend && spec.legend == LegendPos::Left {
-        legend_band_width_vertical(m, &series_names)
+        legend_band_width_vertical(m, &series_names, spec.theme.font_size)
     } else {
         0.0
     };
     let legend_right = if legend && spec.legend == LegendPos::Right {
-        legend_band_width_vertical(m, &series_names)
+        legend_band_width_vertical(m, &series_names, spec.theme.font_size)
     } else {
         0.0
     };
@@ -167,6 +167,9 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         0.0
     };
 
+    let ink = spec.theme.text_color;
+    let label_font = spec.theme.font_size;
+
     // 1. タイトル。
     if let Some(title) = &spec.title {
         items.push(Prim::Text {
@@ -174,7 +177,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             y: OUTER_PAD + TITLE_FONT,
             size: TITLE_FONT,
             anchor: Anchor::Middle,
-            fill: INK,
+            fill: ink,
             content: title.clone(),
         });
     }
@@ -187,15 +190,15 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             y1: y,
             x2: frame.plot_right,
             y2: y,
-            stroke: GRID,
+            stroke: spec.theme.grid_color,
             stroke_width: 1.0,
         });
         items.push(Prim::Text {
             x: frame.plot_left - 6.0,
-            y: y + LABEL_FONT * TEXT_BASELINE_RATIO,
-            size: LABEL_FONT,
+            y: y + label_font * TEXT_BASELINE_RATIO,
+            size: label_font,
             anchor: Anchor::End,
-            fill: INK,
+            fill: ink,
             content: fmt_num(t),
         });
     }
@@ -206,7 +209,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         y1: frame.plot_bottom,
         x2: frame.plot_right,
         y2: frame.plot_bottom,
-        stroke: INK,
+        stroke: ink,
         stroke_width: 1.0,
     });
 
@@ -217,9 +220,9 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             items.push(Prim::Text {
                 x: category_center(frame, i, n),
                 y: frame.plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
-                size: LABEL_FONT,
+                size: label_font,
                 anchor: Anchor::Middle,
-                fill: INK,
+                fill: ink,
                 content: cat.clone(),
             });
         }
@@ -230,7 +233,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         // 各エントリ幅と合計（末尾間隔 16 を最後だけ除く）。
         let mut total = 0.0_f64;
         for (k, ser) in spec.series.iter().enumerate() {
-            let ew = legend_entry_width(m, &ser.name);
+            let ew = legend_entry_width(m, &ser.name, label_font);
             total += ew;
             if k == spec.series.len() - 1 {
                 total -= 16.0;
@@ -253,13 +256,13 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             });
             items.push(Prim::Text {
                 x: cursor + 16.0,
-                y: legend_cy + LABEL_FONT * TEXT_BASELINE_RATIO,
-                size: LABEL_FONT,
+                y: legend_cy + label_font * TEXT_BASELINE_RATIO,
+                size: label_font,
                 anchor: Anchor::Start,
-                fill: INK,
+                fill: ink,
                 content: ser.name.clone(),
             });
-            let ew = legend_entry_width(m, &ser.name);
+            let ew = legend_entry_width(m, &ser.name, label_font);
             cursor += ew;
         }
     }
@@ -272,7 +275,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             .map(|s| (s.name.clone(), s.fill_at(0)))
             .collect();
         let names: Vec<String> = entries.iter().map(|(n, _)| n.clone()).collect();
-        let band_w = legend_band_width_vertical(m, &names);
+        let band_w = legend_band_width_vertical(m, &names, label_font);
         let band_x = if spec.legend == LegendPos::Left {
             OUTER_PAD
         } else {
@@ -284,17 +287,19 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             band_x,
             frame.plot_top,
             frame.plot_bottom,
-            m,
+            ink,
+            label_font,
         );
     }
 }
 
 /// 縦置き凡例(Left/Right)の帯幅: swatch(12) + gap(4) + 最大ラベル幅 + パディング(16)。
 /// 名前が空の系列も含めて算出する(レイアウトの確保量を呼び出し側と一致させるため)。
-pub fn legend_band_width_vertical(m: &TextMeasurer, names: &[String]) -> f64 {
+/// `font_size` はラベル測定に使う基準フォント(テーマ)。
+pub fn legend_band_width_vertical(m: &TextMeasurer, names: &[String], font_size: f64) -> f64 {
     let mut max_w = 0.0_f64;
     for name in names {
-        let w = m.width(name, LABEL_FONT as f32) as f64;
+        let w = m.width(name, font_size as f32) as f64;
         if w > max_w {
             max_w = w;
         }
@@ -304,13 +309,15 @@ pub fn legend_band_width_vertical(m: &TextMeasurer, names: &[String]) -> f64 {
 
 /// 縦置き凡例(Left/Right)を描く。entries は (名前, swatch色) の解決済みペア。
 /// プロットの縦スパン中央にエントリ群を配置する。
+/// `ink`/`font_size` はラベルの色とフォント(テーマ)。
 pub fn draw_vertical_legend(
     items: &mut Vec<Prim>,
     entries: &[(String, Color)],
     band_x: f64,
     plot_top: f64,
     plot_bottom: f64,
-    _m: &TextMeasurer,
+    ink: Color,
+    font_size: f64,
 ) {
     let n = entries.len();
     let group_h = n as f64 * LEGEND_ROW_H;
@@ -327,27 +334,28 @@ pub fn draw_vertical_legend(
         });
         items.push(Prim::Text {
             x: band_x + 16.0,
-            y: row_center + LABEL_FONT * TEXT_BASELINE_RATIO,
-            size: LABEL_FONT,
+            y: row_center + font_size * TEXT_BASELINE_RATIO,
+            size: font_size,
             anchor: Anchor::Start,
-            fill: INK,
+            fill: ink,
             content: name.clone(),
         });
     }
 }
 
 /// 凡例 1 エントリの占有幅: swatch幅(12) + gap(4) + ラベル幅 + trailing間隔(16)。
-pub fn legend_entry_width(m: &TextMeasurer, name: &str) -> f64 {
-    12.0 + 4.0 + m.width(name, LABEL_FONT as f32) as f64 + 16.0
+/// `font_size` はラベル測定に使う基準フォント(テーマ)。
+pub fn legend_entry_width(m: &TextMeasurer, name: &str, font_size: f64) -> f64 {
+    12.0 + 4.0 + m.width(name, font_size as f32) as f64 + 16.0
 }
 
-/// 値ラベルの Prim::Text を生成する(フォント=LABEL_FONT、内容=fmt_num(v))。
-/// 全チャート種でデータラベル生成を一元化する。x/y/anchor/fill は呼び出し側が決める。
-pub fn value_label(x: f64, y: f64, anchor: Anchor, fill: Color, v: f64) -> Prim {
+/// 値ラベルの Prim::Text を生成する(フォント=size、内容=fmt_num(v))。
+/// 全チャート種でデータラベル生成を一元化する。x/y/anchor/fill/size は呼び出し側が決める。
+pub fn value_label(x: f64, y: f64, size: f64, anchor: Anchor, fill: Color, v: f64) -> Prim {
     Prim::Text {
         x,
         y,
-        size: LABEL_FONT,
+        size,
         anchor,
         fill,
         content: fmt_num(v),

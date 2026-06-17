@@ -20,8 +20,11 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 }
 
 fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
-    use super::common::{INK, LABEL_FONT, LABEL_GAP, value_label};
+    use super::common::{LABEL_GAP, value_label};
     use crate::scene::Anchor;
+
+    let ink = spec.theme.text_color;
+    let label_font = spec.theme.font_size;
 
     let frame = super::common::compute(spec, m);
 
@@ -62,9 +65,9 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 let label_y = if v >= base_v {
                     y_top - LABEL_GAP
                 } else {
-                    y_top + h + LABEL_FONT
+                    y_top + h + label_font
                 };
-                items.push(value_label(cx, label_y, Anchor::Middle, INK, v));
+                items.push(value_label(cx, label_y, label_font, Anchor::Middle, ink, v));
             }
         }
     }
@@ -84,13 +87,16 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     use crate::scale::{LinearScale, nice_ticks};
     use crate::scene::Anchor;
 
+    let ink = spec.theme.text_color;
+    let label_font = spec.theme.font_size;
+
     let (dmin, dmax) = value_domain(spec);
     let ticks = nice_ticks(dmin, dmax, 5);
 
     // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。
     let mut max_cat_w = 0.0_f32;
     for c in &spec.categories {
-        let w = m.width(c, LABEL_FONT as f32);
+        let w = m.width(c, label_font as f32);
         if w > max_cat_w {
             max_cat_w = w;
         }
@@ -124,12 +130,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // Left/Right の凡例帯幅(系列名から算出)。
     let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
     let legend_left = if has_legend && spec.legend == crate::ir::LegendPos::Left {
-        legend_band_width_vertical(m, &series_names)
+        legend_band_width_vertical(m, &series_names, label_font)
     } else {
         0.0
     };
     let legend_right = if has_legend && spec.legend == crate::ir::LegendPos::Right {
-        legend_band_width_vertical(m, &series_names)
+        legend_band_width_vertical(m, &series_names, label_font)
     } else {
         0.0
     };
@@ -151,7 +157,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             y: OUTER_PAD + TITLE_FONT,
             size: TITLE_FONT,
             anchor: Anchor::Middle,
-            fill: INK,
+            fill: ink,
             content: title.clone(),
         });
     }
@@ -164,15 +170,15 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             y1: plot_top,
             x2: x,
             y2: plot_bottom,
-            stroke: GRID,
+            stroke: spec.theme.grid_color,
             stroke_width: 1.0,
         });
         items.push(Prim::Text {
             x,
             y: plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
-            size: LABEL_FONT,
+            size: label_font,
             anchor: Anchor::Middle,
-            fill: INK,
+            fill: ink,
             content: fmt_num(t),
         });
     }
@@ -183,7 +189,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         y1: plot_top,
         x2: plot_left,
         y2: plot_bottom,
-        stroke: INK,
+        stroke: ink,
         stroke_width: 1.0,
     });
 
@@ -205,10 +211,10 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         if !spec.categories[i].is_empty() {
             items.push(Prim::Text {
                 x: plot_left - 6.0,
-                y: center_y + LABEL_FONT * TEXT_BASELINE_RATIO,
-                size: LABEL_FONT,
+                y: center_y + label_font * TEXT_BASELINE_RATIO,
+                size: label_font,
                 anchor: Anchor::End,
-                fill: INK,
+                fill: ink,
                 content: spec.categories[i].clone(),
             });
         }
@@ -227,14 +233,14 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 fill: ser.fill_at(i),
             });
             if spec.data_labels && ser.values.get(i).is_some() && v.is_finite() {
-                let cy = by + (bar_h * BAR_FILL_RATIO) / 2.0 + LABEL_FONT * TEXT_BASELINE_RATIO;
+                let cy = by + (bar_h * BAR_FILL_RATIO) / 2.0 + label_font * TEXT_BASELINE_RATIO;
                 // 正は棒右端の右(Start)、負は左端の左(End)に LABEL_GAP 分離す。
                 let (lx, anchor) = if v >= base_v {
                     (vx + LABEL_GAP, Anchor::Start)
                 } else {
                     (vx - LABEL_GAP, Anchor::End)
                 };
-                items.push(value_label(lx, cy, anchor, INK, v));
+                items.push(value_label(lx, cy, label_font, anchor, ink, v));
             }
         }
     }
@@ -248,7 +254,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     {
         let mut total = 0.0_f64;
         for (k, ser) in spec.series.iter().enumerate() {
-            let ew = legend_entry_width(m, &ser.name);
+            let ew = legend_entry_width(m, &ser.name, label_font);
             total += ew;
             if k == spec.series.len() - 1 {
                 total -= 16.0;
@@ -271,13 +277,13 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             });
             items.push(Prim::Text {
                 x: cursor + 16.0,
-                y: legend_cy + LABEL_FONT * TEXT_BASELINE_RATIO,
-                size: LABEL_FONT,
+                y: legend_cy + label_font * TEXT_BASELINE_RATIO,
+                size: label_font,
                 anchor: Anchor::Start,
-                fill: INK,
+                fill: ink,
                 content: ser.name.clone(),
             });
-            cursor += legend_entry_width(m, &ser.name);
+            cursor += legend_entry_width(m, &ser.name, label_font);
         }
     }
 
@@ -298,7 +304,15 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         } else {
             spec.width - OUTER_PAD - legend_right
         };
-        draw_vertical_legend(&mut items, &entries, band_x, plot_top, plot_bottom, m);
+        draw_vertical_legend(
+            &mut items,
+            &entries,
+            band_x,
+            plot_top,
+            plot_bottom,
+            ink,
+            label_font,
+        );
     }
 
     Scene {

@@ -70,6 +70,44 @@ pub enum ChartKind {
     Pie { donut_ratio: f64 }, // 0.0 = pie, >0 = doughnut
 }
 
+/// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。
+/// `Default` は現行の描画定数と**完全一致**する（テーマ未指定時の byte 一致を保証）。
+#[derive(Clone, Debug, PartialEq)]
+pub struct Theme {
+    /// 系列/スライスの自動配色に使う巡回パレット。
+    pub palette: Vec<Color>,
+    /// グリッド線の色。
+    pub grid_color: Color,
+    /// テキスト/インクの色。
+    pub text_color: Color,
+    /// キャンバス背景色。None は背景なし(現行挙動)。
+    pub background: Option<Color>,
+    /// ラベル基準フォントサイズ(px)。タイトルは固定。
+    pub font_size: f64,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Theme {
+            palette: crate::palette::PALETTE.to_vec(),
+            grid_color: Color {
+                r: 224,
+                g: 224,
+                b: 224,
+                a: 1.0,
+            },
+            text_color: Color {
+                r: 102,
+                g: 102,
+                b: 102,
+                a: 1.0,
+            },
+            background: None,
+            font_size: 12.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartSpec {
     pub kind: ChartKind,
@@ -83,6 +121,8 @@ pub struct ChartSpec {
     pub height: f64,
     /// データラベルを描画するか(frontend で解決済み)。
     pub data_labels: bool,
+    /// 視覚トークンのテーマ(frontend で解決済み)。
+    pub theme: Theme,
 }
 
 #[cfg(test)]

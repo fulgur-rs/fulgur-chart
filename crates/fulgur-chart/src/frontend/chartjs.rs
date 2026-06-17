@@ -2,7 +2,6 @@
 
 use crate::color::parse_color;
 use crate::ir::*;
-use crate::palette::palette_color;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -20,10 +19,27 @@ struct RawOptions {
     index_axis: Option<String>,
     #[serde(default)]
     plugins: RawPlugins,
+    #[serde(default)]
+    theme: Option<RawTheme>,
     // 受理するが v1 の IR には未マップ（Task 9 のスケール対応時に使う）。
     #[allow(dead_code)]
     #[serde(default)]
     scales: Option<serde_json::Value>,
+}
+
+/// `options.theme`: 視覚トークンの上書き。各フィールドは任意。
+#[derive(Deserialize)]
+struct RawTheme {
+    #[serde(default)]
+    palette: Option<Vec<String>>,
+    #[serde(rename = "gridColor", default)]
+    grid_color: Option<String>,
+    #[serde(rename = "textColor", default)]
+    text_color: Option<String>,
+    #[serde(rename = "backgroundColor", default)]
+    background_color: Option<String>,
+    #[serde(rename = "fontSize", default)]
+    font_size: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -147,6 +163,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         None => false,
     };
 
+    // テーマ解決(配色に使うため色解決より先に行う)。
+    let theme = build_theme(raw.options.theme);
+
     let is_pie = matches!(kind, ChartKind::Pie { .. });
     let series = raw
         .data
@@ -155,8 +174,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .enumerate()
         .map(|(i, ds)| {
             let n = ds.data.len();
-            let fill = resolve_colors(ds.background_color, is_pie, i, n);
-            let stroke = resolve_colors(ds.border_color, is_pie, i, n);
+            let fill = resolve_colors(ds.background_color, is_pie, i, n, &theme.palette);
+            let stroke = resolve_colors(ds.border_color, is_pie, i, n, &theme.palette);
             Series {
                 name: ds.label,
                 values: ds.data,
@@ -197,7 +216,41 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         width: 800.0,
         height: 450.0,
         data_labels,
+        theme,
     })
+}
+
+/// `options.theme` を [`Theme`] へ解決する。各トークンは「指定 + 妥当」なら上書き、
+/// それ以外はデフォルト値を保つ。色は `parse_color` を通し、不正値はそのトークンの
+/// デフォルトにフォールバックする。パレットは妥当な要素を入力順で採り、空または
+/// 全要素不正ならデフォルトパレットを使う。
+fn build_theme(raw: Option<RawTheme>) -> Theme {
+    let mut theme = Theme::default();
+    let Some(raw) = raw else {
+        return theme;
+    };
+
+    if let Some(entries) = raw.palette {
+        let parsed: Vec<Color> = entries.iter().filter_map(|c| parse_color(c)).collect();
+        if !parsed.is_empty() {
+            theme.palette = parsed;
+        }
+    }
+    if let Some(c) = raw.grid_color.as_deref().and_then(parse_color) {
+        theme.grid_color = c;
+    }
+    if let Some(c) = raw.text_color.as_deref().and_then(parse_color) {
+        theme.text_color = c;
+    }
+    if let Some(c) = raw.background_color.as_deref().and_then(parse_color) {
+        theme.background = Some(c);
+    }
+    if let Some(sz) = raw.font_size {
+        if sz.is_finite() && sz > 0.0 {
+            theme.font_size = sz;
+        }
+    }
+    theme
 }
 
 fn default_border_width(kind: &ChartKind) -> f64 {
@@ -210,12 +263,15 @@ fn default_border_width(kind: &ChartKind) -> f64 {
 /// 指定色(スカラ/配列)を点ごとの Vec<Color> に解決する。
 /// 未指定: pie はスライス別パレット(n色)、それ以外は系列インデックスの 1 色。
 /// 不正色のフォールバックも pie はスライス位置色・非pieは系列色で、未指定時と一貫させる。
+/// 自動配色はテーマの `palette`(空でないことが保証済み)を巡回する。
 fn resolve_colors(
     spec: Option<ScalarOrArray<String>>,
     is_pie: bool,
     series_index: usize,
     n: usize,
+    palette: &[Color],
 ) -> Vec<Color> {
+    let pick = |i: usize| palette[i % palette.len()];
     match spec {
         Some(s) => s
             .into_vec()
@@ -224,15 +280,15 @@ fn resolve_colors(
             .map(|(idx, c)| {
                 parse_color(c).unwrap_or_else(|| {
                     if is_pie {
-                        palette_color(idx)
+                        pick(idx)
                     } else {
-                        palette_color(series_index)
+                        pick(series_index)
                     }
                 })
             })
             .collect(),
-        None if is_pie => (0..n).map(palette_color).collect(),
-        None => vec![palette_color(series_index)],
+        None if is_pie => (0..n).map(pick).collect(),
+        None => vec![pick(series_index)],
     }
 }
 
@@ -293,7 +349,11 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
     }
 
     if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
-        check_object(options, &["indexAxis", "plugins", "scales"], "options")?;
+        check_object(
+            options,
+            &["indexAxis", "plugins", "scales", "theme"],
+            "options",
+        )?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             check_object(
                 plugins,
@@ -303,6 +363,19 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
             if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
                 check_object(dl, &["display"], "options.plugins.datalabels")?;
             }
+        }
+        if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
+            check_object(
+                theme,
+                &[
+                    "palette",
+                    "gridColor",
+                    "textColor",
+                    "backgroundColor",
+                    "fontSize",
+                ],
+                "options.theme",
+            )?;
         }
     }
 

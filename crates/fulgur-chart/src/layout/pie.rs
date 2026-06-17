@@ -27,6 +27,9 @@ const LABEL_COLOR: Color = Color {
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let mut items: Vec<Prim> = Vec::new();
 
+    let ink = spec.theme.text_color;
+    let label_font = spec.theme.font_size;
+
     // doughnut の内径比。
     let donut_ratio = match spec.kind {
         ChartKind::Pie { donut_ratio } => donut_ratio,
@@ -49,7 +52,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             y: common::OUTER_PAD + common::TITLE_FONT,
             size: common::TITLE_FONT,
             anchor: Anchor::Middle,
-            fill: common::INK,
+            fill: ink,
             content: title.clone(),
         });
     }
@@ -71,12 +74,12 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     };
     // Left/Right の凡例帯幅(カテゴリ名から算出)。
     let legend_left = if has_legend && spec.legend == LegendPos::Left {
-        common::legend_band_width_vertical(m, &spec.categories)
+        common::legend_band_width_vertical(m, &spec.categories, label_font)
     } else {
         0.0
     };
     let legend_right = if has_legend && spec.legend == LegendPos::Right {
-        common::legend_band_width_vertical(m, &spec.categories)
+        common::legend_band_width_vertical(m, &spec.categories, label_font)
     } else {
         0.0
     };
@@ -85,7 +88,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let mut total = 0.0_f64;
         let n = spec.categories.len();
         for (k, cat) in spec.categories.iter().enumerate() {
-            total += common::legend_entry_width(m, cat);
+            total += common::legend_entry_width(m, cat, label_font);
             if k == n - 1 {
                 total -= 16.0;
             }
@@ -98,7 +101,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         };
         let mut cursor = start_x;
         for (i, cat) in spec.categories.iter().enumerate() {
-            let swatch = series.map(|s| s.fill_at(i)).unwrap_or(common::INK);
+            let swatch = series.map(|s| s.fill_at(i)).unwrap_or(ink);
             items.push(Prim::Rect {
                 x: cursor,
                 y: legend_cy - 6.0,
@@ -108,13 +111,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             });
             items.push(Prim::Text {
                 x: cursor + 16.0,
-                y: legend_cy + common::LABEL_FONT * common::TEXT_BASELINE_RATIO,
-                size: common::LABEL_FONT,
+                y: legend_cy + label_font * common::TEXT_BASELINE_RATIO,
+                size: label_font,
                 anchor: Anchor::Start,
-                fill: common::INK,
+                fill: ink,
                 content: cat.clone(),
             });
-            cursor += common::legend_entry_width(m, cat);
+            cursor += common::legend_entry_width(m, cat, label_font);
         }
     }
 
@@ -125,7 +128,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             .iter()
             .enumerate()
             .map(|(i, cat)| {
-                let swatch = series.map(|s| s.fill_at(i)).unwrap_or(common::INK);
+                let swatch = series.map(|s| s.fill_at(i)).unwrap_or(ink);
                 (cat.clone(), swatch)
             })
             .collect();
@@ -142,7 +145,15 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // 円の縦スパン(area_top..area_bottom)中央に揃える。
         let area_top = common::OUTER_PAD + title_band + legend_top;
         let area_bottom = spec.height - common::OUTER_PAD - legend_bottom;
-        common::draw_vertical_legend(&mut items, &entries, band_x, area_top, area_bottom, m);
+        common::draw_vertical_legend(
+            &mut items,
+            &entries,
+            band_x,
+            area_top,
+            area_bottom,
+            ink,
+            label_font,
+        );
     }
 
     // 3. 円の領域。
@@ -166,7 +177,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
             let frac = v / total;
             let a1 = a0 + frac * 2.0 * PI;
-            let fill = series.map(|s| s.fill_at(i)).unwrap_or(common::INK);
+            let fill = series.map(|s| s.fill_at(i)).unwrap_or(ink);
 
             let g = Geom {
                 cx,
@@ -191,7 +202,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 };
                 labels.push(common::value_label(
                     cx + label_r * amid.cos(),
-                    cy + label_r * amid.sin() + common::LABEL_FONT * common::TEXT_BASELINE_RATIO,
+                    cy + label_r * amid.sin() + label_font * common::TEXT_BASELINE_RATIO,
+                    label_font,
                     Anchor::Middle,
                     LABEL_COLOR,
                     v,
