@@ -215,6 +215,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         "doughnut" => ChartKind::Pie { donut_ratio: 0.5 },
         "scatter" => ChartKind::Scatter,
         "bubble" => ChartKind::Bubble,
+        "radar" => ChartKind::Radar,
         other => return Err(format!("未対応の type: {other}")),
     };
 

@@ -81,6 +81,7 @@ pub enum ChartKind {
     Pie { donut_ratio: f64 }, // 0.0 = pie, >0 = doughnut
     Scatter,                  // 線形 x × 線形 y。点データ(Series.points)を使う
     Bubble,                   // scatter と同じ枠組み。半径は point.r(第3次元)を使う
+    Radar,                    // 極座標。カテゴリ=スポーク、系列ごとに多角形を重ねる
 }
 
 /// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。

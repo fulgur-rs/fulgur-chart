@@ -92,8 +92,38 @@ fn invalid_json_is_err() {
 
 #[test]
 fn unknown_type_is_err() {
-    let json = r#"{ "type":"radar","data":{"labels":[],"datasets":[]} }"#;
+    let json = r#"{ "type":"polarArea","data":{"labels":[],"datasets":[]} }"#;
     assert!(chartjs::parse(json, false).is_err());
+}
+
+#[test]
+fn parses_radar_spec() {
+    let json = r#"{
+      "type": "radar",
+      "data": {
+        "labels": ["速度", "力", "技"],
+        "datasets": [
+          { "label": "A", "data": [60, 80, 40] },
+          { "label": "B", "data": [50, 30, 90] }
+        ]
+      }
+    }"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Radar));
+    assert_eq!(spec.categories, vec!["速度", "力", "技"]);
+    assert_eq!(spec.series.len(), 2);
+    assert_eq!(spec.series[0].values, vec![60.0, 80.0, 40.0]);
+    assert_eq!(spec.series[1].values, vec![50.0, 30.0, 90.0]);
+    // radar はカテゴリ系なので点データは空。
+    assert!(spec.series[0].points.is_empty());
+    // r 軸はゼロ起点(begin_at_zero)。
+    assert!(spec.y_axis.begin_at_zero);
+}
+
+#[test]
+fn strict_accepts_radar() {
+    let json = r#"{ "type":"radar","data":{"labels":["a"],"datasets":[{"data":[1]}]} }"#;
+    assert!(chartjs::parse(json, true).is_ok());
 }
 
 #[test]
