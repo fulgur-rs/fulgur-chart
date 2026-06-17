@@ -2,7 +2,12 @@
 
 /// 小数2桁に丸め、末尾の不要な 0 と小数点を除去する。
 /// 負ゼロは "0" に正規化。ロケール非依存。
+/// 非有限値（NaN / ±Infinity）は不正な SVG トークンになるため "0" に落とす。
+/// この関数は全座標の最終出口であり、ここで値を有限に保証する。
 pub fn fmt_num(v: f64) -> String {
+    if !v.is_finite() {
+        return "0".to_string();
+    }
     let rounded = (v * 100.0).round() / 100.0;
     let rounded = if rounded == 0.0 { 0.0 } else { rounded }; // -0.0 → 0.0
     let mut s = format!("{rounded:.2}");
@@ -30,5 +35,13 @@ mod tests {
         assert_eq!(fmt_num(1.234), "1.23");
         assert_eq!(fmt_num(-0.0), "0");        // 負ゼロを正規化
         assert_eq!(fmt_num(100.0), "100");
+    }
+
+    #[test]
+    fn non_finite_falls_back_to_zero() {
+        // NaN / ±Inf は不正な SVG トークンなので "0" に落とす
+        assert_eq!(fmt_num(f64::NAN), "0");
+        assert_eq!(fmt_num(f64::INFINITY), "0");
+        assert_eq!(fmt_num(f64::NEG_INFINITY), "0");
     }
 }
