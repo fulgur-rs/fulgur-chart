@@ -230,6 +230,10 @@ fn legend_pos(l: &Option<RawLegend>) -> LegendPos {
 ///
 /// 防御的に走査し、ノードが欠落/想定外の形なら `Ok(())` を返す（後段の通常パースが
 /// 適切な Err を出す）。最初に見つけた未知キーのパスを `Err` で返す。
+// strict 用ホワイトリスト。chart.js v4 サブセットとして「認識済み」のキーを並べる。
+// IR へ未マップでも、設計で v1 サポート対象に挙げたキーは strict でも受理する
+// （strict が弾くのは未知キーであり、認識済み・未完成キーではない）:
+//   datalabels=Task16(最小データラベル) / scales=Task9 / pointRadius=Task13。
 fn check_unknown_keys(json: &str) -> Result<(), String> {
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
