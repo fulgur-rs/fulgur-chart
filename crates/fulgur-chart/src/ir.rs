@@ -9,12 +9,23 @@ pub struct Color {
     pub a: f32, // 0.0–1.0
 }
 
+/// 散布図(scatter)/バブル(bubble)の点データ。`x`/`y` は線形座標、`r` は任意の半径。
+/// カテゴリ系チャート(bar/line/pie)はこれを使わず `values` を使う。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
+    pub r: Option<f64>,
+}
+
 /// 色は**データ点ごと**に持てる（pie のスライス別色が標準形のため）。
 /// 長さ 1 のときは全点へブロードキャストする。`fill_at`/`stroke_at` で安全に参照する。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Series {
     pub name: String,
     pub values: Vec<f64>,
+    /// scatter/bubble の点データ。カテゴリ系チャートでは空。
+    pub points: Vec<Point>,
     pub fill: Vec<Color>,   // len==1 でブロードキャスト、または点ごと
     pub stroke: Vec<Color>, // 同上
     pub stroke_width: f64,
@@ -68,6 +79,7 @@ pub enum ChartKind {
     Bar { horizontal: bool, stacked: bool },
     Line,                     // area/tension は Series 側
     Pie { donut_ratio: f64 }, // 0.0 = pie, >0 = doughnut
+    Scatter,                  // 線形 x × 線形 y。点データ(Series.points)を使う
 }
 
 /// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。
@@ -138,6 +150,7 @@ mod tests {
         let s = Series {
             name: "x".into(),
             values: vec![1.0, 2.0, 3.0],
+            points: vec![],
             fill: vec![c(1, 2, 3)],
             stroke: vec![],
             stroke_width: 1.0,
@@ -153,6 +166,7 @@ mod tests {
         let s = Series {
             name: "x".into(),
             values: vec![1.0, 2.0],
+            points: vec![],
             fill: vec![c(10, 0, 0), c(0, 20, 0)],
             stroke: vec![],
             stroke_width: 1.0,
@@ -169,6 +183,7 @@ mod tests {
         let s = Series {
             name: "x".into(),
             values: vec![1.0],
+            points: vec![],
             fill: vec![],
             stroke: vec![],
             stroke_width: 1.0,

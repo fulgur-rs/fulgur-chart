@@ -1,5 +1,5 @@
 use fulgur_chart::frontend::chartjs;
-use fulgur_chart::ir::ChartKind;
+use fulgur_chart::ir::{ChartKind, Point};
 
 #[test]
 fn parses_minimal_bar_spec() {
@@ -182,5 +182,44 @@ fn scales_stacked_false_is_not_stacked() {
 fn strict_accepts_scales_stacked() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"y":{"stacked":true}}} }"#;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn parses_scatter_point_data() {
+    let json = r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2},{"x":3,"y":4}]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Scatter));
+    assert_eq!(
+        spec.series[0].points,
+        vec![
+            Point {
+                x: 1.0,
+                y: 2.0,
+                r: None
+            },
+            Point {
+                x: 3.0,
+                y: 4.0,
+                r: None
+            },
+        ]
+    );
+    // scatter は数値配列を使わない。
+    assert!(spec.series[0].values.is_empty());
+}
+
+#[test]
+fn categorical_bar_has_empty_points() {
+    // 既存のカテゴリ系パース(数値配列)は points を空に保つ。
+    let json = r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert_eq!(spec.series[0].values, vec![1.0, 2.0]);
+    assert!(spec.series[0].points.is_empty());
+}
+
+#[test]
+fn strict_accepts_scatter() {
+    let json = r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2}]}]}}"#;
     assert!(chartjs::parse(json, true).is_ok());
 }

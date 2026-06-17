@@ -4,6 +4,7 @@ pub mod bar;
 pub mod common;
 pub mod line;
 pub mod pie;
+pub mod scatter;
 
 use crate::ir::{ChartKind, ChartSpec};
 use crate::scene::{Prim, Scene};
@@ -14,6 +15,7 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::Bar { .. } => bar::build(spec, m),
         ChartKind::Line => line::build(spec, m),
         ChartKind::Pie { .. } => pie::build(spec, m),
+        ChartKind::Scatter => scatter::build(spec, m),
     };
 
     // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。

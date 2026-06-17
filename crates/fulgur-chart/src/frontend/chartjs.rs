@@ -84,7 +84,7 @@ struct RawData {
 struct RawDataset {
     #[serde(default)]
     label: String,
-    data: Vec<f64>,
+    data: DataField,
     #[serde(rename = "backgroundColor")]
     background_color: Option<ScalarOrArray<String>>,
     #[serde(rename = "borderColor")]
@@ -99,6 +99,48 @@ struct RawDataset {
     #[allow(dead_code)]
     #[serde(rename = "pointRadius", default)]
     point_radius: Option<f64>,
+}
+
+/// `data`: 数値配列(カテゴリ系)または点オブジェクト配列(scatter/bubble)。
+/// untagged は `Nums` を先に試すので `[1,2]`→Nums、`[{x,y}]`→Points に解決される。
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum DataField {
+    Nums(Vec<f64>),
+    Points(Vec<RawPoint>),
+}
+
+#[derive(Deserialize, Clone)]
+struct RawPoint {
+    x: f64,
+    y: f64,
+    #[serde(default)]
+    r: Option<f64>,
+}
+
+impl DataField {
+    /// 数値配列なら採用、点配列なら空。カテゴリ系チャートの `values` 用。
+    fn into_values(self) -> Vec<f64> {
+        match self {
+            DataField::Nums(v) => v,
+            DataField::Points(_) => vec![],
+        }
+    }
+
+    /// 点配列なら IR の `Point` へ、数値配列なら空。scatter/bubble の `points` 用。
+    fn into_points(self) -> Vec<Point> {
+        match self {
+            DataField::Points(ps) => ps
+                .into_iter()
+                .map(|p| Point {
+                    x: p.x,
+                    y: p.y,
+                    r: p.r,
+                })
+                .collect(),
+            DataField::Nums(_) => vec![],
+        }
+    }
 }
 
 /// chart.js の「スカラ or 配列」を許容する untagged ヘルパ。
@@ -171,6 +213,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         "line" => ChartKind::Line,
         "pie" => ChartKind::Pie { donut_ratio: 0.0 },
         "doughnut" => ChartKind::Pie { donut_ratio: 0.5 },
+        "scatter" => ChartKind::Scatter,
         other => return Err(format!("未対応の type: {other}")),
     };
 
@@ -184,18 +227,30 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let theme = build_theme(raw.options.theme);
 
     let is_pie = matches!(kind, ChartKind::Pie { .. });
+    let is_scatter = matches!(kind, ChartKind::Scatter);
     let series = raw
         .data
         .datasets
         .into_iter()
         .enumerate()
         .map(|(i, ds)| {
-            let n = ds.data.len();
+            // scatter は点データ、それ以外は数値配列を採る。`data` は一度だけ消費する。
+            let (values, points) = if is_scatter {
+                (vec![], ds.data.into_points())
+            } else {
+                (ds.data.into_values(), vec![])
+            };
+            let n = if is_scatter {
+                points.len()
+            } else {
+                values.len()
+            };
             let fill = resolve_colors(ds.background_color, is_pie, i, n, &theme.palette);
             let stroke = resolve_colors(ds.border_color, is_pie, i, n, &theme.palette);
             Series {
                 name: ds.label,
-                values: ds.data,
+                values,
+                points,
                 fill,
                 stroke,
                 stroke_width: ds.border_width.unwrap_or(default_border_width(&kind)),
@@ -204,6 +259,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
         })
         .collect();
+
+    // scatter は線形×線形軸でゼロ起点を強制しない(データ由来のドメインを使う)。
+    // カテゴリ系は従来どおり y のみゼロ起点。
+    let y_begin_at_zero = !is_scatter;
 
     Ok(ChartSpec {
         kind,
@@ -220,7 +279,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             title: None,
             min: None,
             max: None,
-            begin_at_zero: true,
+            begin_at_zero: y_begin_at_zero,
             grid: true,
         },
         legend: legend_pos(&raw.options.plugins.legend),
