@@ -48,7 +48,7 @@ struct RenderArgs {
     #[arg(long)]
     strict: bool,
 
-    /// 入力 DSL。既定は chartjs。
+    /// 入力 DSL。既定は chartjs(対応: chartjs, vegalite)。
     #[arg(long, default_value = "chartjs")]
     dsl: String,
 
@@ -75,9 +75,9 @@ fn main() {
 }
 
 fn run_render(args: RenderArgs) {
-    // 1. DSL チェック。chartjs 以外は未対応(入力指定エラー扱い)。
-    if args.dsl != "chartjs" {
-        eprintln!("未対応の DSL です: {} (対応: chartjs)", args.dsl);
+    // 1. DSL チェック。chartjs / vegalite 以外は未対応(入力指定エラー扱い)。
+    if args.dsl != "chartjs" && args.dsl != "vegalite" {
+        eprintln!("未対応の DSL です: {} (対応: chartjs, vegalite)", args.dsl);
         std::process::exit(1);
     }
 
@@ -215,6 +215,15 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
     }
 }
 
+/// 指定された DSL に応じて spec(JSON 文字列)を IR(ChartSpec) にパースする。
+/// chartjs(既定)はフロントエンド chartjs、vegalite は frontend vegalite を使う。
+fn parse_spec(json: &str, dsl: &str, strict: bool) -> Result<fulgur_chart::ir::ChartSpec, String> {
+    match dsl {
+        "vegalite" => fulgur_chart::frontend::vegalite::parse(json, strict),
+        _ => fulgur_chart::frontend::chartjs::parse(json, strict), // "chartjs"
+    }
+}
+
 /// 1 つの spec(JSON 文字列)と引数から出力バイト列を生成する。
 /// 単一/バッチ両モードで共有し、同一入力なら同一バイト列を返す(決定的)。
 /// 失敗時は `(exit_code, message)` を返す。input/render=1, strict=2, png=3。
@@ -225,14 +234,13 @@ fn render_one(
     font_bytes: &Option<Vec<u8>>,
 ) -> Result<Vec<u8>, (i32, String)> {
     // パース(非strict)。構造/JSON/type エラーは exit 1。
-    let mut spec_ir = fulgur_chart::frontend::chartjs::parse(json, false)
-        .map_err(|e| (1, format!("入力エラー: {e}")))?;
+    let mut spec_ir =
+        parse_spec(json, &args.dsl, false).map_err(|e| (1, format!("入力エラー: {e}")))?;
 
     // strict 指定時は再パースして未知キーを検出。違反は exit 2。
     // (検証用のゲートであり、レンダリングは非strict の ir から行う。)
     if args.strict {
-        fulgur_chart::frontend::chartjs::parse(json, true)
-            .map_err(|e| (2, format!("strict 違反: {e}")))?;
+        parse_spec(json, &args.dsl, true).map_err(|e| (2, format!("strict 違反: {e}")))?;
     }
 
     // width/height 上書き。

@@ -138,6 +138,41 @@ fn font_flag_missing_file_fails() {
         .failure();
 }
 
+/// 最小の Vega-Lite bar spec。
+const MINIMAL_VEGALITE_BAR: &str = r#"{"mark":"bar","data":{"values":[{"c":"A","v":3},{"c":"B","v":5}]},"encoding":{"x":{"field":"c","type":"nominal"},"y":{"field":"v","type":"quantitative"}}}"#;
+
+#[test]
+fn renders_vegalite_spec() {
+    let out = bin()
+        .args(["render", "-", "-o", "-", "--dsl", "vegalite"])
+        .write_stdin(MINIMAL_VEGALITE_BAR)
+        .assert()
+        .success();
+    let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(s.starts_with("<svg"));
+}
+
+#[test]
+fn vegalite_strict_unknown_key_exits_2() {
+    let spec = r#"{"wat":1,"mark":"bar","data":{"values":[{"c":"A","v":3},{"c":"B","v":5}]},"encoding":{"x":{"field":"c","type":"nominal"},"y":{"field":"v","type":"quantitative"}}}"#;
+    bin()
+        .args(["render", "-", "-o", "-", "--dsl", "vegalite", "--strict"])
+        .write_stdin(spec)
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
+fn unknown_dsl_exits_1() {
+    bin()
+        .args(["render", "-", "-o", "-", "--dsl", "bogus"])
+        .write_stdin(MINIMAL_BAR_A)
+        .assert()
+        .failure()
+        .code(1);
+}
+
 // tempdir ヘルパ: tempfile クレートを使わず std::env::temp_dir に一意ディレクトリを作る
 fn tempfile_dir() -> std::path::PathBuf {
     let base = std::env::temp_dir().join(format!("fulgur_chart_cli_test_{}", std::process::id()));
