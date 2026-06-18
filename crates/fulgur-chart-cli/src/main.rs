@@ -14,6 +14,15 @@ struct Cli {
 enum Command {
     /// spec(JSON) を SVG にレンダリングする。
     Render(RenderArgs),
+    /// 対応 DSL の JSON Schema を stdout に出力する。
+    Schema(SchemaArgs),
+}
+
+#[derive(Parser)]
+struct SchemaArgs {
+    /// 出力する DSL のスキーマ(chartjs / vegalite)。
+    #[arg(long, default_value = "chartjs")]
+    dsl: String,
 }
 
 #[derive(Parser)]
@@ -71,6 +80,7 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Render(args) => run_render(args),
+        Command::Schema(args) => run_schema(args),
     }
 }
 
@@ -324,4 +334,22 @@ fn detect_format(output: &str) -> Format {
     } else {
         Format::Svg
     }
+}
+
+fn run_schema(args: SchemaArgs) {
+    let json = match args.dsl.as_str() {
+        "chartjs" => {
+            let schema = schemars::schema_for!(fulgur_chart::schema::ChartJsSpec);
+            serde_json::to_string_pretty(&schema).expect("schema serialization failed")
+        }
+        "vegalite" => {
+            let schema = schemars::schema_for!(fulgur_chart::schema::VegaLiteSpec);
+            serde_json::to_string_pretty(&schema).expect("schema serialization failed")
+        }
+        other => {
+            eprintln!("error: unsupported DSL '{other}' (supported: chartjs, vegalite)");
+            std::process::exit(1);
+        }
+    };
+    println!("{json}");
 }

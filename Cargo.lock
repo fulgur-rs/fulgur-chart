@@ -354,6 +354,8 @@ dependencies = [
  "assert_cmd",
  "clap",
  "fulgur-chart",
+ "schemars",
+ "serde_json",
 ]
 
 [[package]]
