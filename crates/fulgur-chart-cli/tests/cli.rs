@@ -401,3 +401,35 @@ fn batch_render_error_leaves_no_partial_output() {
         "レンダリング失敗時に先行成果物を残さない"
     );
 }
+
+#[test]
+fn batch_preflight_blocks_when_output_is_directory() {
+    let dir = batch_dir("batch_preflight_blocks_when_output_is_directory");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+    std::fs::create_dir_all(&out_dir).unwrap();
+    // b.svg を「ディレクトリ」として作り、2 件目の出力先を塞ぐ。
+    std::fs::create_dir_all(out_dir.join("b.svg")).unwrap();
+    let a = in_dir.join("a.json");
+    let b = in_dir.join("b.json");
+    std::fs::write(&a, MINIMAL_BAR_A).unwrap();
+    std::fs::write(&b, MINIMAL_BAR_A).unwrap();
+
+    bin()
+        .args([
+            "render",
+            a.to_str().unwrap(),
+            b.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(3);
+    // preflight で書き込み前に中止するため、先行する a.svg も書かれない。
+    assert!(
+        !out_dir.join("a.svg").exists(),
+        "preflight 失敗時に部分出力を残さない"
+    );
+}

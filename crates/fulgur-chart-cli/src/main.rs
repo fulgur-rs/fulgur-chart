@@ -216,6 +216,15 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
         eprintln!("出力ディレクトリ作成エラー: {out_dir}: {e}");
         std::process::exit(3);
     }
+    // 書き込み前 preflight: 既存の非ファイル(ディレクトリ等)が出力先を塞いでいたら、
+    // 1 件も書く前に中止する(途中 write 失敗で部分成果物を残すのを避ける。
+    // ディスク満杯など書き込み途中の IO 失敗までは本質的に保証できない)。
+    for (out_path, _) in &outputs {
+        if out_path.exists() && !out_path.is_file() {
+            eprintln!("出力先がファイルではありません: {}", out_path.display());
+            std::process::exit(3);
+        }
+    }
     for (out_path, bytes) in &outputs {
         if let Err(e) = std::fs::write(out_path, bytes) {
             eprintln!("出力エラー: {}: {e}", out_path.display());

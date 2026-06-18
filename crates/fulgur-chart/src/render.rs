@@ -16,7 +16,20 @@ pub fn render_chart_with_font(
 ) -> Result<String, String> {
     let m = TextMeasurer::new(font_bytes).map_err(|e| format!("フォント読込失敗: {e}"))?;
     let fam = family_name(font_bytes).unwrap_or_else(|| DEFAULT_FAMILY.to_string());
-    Ok(render_with(spec, &m, &format!("{fam}, sans-serif")))
+    // family 名は CSS string としてクォートする。フォント name table はカンマや引用符を
+    // 含み得るため、未クォートだと CSS が複数 family と解釈し計測/SVG/PNG の三者一致が崩れる。
+    Ok(render_with(
+        spec,
+        &m,
+        &format!("{}, sans-serif", css_quote_family(&fam)),
+    ))
+}
+
+/// CSS font-family 値用に family 名を二重引用符で囲む。CSS 文字列規則に従い
+/// `\` と `"` をエスケープし、カンマ等を含む名前でも 1 つの family として扱わせる。
+fn css_quote_family(name: &str) -> String {
+    let escaped = name.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 fn render_with(spec: &crate::ir::ChartSpec, m: &TextMeasurer, font_family: &str) -> String {
@@ -50,5 +63,23 @@ mod tests {
     #[test]
     fn with_invalid_font_is_err() {
         assert!(render_chart_with_font(&spec(), b"not a font").is_err());
+    }
+
+    #[test]
+    fn css_quote_family_escapes_and_wraps() {
+        assert_eq!(css_quote_family("IPAGothic"), "\"IPAGothic\"");
+        // カンマ・引用符・バックスラッシュを安全に CSS 文字列化する。
+        assert_eq!(css_quote_family(r#"A,"B\C"#), "\"A,\\\"B\\\\C\"");
+    }
+
+    #[test]
+    fn custom_font_family_is_css_quoted_in_svg() {
+        // 同梱フォント(family "Noto Sans JP")でもカスタム経路はクォートされる。
+        let out = render_chart_with_font(&spec(), DEFAULT_FONT).unwrap();
+        // SVG 属性では XML エスケープされ &quot; になる。
+        assert!(
+            out.contains("&quot;Noto Sans JP&quot;, sans-serif"),
+            "{out}"
+        );
     }
 }
