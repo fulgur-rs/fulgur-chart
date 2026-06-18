@@ -1,0 +1,60 @@
+name: Feature request
+description: Propose a chart type, option, input DSL behavior, or workflow improvement.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an improvement. Please include the chart.js or Vega-Lite behavior you want to match when relevant.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What use case is blocked or awkward today?
+      placeholder: "I want to render ... but fulgur-chart currently ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should fulgur-chart support or change?
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example spec or command
+      description: Include a small JSON spec, CLI command, or expected output shape if possible.
+      placeholder: |
+        ```json
+        {
+          "type": "line",
+          "options": {}
+        }
+        ```
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility notes
+      description: Link to chart.js v4 or Vega-Lite documentation, or describe compatibility expectations.
+      placeholder: "chart.js v4 option: https://www.chartjs.org/docs/latest/..."
+  - type: checkboxes
+    id: determinism
+    attributes:
+      label: Determinism impact
+      description: The same input must continue to produce byte-identical output.
+      options:
+        - label: This feature can be implemented without system fonts, randomness, wall-clock time, or environment-dependent behavior.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or different API shapes you considered.
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Links, screenshots, generated files, or related issues.

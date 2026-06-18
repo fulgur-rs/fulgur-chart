@@ -1,5 +1,9 @@
 # fulgur-chart
 
+[![CI](https://github.com/fulgur-rs/fulgur-chart/actions/workflows/ci.yml/badge.svg)](https://github.com/fulgur-rs/fulgur-chart/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/fulgur-chart-cli.svg)](https://crates.io/crates/fulgur-chart-cli)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#ライセンス)
+
 chart.js v4 互換の JSON spec から、静的な SVG / PNG チャートを生成する CLI です
 （[Fulgur](https://github.com/fulgur-rs) のサイドプロジェクト）。
 

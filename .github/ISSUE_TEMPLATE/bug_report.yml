@@ -1,0 +1,80 @@
+name: Bug report
+description: Report a reproducible rendering, parsing, or CLI problem.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. A minimal chart spec and exact command are the fastest path to a fix.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+      placeholder: "Rendering a stacked bar chart with ... produces ..."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Include a minimal JSON spec and the exact command you ran.
+      placeholder: |
+        ```json
+        {
+          "type": "bar",
+          "data": { "labels": ["A"], "datasets": [{ "data": [1] }] }
+        }
+        ```
+
+        ```sh
+        fulgur-chart render chart.json -o chart.svg
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Paste the error, attach the output image, or describe the incorrect rendering.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe the output or behavior you expected.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`fulgur-chart --version`, crate version, or commit hash."
+      placeholder: "fulgur-chart 0.1.0 / commit abc1234"
+    validations:
+      required: true
+  - type: dropdown
+    id: output
+    attributes:
+      label: Output format
+      options:
+        - SVG
+        - PNG
+        - Both
+        - Not output-specific
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Rust version, install method, and anything else that may affect reproduction.
+      placeholder: "Ubuntu 24.04, rustc 1.85.0, installed with cargo install ..."
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Links, screenshots, generated files, or related issues.
