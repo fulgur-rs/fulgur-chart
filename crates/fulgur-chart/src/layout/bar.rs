@@ -54,7 +54,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             let cx = bx + stack_w / 2.0;
             let mut pos_acc = 0.0_f64;
             let mut neg_acc = 0.0_f64;
-            for (sidx, ser) in spec.series.iter().enumerate() {
+            for ser in &spec.series {
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
@@ -79,7 +79,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     y: y_top,
                     w: stack_w,
                     h,
-                    fill: ser.fill_at(sidx),
+                    fill: ser.fill_at(i),
                 });
                 if spec.data_labels {
                     // セグメント中央(値中点)に値ラベルを置く。
@@ -284,7 +284,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             let cy = by + stack_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
             let mut pos_acc = 0.0_f64;
             let mut neg_acc = 0.0_f64;
-            for (sidx, ser) in spec.series.iter().enumerate() {
+            for ser in &spec.series {
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
@@ -309,7 +309,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     y: by,
                     w,
                     h: stack_h,
-                    fill: ser.fill_at(sidx),
+                    fill: ser.fill_at(i),
                 });
                 if spec.data_labels {
                     // セグメント中央(値中点)に値ラベルを置く。

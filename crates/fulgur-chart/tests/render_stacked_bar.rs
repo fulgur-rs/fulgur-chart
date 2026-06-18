@@ -44,3 +44,15 @@ fn stacked_deterministic() {
     let json = r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"label":"s1","data":[10,20]},{"label":"s2","data":[5,15]}]},"options":{"scales":{"y":{"stacked":true}}}}"#;
     assert_eq!(render(json), render(json));
 }
+
+/// 積み上げでも per-data-point の backgroundColor 配列はカテゴリ index で参照される
+/// (系列 index ではない)。通常棒と同じ fill_at(i) の挙動。
+#[test]
+fn stacked_uses_per_category_color() {
+    let svg = render(
+        r##"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"label":"s1","data":[10,20],"backgroundColor":["#112233","#445566"]}]},"options":{"scales":{"y":{"stacked":true}}}}"##,
+    );
+    // カテゴリ A は #112233、カテゴリ B は #445566 で塗られる(系列 index 0 の色固定ではない)。
+    assert!(svg.contains("#112233"), "カテゴリ0の色: {svg}");
+    assert!(svg.contains("#445566"), "カテゴリ1の色: {svg}");
+}

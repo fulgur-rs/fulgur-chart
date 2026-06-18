@@ -345,3 +345,30 @@ fn batch_rejects_stem_collision() {
     // 衝突検出は create_dir_all より前なので、成果物も out_dir も作らない。
     assert!(!out_dir.join("a.svg").exists(), "部分出力を残さない");
 }
+
+#[test]
+fn batch_rejects_stdin_before_any_output() {
+    let dir = batch_dir("batch_rejects_stdin_before_any_output");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+    let valid = in_dir.join("valid.json");
+    std::fs::write(&valid, MINIMAL_BAR_A).unwrap();
+
+    // `valid.json -` の順でも、検証は出力前に行われ `-` で失敗し、部分出力を残さない。
+    bin()
+        .args([
+            "render",
+            valid.to_str().unwrap(),
+            "-",
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1);
+    assert!(
+        !out_dir.join("valid.svg").exists(),
+        "失敗時に部分成果物を残さない"
+    );
+}

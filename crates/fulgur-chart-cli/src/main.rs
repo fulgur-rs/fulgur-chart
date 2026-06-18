@@ -168,18 +168,26 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
     // 出力名(stem)の衝突を事前検出する。`foo/a.json` と `bar/a.json` は同じ
     // <out-dir>/a.<ext> になり、後勝ちで先行出力を無警告上書きして成果物を失う。
     // 1 件も書き出す前に fail-fast する(部分出力を残さない)。
+    // バッチでは stdin(`-`)は不可。全入力を出力前に検証し、部分出力を残さない。
     let mut seen_stems: Vec<String> = Vec::new();
     for spec_path in &args.spec {
         if spec_path == "-" {
-            continue; // `-` は下のループで弾く
+            eprintln!("バッチモードでは標準入力(`-`)は使えません");
+            std::process::exit(1);
         }
-        if let Some(s) = std::path::Path::new(spec_path).file_stem() {
-            let stem = s.to_string_lossy().into_owned();
-            if seen_stems.contains(&stem) {
-                eprintln!("出力名が衝突します: 複数の入力が同じ出力 {stem}.{ext} を生成します");
+        match std::path::Path::new(spec_path).file_stem() {
+            Some(s) => {
+                let stem = s.to_string_lossy().into_owned();
+                if seen_stems.contains(&stem) {
+                    eprintln!("出力名が衝突します: 複数の入力が同じ出力 {stem}.{ext} を生成します");
+                    std::process::exit(1);
+                }
+                seen_stems.push(stem);
+            }
+            None => {
+                eprintln!("ファイル名を決定できません: {spec_path}");
                 std::process::exit(1);
             }
-            seen_stems.push(stem);
         }
     }
 
@@ -191,13 +199,7 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
 
     // 各 spec を入力順に処理(決定的)。fail-fast。
     for spec_path in &args.spec {
-        // バッチでは stdin(`-`)は不可。
-        if spec_path == "-" {
-            eprintln!("バッチモードでは標準入力(`-`)は使えません");
-            std::process::exit(1);
-        }
-
-        // 実在ファイルから出力ファイル名のステムを得る。
+        // 出力ファイル名のステム(`-`/不正名は事前検証で除外済み)。
         let stem = match std::path::Path::new(spec_path).file_stem() {
             Some(s) => s.to_string_lossy().into_owned(),
             None => {
