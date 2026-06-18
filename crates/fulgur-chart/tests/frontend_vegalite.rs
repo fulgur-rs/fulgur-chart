@@ -153,6 +153,22 @@ fn render_smoke_produces_svg() {
 }
 
 #[test]
+fn typo_missing_or_nonnumeric_field_errors() {
+    // y.field の typo → 全 0 の誤チャートを防ぐため Err。
+    let typo = r#"{"mark":"bar","data":{"values":[{"cat":"A","val":3}]},
+        "encoding":{"x":{"field":"cat"},"y":{"field":"vall"}}}"#;
+    assert!(vegalite::parse(typo, false).is_err());
+    // y が文字列(非数値) → Err。
+    let nonnum = r#"{"mark":"bar","data":{"values":[{"cat":"A","val":"x"}]},
+        "encoding":{"x":{"field":"cat"},"y":{"field":"val"}}}"#;
+    assert!(vegalite::parse(nonnum, false).is_err());
+    // 必須 x.field 未指定 → Err。
+    let missing = r#"{"mark":"bar","data":{"values":[{"cat":"A","val":3}]},
+        "encoding":{"y":{"field":"val"}}}"#;
+    assert!(vegalite::parse(missing, false).is_err());
+}
+
+#[test]
 fn line_with_sparse_color_errors() {
     // 色分け line で (cat,color) が疎 → 0 埋めの誤った折れ線を防ぐため Err。
     let json = r#"{

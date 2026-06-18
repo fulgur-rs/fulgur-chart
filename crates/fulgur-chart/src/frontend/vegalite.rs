@@ -39,6 +39,48 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let color_field = channel_field(encoding, "color");
     let theta_field = channel_field(encoding, "theta");
 
+    // 必須 encoding field の指定・存在・型を検証する。これを通せば field_f64/
+    // field_category が 0/空へ黙って丸めることはなくなる(typo・欠損・型違いを明示エラーに)。
+    match &kind {
+        ChartKind::Bar { .. } | ChartKind::Line => {
+            let xf = require_field(&x_field, "x")?;
+            let yf = require_field(&y_field, "y")?;
+            validate_present(&records, xf)?;
+            validate_numeric(&records, yf)?;
+            if let Some(cf) = color_field.as_deref() {
+                validate_present(&records, cf)?;
+            }
+        }
+        ChartKind::Scatter => {
+            let xf = require_field(&x_field, "x")?;
+            let yf = require_field(&y_field, "y")?;
+            validate_numeric(&records, xf)?;
+            validate_numeric(&records, yf)?;
+            if let Some(cf) = color_field.as_deref() {
+                validate_present(&records, cf)?;
+            }
+        }
+        ChartKind::Pie { .. } => {
+            // 値は theta(無ければ y)、カテゴリは color(無ければ x)。
+            let vf = theta_field
+                .as_deref()
+                .or(y_field.as_deref())
+                .ok_or_else(|| {
+                    "arc には encoding.theta.field または y.field が必要です".to_string()
+                })?;
+            validate_numeric(&records, vf)?;
+            let cf = color_field
+                .as_deref()
+                .or(x_field.as_deref())
+                .ok_or_else(|| {
+                    "arc には encoding.color.field または x.field が必要です".to_string()
+                })?;
+            validate_present(&records, cf)?;
+        }
+        // Bubble/Radar/Mixed は Vega-Lite mark から生成されない。
+        _ => {}
+    }
+
     // 色分け line で疎なカテゴリ(一部 (category,color) 組が欠落)は、欠損を 0 埋めすると
     // 実在しないゼロ点へ折れ線が接続され誤りになる。IR は欠損表現を持たないため拒否する。
     if matches!(kind, ChartKind::Line) && color_field.is_some() {
@@ -190,6 +232,37 @@ fn channel_field(encoding: &Map<String, Value>, channel: &str) -> Option<String>
         .and_then(|o| o.get("field"))
         .and_then(Value::as_str)
         .map(str::to_owned)
+}
+
+/// 必須チャネルの field 指定を取り出す。未指定なら Err。
+fn require_field<'a>(field: &'a Option<String>, channel: &str) -> Result<&'a str, String> {
+    field
+        .as_deref()
+        .ok_or_else(|| format!("encoding.{channel}.field が必要です"))
+}
+
+/// 参照フィールドが全レコードに存在することを検証する(typo・欠落を検出)。
+/// 型はカテゴリとして許容(文字列/数値/真偽)。
+fn validate_present(records: &[Map<String, Value>], field: &str) -> Result<(), String> {
+    for r in records {
+        if !r.contains_key(field) {
+            return Err(format!("フィールド {field} が見つかりません(typo?)"));
+        }
+    }
+    Ok(())
+}
+
+/// 参照フィールドが全レコードに存在し、かつ数値であることを検証する。
+/// 欠落・非数値は 0.0 へ黙って丸めず明示エラーにする。
+fn validate_numeric(records: &[Map<String, Value>], field: &str) -> Result<(), String> {
+    for r in records {
+        match r.get(field) {
+            Some(Value::Number(_)) => {}
+            Some(_) => return Err(format!("フィールド {field} は数値である必要があります")),
+            None => return Err(format!("フィールド {field} が見つかりません(typo?)")),
+        }
+    }
+    Ok(())
 }
 
 /// レコードの指定フィールドを f64 として読む。数値でない/欠落は 0.0。
