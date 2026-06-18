@@ -1,5 +1,5 @@
 pub mod common;
 pub mod chartjs;
-// pub mod vegalite; // Task 4 で追加
+pub mod vegalite;
 pub use chartjs::ChartJsSpec;
-// pub use vegalite::VegaLiteSpec;
+pub use vegalite::VegaLiteSpec;
