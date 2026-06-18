@@ -153,6 +153,14 @@ fn render_smoke_produces_svg() {
 }
 
 #[test]
+fn category_field_non_scalar_errors() {
+    // x の値が object → カテゴリ値にできず Err(空カテゴリへの統合を防ぐ)。
+    let json = r#"{"mark":"bar","data":{"values":[{"cat":{"nested":1},"val":3}]},
+        "encoding":{"x":{"field":"cat"},"y":{"field":"val"}}}"#;
+    assert!(vegalite::parse(json, false).is_err());
+}
+
+#[test]
 fn typo_missing_or_nonnumeric_field_errors() {
     // y.field の typo → 全 0 の誤チャートを防ぐため Err。
     let typo = r#"{"mark":"bar","data":{"values":[{"cat":"A","val":3}]},

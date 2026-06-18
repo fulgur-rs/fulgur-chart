@@ -45,10 +45,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         ChartKind::Bar { .. } | ChartKind::Line => {
             let xf = require_field(&x_field, "x")?;
             let yf = require_field(&y_field, "y")?;
-            validate_present(&records, xf)?;
+            validate_category(&records, xf)?;
             validate_numeric(&records, yf)?;
             if let Some(cf) = color_field.as_deref() {
-                validate_present(&records, cf)?;
+                validate_category(&records, cf)?;
             }
         }
         ChartKind::Scatter => {
@@ -57,7 +57,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             validate_numeric(&records, xf)?;
             validate_numeric(&records, yf)?;
             if let Some(cf) = color_field.as_deref() {
-                validate_present(&records, cf)?;
+                validate_category(&records, cf)?;
             }
         }
         ChartKind::Pie { .. } => {
@@ -75,7 +75,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 .ok_or_else(|| {
                     "arc には encoding.color.field または x.field が必要です".to_string()
                 })?;
-            validate_present(&records, cf)?;
+            validate_category(&records, cf)?;
         }
         // Bubble/Radar/Mixed は Vega-Lite mark から生成されない。
         _ => {}
@@ -241,12 +241,19 @@ fn require_field<'a>(field: &'a Option<String>, channel: &str) -> Result<&'a str
         .ok_or_else(|| format!("encoding.{channel}.field が必要です"))
 }
 
-/// 参照フィールドが全レコードに存在することを検証する(typo・欠落を検出)。
-/// 型はカテゴリとして許容(文字列/数値/真偽)。
-fn validate_present(records: &[Map<String, Value>], field: &str) -> Result<(), String> {
+/// 参照フィールドが全レコードに存在し、かつカテゴリ値(文字列/数値/真偽)であることを
+/// 検証する。null/object/array は field_category が "" に丸めて別カテゴリを空へ統合する
+/// 誤りを生むため、欠落・非カテゴリ型は明示エラーにする。
+fn validate_category(records: &[Map<String, Value>], field: &str) -> Result<(), String> {
     for r in records {
-        if !r.contains_key(field) {
-            return Err(format!("フィールド {field} が見つかりません(typo?)"));
+        match r.get(field) {
+            Some(Value::String(_) | Value::Number(_) | Value::Bool(_)) => {}
+            Some(_) => {
+                return Err(format!(
+                    "フィールド {field} はカテゴリ値(文字列/数値/真偽)である必要があります"
+                ));
+            }
+            None => return Err(format!("フィールド {field} が見つかりません(typo?)")),
         }
     }
     Ok(())
