@@ -225,6 +225,16 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         }
     };
 
+    // dataset 別 type は bar/line のみ対応。それ以外(scatter 等)が指定されたら、
+    // 黙って基本型へフォールバックして点データを失わないよう明示的に拒否する。
+    for ds in &raw.data.datasets {
+        if let Some(t) = &ds.dataset_type {
+            if t != "bar" && t != "line" {
+                return Err(format!("未対応の dataset type: {t}"));
+            }
+        }
+    }
+
     // 各 dataset の実効種別。Mixed 判定と Series.series_type の双方に使う。
     let series_types: Vec<SeriesType> = raw
         .data
@@ -276,7 +286,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let is_pie = matches!(kind, ChartKind::Pie { .. });
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
     let is_point_based = matches!(kind, ChartKind::Scatter | ChartKind::Bubble);
-    let series = raw
+    let series: Vec<Series> = raw
         .data
         .datasets
         .into_iter()
@@ -311,6 +321,16 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
         })
         .collect();
+
+    // レーダーは負値に未対応。半径が負になると頂点が反対スポークへ反転し、
+    // 実データと異なる多角形になるため、parse 時に明示的に拒否する。
+    if matches!(kind, ChartKind::Radar)
+        && series
+            .iter()
+            .any(|s: &Series| s.values.iter().any(|v| v.is_finite() && *v < 0.0))
+    {
+        return Err("レーダーチャートは負の値に未対応です".to_string());
+    }
 
     // scatter/bubble は線形×線形軸でゼロ起点を強制しない(データ由来のドメインを使う)。
     // カテゴリ系は従来どおり y のみゼロ起点。

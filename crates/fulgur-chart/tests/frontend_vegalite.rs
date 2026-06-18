@@ -153,6 +153,21 @@ fn render_smoke_produces_svg() {
 }
 
 #[test]
+fn honors_width_height_title() {
+    // VL の width/height/title を ChartSpec に反映する(strict 許可と整合)。
+    let json = r#"{
+        "mark": "bar",
+        "width": 400, "height": 300, "title": "売上",
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}}
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    assert_eq!(spec.width, 400.0);
+    assert_eq!(spec.height, 300.0);
+    assert_eq!(spec.title.as_deref(), Some("売上"));
+}
+
+#[test]
 fn strict_rejects_aggregate() {
     // aggregate は未実装。strict では未対応キーとして拒否する(誤った集計を黙認しない)。
     let json = r#"{

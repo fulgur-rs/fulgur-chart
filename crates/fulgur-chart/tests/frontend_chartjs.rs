@@ -323,3 +323,20 @@ fn single_dataset_type_override_changes_kind() {
     assert!(matches!(spec.kind, ChartKind::Line));
     assert_eq!(spec.series[0].series_type, SeriesType::Line);
 }
+
+#[test]
+fn unsupported_dataset_type_errors() {
+    // bar 基本型に scatter dataset を混ぜるのは未対応。点データが空で「成功扱いの
+    // 空チャート」になるのを防ぎ、明示エラーにする。
+    let json = r#"{"type":"bar","data":{"labels":["a"],
+      "datasets":[{"type":"scatter","data":[{"x":1,"y":2}]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+}
+
+#[test]
+fn radar_rejects_negative_values() {
+    // 負の半径は頂点が反対スポークへ反転するため、レーダーは負値を拒否する。
+    let json = r#"{"type":"radar","data":{"labels":["a","b","c"],
+      "datasets":[{"data":[3,-1,2]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+}

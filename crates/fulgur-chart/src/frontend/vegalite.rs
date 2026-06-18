@@ -67,6 +67,28 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // scatter は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点（chartjs と一致）。
     let y_begin_at_zero = !matches!(kind, ChartKind::Scatter);
 
+    // VL トップレベルの width/height/title を反映する(無ければ既定 800x450・無題)。
+    // title は文字列、または `{"text": "..."}` オブジェクトを受ける。
+    let width = top
+        .get("width")
+        .and_then(Value::as_f64)
+        .filter(|w| w.is_finite() && *w > 0.0)
+        .unwrap_or(800.0);
+    let height = top
+        .get("height")
+        .and_then(Value::as_f64)
+        .filter(|h| h.is_finite() && *h > 0.0)
+        .unwrap_or(450.0);
+    let title = match top.get("title") {
+        Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
+        Some(Value::Object(o)) => o
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string),
+        _ => None,
+    };
+
     Ok(ChartSpec {
         kind,
         series,
@@ -86,9 +108,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             grid: true,
         },
         legend: LegendPos::Top,
-        title: None,
-        width: 800.0,
-        height: 450.0,
+        title,
+        width,
+        height,
         data_labels: false,
         theme,
     })
