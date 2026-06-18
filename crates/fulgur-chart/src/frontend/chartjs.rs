@@ -529,6 +529,19 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                         ],
                         &format!("data.datasets[{i}]"),
                     )?;
+                    // scatter/bubble の点データ {x,y,r} 各オブジェクト内のキーも検査する。
+                    // RawPoint は未知キーを無視するため、ここで typo(例 radius)を検出する。
+                    if let Some(points) = ds.get("data").and_then(|v| v.as_array()) {
+                        for (j, pt) in points.iter().enumerate() {
+                            if let Some(pt) = pt.as_object() {
+                                check_object(
+                                    pt,
+                                    &["x", "y", "r"],
+                                    &format!("data.datasets[{i}].data[{j}]"),
+                                )?;
+                            }
+                        }
+                    }
                 }
             }
         }

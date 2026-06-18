@@ -362,6 +362,14 @@ fn mixed_with_horizontal_or_stacked_errors() {
 }
 
 #[test]
+fn strict_rejects_unknown_point_key() {
+    // 点オブジェクト {x,y,r} の typo(radius は r が正) を strict で検出。
+    let json = r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2,"radius":20}]}]}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+    assert!(chartjs::parse(json, false).is_ok()); // 非strict は無視
+}
+
+#[test]
 fn data_shape_mismatch_errors() {
     // scatter に数値配列 → 点データが空になる空チャート化を防ぎ、明示エラーに。
     let scatter_nums = r#"{"type":"scatter","data":{"datasets":[{"data":[1,2,3]}]}}"#;
