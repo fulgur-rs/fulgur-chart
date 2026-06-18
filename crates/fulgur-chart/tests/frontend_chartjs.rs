@@ -342,6 +342,25 @@ fn radar_rejects_negative_values() {
 }
 
 #[test]
+fn data_shape_mismatch_errors() {
+    // scatter に数値配列 → 点データが空になる空チャート化を防ぎ、明示エラーに。
+    let scatter_nums = r#"{"type":"scatter","data":{"datasets":[{"data":[1,2,3]}]}}"#;
+    assert!(chartjs::parse(scatter_nums, false).is_err());
+    // bar に {x,y} 点配列 → エラー(values が空になる欠損を防ぐ)。
+    let bar_points =
+        r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[{"x":1,"y":2}]}]}}"#;
+    assert!(chartjs::parse(bar_points, false).is_err());
+}
+
+#[test]
+fn dataset_type_on_non_mixable_base_errors() {
+    // pie に dataset type:line → 無視して別種描画せず、明示エラーに。
+    let json = r#"{"type":"pie","data":{"labels":["a","b"],
+      "datasets":[{"type":"line","data":[1,2]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+}
+
+#[test]
 fn strict_rejects_scales_typo() {
     // stacked は描画に効くので、typo を strict で取りこぼさない。
     let typo = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},

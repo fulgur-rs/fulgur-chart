@@ -225,10 +225,17 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         }
     };
 
-    // dataset 別 type は bar/line のみ対応。それ以外(scatter 等)が指定されたら、
-    // 黙って基本型へフォールバックして点データを失わないよう明示的に拒否する。
+    // dataset 別 type は「基本 type が bar/line」かつ値が bar/line のときのみ有効。
+    // pie/scatter 等への type 指定や bar/line 以外の値は、黙って無視せず明示エラーにする。
+    let is_mixable_base = matches!(raw.chart_type.as_str(), "bar" | "line");
     for ds in &raw.data.datasets {
         if let Some(t) = &ds.dataset_type {
+            if !is_mixable_base {
+                return Err(format!(
+                    "dataset の type は基本 type が bar/line のときのみ指定できます(基本 type={})",
+                    raw.chart_type
+                ));
+            }
             if t != "bar" && t != "line" {
                 return Err(format!("未対応の dataset type: {t}"));
             }
@@ -246,7 +253,6 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // 描画 kind は、基本型が bar/line のとき「解決後の dataset 種別」で決める:
     // 両方含む→Mixed、全 Line→Line、全 Bar→Bar。dataset 別 type の単独上書き
     // (例 {"type":"bar","datasets":[{"type":"line"}]})も正しく反映される。
-    let is_mixable_base = matches!(raw.chart_type.as_str(), "bar" | "line");
     let has_bar = series_types.contains(&SeriesType::Bar);
     let has_line = series_types.contains(&SeriesType::Line);
     let bar_kind = || ChartKind::Bar {
@@ -286,6 +292,22 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let is_pie = matches!(kind, ChartKind::Pie { .. });
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
     let is_point_based = matches!(kind, ChartKind::Scatter | ChartKind::Bubble);
+
+    // データ形状とチャート種の整合を検査する。点ベース(scatter/bubble)は {x,y(,r)}
+    // 配列、カテゴリ系は数値配列を要する。非空の不一致は空チャート化せず明示エラーに。
+    for ds in &raw.data.datasets {
+        let mismatched = match &ds.data {
+            DataField::Nums(v) => is_point_based && !v.is_empty(),
+            DataField::Points(v) => !is_point_based && !v.is_empty(),
+        };
+        if mismatched {
+            return Err(format!(
+                "チャート種 {} とデータ形状が一致しません",
+                raw.chart_type
+            ));
+        }
+    }
+
     let series: Vec<Series> = raw
         .data
         .datasets
