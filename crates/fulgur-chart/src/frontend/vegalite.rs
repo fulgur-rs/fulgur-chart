@@ -286,6 +286,7 @@ fn build_categorical(
                 area: false,
                 tension: 0.0,
                 series_type,
+                point_radius: None,
             }
         })
         .collect()
@@ -332,6 +333,7 @@ fn build_scatter(
                 area: false,
                 tension: 0.0,
                 series_type: SeriesType::Bar,
+                point_radius: None,
             }
         })
         .collect()
@@ -376,6 +378,7 @@ fn build_pie(
         area: false,
         tension: 0.0,
         series_type: SeriesType::Bar,
+        point_radius: None,
     }]
 }
 

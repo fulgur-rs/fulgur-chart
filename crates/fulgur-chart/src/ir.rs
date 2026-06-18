@@ -41,6 +41,9 @@ pub struct Series {
     pub tension: f64, // 0.0 = 直線
     /// 描画種別。混合チャートでのみ意味を持つ(単一種別では未使用)。
     pub series_type: SeriesType,
+    /// scatter のマーカー半径(chart.js pointRadius)。None なら既定値。
+    /// bubble では point.r を優先し、欠落時のフォールバックに使う。
+    pub point_radius: Option<f64>,
 }
 
 impl Series {
@@ -170,6 +173,7 @@ mod tests {
             area: false,
             tension: 0.0,
             series_type: SeriesType::Bar,
+            point_radius: None,
         };
         assert_eq!(s.fill_at(0), c(1, 2, 3));
         assert_eq!(s.fill_at(2), c(1, 2, 3)); // ブロードキャスト
@@ -187,6 +191,7 @@ mod tests {
             area: false,
             tension: 0.0,
             series_type: SeriesType::Bar,
+            point_radius: None,
         };
         assert_eq!(s.fill_at(0), c(10, 0, 0));
         assert_eq!(s.fill_at(1), c(0, 20, 0));
@@ -205,6 +210,7 @@ mod tests {
             area: false,
             tension: 0.0,
             series_type: SeriesType::Bar,
+            point_radius: None,
         };
         assert_eq!(s.stroke_at(0), c(0, 0, 0));
     }

@@ -6,6 +6,18 @@ fn render(json: &str) -> String {
 }
 
 #[test]
+fn scatter_honors_point_radius() {
+    // dataset の pointRadius が scatter のマーカー半径に反映される(既定 3 ではなく)。
+    let svg = render(
+        r#"{"type":"scatter","data":{"datasets":[{"pointRadius":10,"data":[{"x":1,"y":2}]}]}}"#,
+    );
+    assert!(
+        svg.contains(r#"r="10""#),
+        "pointRadius=10 が反映される: {svg}"
+    );
+}
+
+#[test]
 fn scatter_draws_one_circle_per_point() {
     let svg = render(
         r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2},{"x":3,"y":4},{"x":5,"y":1}]}]}}"#,

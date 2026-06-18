@@ -98,8 +98,7 @@ struct RawDataset {
     fill: FillSpec,
     #[serde(default)]
     tension: f64,
-    // pointRadius は受理するが v1 の IR には未マップ（Task 13 でマーカー対応時に使う）。
-    #[allow(dead_code)]
+    // scatter のマーカー半径。Series.point_radius へマップする。
     #[serde(rename = "pointRadius", default)]
     point_radius: Option<f64>,
 }
@@ -352,6 +351,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 area: ds.fill.is_filled(),
                 tension: ds.tension,
                 series_type,
+                point_radius: ds.point_radius,
             }
         })
         .collect();

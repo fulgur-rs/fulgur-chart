@@ -18,20 +18,24 @@ const DEFAULT_POINT_R: f64 = 3.0;
 /// bubble で `point.r` が無い場合の既定半径。bubble は通常 r を持つが保険。
 const DEFAULT_BUBBLE_R: f64 = 5.0;
 
-/// 1 点の半径を返す。bubble はデータの第3次元 `point.r` を半径に使い、
-/// scatter は固定の既定値を使う(scatter 出力を従来どおり byte 一致に保つ)。
-/// 非有限/負の半径は不正な SVG を避けるため既定値にフォールバックする。
-fn point_radius(kind: &ChartKind, point: &Point) -> f64 {
+/// 1 点の半径を返す。bubble はデータの第3次元 `point.r` を優先し、無ければ
+/// dataset の `pointRadius`、それも無ければ既定値。scatter は dataset の `pointRadius`
+/// (chart.js の指定)を使い、無指定なら既定値。非有限/負の半径は不正な SVG を避けるため
+/// それぞれの既定値にフォールバックする。
+fn point_radius(kind: &ChartKind, point: &Point, dataset_radius: Option<f64>) -> f64 {
+    let valid = |r: f64, fallback: f64| {
+        if r.is_finite() && r >= 0.0 {
+            r
+        } else {
+            fallback
+        }
+    };
     match kind {
         ChartKind::Bubble => {
-            let r = point.r.unwrap_or(DEFAULT_BUBBLE_R);
-            if r.is_finite() && r >= 0.0 {
-                r
-            } else {
-                DEFAULT_BUBBLE_R
-            }
+            let r = point.r.or(dataset_radius).unwrap_or(DEFAULT_BUBBLE_R);
+            valid(r, DEFAULT_BUBBLE_R)
         }
-        _ => DEFAULT_POINT_R,
+        _ => valid(dataset_radius.unwrap_or(DEFAULT_POINT_R), DEFAULT_POINT_R),
     }
 }
 
@@ -210,7 +214,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             items.push(Prim::Circle {
                 cx: xs.map(p.x),
                 cy: ys.map(p.y),
-                r: point_radius(&spec.kind, p),
+                r: point_radius(&spec.kind, p, ser.point_radius),
                 fill: ser.fill_at(i),
             });
         }
