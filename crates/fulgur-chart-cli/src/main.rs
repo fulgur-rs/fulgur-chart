@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-/// fulgur-chart: chart.js 互換 JSON spec から決定的な静的 SVG を生成する CLI。
+/// Render chart.js-compatible JSON specs to deterministic static SVG/PNG.
 #[derive(Parser)]
 #[command(name = "fulgur-chart", version)]
 struct Cli {
@@ -12,60 +12,60 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// spec(JSON) を SVG にレンダリングする。
+    /// Render a spec (JSON) to SVG or PNG.
     Render(RenderArgs),
-    /// 対応 DSL の JSON Schema を stdout に出力する。
+    /// Print the JSON Schema for a supported input DSL.
     Schema(SchemaArgs),
 }
 
 #[derive(Parser)]
 struct SchemaArgs {
-    /// 出力する DSL のスキーマ(chartjs / vegalite)。
+    /// DSL whose schema to output (chartjs or vegalite).
     #[arg(long, default_value = "chartjs")]
     dsl: String,
 }
 
 #[derive(Parser)]
 struct RenderArgs {
-    /// spec ファイルパス(1 つ以上)。`-` で標準入力から読み込む。
-    /// 複数指定時は --out-dir が必須(`-` は不可)。
+    /// Input spec file path(s). Use '-' to read from stdin.
+    /// Multiple files require --out-dir ('-' not allowed in batch mode).
     #[arg(num_args = 1..)]
     spec: Vec<String>,
 
-    /// 出力先パス。`-` で標準出力へ書き出す。単一 spec 時に必須。
+    /// Output path. Use '-' for stdout. Required in single-spec mode.
     #[arg(short, long)]
     output: Option<String>,
 
-    /// 複数 spec を一括出力するディレクトリ。各 spec は `<out-dir>/<stem>.<ext>` に書き出す。
+    /// Output directory for batch mode. Each spec is written as <out-dir>/<stem>.<ext>.
     #[arg(long)]
     out_dir: Option<String>,
 
-    /// 出力フォーマット。省略時は output 拡張子で判定する(.png→png, それ以外/stdout→svg)。
-    /// --out-dir 指定時は省略すると svg。
+    /// Output format. Inferred from the output extension (.png → png, otherwise svg).
+    /// Defaults to svg when --out-dir is used.
     #[arg(long, value_enum)]
     format: Option<Format>,
 
-    /// 指定すると spec の幅を上書きする。
+    /// Override the chart width from the spec.
     #[arg(long)]
     width: Option<f64>,
 
-    /// 指定すると spec の高さを上書きする。
+    /// Override the chart height from the spec.
     #[arg(long)]
     height: Option<f64>,
 
-    /// 未知/非対応キーをエラーにする(strict モード)。
+    /// Reject unknown or unsupported keys (strict mode).
     #[arg(long)]
     strict: bool,
 
-    /// 入力 DSL。既定は chartjs(対応: chartjs, vegalite)。
+    /// Input DSL. Supported values: chartjs, vegalite.
     #[arg(long, default_value = "chartjs")]
     dsl: String,
 
-    /// PNG 出力時の解像度倍率（1.0=等倍）。
+    /// Scale factor for PNG output (1.0 = 1x).
     #[arg(long, default_value_t = 1.0)]
     scale: f32,
 
-    /// 計測・SVG・PNG で使うフォントファイルパス。省略時は同梱フォント。
+    /// Font file for text metrics and rendering. Defaults to the bundled font.
     #[arg(long)]
     font: Option<String>,
 }
@@ -85,15 +85,13 @@ fn main() {
 }
 
 fn run_render(args: RenderArgs) {
-    // 1. DSL チェック。chartjs / vegalite 以外は未対応(入力指定エラー扱い)。
+    // Validate DSL; only chartjs and vegalite are supported.
     if args.dsl != "chartjs" && args.dsl != "vegalite" {
         eprintln!("error: unsupported DSL '{}' (supported: chartjs, vegalite)", args.dsl);
         std::process::exit(1);
     }
 
-    // 2. フォント読込: --font 指定時はファイルを1度だけ読み、計測/SVG/PNG の三者で
-    //    同一バイト列を使う。未指定なら同梱フォント(従来動作で byte 一致)。
-    //    バッチ時も全ファイルで同じバイト列を使い回す(再読込しない)。
+    // Load the font once if --font is given; reused across metric/SVG/PNG stages and all batch files.
     let font_bytes: Option<Vec<u8>> = match &args.font {
         Some(path) => match std::fs::read(path) {
             Ok(b) => Some(b),
@@ -105,17 +103,16 @@ fn run_render(args: RenderArgs) {
         None => None,
     };
 
-    // 3. モード判定: --out-dir 指定の有無でバッチ/単一を分岐。
+    // Dispatch to single or batch mode based on whether --out-dir was given.
     match &args.out_dir {
         None => run_single(&args, &font_bytes),
         Some(out_dir) => run_batch(&args, out_dir, &font_bytes),
     }
 }
 
-/// 単一モード: spec を 1 つだけ受け取り、output(`-`=stdout)へ書き出す。
-/// 出力バイト列は従来動作と完全一致する。
+/// Single-spec mode: render one spec and write to output ('-' = stdout).
 fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
-    // spec はちょうど 1 つでなければならない。複数は --out-dir が必要。
+    // Exactly one spec is required; multiple specs need --out-dir.
     if args.spec.is_empty() {
         eprintln!("error: no input spec provided");
         std::process::exit(1);
@@ -126,7 +123,7 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
     }
     let spec_path = &args.spec[0];
 
-    // output(`-o`)は必須。
+    // --output is required in single-spec mode.
     let output = match &args.output {
         Some(o) => o,
         None => {
@@ -135,7 +132,7 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
         }
     };
 
-    // spec 読み込み。`-` は stdin、それ以外はファイル。読めなければ exit 1。
+    // Read spec from stdin ('-') or file; exit 1 on failure.
     let json = match read_spec(spec_path) {
         Ok(s) => s,
         Err(e) => {
@@ -144,10 +141,9 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
         }
     };
 
-    // format 決定: --format 明示 > output 拡張子(.png→png) > 既定 svg。
+    // Determine output format: explicit flag > infer from extension > default svg.
     let format = args.format.clone().unwrap_or_else(|| detect_format(output));
 
-    // 出力生成。
     let bytes = match render_one(&json, args, &format, font_bytes) {
         Ok(b) => b,
         Err((code, msg)) => {
@@ -156,41 +152,41 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
         }
     };
 
-    // 書き出し。`-` は stdout、それ以外はファイル。IO 失敗は exit 3。
+    // Write to stdout ('-') or file; exit 3 on IO failure.
     if let Err(e) = write_output(output, &bytes) {
         eprintln!("error: write failed: {e}");
         std::process::exit(3);
     }
 }
 
-/// バッチモード: 複数 spec を out_dir へ `<stem>.<ext>` で一括出力する。
-/// 入力順に処理し、最初のエラーで該当コード(input=1/strict=2/IO・png=3)で打ち切る。
+/// Batch mode: render multiple specs and write each to <out-dir>/<stem>.<ext>.
+/// Processes inputs in order; aborts on first error (exit 1=input, 2=strict, 3=IO/png).
 fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
-    // --out-dir と --output(-o)は併用不可。
+    // --out-dir and --output are mutually exclusive.
     if args.output.is_some() {
         eprintln!("error: --out-dir and --output cannot be used together");
         std::process::exit(1);
     }
 
-    // バッチでは output 拡張子が無いので、--format(既定 svg)から拡張子を決める。
+    // In batch mode there is no output path to inspect, so the format defaults to svg.
     let format = args.format.clone().unwrap_or(Format::Svg);
     let ext = match format {
         Format::Svg => "svg",
         Format::Png => "png",
     };
 
-    // フェーズ1: 全入力を検証・レンダリングしてから(まだ書き出さず)結果を貯める。
-    // 1 件でも失敗すれば、ディレクトリ作成も書き出しもせず打ち切る(部分出力を残さない)。
-    // 併せて出力名(stem)の衝突も事前検出する(`foo/a.json` と `bar/a.json` は同じ出力)。
+    // Phase 1: validate and render all inputs before writing anything.
+    // Abort on first error so no partial output is left on disk.
+    // Also detect stem collisions upfront (e.g. "foo/a.json" and "bar/a.json" would both write "a.<ext>").
     let mut seen_stems: Vec<String> = Vec::new();
     let mut outputs: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
     for spec_path in &args.spec {
-        // バッチでは stdin(`-`)は不可。
+        // Stdin ('-') is not supported in batch mode.
         if spec_path == "-" {
             eprintln!("error: stdin ('-') is not supported in batch mode");
             std::process::exit(1);
         }
-        // 出力ファイル名のステム。
+        // Output filename stem (basename without extension).
         let stem = match std::path::Path::new(spec_path).file_stem() {
             Some(s) => s.to_string_lossy().into_owned(),
             None => {
@@ -204,7 +200,7 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
         }
         seen_stems.push(stem.clone());
 
-        // spec 読み込み(ファイルのみ)。読めなければ exit 1。
+        // Read spec from file; exit 1 on failure.
         let json = match std::fs::read_to_string(spec_path) {
             Ok(s) => s,
             Err(e) => {
@@ -213,7 +209,7 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
             }
         };
 
-        // 出力生成(ここでは書き出さない)。失敗は該当コードで打ち切り。
+        // Render but don't write yet; abort with the relevant exit code on failure.
         let bytes = match render_one(&json, args, &format, font_bytes) {
             Ok(b) => b,
             Err((code, msg)) => {
@@ -225,14 +221,14 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
         outputs.push((out_path, bytes));
     }
 
-    // フェーズ2: 全件成功したので、ここで初めてディレクトリ作成と書き出しを行う。
+    // Phase 2: all inputs succeeded — now create the output directory and write files.
     if let Err(e) = std::fs::create_dir_all(out_dir) {
         eprintln!("error: failed to create output directory '{out_dir}': {e}");
         std::process::exit(3);
     }
-    // 書き込み前 preflight: 既存の非ファイル(ディレクトリ等)が出力先を塞いでいたら、
-    // 1 件も書く前に中止する(途中 write 失敗で部分成果物を残すのを避ける。
-    // ディスク満杯など書き込み途中の IO 失敗までは本質的に保証できない)。
+    // Pre-flight: abort before writing anything if any output path is blocked by a non-file
+    // (directory, symlink to dir, etc.). Cannot guarantee atomicity against mid-write IO errors
+    // such as disk full, but this catches the common case of accidental directory collisions.
     for (out_path, _) in &outputs {
         if out_path.exists() && !out_path.is_file() {
             eprintln!("error: output path is not a file: {}", out_path.display());
@@ -247,8 +243,7 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
     }
 }
 
-/// 指定された DSL に応じて spec(JSON 文字列)を IR(ChartSpec) にパースする。
-/// chartjs(既定)はフロントエンド chartjs、vegalite は frontend vegalite を使う。
+/// Parse a spec JSON string to IR using the specified DSL (chartjs or vegalite).
 fn parse_spec(json: &str, dsl: &str, strict: bool) -> Result<fulgur_chart::ir::ChartSpec, String> {
     match dsl {
         "vegalite" => fulgur_chart::frontend::vegalite::parse(json, strict),
@@ -256,26 +251,25 @@ fn parse_spec(json: &str, dsl: &str, strict: bool) -> Result<fulgur_chart::ir::C
     }
 }
 
-/// 1 つの spec(JSON 文字列)と引数から出力バイト列を生成する。
-/// 単一/バッチ両モードで共有し、同一入力なら同一バイト列を返す(決定的)。
-/// 失敗時は `(exit_code, message)` を返す。input/render=1, strict=2, png=3。
+/// Render one spec JSON string to output bytes. Shared by single and batch modes.
+/// Returns Err((exit_code, message)) on failure: 1=input/render, 2=strict, 3=png/IO.
 fn render_one(
     json: &str,
     args: &RenderArgs,
     format: &Format,
     font_bytes: &Option<Vec<u8>>,
 ) -> Result<Vec<u8>, (i32, String)> {
-    // パース(非strict)。構造/JSON/type エラーは exit 1。
+    // Parse non-strictly; JSON/structure/type errors exit 1.
     let mut spec_ir =
-        parse_spec(json, &args.dsl, false).map_err(|e| (1, format!("入力エラー: {e}")))?;
+        parse_spec(json, &args.dsl, false).map_err(|e| (1, format!("error: parse failed: {e}")))?;
 
-    // strict 指定時は再パースして未知キーを検出。違反は exit 2。
-    // (検証用のゲートであり、レンダリングは非strict の ir から行う。)
+    // When --strict is set, re-parse with strict mode to catch unknown keys (exit 2).
+    // Rendering still uses the non-strict IR parsed above.
     if args.strict {
-        parse_spec(json, &args.dsl, true).map_err(|e| (2, format!("strict 違反: {e}")))?;
+        parse_spec(json, &args.dsl, true).map_err(|e| (2, format!("error: strict violation: {e}")))?;
     }
 
-    // width/height 上書き。
+    // Apply CLI width/height overrides.
     if let Some(w) = args.width {
         spec_ir.width = w;
     }
@@ -283,14 +277,14 @@ fn render_one(
         spec_ir.height = h;
     }
 
-    // SVG 生成。
+    // Render SVG.
     let svg = match font_bytes {
         Some(bytes) => fulgur_chart::render::render_chart_with_font(&spec_ir, bytes)
-            .map_err(|e| (1, format!("レンダリングエラー: {e}")))?,
+            .map_err(|e| (1, format!("error: render failed: {e}")))?,
         None => fulgur_chart::render::render_chart(&spec_ir),
     };
 
-    // PNG 指定時はラスタライズ。
+    // Rasterize to PNG when requested.
     match format {
         Format::Svg => Ok(svg.into_bytes()),
         Format::Png => {
@@ -298,7 +292,7 @@ fn render_one(
                 Some(fb) => fulgur_chart::raster::svg_to_png_with_font(&svg, args.scale, fb),
                 None => fulgur_chart::raster::svg_to_png(&svg, args.scale),
             };
-            res.map_err(|e| (3, format!("PNG 変換エラー: {e}")))
+            res.map_err(|e| (3, format!("error: PNG conversion failed: {e}")))
         }
     }
 }

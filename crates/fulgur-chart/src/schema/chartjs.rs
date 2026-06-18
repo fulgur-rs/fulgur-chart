@@ -1,8 +1,8 @@
-//! chart.js v4 spec の JSON Schema 型定義。
+//! JSON Schema types for the chart.js v4 input DSL.
 //!
-//! [`ChartJsSpec`] が `fulgur-chart schema --dsl chartjs` で出力するトップ型。
-//! `#[serde(tag = "type")]` による discriminated union で、chart 種別ごとに
-//! 有効な data・options のみを保持する。
+//! [`ChartJsSpec`] is the root type emitted by `fulgur-chart schema --dsl chartjs`.
+//! It is a `#[serde(tag = "type")]` discriminated union so that each chart kind
+//! exposes only the data and options fields that are valid for it.
 
 use super::common::{
     AxisOptions, ColorString, DataLabelsPlugin, LegendPlugin, ScalarOrArray, ThemeOptions,
@@ -12,11 +12,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // ────────────────────────────────────────────────
-// トップレベルの discriminated union
+// Top-level discriminated union
 // ────────────────────────────────────────────────
 
-/// fulgur-chart が受け付ける chart.js v4 互換 spec のルート型。
-/// `"type"` フィールドで各チャート種別の専用スキーマに分岐する。
+/// Root type for a chart.js v4 compatible spec accepted by fulgur-chart.
+/// The `"type"` field selects the per-chart-kind schema variant.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
 pub enum ChartJsSpec {
@@ -30,7 +30,7 @@ pub enum ChartJsSpec {
 }
 
 // ────────────────────────────────────────────────
-// 棒グラフ (bar)
+// Bar chart
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -49,13 +49,13 @@ pub struct BarData {
     pub datasets: Vec<BarDataset>,
 }
 
-/// bar/line 混合チャート対応。`type` で系列ごとの描画種別を切り替える。
+/// Bar dataset. Supports mixed bar+line charts via the per-dataset `type` field.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BarDataset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// 混合チャート用。"bar" または "line" のみ有効。
+    /// Per-dataset chart type for mixed bar+line charts. Only "bar" or "line" are valid.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub dataset_type: Option<BarOrLine>,
     pub data: Vec<f64>,
@@ -119,7 +119,7 @@ pub struct BarScales {
 }
 
 // ────────────────────────────────────────────────
-// 折れ線グラフ (line)
+// Line chart
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -158,7 +158,7 @@ pub struct LineDataset {
     pub point_radius: Option<f64>,
 }
 
-/// line のエリア塗り指定。true/false またはモード文字列("origin" 等)。
+/// Area fill setting: `true`/`false` or a mode string (e.g. `"origin"`).
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum FillSpec {
@@ -177,7 +177,7 @@ pub struct LineOptions {
     pub theme: Option<ThemeOptions>,
 }
 
-/// plugins: title / legend / datalabels（scales なし種別で共用）。
+/// Plugin options shared by chart types that have no scales (pie, doughnut, radar).
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct CommonPlugins {
@@ -190,7 +190,7 @@ pub struct CommonPlugins {
 }
 
 // ────────────────────────────────────────────────
-// 円グラフ / ドーナツ (pie / doughnut)
+// Pie and doughnut charts
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -233,7 +233,7 @@ pub struct PieOptions {
 }
 
 // ────────────────────────────────────────────────
-// 散布図 (scatter)
+// Scatter chart
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -285,7 +285,7 @@ pub struct XYOptions {
 }
 
 // ────────────────────────────────────────────────
-// バブルチャート (bubble)
+// Bubble chart
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -326,7 +326,7 @@ pub struct XYRPoint {
 }
 
 // ────────────────────────────────────────────────
-// レーダーチャート (radar)
+// Radar chart
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]

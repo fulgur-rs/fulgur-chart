@@ -1,11 +1,11 @@
-//! chartjs / vegalite 双方で使う共通スキーマ型。
+//! Common schema types shared by the chartjs and vegalite frontends.
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// CSS 色文字列（"#rrggbb"、"rgba(...)" 等）。スキーマ上は string。
+/// A CSS color string (e.g. "#rrggbb", "rgba(...)"). Represented as a plain string in the schema.
 pub type ColorString = String;
 
-/// スカラまたは配列。
+/// A value that can be either a single item or an array.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ScalarOrArray<T> {
@@ -13,7 +13,7 @@ pub enum ScalarOrArray<T> {
     Many(Vec<T>),
 }
 
-/// options.theme に対応する視覚トークン上書きオブジェクト。
+/// Visual token overrides (options.theme).
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ThemeOptions {
@@ -25,12 +25,12 @@ pub struct ThemeOptions {
     pub text_color: Option<ColorString>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ColorString>,
-    /// ラベル基準フォントサイズ(px)。
+    /// Base font size for labels in pixels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<f64>,
 }
 
-/// plugins.title。
+/// options.plugins.title configuration.
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct TitlePlugin {
@@ -40,7 +40,7 @@ pub struct TitlePlugin {
     pub text: Option<String>,
 }
 
-/// plugins.legend。
+/// options.plugins.legend configuration.
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct LegendPlugin {
@@ -59,7 +59,7 @@ pub enum LegendPosition {
     Right,
 }
 
-/// plugins.datalabels。
+/// options.plugins.datalabels configuration.
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct DataLabelsPlugin {
@@ -67,7 +67,7 @@ pub struct DataLabelsPlugin {
     pub display: Option<bool>,
 }
 
-/// options.scales.{x,y} の軸オプション。
+/// Axis options for options.scales.x / options.scales.y.
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AxisOptions {
@@ -77,10 +77,10 @@ pub struct AxisOptions {
     pub min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max: Option<f64>,
-    /// 軸タイトル設定（現在 IR 未マップ）。
+    /// Axis title configuration (parsed but not yet mapped to IR).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<serde_json::Value>,
-    /// グリッド設定（現在 IR 未マップ）。
+    /// Grid line configuration (parsed but not yet mapped to IR).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grid: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]

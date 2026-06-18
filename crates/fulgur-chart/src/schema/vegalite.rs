@@ -1,10 +1,10 @@
-//! Vega-Lite サブセットの JSON Schema 型定義。
+//! JSON Schema types for the Vega-Lite subset input DSL.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// fulgur-chart が受け付ける Vega-Lite サブセット spec のルート型。
-/// `mark` フィールドの値で各チャート種別に分岐する。
+/// Root type for a Vega-Lite subset spec accepted by fulgur-chart.
+/// The `mark` field value selects the per-chart-kind schema variant.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum VegaLiteSpec {
@@ -15,28 +15,28 @@ pub enum VegaLiteSpec {
 }
 
 // ────────────────────────────────────────────────
-// 共通ヘルパー
+// Common helpers
 // ────────────────────────────────────────────────
 
-/// data.values: インライン JSON オブジェクトの配列。
+/// Inline data: an array of JSON objects (data.values).
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VlData {
     pub values: Vec<serde_json::Value>,
 }
 
-/// エンコーディングチャネル（field + 省略可能な type ヒント）。
+/// An encoding channel: a data field reference with an optional type hint.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VlChannel {
-    /// data.values の各レコードで参照するフィールド名。
+    /// Name of the field in each record of data.values.
     pub field: String,
-    /// 型ヒント("quantitative", "nominal" 等)。現在は動作に影響しない。
+    /// Type hint (e.g. "quantitative", "nominal"). Currently has no effect on rendering.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub field_type: Option<String>,
 }
 
-/// VL の title: 文字列または {text: ...} オブジェクト。
+/// Vega-Lite title: either a plain string or a `{text: ...}` object.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum VlTitle {
@@ -45,7 +45,7 @@ pub enum VlTitle {
 }
 
 // ────────────────────────────────────────────────
-// mark 定数型
+// Mark constant types
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -73,7 +73,7 @@ pub enum MarkArc {
 }
 
 // ────────────────────────────────────────────────
-// 棒グラフ (mark: "bar")
+// Bar chart (mark: "bar")
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -102,7 +102,7 @@ pub struct VlBarEncoding {
 }
 
 // ────────────────────────────────────────────────
-// 折れ線グラフ (mark: "line")
+// Line chart (mark: "line")
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -122,7 +122,7 @@ pub struct VlLineSpec {
 }
 
 // ────────────────────────────────────────────────
-// 散布図 (mark: "point")
+// Scatter plot (mark: "point")
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -151,7 +151,7 @@ pub struct VlPointEncoding {
 }
 
 // ────────────────────────────────────────────────
-// 円グラフ (mark: "arc")
+// Arc / pie chart (mark: "arc")
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
