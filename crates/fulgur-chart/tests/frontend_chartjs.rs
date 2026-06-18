@@ -340,3 +340,16 @@ fn radar_rejects_negative_values() {
       "datasets":[{"data":[3,-1,2]}]}}"#;
     assert!(chartjs::parse(json, false).is_err());
 }
+
+#[test]
+fn strict_rejects_scales_typo() {
+    // stacked は描画に効くので、typo を strict で取りこぼさない。
+    let typo = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"y":{"stakced":true}}}}"#;
+    assert!(chartjs::parse(typo, true).is_err());
+    assert!(chartjs::parse(typo, false).is_ok());
+    // 正しい stacked キーは strict でも通る。
+    let ok = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"y":{"stacked":true}}}}"#;
+    assert!(chartjs::parse(ok, true).is_ok());
+}

@@ -529,6 +529,21 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                 "options.theme",
             )?;
         }
+        // scales 配下も検査する。stacked は描画に効く load-bearing キーなので、
+        // typo(例 stakced)を strict で取りこぼさないようにする。各軸は設計が認める
+        // サブセットのみ許可(stacked のみ実装、他は認識済み・未実装)。
+        if let Some(scales) = options.get("scales").and_then(|v| v.as_object()) {
+            check_object(scales, &["x", "y"], "options.scales")?;
+            for axis in ["x", "y"] {
+                if let Some(ax) = scales.get(axis).and_then(|v| v.as_object()) {
+                    check_object(
+                        ax,
+                        &["stacked", "min", "max", "title", "grid", "beginAtZero"],
+                        &format!("options.scales.{axis}"),
+                    )?;
+                }
+            }
+        }
     }
 
     Ok(())
