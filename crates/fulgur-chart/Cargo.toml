@@ -1,6 +1,9 @@
 [package]
 name = "fulgur-chart"
 version = "0.1.0"
+description = "Render chart.js-compatible JSON specs to deterministic static SVG/PNG"
+keywords = ["chart", "svg", "chartjs", "visualization", "png"]
+categories = ["graphics", "visualization"]
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

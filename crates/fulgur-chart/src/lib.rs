@@ -1,4 +1,4 @@
-//! fulgur-chart: chart.js v4 互換 JSON から決定的な静的 SVG/PNG を生成するライブラリ。
+//! Render chart.js-compatible JSON specs to deterministic static SVG/PNG.
 
 pub mod color;
 pub mod font;
