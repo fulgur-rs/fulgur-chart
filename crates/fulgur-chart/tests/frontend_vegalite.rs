@@ -153,6 +153,32 @@ fn render_smoke_produces_svg() {
 }
 
 #[test]
+fn line_with_sparse_color_errors() {
+    // 色分け line で (cat,color) が疎 → 0 埋めの誤った折れ線を防ぐため Err。
+    let json = r#"{
+        "mark": "line",
+        "data": {"values": [{"cat":"A","val":3,"g":"x"},{"cat":"B","val":5,"g":"y"}]},
+        "encoding": {"x":{"field":"cat"},"y":{"field":"val"},"color":{"field":"g"}}
+    }"#;
+    assert!(vegalite::parse(json, false).is_err());
+}
+
+#[test]
+fn line_with_dense_color_ok() {
+    // 全 (cat,color) が揃っていれば 2 系列で OK。
+    let json = r#"{
+        "mark": "line",
+        "data": {"values": [
+            {"cat":"A","val":3,"g":"x"},{"cat":"B","val":5,"g":"x"},
+            {"cat":"A","val":2,"g":"y"},{"cat":"B","val":4,"g":"y"}
+        ]},
+        "encoding": {"x":{"field":"cat"},"y":{"field":"val"},"color":{"field":"g"}}
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    assert_eq!(spec.series.len(), 2);
+}
+
+#[test]
 fn honors_width_height_title() {
     // VL の width/height/title を ChartSpec に反映する(strict 許可と整合)。
     let json = r#"{

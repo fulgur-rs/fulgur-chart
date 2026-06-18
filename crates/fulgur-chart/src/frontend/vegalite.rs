@@ -39,6 +39,27 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let color_field = channel_field(encoding, "color");
     let theta_field = channel_field(encoding, "theta");
 
+    // 色分け line で疎なカテゴリ(一部 (category,color) 組が欠落)は、欠損を 0 埋めすると
+    // 実在しないゼロ点へ折れ線が接続され誤りになる。IR は欠損表現を持たないため拒否する。
+    if matches!(kind, ChartKind::Line) && color_field.is_some() {
+        let cats = distinct_categories(&records, x_field.as_deref());
+        let groups = distinct_categories(&records, color_field.as_deref());
+        for group in &groups {
+            for cat in &cats {
+                let present = records.iter().any(|r| {
+                    &field_category(r, x_field.as_deref()) == cat
+                        && &field_category(r, color_field.as_deref()) == group
+                });
+                if !present {
+                    return Err(
+                        "色分け折れ線(line + color)は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+
     let theme = Theme::default();
 
     let series = match &kind {
