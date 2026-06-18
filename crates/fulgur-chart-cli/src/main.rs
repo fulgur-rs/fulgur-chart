@@ -106,6 +106,10 @@ fn run_render(args: RenderArgs) {
 /// 出力バイト列は従来動作と完全一致する。
 fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
     // spec はちょうど 1 つでなければならない。複数は --out-dir が必要。
+    if args.spec.is_empty() {
+        eprintln!("spec ファイルを指定してください");
+        std::process::exit(1);
+    }
     if args.spec.len() > 1 {
         eprintln!("複数 spec には --out-dir が必要です");
         std::process::exit(1);
