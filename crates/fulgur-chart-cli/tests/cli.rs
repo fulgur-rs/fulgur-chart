@@ -372,3 +372,32 @@ fn batch_rejects_stdin_before_any_output() {
         "失敗時に部分成果物を残さない"
     );
 }
+
+#[test]
+fn batch_render_error_leaves_no_partial_output() {
+    let dir = batch_dir("batch_render_error_leaves_no_partial_output");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+    let good = in_dir.join("good.json");
+    let bad = in_dir.join("bad.json");
+    std::fs::write(&good, MINIMAL_BAR_A).unwrap();
+    std::fs::write(&bad, "{ not valid json").unwrap();
+
+    // good→bad の順でも、二相処理(全件レンダリング後に一括書き出し)により
+    // 2 件目の JSON エラーで失敗し、good の成果物も書き出されない。
+    bin()
+        .args([
+            "render",
+            good.to_str().unwrap(),
+            bad.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(
+        !out_dir.join("good.svg").exists(),
+        "レンダリング失敗時に先行成果物を残さない"
+    );
+}

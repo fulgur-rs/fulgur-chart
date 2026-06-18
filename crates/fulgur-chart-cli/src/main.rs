@@ -165,41 +165,18 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
         Format::Png => "png",
     };
 
-    // 出力名(stem)の衝突を事前検出する。`foo/a.json` と `bar/a.json` は同じ
-    // <out-dir>/a.<ext> になり、後勝ちで先行出力を無警告上書きして成果物を失う。
-    // 1 件も書き出す前に fail-fast する(部分出力を残さない)。
-    // バッチでは stdin(`-`)は不可。全入力を出力前に検証し、部分出力を残さない。
+    // フェーズ1: 全入力を検証・レンダリングしてから(まだ書き出さず)結果を貯める。
+    // 1 件でも失敗すれば、ディレクトリ作成も書き出しもせず打ち切る(部分出力を残さない)。
+    // 併せて出力名(stem)の衝突も事前検出する(`foo/a.json` と `bar/a.json` は同じ出力)。
     let mut seen_stems: Vec<String> = Vec::new();
+    let mut outputs: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
     for spec_path in &args.spec {
+        // バッチでは stdin(`-`)は不可。
         if spec_path == "-" {
             eprintln!("バッチモードでは標準入力(`-`)は使えません");
             std::process::exit(1);
         }
-        match std::path::Path::new(spec_path).file_stem() {
-            Some(s) => {
-                let stem = s.to_string_lossy().into_owned();
-                if seen_stems.contains(&stem) {
-                    eprintln!("出力名が衝突します: 複数の入力が同じ出力 {stem}.{ext} を生成します");
-                    std::process::exit(1);
-                }
-                seen_stems.push(stem);
-            }
-            None => {
-                eprintln!("ファイル名を決定できません: {spec_path}");
-                std::process::exit(1);
-            }
-        }
-    }
-
-    // 出力ディレクトリを作成。失敗は exit 3。
-    if let Err(e) = std::fs::create_dir_all(out_dir) {
-        eprintln!("出力ディレクトリ作成エラー: {out_dir}: {e}");
-        std::process::exit(3);
-    }
-
-    // 各 spec を入力順に処理(決定的)。fail-fast。
-    for spec_path in &args.spec {
-        // 出力ファイル名のステム(`-`/不正名は事前検証で除外済み)。
+        // 出力ファイル名のステム。
         let stem = match std::path::Path::new(spec_path).file_stem() {
             Some(s) => s.to_string_lossy().into_owned(),
             None => {
@@ -207,6 +184,11 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
                 std::process::exit(1);
             }
         };
+        if seen_stems.contains(&stem) {
+            eprintln!("出力名が衝突します: 複数の入力が同じ出力 {stem}.{ext} を生成します");
+            std::process::exit(1);
+        }
+        seen_stems.push(stem.clone());
 
         // spec 読み込み(ファイルのみ)。読めなければ exit 1。
         let json = match std::fs::read_to_string(spec_path) {
@@ -217,7 +199,7 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
             }
         };
 
-        // 出力生成。
+        // 出力生成(ここでは書き出さない)。失敗は該当コードで打ち切り。
         let bytes = match render_one(&json, args, &format, font_bytes) {
             Ok(b) => b,
             Err((code, msg)) => {
@@ -225,10 +207,17 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
                 std::process::exit(code);
             }
         };
-
-        // 書き出し: <out_dir>/<stem>.<ext>。IO 失敗は exit 3。
         let out_path = std::path::Path::new(out_dir).join(format!("{stem}.{ext}"));
-        if let Err(e) = std::fs::write(&out_path, &bytes) {
+        outputs.push((out_path, bytes));
+    }
+
+    // フェーズ2: 全件成功したので、ここで初めてディレクトリ作成と書き出しを行う。
+    if let Err(e) = std::fs::create_dir_all(out_dir) {
+        eprintln!("出力ディレクトリ作成エラー: {out_dir}: {e}");
+        std::process::exit(3);
+    }
+    for (out_path, bytes) in &outputs {
+        if let Err(e) = std::fs::write(out_path, bytes) {
             eprintln!("出力エラー: {}: {e}", out_path.display());
             std::process::exit(3);
         }

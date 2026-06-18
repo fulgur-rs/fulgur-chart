@@ -233,20 +233,27 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .map(|ds| resolve_series_type(&ds.dataset_type))
         .collect();
 
-    // 混合判定: 基本型が bar/line で、解決後の種別が Bar/Line を両方含むなら Mixed。
+    // 描画 kind は、基本型が bar/line のとき「解決後の dataset 種別」で決める:
+    // 両方含む→Mixed、全 Line→Line、全 Bar→Bar。dataset 別 type の単独上書き
+    // (例 {"type":"bar","datasets":[{"type":"line"}]})も正しく反映される。
     let is_mixable_base = matches!(raw.chart_type.as_str(), "bar" | "line");
-    let is_mixed = is_mixable_base
-        && series_types.contains(&SeriesType::Bar)
-        && series_types.contains(&SeriesType::Line);
+    let has_bar = series_types.contains(&SeriesType::Bar);
+    let has_line = series_types.contains(&SeriesType::Line);
+    let bar_kind = || ChartKind::Bar {
+        horizontal: raw.options.index_axis.as_deref() == Some("y"),
+        stacked,
+    };
 
-    let kind = if is_mixed {
+    let kind = if is_mixable_base && has_bar && has_line {
         ChartKind::Mixed
+    } else if is_mixable_base && has_line && !has_bar {
+        ChartKind::Line
+    } else if is_mixable_base && has_bar && !has_line {
+        bar_kind()
     } else {
+        // dataset 空(種別未確定)、または mixable でない型。基本 type で決める。
         match raw.chart_type.as_str() {
-            "bar" => ChartKind::Bar {
-                horizontal: raw.options.index_axis.as_deref() == Some("y"),
-                stacked,
-            },
+            "bar" => bar_kind(),
             "line" => ChartKind::Line,
             "pie" => ChartKind::Pie { donut_ratio: 0.0 },
             "doughnut" => ChartKind::Pie { donut_ratio: 0.5 },

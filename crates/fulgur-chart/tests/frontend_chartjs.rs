@@ -312,3 +312,14 @@ fn strict_accepts_dataset_type() {
       "datasets":[{"data":[1]},{"type":"line","data":[2]}]}}"#;
     assert!(chartjs::parse(json, true).is_ok());
 }
+
+#[test]
+fn single_dataset_type_override_changes_kind() {
+    // 基本 type=bar でも、全 dataset が type:"line" なら kind は Line になる
+    // (混合でない単独上書き。以前は kind=Bar のままで line が棒描画されていた)。
+    let json = r#"{"type":"bar","data":{"labels":["a","b"],
+      "datasets":[{"type":"line","data":[1,2]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Line));
+    assert_eq!(spec.series[0].series_type, SeriesType::Line);
+}
