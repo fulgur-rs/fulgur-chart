@@ -260,6 +260,18 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         stacked,
     };
 
+    // 混合(bar+line)は縦・非積み上げのみ対応。横棒(indexAxis:y)や積み上げと併用すると
+    // それらが黙って失われるため、受理せず明示エラーにする(mixed.rs は縦・非積み上げ前提)。
+    if is_mixable_base && has_bar && has_line {
+        let horizontal = raw.options.index_axis.as_deref() == Some("y");
+        if horizontal || stacked {
+            return Err(
+                "混合チャート(bar+line)は横棒(indexAxis:y)・積み上げ(stacked)と併用できません"
+                    .to_string(),
+            );
+        }
+    }
+
     let kind = if is_mixable_base && has_bar && has_line {
         ChartKind::Mixed
     } else if is_mixable_base && has_line && !has_bar {

@@ -342,6 +342,26 @@ fn radar_rejects_negative_values() {
 }
 
 #[test]
+fn mixed_with_horizontal_or_stacked_errors() {
+    let base_datasets =
+        r#""data":{"labels":["a"],"datasets":[{"data":[1]},{"type":"line","data":[2]}]}"#;
+    // 横棒×混合 → エラー(mixed は縦・非積み上げのみ)。
+    let horiz = format!(r#"{{"type":"bar",{base_datasets},"options":{{"indexAxis":"y"}}}}"#);
+    assert!(chartjs::parse(&horiz, false).is_err());
+    // 積み上げ×混合 → エラー。
+    let stk = format!(
+        r#"{{"type":"bar",{base_datasets},"options":{{"scales":{{"y":{{"stacked":true}}}}}}}}"#
+    );
+    assert!(chartjs::parse(&stk, false).is_err());
+    // 通常の混合は従来どおり Mixed。
+    let ok = format!(r#"{{"type":"bar",{base_datasets}}}"#);
+    assert!(matches!(
+        chartjs::parse(&ok, false).unwrap().kind,
+        ChartKind::Mixed
+    ));
+}
+
+#[test]
 fn data_shape_mismatch_errors() {
     // scatter に数値配列 → 点データが空になる空チャート化を防ぎ、明示エラーに。
     let scatter_nums = r#"{"type":"scatter","data":{"datasets":[{"data":[1,2,3]}]}}"#;
