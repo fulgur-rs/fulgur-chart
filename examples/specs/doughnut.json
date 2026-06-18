@@ -1,0 +1,15 @@
+{
+  "type": "doughnut",
+  "data": {
+    "labels": ["Chrome", "Safari", "Edge", "Firefox", "その他"],
+    "datasets": [
+      { "data": [63, 19, 8, 6, 4] }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "ブラウザシェア（ドーナツ）" },
+      "legend": { "display": true, "position": "right" }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": ["Rust", "Go", "TypeScript", "Python", "Kotlin"],
+    "datasets": [
+      {
+        "label": "満足度 (%)",
+        "data": [87, 73, 78, 81, 69],
+        "backgroundColor": "#36a2eb"
+      }
+    ]
+  },
+  "options": {
+    "indexAxis": "y",
+    "plugins": {
+      "title": { "display": true, "text": "言語別の満足度（横棒）" },
+      "legend": { "display": false }
+    }
+  }
+}

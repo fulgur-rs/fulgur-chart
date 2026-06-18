@@ -1,0 +1,23 @@
+{
+  "type": "bubble",
+  "data": {
+    "datasets": [
+      {
+        "label": "主要都市",
+        "backgroundColor": "#9966ff",
+        "data": [
+          { "x": 35, "y": 620, "r": 28 },
+          { "x": 24, "y": 410, "r": 18 },
+          { "x": 14, "y": 250, "r": 12 },
+          { "x": 9, "y": 150, "r": 8 }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "年齢中央値・平均所得・人口（バブル）" },
+      "legend": { "display": false }
+    }
+  }
+}

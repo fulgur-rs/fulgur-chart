@@ -1,0 +1,26 @@
+{
+  "type": "radar",
+  "data": {
+    "labels": ["速度", "力", "技", "防御", "魔法", "運"],
+    "datasets": [
+      {
+        "label": "戦士",
+        "data": [70, 95, 60, 90, 20, 50],
+        "borderColor": "#36a2eb",
+        "backgroundColor": "#36a2eb"
+      },
+      {
+        "label": "魔法使い",
+        "data": [55, 30, 80, 40, 95, 65],
+        "borderColor": "#ff6384",
+        "backgroundColor": "#ff6384"
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "キャラクター能力値（レーダー）" },
+      "legend": { "display": true, "position": "top" }
+    }
+  }
+}

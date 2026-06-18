@@ -1,0 +1,29 @@
+{
+  "type": "scatter",
+  "data": {
+    "datasets": [
+      {
+        "label": "店舗A",
+        "backgroundColor": "#36a2eb",
+        "data": [
+          { "x": 12, "y": 4 }, { "x": 18, "y": 7 }, { "x": 25, "y": 9 },
+          { "x": 30, "y": 14 }, { "x": 33, "y": 13 }, { "x": 38, "y": 19 }
+        ]
+      },
+      {
+        "label": "店舗B",
+        "backgroundColor": "#ff6384",
+        "data": [
+          { "x": 10, "y": 9 }, { "x": 16, "y": 12 }, { "x": 22, "y": 11 },
+          { "x": 28, "y": 17 }, { "x": 35, "y": 22 }, { "x": 40, "y": 24 }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "気温と来客数の関係（散布図）" },
+      "legend": { "display": true, "position": "top" }
+    }
+  }
+}
