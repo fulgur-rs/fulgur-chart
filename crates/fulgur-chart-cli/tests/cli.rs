@@ -433,3 +433,42 @@ fn batch_preflight_blocks_when_output_is_directory() {
         "preflight 失敗時に部分出力を残さない"
     );
 }
+
+#[test]
+fn schema_chartjs_is_valid_json() {
+    let output = Command::cargo_bin("fulgur-chart")
+        .unwrap()
+        .args(["schema"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&text).expect("not valid JSON");
+    // $schema フィールドが存在する
+    assert!(v.get("$schema").is_some(), "missing $schema");
+    // oneOf / anyOf のいずれかが存在する（discriminated union）
+    let has_union = v.get("oneOf").is_some() || v.get("anyOf").is_some();
+    assert!(has_union, "expected union schema (oneOf or anyOf)");
+}
+
+#[test]
+fn schema_vegalite_is_valid_json() {
+    let output = Command::cargo_bin("fulgur-chart")
+        .unwrap()
+        .args(["schema", "--dsl", "vegalite"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let _: serde_json::Value = serde_json::from_str(&text).expect("not valid JSON");
+}
+
+#[test]
+fn schema_unknown_dsl_exits_1() {
+    let output = Command::cargo_bin("fulgur-chart")
+        .unwrap()
+        .args(["schema", "--dsl", "unknown"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+}
