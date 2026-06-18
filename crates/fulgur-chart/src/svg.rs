@@ -157,9 +157,12 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
             let hex = color_hex(fill);
             let op = opacity_attr("fill-opacity", fill.a);
             let escaped = xml_escape(content);
+            // font_family は --font のフォント name table 由来(信頼できない)になり得る。
+            // 二重引用符属性なので `"` を含む family 名による属性インジェクションを防ぐ。
+            let fam = xml_escape_attr(font_family);
             write!(
                 s,
-                r#"<text x="{x}" y="{y}" font-family="{font_family}" font-size="{size}" text-anchor="{anchor}" fill="{hex}"{op}>{escaped}</text>"#
+                r#"<text x="{x}" y="{y}" font-family="{fam}" font-size="{size}" text-anchor="{anchor}" fill="{hex}"{op}>{escaped}</text>"#
             )
             .unwrap();
         }
@@ -171,6 +174,12 @@ fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+/// XML 属性値用エスケープ。テキスト用に加えて二重引用符 `"` も実体参照化し、
+/// 二重引用符属性の早期終端によるインジェクションを防ぐ。
+fn xml_escape_attr(s: &str) -> String {
+    xml_escape(s).replace('"', "&quot;")
 }
 
 #[cfg(test)]
@@ -515,5 +524,31 @@ mod tests {
             "</svg>\n",
         );
         assert_eq!(render_svg(&scene, "Noto Sans JP, sans-serif"), expected);
+    }
+
+    #[test]
+    fn font_family_attribute_is_escaped() {
+        // --font 由来の悪意ある family 名(二重引用符)が属性を破壊しないこと。
+        let scene = Scene {
+            width: 10.0,
+            height: 10.0,
+            items: vec![Prim::Text {
+                x: 0.0,
+                y: 0.0,
+                size: 10.0,
+                anchor: Anchor::Start,
+                fill: black(),
+                content: "x".into(),
+            }],
+        };
+        let svg = render_svg(&scene, r#"Evil" onload="boom"#);
+        assert!(
+            svg.contains("&quot;"),
+            "二重引用符が実体参照化される: {svg}"
+        );
+        assert!(
+            !svg.contains(r#"font-family="Evil" onload="#),
+            "属性が早期終端していない: {svg}"
+        );
     }
 }

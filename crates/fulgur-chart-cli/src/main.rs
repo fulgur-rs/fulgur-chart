@@ -165,6 +165,24 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
         Format::Png => "png",
     };
 
+    // 出力名(stem)の衝突を事前検出する。`foo/a.json` と `bar/a.json` は同じ
+    // <out-dir>/a.<ext> になり、後勝ちで先行出力を無警告上書きして成果物を失う。
+    // 1 件も書き出す前に fail-fast する(部分出力を残さない)。
+    let mut seen_stems: Vec<String> = Vec::new();
+    for spec_path in &args.spec {
+        if spec_path == "-" {
+            continue; // `-` は下のループで弾く
+        }
+        if let Some(s) = std::path::Path::new(spec_path).file_stem() {
+            let stem = s.to_string_lossy().into_owned();
+            if seen_stems.contains(&stem) {
+                eprintln!("出力名が衝突します: 複数の入力が同じ出力 {stem}.{ext} を生成します");
+                std::process::exit(1);
+            }
+            seen_stems.push(stem);
+        }
+    }
+
     // 出力ディレクトリを作成。失敗は exit 3。
     if let Err(e) = std::fs::create_dir_all(out_dir) {
         eprintln!("出力ディレクトリ作成エラー: {out_dir}: {e}");

@@ -359,11 +359,9 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         check_object(encoding, &["x", "y", "color", "theta"], "encoding")?;
         for channel in ["x", "y", "color", "theta"] {
             if let Some(ch) = encoding.get(channel).and_then(Value::as_object) {
-                check_object(
-                    ch,
-                    &["field", "type", "aggregate"],
-                    &format!("encoding.{channel}"),
-                )?;
+                // aggregate は未実装(本体は単純合計しかしない)。strict では
+                // 誤った集計結果を黙って返さないよう、未対応キーとして拒否する。
+                check_object(ch, &["field", "type"], &format!("encoding.{channel}"))?;
             }
         }
     }

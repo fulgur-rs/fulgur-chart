@@ -316,3 +316,32 @@ fn out_dir_conflicts_with_output() {
         .assert()
         .failure();
 }
+
+#[test]
+fn batch_rejects_stem_collision() {
+    let dir = batch_dir("batch_rejects_stem_collision");
+    let d1 = dir.join("d1");
+    let d2 = dir.join("d2");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&d1).unwrap();
+    std::fs::create_dir_all(&d2).unwrap();
+    // 別ディレクトリの同名 stem (a.json) → 出力 a.<ext> が衝突 → 書き出し前に fail-fast。
+    let a1 = d1.join("a.json");
+    let a2 = d2.join("a.json");
+    std::fs::write(&a1, MINIMAL_BAR_A).unwrap();
+    std::fs::write(&a2, MINIMAL_BAR_A).unwrap();
+
+    bin()
+        .args([
+            "render",
+            a1.to_str().unwrap(),
+            a2.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1);
+    // 衝突検出は create_dir_all より前なので、成果物も out_dir も作らない。
+    assert!(!out_dir.join("a.svg").exists(), "部分出力を残さない");
+}

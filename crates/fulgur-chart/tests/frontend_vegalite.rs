@@ -151,3 +151,15 @@ fn render_smoke_produces_svg() {
     let svg = fulgur_chart::render::render_chart(&spec);
     assert!(svg.starts_with("<svg"));
 }
+
+#[test]
+fn strict_rejects_aggregate() {
+    // aggregate は未実装。strict では未対応キーとして拒否する(誤った集計を黙認しない)。
+    let json = r#"{
+        "mark": "bar",
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"x": {"field":"cat"}, "y": {"field":"val","aggregate":"mean"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+    assert!(vegalite::parse(json, false).is_ok());
+}
