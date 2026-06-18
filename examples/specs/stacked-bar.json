@@ -3,15 +3,15 @@
   "data": {
     "labels": ["Q1", "Q2", "Q3", "Q4"],
     "datasets": [
-      { "label": "製品A", "data": [120, 150, 180, 210], "backgroundColor": "#36a2eb" },
-      { "label": "製品B", "data": [80, 90, 120, 140], "backgroundColor": "#ff6384" },
-      { "label": "製品C", "data": [40, 60, 70, 90], "backgroundColor": "#4bc0c0" }
+      { "label": "Product A", "data": [120, 150, 180, 210], "backgroundColor": "#36a2eb" },
+      { "label": "Product B", "data": [80, 90, 120, 140], "backgroundColor": "#ff6384" },
+      { "label": "Product C", "data": [40, 60, 70, 90], "backgroundColor": "#4bc0c0" }
     ]
   },
   "options": {
     "scales": { "y": { "stacked": true } },
     "plugins": {
-      "title": { "display": true, "text": "四半期売上の内訳（積み上げ棒）" },
+      "title": { "display": true, "text": "Quarterly Revenue Breakdown (stacked bar)" },
       "legend": { "display": true, "position": "top" }
     }
   }

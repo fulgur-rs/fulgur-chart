@@ -1,15 +1,15 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
   "mark": "bar",
-  "title": "地域別の四半期売上（Vega-Lite 入力）",
+  "title": "Quarterly Sales by Region (Vega-Lite input)",
   "data": {
     "values": [
-      { "q": "Q1", "sales": 120, "region": "東日本" },
-      { "q": "Q2", "sales": 150, "region": "東日本" },
-      { "q": "Q3", "sales": 180, "region": "東日本" },
-      { "q": "Q1", "sales": 90, "region": "西日本" },
-      { "q": "Q2", "sales": 110, "region": "西日本" },
-      { "q": "Q3", "sales": 130, "region": "西日本" }
+      { "q": "Q1", "sales": 120, "region": "East" },
+      { "q": "Q2", "sales": 150, "region": "East" },
+      { "q": "Q3", "sales": 180, "region": "East" },
+      { "q": "Q1", "sales": 90, "region": "West" },
+      { "q": "Q2", "sales": 110, "region": "West" },
+      { "q": "Q3", "sales": 130, "region": "West" }
     ]
   },
   "encoding": {

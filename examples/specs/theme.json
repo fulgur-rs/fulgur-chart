@@ -1,16 +1,16 @@
 {
   "type": "line",
   "data": {
-    "labels": ["1月", "2月", "3月", "4月", "5月", "6月"],
+    "labels": ["Jan", "Feb", "Mar", "Apr", "May", "Jun"],
     "datasets": [
       {
-        "label": "東京",
+        "label": "Tokyo",
         "data": [5, 7, 11, 17, 22, 25],
         "borderColor": "#ffcd56",
         "tension": 0.4
       },
       {
-        "label": "札幌",
+        "label": "Sapporo",
         "data": [-3, -2, 3, 10, 16, 20],
         "borderColor": "#4bc0c0",
         "tension": 0.4
@@ -19,7 +19,7 @@
   },
   "options": {
     "plugins": {
-      "title": { "display": true, "text": "月平均気温（ダークテーマ）" },
+      "title": { "display": true, "text": "Monthly Avg. Temperature (dark theme)" },
       "legend": { "display": true, "position": "top" }
     },
     "theme": {

@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>fulgur-chart サンプルギャラリー</title>
+  <title>fulgur-chart sample gallery</title>
   <style>
     body {
       font-family: "Noto Sans JP", sans-serif;
@@ -30,94 +30,94 @@
   </style>
 </head>
 <body>
-  <h1>fulgur-chart サンプルギャラリー</h1>
-  <p>fulgur-chart が生成した静的 SVG を埋め込んだギャラリーです。対応するチャート種と
-     主な機能を一通り並べています。<code>fulgur render</code> で PDF 化すると、SVG が
-     ベクターのまま埋め込まれます。</p>
+  <h1>fulgur-chart sample gallery</h1>
+  <p>A gallery of static SVGs produced by fulgur-chart, covering every supported chart
+     type and the main features. Rendering through <code>fulgur render</code> embeds the
+     SVGs into a PDF as vectors.</p>
 
   <div class="grid">
     <section>
-      <h2>棒グラフ</h2>
-      <img src="out/bar.svg" alt="月次売上の棒グラフ">
-      <p class="caption">縦棒。月次の売上推移。</p>
+      <h2>Bar</h2>
+      <img src="out/bar.svg" alt="Monthly revenue bar chart">
+      <p class="caption">Vertical bars: monthly revenue.</p>
     </section>
 
     <section>
-      <h2>横棒グラフ</h2>
-      <img src="out/bar-horizontal.svg" alt="言語別満足度の横棒グラフ">
-      <p class="caption"><code>indexAxis: "y"</code> による横棒。</p>
+      <h2>Horizontal bar</h2>
+      <img src="out/bar-horizontal.svg" alt="Satisfaction by language, horizontal bar">
+      <p class="caption">Horizontal bars via <code>indexAxis: "y"</code>.</p>
     </section>
 
     <section>
-      <h2>積み上げ棒グラフ</h2>
-      <img src="out/stacked-bar.svg" alt="四半期売上内訳の積み上げ棒グラフ">
-      <p class="caption"><code>scales.y.stacked</code> で系列を積み上げ。</p>
+      <h2>Stacked bar</h2>
+      <img src="out/stacked-bar.svg" alt="Quarterly revenue breakdown, stacked bar">
+      <p class="caption">Series stacked via <code>scales.y.stacked</code>.</p>
     </section>
 
     <section>
-      <h2>折れ線グラフ</h2>
-      <img src="out/line.svg" alt="週間気温の折れ線グラフ">
-      <p class="caption">2 系列・<code>tension</code> でなめらかに。</p>
+      <h2>Line</h2>
+      <img src="out/line.svg" alt="Weekly temperature line chart">
+      <p class="caption">Two series, smoothed with <code>tension</code>.</p>
     </section>
 
     <section>
-      <h2>エリアチャート</h2>
-      <img src="out/area.svg" alt="累計ユーザー数のエリアチャート">
-      <p class="caption"><code>"fill": true</code> の line。</p>
+      <h2>Area</h2>
+      <img src="out/area.svg" alt="Cumulative users area chart">
+      <p class="caption">Line with <code>"fill": true</code>.</p>
     </section>
 
     <section>
-      <h2>円グラフ</h2>
-      <img src="out/pie.svg" alt="デバイス別アクセス割合の円グラフ">
-      <p class="caption">スライスごとに自動配色。</p>
+      <h2>Pie</h2>
+      <img src="out/pie.svg" alt="Access by device pie chart">
+      <p class="caption">Auto-colored per slice.</p>
     </section>
 
     <section>
-      <h2>ドーナツグラフ</h2>
-      <img src="out/doughnut.svg" alt="ブラウザシェアのドーナツグラフ">
-      <p class="caption">ドーナツ。凡例は右配置。</p>
+      <h2>Doughnut</h2>
+      <img src="out/doughnut.svg" alt="Browser share doughnut chart">
+      <p class="caption">Doughnut with a right-aligned legend.</p>
     </section>
 
     <section>
-      <h2>散布図</h2>
-      <img src="out/scatter.svg" alt="気温と来客数の散布図">
-      <p class="caption"><code>{x, y}</code> 点データ・線形×線形軸。</p>
+      <h2>Scatter</h2>
+      <img src="out/scatter.svg" alt="Temperature vs. visitors scatter plot">
+      <p class="caption"><code>{x, y}</code> points on linear axes.</p>
     </section>
 
     <section>
-      <h2>バブルチャート</h2>
-      <img src="out/bubble.svg" alt="人口・所得・年齢のバブルチャート">
-      <p class="caption"><code>{x, y, r}</code> で第3次元を半径に。</p>
+      <h2>Bubble</h2>
+      <img src="out/bubble.svg" alt="Population bubble chart">
+      <p class="caption"><code>{x, y, r}</code> — radius as a third dimension.</p>
     </section>
 
     <section>
-      <h2>レーダーチャート</h2>
-      <img src="out/radar.svg" alt="キャラクター能力値のレーダーチャート">
-      <p class="caption">多変量を極座標で比較。</p>
+      <h2>Radar</h2>
+      <img src="out/radar.svg" alt="Character stats radar chart">
+      <p class="caption">Multivariate comparison in polar coordinates.</p>
     </section>
 
     <section>
-      <h2>混合チャート</h2>
-      <img src="out/mixed.svg" alt="売上実績と目標の混合チャート">
-      <p class="caption">dataset 別 <code>type</code> で棒 + 折れ線。</p>
+      <h2>Mixed</h2>
+      <img src="out/mixed.svg" alt="Revenue actual vs. target mixed chart">
+      <p class="caption">Per-dataset <code>type</code>: bar + line.</p>
     </section>
 
     <section>
-      <h2>データラベル</h2>
-      <img src="out/datalabels.svg" alt="データラベル付きの棒グラフ">
-      <p class="caption"><code>plugins.datalabels</code> で各点に値を描画。</p>
+      <h2>Data labels</h2>
+      <img src="out/datalabels.svg" alt="Bar chart with data labels">
+      <p class="caption">Values drawn per point via <code>plugins.datalabels</code>.</p>
     </section>
 
     <section>
-      <h2>テーマ（ダーク）</h2>
-      <img src="out/theme.svg" alt="ダークテーマの折れ線グラフ">
-      <p class="caption"><code>options.theme</code> で配色を上書き。</p>
+      <h2>Theme (dark)</h2>
+      <img src="out/theme.svg" alt="Dark-themed line chart">
+      <p class="caption">Colors overridden via <code>options.theme</code>.</p>
     </section>
 
     <section>
-      <h2>Vega-Lite 入力</h2>
-      <img src="out/vegalite.svg" alt="Vega-Lite 入力の地域別売上">
-      <p class="caption"><code>--dsl vegalite</code> での入力例。</p>
+      <h2>Vega-Lite input</h2>
+      <img src="out/vegalite.svg" alt="Vega-Lite quarterly sales by region">
+      <p class="caption">Rendered from a Vega-Lite spec (<code>--dsl vegalite</code>).</p>
     </section>
   </div>
 </body>

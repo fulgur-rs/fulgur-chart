@@ -4,7 +4,7 @@
     "labels": ["Q1", "Q2", "Q3", "Q4"],
     "datasets": [
       {
-        "label": "累計ユーザー数 (千人)",
+        "label": "Total Users (k)",
         "data": [30, 75, 130, 210],
         "borderColor": "#4bc0c0",
         "backgroundColor": "#4bc0c0",
@@ -15,7 +15,7 @@
   },
   "options": {
     "plugins": {
-      "title": { "display": true, "text": "ユーザー数の推移" }
+      "title": { "display": true, "text": "Cumulative Users" }
     }
   }
 }

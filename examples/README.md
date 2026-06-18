@@ -1,36 +1,37 @@
 # examples
 
-fulgur-chart のサンプル spec と、それを実 CLI で描画した SVG、Fulgur に通す想定の
-レポート HTML を置いています。対応するチャート種と主な機能を一通りカバーしています。
+Sample specs for fulgur-chart, the SVGs rendered from them by the real CLI, and a
+report HTML intended for Fulgur. These cover every supported chart type and the main
+features.
 
-## ディレクトリ
+## Directory
 
-- `specs/` … 入力 spec（JSON）。既定は chart.js v4 互換、`vegalite.json` のみ Vega-Lite。
-  - チャート種:
-    - `bar.json` … 棒グラフ（縦・月次売上）
-    - `bar-horizontal.json` … 横棒グラフ（`indexAxis: "y"`）
-    - `stacked-bar.json` … 積み上げ棒（`scales.y.stacked`）
-    - `line.json` … 折れ線（2 系列・`tension` でなめらかに）
-    - `area.json` … エリアチャート（`"fill": true` の line）
-    - `pie.json` … 円グラフ（スライスごとに自動配色）
-    - `doughnut.json` … ドーナツグラフ（凡例は右）
-    - `scatter.json` … 散布図（`{x, y}` 点データ・2 系列）
-    - `bubble.json` … バブルチャート（`{x, y, r}` で第3次元を半径に）
-    - `radar.json` … レーダーチャート（多変量・2 系列）
-    - `mixed.json` … 混合チャート（棒 + 折れ線・dataset 別 `type`）
-  - 機能:
-    - `datalabels.json` … データラベル（`plugins.datalabels.display`）
-    - `theme.json` … テーマ上書き（`options.theme` でダーク配色）
-    - `vegalite.json` … Vega-Lite サブセット入力（`--dsl vegalite`）
-- `out/` … 上記 spec を CLI で描画した SVG（リポジトリに同梱）
-- `report.html` … 生成 SVG を `<img>` で並べた最小ギャラリー
+- `specs/` … input specs (JSON). chart.js v4-compatible by default; only `vegalite.json` is Vega-Lite.
+  - Chart types:
+    - `bar.json` … bar chart (vertical, monthly revenue)
+    - `bar-horizontal.json` … horizontal bar (`indexAxis: "y"`)
+    - `stacked-bar.json` … stacked bar (`scales.y.stacked`)
+    - `line.json` … line chart (two series, smoothed with `tension`)
+    - `area.json` … area chart (line with `"fill": true`)
+    - `pie.json` … pie chart (auto-colored per slice)
+    - `doughnut.json` … doughnut chart (legend on the right)
+    - `scatter.json` … scatter plot (`{x, y}` point data, two series)
+    - `bubble.json` … bubble chart (`{x, y, r}` — radius as a third dimension)
+    - `radar.json` … radar chart (multivariate, two series)
+    - `mixed.json` … mixed chart (bar + line via per-dataset `type`)
+  - Features:
+    - `datalabels.json` … data labels (`plugins.datalabels.display`)
+    - `theme.json` … theme override (`options.theme`, dark palette)
+    - `vegalite.json` … Vega-Lite subset input (`--dsl vegalite`)
+- `out/` … the SVGs rendered from those specs by the CLI (committed)
+- `report.html` … a minimal gallery embedding the generated SVGs with `<img>`
 
-## SVG の生成（再生成手順）
+## Regenerating the SVGs
 
-リポジトリのルートから、各 spec を CLI に通して `out/` を再生成します。出力は決定的
-（同一入力なら byte-identical）なので、再生成しても差分は出ません。
+From the repository root, run each spec through the CLI to regenerate `out/`. Output is
+deterministic (byte-identical for identical input), so regenerating produces no diff.
 
-chart.js 系（`vegalite` 以外）はまとめて生成できます。
+The chart.js specs (everything except `vegalite`) can be generated together:
 
 ```sh
 for n in bar bar-horizontal stacked-bar line area pie doughnut \
@@ -39,31 +40,33 @@ for n in bar bar-horizontal stacked-bar line area pie doughnut \
 done
 ```
 
-Vega-Lite 入力は `--dsl vegalite` を付けます。
+Vega-Lite input needs `--dsl vegalite`:
 
 ```sh
 cargo run -q -p fulgur-chart-cli -- render examples/specs/vegalite.json -o examples/out/vegalite.svg --dsl vegalite
 ```
 
-PNG が欲しい場合は `--format png`（任意で `--scale 2` などの倍率）を付けます。
+For PNG, add `--format png` (optionally `--scale 2` for a resolution multiplier):
 
 ```sh
 cargo run -q -p fulgur-chart-cli -- render examples/specs/bar.json -o examples/out/bar.png --format png --scale 2
 ```
 
-複数 spec をまとめて出力するなら `--out-dir` でバッチ生成もできます。
+To render several specs at once, use `--out-dir` for batch generation:
 
 ```sh
 cargo run -q -p fulgur-chart-cli -- render examples/specs/bar.json examples/specs/pie.json --out-dir examples/out/
 ```
 
-## Fulgur で PDF 化する
+## Rendering to PDF with Fulgur
 
-`report.html` は生成 SVG を相対パスで参照しているだけの普通の HTML です。
-[Fulgur](https://github.com/fulgur-rs) に通すと、SVG がベクターのまま PDF に埋め込まれます。
+`report.html` is plain HTML that references the generated SVGs by relative path. Run it
+through [Fulgur](https://github.com/fulgur-rs) and the SVGs are embedded into the PDF as
+vectors.
 
 ```sh
 fulgur render -o report.pdf report.html
 ```
 
-PDF 側でも同じ Noto Sans JP をバンドルすると、チャート内テキストの字形が一致します。
+Bundling the same Noto Sans JP on the Fulgur side keeps the glyph shapes of in-chart text
+consistent.

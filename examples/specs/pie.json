@@ -1,17 +1,17 @@
 {
   "type": "pie",
   "data": {
-    "labels": ["デスクトップ", "モバイル", "タブレット", "その他"],
+    "labels": ["Desktop", "Mobile", "Tablet", "Other"],
     "datasets": [
       {
-        "label": "アクセス割合",
+        "label": "Share",
         "data": [55, 30, 12, 3]
       }
     ]
   },
   "options": {
     "plugins": {
-      "title": { "display": true, "text": "デバイス別アクセス割合" },
+      "title": { "display": true, "text": "Access by Device" },
       "legend": { "display": true, "position": "top" }
     }
   }
