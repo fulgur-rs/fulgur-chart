@@ -77,7 +77,7 @@ fn main() {
 fn run_render(args: RenderArgs) {
     // 1. DSL チェック。chartjs / vegalite 以外は未対応(入力指定エラー扱い)。
     if args.dsl != "chartjs" && args.dsl != "vegalite" {
-        eprintln!("未対応の DSL です: {} (対応: chartjs, vegalite)", args.dsl);
+        eprintln!("error: unsupported DSL '{}' (supported: chartjs, vegalite)", args.dsl);
         std::process::exit(1);
     }
 
@@ -88,7 +88,7 @@ fn run_render(args: RenderArgs) {
         Some(path) => match std::fs::read(path) {
             Ok(b) => Some(b),
             Err(e) => {
-                eprintln!("フォント読み込みエラー: {path}: {e}");
+                eprintln!("error: failed to read font '{path}': {e}");
                 std::process::exit(1);
             }
         },
@@ -107,11 +107,11 @@ fn run_render(args: RenderArgs) {
 fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
     // spec はちょうど 1 つでなければならない。複数は --out-dir が必要。
     if args.spec.is_empty() {
-        eprintln!("spec ファイルを指定してください");
+        eprintln!("error: no input spec provided");
         std::process::exit(1);
     }
     if args.spec.len() > 1 {
-        eprintln!("複数 spec には --out-dir が必要です");
+        eprintln!("error: multiple input specs require --out-dir");
         std::process::exit(1);
     }
     let spec_path = &args.spec[0];
@@ -120,7 +120,7 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
     let output = match &args.output {
         Some(o) => o,
         None => {
-            eprintln!("単一 spec には --output(-o)が必要です");
+            eprintln!("error: --output (-o) is required for single-spec mode");
             std::process::exit(1);
         }
     };
@@ -129,7 +129,7 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
     let json = match read_spec(spec_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("入力読み込みエラー: {e}");
+            eprintln!("error: failed to read input: {e}");
             std::process::exit(1);
         }
     };
@@ -148,7 +148,7 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
 
     // 書き出し。`-` は stdout、それ以外はファイル。IO 失敗は exit 3。
     if let Err(e) = write_output(output, &bytes) {
-        eprintln!("出力エラー: {e}");
+        eprintln!("error: write failed: {e}");
         std::process::exit(3);
     }
 }
@@ -158,7 +158,7 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
 fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
     // --out-dir と --output(-o)は併用不可。
     if args.output.is_some() {
-        eprintln!("--out-dir と --output は併用できません");
+        eprintln!("error: --out-dir and --output cannot be used together");
         std::process::exit(1);
     }
 
@@ -177,19 +177,19 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
     for spec_path in &args.spec {
         // バッチでは stdin(`-`)は不可。
         if spec_path == "-" {
-            eprintln!("バッチモードでは標準入力(`-`)は使えません");
+            eprintln!("error: stdin ('-') is not supported in batch mode");
             std::process::exit(1);
         }
         // 出力ファイル名のステム。
         let stem = match std::path::Path::new(spec_path).file_stem() {
             Some(s) => s.to_string_lossy().into_owned(),
             None => {
-                eprintln!("ファイル名を決定できません: {spec_path}");
+                eprintln!("error: cannot determine output stem for '{spec_path}'");
                 std::process::exit(1);
             }
         };
         if seen_stems.contains(&stem) {
-            eprintln!("出力名が衝突します: 複数の入力が同じ出力 {stem}.{ext} を生成します");
+            eprintln!("error: output name conflict: multiple inputs would produce '{stem}.{ext}'");
             std::process::exit(1);
         }
         seen_stems.push(stem.clone());
@@ -198,7 +198,7 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
         let json = match std::fs::read_to_string(spec_path) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("入力読み込みエラー: {spec_path}: {e}");
+                eprintln!("error: failed to read '{spec_path}': {e}");
                 std::process::exit(1);
             }
         };
@@ -217,7 +217,7 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
 
     // フェーズ2: 全件成功したので、ここで初めてディレクトリ作成と書き出しを行う。
     if let Err(e) = std::fs::create_dir_all(out_dir) {
-        eprintln!("出力ディレクトリ作成エラー: {out_dir}: {e}");
+        eprintln!("error: failed to create output directory '{out_dir}': {e}");
         std::process::exit(3);
     }
     // 書き込み前 preflight: 既存の非ファイル(ディレクトリ等)が出力先を塞いでいたら、
@@ -225,13 +225,13 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
     // ディスク満杯など書き込み途中の IO 失敗までは本質的に保証できない)。
     for (out_path, _) in &outputs {
         if out_path.exists() && !out_path.is_file() {
-            eprintln!("出力先がファイルではありません: {}", out_path.display());
+            eprintln!("error: output path is not a file: {}", out_path.display());
             std::process::exit(3);
         }
     }
     for (out_path, bytes) in &outputs {
         if let Err(e) = std::fs::write(out_path, bytes) {
-            eprintln!("出力エラー: {}: {e}", out_path.display());
+            eprintln!("error: write failed '{}': {e}", out_path.display());
             std::process::exit(3);
         }
     }
