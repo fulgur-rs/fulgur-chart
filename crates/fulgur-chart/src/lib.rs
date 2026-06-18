@@ -11,6 +11,7 @@ pub mod raster;
 pub mod render;
 pub mod scale;
 pub mod scene;
+pub mod schema;
 pub mod svg;
 pub mod text;
 
