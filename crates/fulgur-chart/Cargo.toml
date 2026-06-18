@@ -10,6 +10,7 @@ repository.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 resvg = { workspace = true }
+schemars = { workspace = true }
 usvg = { workspace = true }
 ttf-parser = { workspace = true }
 

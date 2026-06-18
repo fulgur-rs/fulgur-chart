@@ -16,3 +16,4 @@ resvg = "0.45"
 usvg = "0.45"
 ttf-parser = "0.25"
 insta = { version = "1", features = ["yaml"] }
+schemars = { version = "1.2", features = ["preserve_order"] }
