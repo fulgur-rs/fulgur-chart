@@ -87,7 +87,10 @@ fn main() {
 fn run_render(args: RenderArgs) {
     // Validate DSL; only chartjs and vegalite are supported.
     if args.dsl != "chartjs" && args.dsl != "vegalite" {
-        eprintln!("error: unsupported DSL '{}' (supported: chartjs, vegalite)", args.dsl);
+        eprintln!(
+            "error: unsupported DSL '{}' (supported: chartjs, vegalite)",
+            args.dsl
+        );
         std::process::exit(1);
     }
 
@@ -266,7 +269,8 @@ fn render_one(
     // When --strict is set, re-parse with strict mode to catch unknown keys (exit 2).
     // Rendering still uses the non-strict IR parsed above.
     if args.strict {
-        parse_spec(json, &args.dsl, true).map_err(|e| (2, format!("error: strict violation: {e}")))?;
+        parse_spec(json, &args.dsl, true)
+            .map_err(|e| (2, format!("error: strict violation: {e}")))?;
     }
 
     // Apply CLI width/height overrides.
