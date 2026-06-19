@@ -188,6 +188,17 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     if strict {
         check_unknown_keys(json)?;
     }
+
+    // matrix は専用パスで処理する（data 形式が {x,y,v} で他と異なるため）
+    {
+        let chart_type = serde_json::from_str::<serde_json::Value>(json)
+            .ok()
+            .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|s| s.to_string()));
+        if chart_type.as_deref() == Some("matrix") {
+            return parse_matrix(json);
+        }
+    }
+
     let raw: RawSpec = serde_json::from_str(json).map_err(|e| e.to_string())?;
 
     // 積み上げ判定: options.scales.x.stacked または options.scales.y.stacked が true。
@@ -594,6 +605,129 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
+    #[derive(Deserialize)]
+    struct MatrixWrapper {
+        data: MatrixRawData,
+        #[serde(default)]
+        options: RawOptions,
+    }
+
+    #[derive(Deserialize)]
+    struct MatrixRawData {
+        datasets: Vec<MatrixRawDataset>,
+    }
+
+    #[derive(Deserialize)]
+    struct MatrixRawDataset {
+        #[serde(default)]
+        _label: String,
+        data: Vec<MatrixRawCell>,
+        #[serde(rename = "backgroundColor", default)]
+        background_color: Option<String>,
+        #[serde(rename = "borderWidth", default)]
+        border_width: Option<f64>,
+    }
+
+    #[derive(Deserialize)]
+    struct MatrixRawCell {
+        x: String,
+        y: String,
+        v: f64,
+    }
+
+    let raw: MatrixWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
+
+    if raw.data.datasets.len() > 1 {
+        return Err("matrix チャートは dataset が 1 つのみサポートされます".to_string());
+    }
+    if raw.data.datasets.is_empty() {
+        return Err("matrix チャートには dataset が 1 つ必要です".to_string());
+    }
+
+    let ds = raw.data.datasets.into_iter().next().unwrap();
+
+    // x/y カテゴリを出現順に収集（重複除去）
+    let mut x_cats: Vec<String> = vec![];
+    let mut y_cats: Vec<String> = vec![];
+    for cell in &ds.data {
+        if !x_cats.contains(&cell.x) {
+            x_cats.push(cell.x.clone());
+        }
+        if !y_cats.contains(&cell.y) {
+            y_cats.push(cell.y.clone());
+        }
+    }
+
+    let n_cols = x_cats.len();
+    let n_rows = y_cats.len();
+
+    // NaN で初期化したグリッドを構築
+    let mut grid: Vec<Vec<f64>> = vec![vec![f64::NAN; n_cols]; n_rows];
+    for cell in &ds.data {
+        let xi = x_cats.iter().position(|c| c == &cell.x).unwrap();
+        let yi = y_cats.iter().position(|r| r == &cell.y).unwrap();
+        grid[yi][xi] = cell.v;
+    }
+
+    let theme = build_theme(raw.options.theme);
+
+    let color_hi = ds
+        .background_color
+        .as_deref()
+        .and_then(parse_color)
+        .unwrap_or(theme.palette[0]);
+    let color_lo = Color { r: 255, g: 255, b: 255, a: 1.0 };
+
+    let series: Vec<Series> = y_cats
+        .iter()
+        .enumerate()
+        .map(|(i, name)| Series {
+            name: name.clone(),
+            values: grid[i].clone(),
+            points: vec![],
+            fill: vec![color_hi],
+            stroke: vec![],
+            stroke_width: ds.border_width.unwrap_or(0.0),
+            area: false,
+            tension: 0.0,
+            series_type: SeriesType::Bar,
+            point_radius: None,
+        })
+        .collect();
+
+    Ok(ChartSpec {
+        kind: ChartKind::Matrix { color_lo, color_hi },
+        series,
+        categories: x_cats,
+        x_axis: AxisSpec {
+            title: None,
+            min: None,
+            max: None,
+            begin_at_zero: false,
+            grid: false,
+        },
+        y_axis: AxisSpec {
+            title: None,
+            min: None,
+            max: None,
+            begin_at_zero: false,
+            grid: false,
+        },
+        legend: legend_pos(&raw.options.plugins.legend),
+        title: raw
+            .options
+            .plugins
+            .title
+            .filter(|t| t.display)
+            .map(|t| t.text),
+        width: 800.0,
+        height: 450.0,
+        data_labels: false,
+        theme,
+    })
 }
 
 /// `obj` のキーを `allowed` に照らし、最初の未知キーを `Err(パス)` で返す。
