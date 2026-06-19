@@ -338,13 +338,20 @@ fn detect_format(output: &str) -> Format {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct DslDetector {
+    mark: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "type")]
+    r#type: Option<serde::de::IgnoredAny>,
+}
+
 fn detect_dsl(json: &str) -> Result<&'static str, String> {
-    let v: serde_json::Value =
+    let d: DslDetector =
         serde_json::from_str(json).map_err(|e| format!("error: invalid JSON: {e}"))?;
-    if v.get("mark").is_some() {
+    if d.mark.is_some() {
         return Ok("vegalite");
     }
-    if v.get("type").is_some() {
+    if d.r#type.is_some() {
         return Ok("chartjs");
     }
     Err("error: cannot auto-detect DSL: specify --dsl chartjs or --dsl vegalite".to_string())
