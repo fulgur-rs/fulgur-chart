@@ -458,3 +458,12 @@ fn matrix_schema_roundtrip() {
     let spec: ChartJsSpec = serde_json::from_str(json).unwrap();
     assert!(matches!(spec, ChartJsSpec::Matrix(_)));
 }
+
+#[test]
+fn matrix_strict_mode_accepts_v_key() {
+    let json = r#"{"type":"matrix","data":{"datasets":[{"data":[
+        {"x":"A","y":"X","v":1}
+    ]}]}}"#;
+    // strict モードでも matrix は受理されるべき
+    assert!(chartjs::parse(json, true).is_ok(), "strict mode should accept matrix with v key");
+}

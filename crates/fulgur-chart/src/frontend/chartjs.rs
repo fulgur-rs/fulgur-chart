@@ -185,11 +185,9 @@ impl FillSpec {
 }
 
 pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
-    if strict {
-        check_unknown_keys(json)?;
-    }
-
-    // matrix は専用パスで処理する（data 形式が {x,y,v} で他と異なるため）
+    // matrix は専用パスで処理する（data 形式が {x,y,v} で他と異なるため）。
+    // check_unknown_keys より先に捕捉することで、matrix の "v" キーを未知キーと
+    // 誤判定するのを防ぐ。
     {
         let chart_type = serde_json::from_str::<serde_json::Value>(json)
             .ok()
@@ -197,6 +195,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         if chart_type.as_deref() == Some("matrix") {
             return parse_matrix(json);
         }
+    }
+
+    if strict {
+        check_unknown_keys(json)?;
     }
 
     let raw: RawSpec = serde_json::from_str(json).map_err(|e| e.to_string())?;
