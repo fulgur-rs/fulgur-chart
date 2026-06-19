@@ -288,7 +288,8 @@ fn render_one(
 
     // Validate input bounds (DoS prevention). Called after overrides so --width/--height
     // are also checked. Exceeding a limit is a client error (exit 1).
-    fulgur_chart::guard::validate_spec(&spec_ir).map_err(|e| (1, format!("error: {e}")))?;
+    fulgur_chart::guard::validate_spec(&spec_ir, &fulgur_chart::guard::InputLimits::default())
+        .map_err(|e| (1, format!("error: {e}")))?;
 
     // Render SVG.
     let svg = match font_bytes {
