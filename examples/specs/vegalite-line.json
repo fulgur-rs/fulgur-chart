@@ -1,0 +1,38 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "mark": "line",
+  "title": "Monthly Temperature by City (Vega-Lite line)",
+  "data": {
+    "values": [
+      { "month": "Jan", "temp": 3,  "city": "Tokyo" },
+      { "month": "Feb", "temp": 4,  "city": "Tokyo" },
+      { "month": "Mar", "temp": 8,  "city": "Tokyo" },
+      { "month": "Apr", "temp": 14, "city": "Tokyo" },
+      { "month": "May", "temp": 19, "city": "Tokyo" },
+      { "month": "Jun", "temp": 23, "city": "Tokyo" },
+      { "month": "Jul", "temp": 27, "city": "Tokyo" },
+      { "month": "Aug", "temp": 28, "city": "Tokyo" },
+      { "month": "Sep", "temp": 24, "city": "Tokyo" },
+      { "month": "Oct", "temp": 18, "city": "Tokyo" },
+      { "month": "Nov", "temp": 12, "city": "Tokyo" },
+      { "month": "Dec", "temp": 6,  "city": "Tokyo" },
+      { "month": "Jan", "temp": 9,  "city": "Sydney" },
+      { "month": "Feb", "temp": 9,  "city": "Sydney" },
+      { "month": "Mar", "temp": 7,  "city": "Sydney" },
+      { "month": "Apr", "temp": 5,  "city": "Sydney" },
+      { "month": "May", "temp": 2,  "city": "Sydney" },
+      { "month": "Jun", "temp": 0,  "city": "Sydney" },
+      { "month": "Jul", "temp": -1, "city": "Sydney" },
+      { "month": "Aug", "temp": 0,  "city": "Sydney" },
+      { "month": "Sep", "temp": 3,  "city": "Sydney" },
+      { "month": "Oct", "temp": 6,  "city": "Sydney" },
+      { "month": "Nov", "temp": 8,  "city": "Sydney" },
+      { "month": "Dec", "temp": 9,  "city": "Sydney" }
+    ]
+  },
+  "encoding": {
+    "x": { "field": "month", "type": "nominal" },
+    "y": { "field": "temp",  "type": "quantitative" },
+    "color": { "field": "city", "type": "nominal" }
+  }
+}

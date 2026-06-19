@@ -1,0 +1,20 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "mark": "arc",
+  "title": "Global Energy Mix 2023 (Vega-Lite arc)",
+  "data": {
+    "values": [
+      { "source": "Coal",        "pct": 35.4 },
+      { "source": "Natural Gas", "pct": 22.5 },
+      { "source": "Hydro",       "pct": 15.0 },
+      { "source": "Nuclear",     "pct": 9.2  },
+      { "source": "Wind",        "pct": 7.8  },
+      { "source": "Solar",       "pct": 5.5  },
+      { "source": "Other",       "pct": 4.6  }
+    ]
+  },
+  "encoding": {
+    "theta": { "field": "pct",    "type": "quantitative" },
+    "color": { "field": "source", "type": "nominal" }
+  }
+}
