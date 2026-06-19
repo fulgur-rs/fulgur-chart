@@ -507,8 +507,8 @@ fn arc_segment(
     theta: f64,
     d: f64,
 ) {
-    // Dokter/Morken 近似: |d| ≤ π/2 のとき最大誤差は約 0.5px 未満。
-    let alpha = (d / 2.0).tan() * 4.0 / 3.0;
+    // Dokter/Morken 近似: α = (4/3)·tan(d/4)。|d| ≤ π/2 のとき最大誤差は約 0.0003r 未満。
+    let alpha = (d / 4.0).tan() * 4.0 / 3.0;
     let cos_phi = phi.cos();
     let sin_phi = phi.sin();
     let cos_t1 = theta.cos();
