@@ -57,9 +57,9 @@ struct RenderArgs {
     #[arg(long)]
     strict: bool,
 
-    /// Input DSL. Supported values: chartjs, vegalite.
-    #[arg(long, default_value = "chartjs")]
-    dsl: String,
+    /// Input DSL (chartjs or vegalite). Auto-detected from the spec when omitted.
+    #[arg(long)]
+    dsl: Option<String>,
 
     /// Scale factor for PNG output (1.0 = 1x).
     #[arg(long, default_value_t = 1.0)]
@@ -85,13 +85,12 @@ fn main() {
 }
 
 fn run_render(args: RenderArgs) {
-    // Validate DSL; only chartjs and vegalite are supported.
-    if args.dsl != "chartjs" && args.dsl != "vegalite" {
-        eprintln!(
-            "error: unsupported DSL '{}' (supported: chartjs, vegalite)",
-            args.dsl
-        );
-        std::process::exit(1);
+    // Validate explicit DSL; only chartjs and vegalite are supported.
+    if let Some(dsl) = &args.dsl {
+        if dsl != "chartjs" && dsl != "vegalite" {
+            eprintln!("error: unsupported DSL '{dsl}' (supported: chartjs, vegalite)");
+            std::process::exit(1);
+        }
     }
 
     // Load the font once if --font is given; reused across metric/SVG/PNG stages and all batch files.
@@ -262,14 +261,20 @@ fn render_one(
     format: &Format,
     font_bytes: &Option<Vec<u8>>,
 ) -> Result<Vec<u8>, (i32, String)> {
+    // Resolve DSL: use explicit --dsl, or auto-detect from the spec's top-level keys.
+    let dsl: &str = match &args.dsl {
+        Some(d) => d.as_str(),
+        None => detect_dsl(json).map_err(|e| (1, e))?,
+    };
+
     // Parse non-strictly; JSON/structure/type errors exit 1.
     let mut spec_ir =
-        parse_spec(json, &args.dsl, false).map_err(|e| (1, format!("error: parse failed: {e}")))?;
+        parse_spec(json, dsl, false).map_err(|e| (1, format!("error: parse failed: {e}")))?;
 
     // When --strict is set, re-parse with strict mode to catch unknown keys (exit 2).
     // Rendering still uses the non-strict IR parsed above.
     if args.strict {
-        parse_spec(json, &args.dsl, true)
+        parse_spec(json, dsl, true)
             .map_err(|e| (2, format!("error: strict violation: {e}")))?;
     }
 
@@ -334,7 +339,6 @@ fn detect_format(output: &str) -> Format {
     }
 }
 
-#[allow(dead_code)]
 fn detect_dsl(json: &str) -> Result<&'static str, String> {
     let v: serde_json::Value = serde_json::from_str(json)
         .map_err(|e| format!("error: invalid JSON: {e}"))?;
