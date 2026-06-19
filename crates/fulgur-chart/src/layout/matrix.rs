@@ -84,11 +84,10 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
         }
     }
-    let range = if (max_v - min_v).abs() < f64::EPSILON {
-        1.0
-    } else {
-        max_v - min_v
-    };
+    // 全セルが同一値のとき range=0 になるので、lerp に渡す t を常に 1.0 にして
+    // 最大色（color_hi）で塗る。range=1.0 に固定すると t=0→白になってしまう。
+    let all_same = (max_v - min_v).abs() < f64::EPSILON;
+    let range = if all_same { 1.0 } else { max_v - min_v };
 
     let mut items: Vec<Prim> = Vec::new();
 
@@ -110,7 +109,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         for (col, &v) in s.values.iter().enumerate() {
             let cell_x = plot_left + col as f64 * cell_w;
             let fill = if v.is_finite() {
-                lerp_color(color_lo, color_hi, (v - min_v) / range)
+                let t = if all_same { 1.0 } else { (v - min_v) / range };
+                lerp_color(color_lo, color_hi, t)
             } else {
                 NAN_COLOR
             };
