@@ -3,6 +3,7 @@
 pub mod color;
 pub mod font;
 pub mod frontend;
+pub mod guard;
 pub mod ir;
 pub mod layout;
 pub mod num;

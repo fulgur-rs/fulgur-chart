@@ -5,6 +5,11 @@ use resvg::{tiny_skia, usvg};
 
 use crate::font::DEFAULT_FONT;
 
+/// PNG 出力の最大ピクセル面積(幅 × 高さ)。
+/// scale 適用後のピクセル数がこれを超えると OOM のリスクがあるため Err とする。
+/// 64M px ≒ 8000×8000 → raw RGBA で約 256 MB。
+const MAX_PNG_AREA_PIXELS: u64 = 64_000_000;
+
 /// SVG 文字列を PNG バイト列にラスタライズする。`scale` は解像度倍率（1.0=等倍）。
 ///
 /// `scale` が正の有限値でない場合（0 以下・負・NaN）は 1.0 にフォールバックする。
@@ -37,6 +42,15 @@ pub fn svg_to_png_with_font(svg: &str, scale: f32, font_bytes: &[u8]) -> Result<
     let size = tree.size();
     let w = (size.width() * scale).round().max(1.0) as u32;
     let h = (size.height() * scale).round().max(1.0) as u32;
+
+    // OOM 防止: scale 適用後のピクセル面積が上限を超えたら即 Err。
+    // Pixmap::new の内部チェックより先にここで弾くことで、境界ケースの挙動を明確にする。
+    let area = w as u64 * h as u64;
+    if area > MAX_PNG_AREA_PIXELS {
+        return Err(format!(
+            "PNG 解像度 {w}×{h} px ({area} ピクセル) が上限 {MAX_PNG_AREA_PIXELS} px² を超えています"
+        ));
+    }
 
     let mut pixmap = tiny_skia::Pixmap::new(w, h)
         .ok_or_else(|| format!("Pixmap 確保失敗: 寸法 {w}x{h} が無効です"))?;
@@ -105,5 +119,28 @@ mod tests {
         // フォントが usvg fontdb にロードできないバイト列のとき Err（panic しない）。
         let err = svg_to_png_with_font(MIN_SVG, 1.0, b"not a font");
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn oversized_png_area_is_err() {
+        // MAX_PNG_AREA_PIXELS を超える SVG は Err（OOM 防止）。
+        // 8001×8001 = 64_016_001 > 64_000_000。
+        let huge_svg =
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="8001" height="8001"></svg>"#;
+        let err = svg_to_png(huge_svg, 1.0);
+        assert!(err.is_err(), "oversized PNG should be rejected: {err:?}");
+        assert!(
+            err.unwrap_err().contains("上限"),
+            "error message should mention the limit"
+        );
+    }
+
+    #[test]
+    fn near_limit_png_area_is_ok() {
+        // 7999×7999 = 63_984_001 < 64_000_000 → 通る。
+        let near_svg =
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="7999" height="7999"></svg>"#;
+        let result = svg_to_png(near_svg, 1.0);
+        assert!(result.is_ok(), "near-limit PNG should succeed: {result:?}");
     }
 }

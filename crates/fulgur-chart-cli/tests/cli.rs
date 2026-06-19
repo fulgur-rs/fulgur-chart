@@ -512,3 +512,51 @@ fn auto_detect_unknown_spec_exits_1() {
         "stderr should contain 'auto-detect', got: {stderr}"
     );
 }
+
+// --- 入力上限（guard モジュールが CLI 経由で正しく動作することを確認）---
+
+#[test]
+fn oversized_width_exits_1() {
+    // width が MAX_DIMENSION_PX (32768) を超えると exit 1。
+    let spec = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#;
+    let out = bin()
+        .args(["render", "-", "-o", "-", "--width", "32769"])
+        .write_stdin(spec)
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("width"),
+        "stderr should mention 'width', got: {stderr}"
+    );
+}
+
+#[test]
+fn oversized_height_exits_1() {
+    // height が MAX_DIMENSION_PX (32768) を超えると exit 1。
+    let spec = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#;
+    let out = bin()
+        .args(["render", "-", "-o", "-", "--height", "32769"])
+        .write_stdin(spec)
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("height"),
+        "stderr should mention 'height', got: {stderr}"
+    );
+}
+
+#[test]
+fn zero_width_exits_1() {
+    // width=0 (MIN_DIMENSION_PX 未満) も exit 1。
+    let spec = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#;
+    bin()
+        .args(["render", "-", "-o", "-", "--width", "0"])
+        .write_stdin(spec)
+        .assert()
+        .failure()
+        .code(1);
+}
