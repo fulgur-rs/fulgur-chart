@@ -622,8 +622,9 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
 
     #[derive(Deserialize)]
     struct MatrixRawDataset {
+        #[allow(dead_code)]
         #[serde(default)]
-        _label: String,
+        label: String,
         data: Vec<MatrixRawCell>,
         #[serde(rename = "backgroundColor", default)]
         background_color: Option<String>,
