@@ -778,6 +778,16 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         a: 1.0,
     };
 
+    let stroke_color: Vec<Color> = ds
+        .border_color
+        .as_ref()
+        .and_then(|c| match c {
+            ScalarOrArray::One(v) => parse_color(v),
+            ScalarOrArray::Many(vs) => vs.first().and_then(|v| parse_color(v)),
+        })
+        .map(|c| vec![c])
+        .unwrap_or_default();
+
     let series: Vec<Series> = y_cats
         .iter()
         .enumerate()
@@ -786,7 +796,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             values: grid[i].clone(),
             points: vec![],
             fill: vec![color_hi],
-            stroke: vec![],
+            stroke: stroke_color.clone(),
             stroke_width: ds.border_width.unwrap_or(0.0),
             area: false,
             tension: 0.0,
