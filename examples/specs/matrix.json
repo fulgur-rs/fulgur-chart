@@ -1,0 +1,34 @@
+{
+  "type": "matrix",
+  "data": {
+    "datasets": [{
+      "label": "Weekly Activity",
+      "data": [
+        {"x": "Mon", "y": "Morning",   "v": 5},
+        {"x": "Tue", "y": "Morning",   "v": 8},
+        {"x": "Wed", "y": "Morning",   "v": 3},
+        {"x": "Thu", "y": "Morning",   "v": 7},
+        {"x": "Fri", "y": "Morning",   "v": 4},
+        {"x": "Mon", "y": "Afternoon", "v": 9},
+        {"x": "Tue", "y": "Afternoon", "v": 2},
+        {"x": "Wed", "y": "Afternoon", "v": 6},
+        {"x": "Thu", "y": "Afternoon", "v": 8},
+        {"x": "Fri", "y": "Afternoon", "v": 5},
+        {"x": "Mon", "y": "Evening",   "v": 3},
+        {"x": "Tue", "y": "Evening",   "v": 7},
+        {"x": "Wed", "y": "Evening",   "v": 9},
+        {"x": "Thu", "y": "Evening",   "v": 4},
+        {"x": "Fri", "y": "Evening",   "v": 6}
+      ],
+      "backgroundColor": "rgba(54, 162, 235, 1.0)"
+    }]
+  },
+  "options": {
+    "plugins": {
+      "title": {
+        "display": true,
+        "text": "Weekly Activity Heatmap"
+      }
+    }
+  }
+}

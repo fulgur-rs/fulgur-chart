@@ -400,3 +400,73 @@ fn strict_rejects_scales_typo() {
       "options":{"scales":{"y":{"stacked":true}}}}"#;
     assert!(chartjs::parse(ok, true).is_ok());
 }
+
+#[test]
+fn matrix_parses_categories_and_series() {
+    let json = r#"{
+        "type": "matrix",
+        "data": {"datasets": [{"label": "h", "data": [
+            {"x": "Mon", "y": "Morning", "v": 5.0},
+            {"x": "Tue", "y": "Morning", "v": 8.0},
+            {"x": "Mon", "y": "Evening", "v": 3.0},
+            {"x": "Tue", "y": "Evening", "v": 9.0}
+        ], "backgroundColor": "rgba(54,162,235,1.0)"}]}
+    }"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Matrix { .. }));
+    assert_eq!(spec.categories, vec!["Mon", "Tue"]);
+    assert_eq!(spec.series.len(), 2);
+    assert_eq!(spec.series[0].name, "Morning");
+    assert_eq!(spec.series[0].values, vec![5.0, 8.0]);
+    assert_eq!(spec.series[1].name, "Evening");
+    assert_eq!(spec.series[1].values, vec![3.0, 9.0]);
+}
+
+#[test]
+fn matrix_multiple_datasets_is_error() {
+    let json = r#"{"type":"matrix","data":{"datasets":[
+        {"data":[{"x":"A","y":"X","v":1}]},
+        {"data":[{"x":"A","y":"X","v":2}]}
+    ]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+}
+
+#[test]
+fn matrix_missing_cell_becomes_nan() {
+    let json = r#"{"type":"matrix","data":{"datasets":[{"data":[
+        {"x":"Mon","y":"Morning","v":1.0},
+        {"x":"Tue","y":"Morning","v":2.0},
+        {"x":"Mon","y":"Evening","v":3.0}
+    ]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(spec.series[1].values[1].is_nan());
+}
+
+#[test]
+fn matrix_schema_roundtrip() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    let json = r##"{
+        "type": "matrix",
+        "data": {
+            "datasets": [{
+                "label": "Heat",
+                "data": [{"x": "Mon", "y": "AM", "v": 5.0}],
+                "backgroundColor": "#36a2eb"
+            }]
+        }
+    }"##;
+    let spec: ChartJsSpec = serde_json::from_str(json).unwrap();
+    assert!(matches!(spec, ChartJsSpec::Matrix(_)));
+}
+
+#[test]
+fn matrix_strict_mode_accepts_v_key() {
+    let json = r#"{"type":"matrix","data":{"datasets":[{"data":[
+        {"x":"A","y":"X","v":1}
+    ]}]}}"#;
+    // strict モードでも matrix は受理されるべき
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict mode should accept matrix with v key"
+    );
+}

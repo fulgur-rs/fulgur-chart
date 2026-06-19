@@ -3,6 +3,7 @@
 use crate::color::parse_color;
 use crate::ir::*;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Deserialize)]
 struct RawSpec {
@@ -185,9 +186,29 @@ impl FillSpec {
 }
 
 pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
+    // matrix は専用パスで処理する（data 形式が {x,y,v} で他と異なるため）。
+    // check_unknown_keys より先に捕捉することで、matrix の "v" キーを未知キーと
+    // 誤判定するのを防ぐ。
+    {
+        let chart_type = serde_json::from_str::<serde_json::Value>(json)
+            .ok()
+            .and_then(|v| {
+                v.get("type")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
+            });
+        if chart_type.as_deref() == Some("matrix") {
+            if strict {
+                check_unknown_keys_matrix(json)?;
+            }
+            return parse_matrix(json);
+        }
+    }
+
     if strict {
         check_unknown_keys(json)?;
     }
+
     let raw: RawSpec = serde_json::from_str(json).map_err(|e| e.to_string())?;
 
     // 積み上げ判定: options.scales.x.stacked または options.scales.y.stacked が true。
@@ -594,6 +615,226 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let Some(top) = value.as_object() else {
+        return Ok(());
+    };
+    check_object(top, &["type", "data", "options"], "")?;
+    if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
+        check_object(data, &["datasets"], "data")?;
+        if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
+            for (i, ds) in datasets.iter().enumerate() {
+                if let Some(ds) = ds.as_object() {
+                    check_object(
+                        ds,
+                        &[
+                            "label",
+                            "data",
+                            "backgroundColor",
+                            "borderColor",
+                            "borderWidth",
+                        ],
+                        &format!("data.datasets[{i}]"),
+                    )?;
+                    if let Some(points) = ds.get("data").and_then(|v| v.as_array()) {
+                        for (j, pt) in points.iter().enumerate() {
+                            if let Some(pt) = pt.as_object() {
+                                check_object(
+                                    pt,
+                                    &["x", "y", "v"],
+                                    &format!("data.datasets[{i}].data[{j}]"),
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
+        check_object(options, &["plugins", "theme"], "options")?;
+        if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
+            check_object(plugins, &["title", "legend"], "options.plugins")?;
+        }
+        if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
+            check_object(
+                theme,
+                &[
+                    "palette",
+                    "gridColor",
+                    "textColor",
+                    "backgroundColor",
+                    "fontSize",
+                ],
+                "options.theme",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
+    #[derive(Deserialize)]
+    struct MatrixWrapper {
+        data: MatrixRawData,
+        #[serde(default)]
+        options: RawOptions,
+    }
+
+    #[derive(Deserialize)]
+    struct MatrixRawData {
+        datasets: Vec<MatrixRawDataset>,
+    }
+
+    #[derive(Deserialize)]
+    struct MatrixRawDataset {
+        #[allow(dead_code)]
+        #[serde(default)]
+        label: String,
+        data: Vec<MatrixRawCell>,
+        #[serde(rename = "backgroundColor", default)]
+        background_color: Option<ScalarOrArray<String>>,
+        #[serde(rename = "borderColor", default)]
+        border_color: Option<ScalarOrArray<String>>,
+        #[serde(rename = "borderWidth", default)]
+        border_width: Option<f64>,
+    }
+
+    #[derive(Deserialize)]
+    struct MatrixRawCell {
+        x: String,
+        y: String,
+        v: f64,
+    }
+
+    let raw: MatrixWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
+
+    if raw.data.datasets.len() > 1 {
+        return Err("matrix チャートは dataset が 1 つのみサポートされます".to_string());
+    }
+    if raw.data.datasets.is_empty() {
+        return Err("matrix チャートには dataset が 1 つ必要です".to_string());
+    }
+
+    let ds = raw.data.datasets.into_iter().next().unwrap();
+
+    // x/y カテゴリを出現順に収集（重複除去）— HashMap で O(n) ルックアップ
+    let mut x_cats: Vec<String> = Vec::new();
+    let mut x_idx: HashMap<String, usize> = HashMap::new();
+    let mut y_cats: Vec<String> = Vec::new();
+    let mut y_idx: HashMap<String, usize> = HashMap::new();
+    for cell in &ds.data {
+        if !x_idx.contains_key(&cell.x) {
+            x_idx.insert(cell.x.clone(), x_cats.len());
+            x_cats.push(cell.x.clone());
+        }
+        if !y_idx.contains_key(&cell.y) {
+            y_idx.insert(cell.y.clone(), y_cats.len());
+            y_cats.push(cell.y.clone());
+        }
+    }
+
+    let n_cols = x_cats.len();
+    let n_rows = y_cats.len();
+
+    // グリッドサイズ上限チェック
+    if n_cols.saturating_mul(n_rows) > 10_000 {
+        return Err(format!(
+            "matrix grid too large: {}×{} = {} cells (limit 10000)",
+            n_cols,
+            n_rows,
+            n_cols * n_rows
+        ));
+    }
+
+    // NaN で初期化したグリッドを構築
+    let mut grid: Vec<Vec<f64>> = vec![vec![f64::NAN; n_cols]; n_rows];
+    for cell in &ds.data {
+        let ci = x_idx[&cell.x];
+        let ri = y_idx[&cell.y];
+        grid[ri][ci] = cell.v;
+    }
+
+    let theme = build_theme(raw.options.theme);
+
+    let color_hi = ds
+        .background_color
+        .as_ref()
+        .and_then(|c| match c {
+            ScalarOrArray::One(v) => parse_color(v),
+            ScalarOrArray::Many(vs) => vs.first().and_then(|v| parse_color(v)),
+        })
+        .unwrap_or(theme.palette[0]);
+    let color_lo = Color {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 1.0,
+    };
+
+    let stroke_color: Vec<Color> = ds
+        .border_color
+        .as_ref()
+        .and_then(|c| match c {
+            ScalarOrArray::One(v) => parse_color(v),
+            ScalarOrArray::Many(vs) => vs.first().and_then(|v| parse_color(v)),
+        })
+        .map(|c| vec![c])
+        .unwrap_or_default();
+
+    let series: Vec<Series> = y_cats
+        .iter()
+        .enumerate()
+        .map(|(i, name)| Series {
+            name: name.clone(),
+            values: grid[i].clone(),
+            points: vec![],
+            fill: vec![color_hi],
+            stroke: stroke_color.clone(),
+            stroke_width: ds.border_width.unwrap_or(0.0),
+            area: false,
+            tension: 0.0,
+            series_type: SeriesType::Bar,
+            point_radius: None,
+        })
+        .collect();
+
+    Ok(ChartSpec {
+        kind: ChartKind::Matrix { color_lo, color_hi },
+        series,
+        categories: x_cats,
+        x_axis: AxisSpec {
+            title: None,
+            min: None,
+            max: None,
+            begin_at_zero: false,
+            grid: false,
+        },
+        y_axis: AxisSpec {
+            title: None,
+            min: None,
+            max: None,
+            begin_at_zero: false,
+            grid: false,
+        },
+        legend: legend_pos(&raw.options.plugins.legend),
+        title: raw
+            .options
+            .plugins
+            .title
+            .filter(|t| t.display)
+            .map(|t| t.text),
+        width: 800.0,
+        height: 450.0,
+        data_labels: false,
+        theme,
+    })
 }
 
 /// `obj` のキーを `allowed` に照らし、最初の未知キーを `Err(パス)` で返す。
