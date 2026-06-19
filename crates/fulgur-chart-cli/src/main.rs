@@ -84,6 +84,7 @@ fn main() {
     }
 }
 
+/// Top-level render subcommand: validates explicit --dsl, loads font, dispatches to single or batch mode.
 fn run_render(args: RenderArgs) {
     // Validate explicit DSL; only chartjs and vegalite are supported.
     if let Some(dsl) = &args.dsl {
@@ -338,6 +339,7 @@ fn detect_format(output: &str) -> Format {
     }
 }
 
+/// Lightweight serde helper that only deserialises the top-level keys used for DSL detection.
 #[derive(serde::Deserialize)]
 struct DslDetector {
     mark: Option<serde::de::IgnoredAny>,
@@ -345,6 +347,7 @@ struct DslDetector {
     r#type: Option<serde::de::IgnoredAny>,
 }
 
+/// Infer DSL from spec JSON: `mark` key → vegalite, `type` key → chartjs, neither → Err.
 fn detect_dsl(json: &str) -> Result<&'static str, String> {
     let d: DslDetector =
         serde_json::from_str(json).map_err(|e| format!("error: invalid JSON: {e}"))?;
