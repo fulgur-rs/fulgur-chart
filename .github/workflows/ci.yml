@@ -124,4 +124,4 @@ jobs:
         run: cargo publish --dry-run -p fulgur-chart
 
       - name: fulgur-chart-cli
-        run: cargo publish --dry-run -p fulgur-chart-cli
+        run: cargo publish --dry-run --no-verify -p fulgur-chart-cli

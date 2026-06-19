@@ -412,7 +412,10 @@ mod tests {
     fn make_bar_spec(n: usize, width: f64) -> ChartSpec {
         let palette = crate::palette::PALETTE.to_vec();
         ChartSpec {
-            kind: ChartKind::Bar { horizontal: false, stacked: false },
+            kind: ChartKind::Bar {
+                horizontal: false,
+                stacked: false,
+            },
             categories: (0..n).map(|i| format!("Cat{i:04}")).collect(),
             series: vec![Series {
                 name: String::new(),
@@ -426,8 +429,20 @@ mod tests {
                 series_type: SeriesType::Bar,
                 point_radius: None,
             }],
-            x_axis: AxisSpec { title: None, min: None, max: None, begin_at_zero: true, grid: true },
-            y_axis: AxisSpec { title: None, min: None, max: None, begin_at_zero: true, grid: true },
+            x_axis: AxisSpec {
+                title: None,
+                min: None,
+                max: None,
+                begin_at_zero: true,
+                grid: true,
+            },
+            y_axis: AxisSpec {
+                title: None,
+                min: None,
+                max: None,
+                begin_at_zero: true,
+                grid: true,
+            },
             legend: LegendPos::None,
             title: None,
             width,
@@ -448,7 +463,15 @@ mod tests {
         // title=None・legend=None なので anchor=Middle は x カテゴリラベルのみ。
         let x_label_count = items
             .iter()
-            .filter(|p| matches!(p, Prim::Text { anchor: Anchor::Middle, .. }))
+            .filter(|p| {
+                matches!(
+                    p,
+                    Prim::Text {
+                        anchor: Anchor::Middle,
+                        ..
+                    }
+                )
+            })
             .count();
         assert!(
             x_label_count < n,

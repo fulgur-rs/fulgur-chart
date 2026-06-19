@@ -255,7 +255,9 @@ fn build_canonical_glyph_path(
 ) -> Option<tiny_skia::Path> {
     let mut builder = PathBuilder::new();
     {
-        let mut sink = GlyphSinkNorm { builder: &mut builder };
+        let mut sink = GlyphSinkNorm {
+            builder: &mut builder,
+        };
         face.outline_glyph(gid, &mut sink)?;
     }
     builder.finish()
