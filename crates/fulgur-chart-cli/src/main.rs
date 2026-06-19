@@ -334,6 +334,7 @@ fn detect_format(output: &str) -> Format {
     }
 }
 
+#[allow(dead_code)]
 fn detect_dsl(json: &str) -> Result<&'static str, String> {
     let v: serde_json::Value = serde_json::from_str(json)
         .map_err(|e| format!("error: invalid JSON: {e}"))?;
