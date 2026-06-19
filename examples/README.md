@@ -19,6 +19,7 @@ features.
     - `bubble.json` … bubble chart (`{x, y, r}` — radius as a third dimension)
     - `radar.json` … radar chart (multivariate, two series)
     - `mixed.json` … mixed chart (bar + line via per-dataset `type`)
+    - `matrix.json` … matrix (heatmap) chart (`{x, y, v}` point data, color gradient)
   - Features:
     - `datalabels.json` … data labels (`plugins.datalabels.display`)
     - `theme.json` … theme override (`options.theme`, dark palette)
@@ -35,7 +36,7 @@ The chart.js specs (everything except `vegalite`) can be generated together:
 
 ```sh
 for n in bar bar-horizontal stacked-bar line area pie doughnut \
-         scatter bubble radar mixed datalabels theme; do
+         scatter bubble radar mixed matrix datalabels theme; do
   cargo run -q -p fulgur-chart-cli -- render "examples/specs/$n.json" -o "examples/out/$n.svg"
 done
 ```
