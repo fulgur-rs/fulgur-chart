@@ -393,13 +393,13 @@ pub struct MatrixData {
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MatrixDataset {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub data: Vec<MatrixPoint>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub background_color: Option<ColorString>,
+    pub background_color: Option<ScalarOrArray<ColorString>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub border_color: Option<ColorString>,
+    pub border_color: Option<ScalarOrArray<ColorString>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_width: Option<f64>,
 }
