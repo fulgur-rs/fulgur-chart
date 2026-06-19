@@ -291,22 +291,23 @@ fn render_one(
     fulgur_chart::guard::validate_spec(&spec_ir, &fulgur_chart::guard::InputLimits::default())
         .map_err(|e| (1, format!("error: {e}")))?;
 
-    // Render SVG.
-    let svg = match font_bytes {
-        Some(bytes) => fulgur_chart::render::render_chart_with_font(&spec_ir, bytes)
-            .map_err(|e| (1, format!("error: render failed: {e}")))?,
-        None => fulgur_chart::render::render_chart(&spec_ir),
-    };
-
-    // Rasterize to PNG when requested.
     match format {
-        Format::Svg => Ok(svg.into_bytes()),
-        Format::Png => {
-            let res = match font_bytes {
-                Some(fb) => fulgur_chart::raster::svg_to_png_with_font(&svg, args.scale, fb),
-                None => fulgur_chart::raster::svg_to_png(&svg, args.scale),
+        Format::Svg => {
+            // SVG 経路は変更なし。
+            let svg = match font_bytes {
+                Some(bytes) => fulgur_chart::render::render_chart_with_font(&spec_ir, bytes)
+                    .map_err(|e| (1, format!("error: render failed: {e}")))?,
+                None => fulgur_chart::render::render_chart(&spec_ir),
             };
-            res.map_err(|e| (3, format!("error: PNG conversion failed: {e}")))
+            Ok(svg.into_bytes())
+        }
+        Format::Png => {
+            // PNG は SVG 文字列を経由しない直接描画（メモリ効率・速度向上）。
+            let fb = font_bytes
+                .as_deref()
+                .unwrap_or(fulgur_chart::font::DEFAULT_FONT);
+            fulgur_chart::raster_direct::render_chart_to_png(&spec_ir, args.scale, fb)
+                .map_err(|e| (3, format!("error: PNG conversion failed: {e}")))
         }
     }
 }

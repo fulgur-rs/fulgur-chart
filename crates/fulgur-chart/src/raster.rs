@@ -8,7 +8,7 @@ use crate::font::DEFAULT_FONT;
 /// PNG 出力の最大ピクセル面積(幅 × 高さ)。
 /// scale 適用後のピクセル数がこれを超えると OOM のリスクがあるため Err とする。
 /// 64M px ≒ 8000×8000 → raw RGBA で約 256 MB。
-const MAX_PNG_AREA_PIXELS: u64 = 64_000_000;
+pub(crate) const MAX_PNG_AREA_PIXELS: u64 = 64_000_000;
 
 /// SVG 文字列を PNG バイト列にラスタライズする。`scale` は解像度倍率（1.0=等倍）。
 ///

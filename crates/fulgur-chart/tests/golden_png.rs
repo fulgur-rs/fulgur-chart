@@ -1,15 +1,16 @@
 //! golden PNG 比較テスト。代表 spec を PNG にラスタライズし、コミット済みの
-//! golden PNG とピクセル許容差で比較する。resvg/tiny-skia の AA・浮動小数の
+//! golden PNG とピクセル許容差で比較する。tiny-skia の AA・浮動小数の
 //! プラットフォーム差を吸収しつつ、実害のある視覚回帰は検出する。
 //!
 //! golden の再生成は環境変数 `UPDATE_GOLDEN`（任意の値）で行う:
 //!   UPDATE_GOLDEN=1 cargo test -p fulgur-chart --test golden_png
+//!
+//! レンダラ変更時は意図的に UPDATE_GOLDEN=1 で再生成してから commit する。
 
 use std::path::PathBuf;
 
 use fulgur_chart::frontend::chartjs;
-use fulgur_chart::raster::svg_to_png;
-use fulgur_chart::render::render_chart;
+use fulgur_chart::raster_direct::render_chart_to_png;
 use resvg::tiny_skia::Pixmap;
 
 /// 比較対象の代表 spec 名（examples/specs/<name>.json）。
@@ -47,8 +48,8 @@ fn render_to_png(name: &str) -> Vec<u8> {
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("spec 読み込み失敗 {path}: {e}"));
     let spec =
         chartjs::parse(&json, false).unwrap_or_else(|e| panic!("spec parse 失敗 {name}: {e}"));
-    let svg = render_chart(&spec);
-    svg_to_png(&svg, 1.0).unwrap_or_else(|e| panic!("ラスタライズ失敗 {name}: {e}"))
+    render_chart_to_png(&spec, 1.0, fulgur_chart::font::DEFAULT_FONT)
+        .unwrap_or_else(|e| panic!("ラスタライズ失敗 {name}: {e}"))
 }
 
 #[test]
