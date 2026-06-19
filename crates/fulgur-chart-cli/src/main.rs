@@ -274,8 +274,7 @@ fn render_one(
     // When --strict is set, re-parse with strict mode to catch unknown keys (exit 2).
     // Rendering still uses the non-strict IR parsed above.
     if args.strict {
-        parse_spec(json, dsl, true)
-            .map_err(|e| (2, format!("error: strict violation: {e}")))?;
+        parse_spec(json, dsl, true).map_err(|e| (2, format!("error: strict violation: {e}")))?;
     }
 
     // Apply CLI width/height overrides.
@@ -340,8 +339,8 @@ fn detect_format(output: &str) -> Format {
 }
 
 fn detect_dsl(json: &str) -> Result<&'static str, String> {
-    let v: serde_json::Value = serde_json::from_str(json)
-        .map_err(|e| format!("error: invalid JSON: {e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("error: invalid JSON: {e}"))?;
     if v.get("mark").is_some() {
         return Ok("vegalite");
     }
@@ -375,17 +374,26 @@ mod detect_dsl_tests {
 
     #[test]
     fn type_key_detects_chartjs() {
-        assert_eq!(detect_dsl(r#"{"type":"bar","data":{}}"#).unwrap(), "chartjs");
+        assert_eq!(
+            detect_dsl(r#"{"type":"bar","data":{}}"#).unwrap(),
+            "chartjs"
+        );
     }
 
     #[test]
     fn mark_key_detects_vegalite() {
-        assert_eq!(detect_dsl(r#"{"mark":"bar","data":{"values":[]}}"#).unwrap(), "vegalite");
+        assert_eq!(
+            detect_dsl(r#"{"mark":"bar","data":{"values":[]}}"#).unwrap(),
+            "vegalite"
+        );
     }
 
     #[test]
     fn mark_takes_priority_over_type() {
-        assert_eq!(detect_dsl(r#"{"mark":"bar","type":"x"}"#).unwrap(), "vegalite");
+        assert_eq!(
+            detect_dsl(r#"{"mark":"bar","type":"x"}"#).unwrap(),
+            "vegalite"
+        );
     }
 
     #[test]
