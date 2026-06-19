@@ -11,6 +11,7 @@
 //! すべて決定的（distinct 値の抽出は first-seen 順、HashMap 不使用）でパニックしない。
 
 use crate::ir::*;
+use crate::palette::vegalite_theme;
 use serde_json::{Map, Value};
 
 /// Vega-Lite サブセットを [`ChartSpec`] へ変換する。
@@ -102,7 +103,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         }
     }
 
-    let theme = Theme::default();
+    let theme = vegalite_theme();
 
     let series = match &kind {
         ChartKind::Pie { .. } => build_pie(

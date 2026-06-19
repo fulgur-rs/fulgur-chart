@@ -1,6 +1,6 @@
-//! chart.js v4 既定カラーパレット。
+//! カラーパレットとテーマ定義。
 
-use crate::ir::Color;
+use crate::ir::{Color, Theme};
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color { r, g, b, a: 1.0 }
@@ -19,6 +19,32 @@ pub static PALETTE: &[Color] = &[
 
 pub fn palette_color(i: usize) -> Color {
     PALETTE[i % PALETTE.len()]
+}
+
+/// Vega-Lite デフォルトカラースキーム（Tableau10）。
+pub static VEGALITE_PALETTE: &[Color] = &[
+    rgb(76, 120, 168),  // #4c78a8 steel blue
+    rgb(245, 133, 24),  // #f58518 orange
+    rgb(228, 87, 86),   // #e45756 red
+    rgb(114, 183, 178), // #72b7b2 teal
+    rgb(84, 162, 75),   // #54a24b green
+    rgb(238, 202, 59),  // #eeca3b yellow
+    rgb(178, 121, 162), // #b279a2 purple
+    rgb(255, 157, 166), // #ff9da6 pink
+    rgb(157, 117, 93),  // #9d755d brown
+    rgb(186, 176, 172), // #bab0ac light gray
+];
+
+/// Vega-Lite のデフォルトビジュアルスタイルを返す。
+/// パレット: Tableau10、背景: 白、グリッド: #ddd、テキスト: #333。
+pub fn vegalite_theme() -> Theme {
+    Theme {
+        palette: VEGALITE_PALETTE.to_vec(),
+        grid_color: rgb(221, 221, 221), // #dddddd
+        text_color: rgb(51, 51, 51),    // #333333
+        background: Some(rgb(255, 255, 255)),
+        font_size: 11.0,
+    }
 }
 
 #[cfg(test)]
