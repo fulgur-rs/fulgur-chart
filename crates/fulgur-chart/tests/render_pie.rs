@@ -97,7 +97,10 @@ fn pie_starts_at_top_and_advances_clockwise() {
         (l0x - cx).abs() < 0.05,
         "start should be directly above center (x): l0x={l0x} cx={cx}"
     );
-    assert!(l0y < cy, "start should be above center (top): l0y={l0y} cy={cy}");
+    assert!(
+        l0y < cy,
+        "start should be above center (top): l0y={l0y} cy={cy}"
+    );
     // 円弧コマンドと sweep flag(=1: SVG y下向き座標で時計回り)、large-arc(270°なので1)。
     assert_eq!(t[6], "A");
     assert_eq!(t[10], "1", "large-arc-flag must be 1 for the 270° slice");
