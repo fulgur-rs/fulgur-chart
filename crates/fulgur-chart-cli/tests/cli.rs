@@ -472,3 +472,43 @@ fn schema_unknown_dsl_exits_1() {
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
 }
+
+#[test]
+fn auto_detect_chartjs_without_dsl_flag() {
+    let spec = r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}"#;
+    let out = bin()
+        .args(["render", "-", "-o", "-"])
+        .write_stdin(spec)
+        .assert()
+        .success();
+    let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(s.starts_with("<svg"));
+}
+
+#[test]
+fn auto_detect_vegalite_without_dsl_flag() {
+    let spec = r#"{"mark":"bar","data":{"values":[{"x":"A","y":1}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"}}}"#;
+    let out = bin()
+        .args(["render", "-", "-o", "-"])
+        .write_stdin(spec)
+        .assert()
+        .success();
+    let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(s.starts_with("<svg"));
+}
+
+#[test]
+fn auto_detect_unknown_spec_exits_1() {
+    let spec = r#"{"labels":["A"],"values":[1]}"#;
+    let out = bin()
+        .args(["render", "-", "-o", "-"])
+        .write_stdin(spec)
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("auto-detect"),
+        "stderr should contain 'auto-detect', got: {stderr}"
+    );
+}
