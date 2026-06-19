@@ -465,5 +465,8 @@ fn matrix_strict_mode_accepts_v_key() {
         {"x":"A","y":"X","v":1}
     ]}]}}"#;
     // strict モードでも matrix は受理されるべき
-    assert!(chartjs::parse(json, true).is_ok(), "strict mode should accept matrix with v key");
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict mode should accept matrix with v key"
+    );
 }
