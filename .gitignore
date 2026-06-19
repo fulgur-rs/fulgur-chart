@@ -4,6 +4,7 @@
 .dolt/
 *.db
 .beads-credential-key
+.beads/issues.jsonl
 
 # git worktrees
 /.worktrees/
