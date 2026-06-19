@@ -400,3 +400,20 @@ fn strict_rejects_scales_typo() {
       "options":{"scales":{"y":{"stacked":true}}}}"#;
     assert!(chartjs::parse(ok, true).is_ok());
 }
+
+#[test]
+fn matrix_schema_roundtrip() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    let json = r##"{
+        "type": "matrix",
+        "data": {
+            "datasets": [{
+                "label": "Heat",
+                "data": [{"x": "Mon", "y": "AM", "v": 5.0}],
+                "backgroundColor": "#36a2eb"
+            }]
+        }
+    }"##;
+    let spec: ChartJsSpec = serde_json::from_str(json).unwrap();
+    assert!(matches!(spec, ChartJsSpec::Matrix(_)));
+}

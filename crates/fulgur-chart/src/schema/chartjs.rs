@@ -27,6 +27,7 @@ pub enum ChartJsSpec {
     Scatter(ScatterSpec),
     Bubble(BubbleSpec),
     Radar(RadarSpec),
+    Matrix(MatrixSpec),
 }
 
 // ────────────────────────────────────────────────
@@ -365,6 +366,55 @@ pub struct RadarDataset {
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RadarOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<CommonPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+// ────────────────────────────────────────────────
+// Matrix chart
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MatrixSpec {
+    pub data: MatrixData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<MatrixOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MatrixData {
+    pub datasets: Vec<MatrixDataset>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MatrixDataset {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub data: Vec<MatrixPoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_width: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MatrixPoint {
+    pub x: String,
+    pub y: String,
+    pub v: f64,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MatrixOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins: Option<CommonPlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]
