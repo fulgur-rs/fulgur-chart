@@ -334,6 +334,18 @@ fn detect_format(output: &str) -> Format {
     }
 }
 
+fn detect_dsl(json: &str) -> Result<&'static str, String> {
+    let v: serde_json::Value = serde_json::from_str(json)
+        .map_err(|e| format!("error: invalid JSON: {e}"))?;
+    if v.get("mark").is_some() {
+        return Ok("vegalite");
+    }
+    if v.get("type").is_some() {
+        return Ok("chartjs");
+    }
+    Err("error: cannot auto-detect DSL: specify --dsl chartjs or --dsl vegalite".to_string())
+}
+
 fn run_schema(args: SchemaArgs) {
     let json = match args.dsl.as_str() {
         "chartjs" => {
@@ -350,4 +362,34 @@ fn run_schema(args: SchemaArgs) {
         }
     };
     println!("{json}");
+}
+
+#[cfg(test)]
+mod detect_dsl_tests {
+    use super::detect_dsl;
+
+    #[test]
+    fn type_key_detects_chartjs() {
+        assert_eq!(detect_dsl(r#"{"type":"bar","data":{}}"#).unwrap(), "chartjs");
+    }
+
+    #[test]
+    fn mark_key_detects_vegalite() {
+        assert_eq!(detect_dsl(r#"{"mark":"bar","data":{"values":[]}}"#).unwrap(), "vegalite");
+    }
+
+    #[test]
+    fn mark_takes_priority_over_type() {
+        assert_eq!(detect_dsl(r#"{"mark":"bar","type":"x"}"#).unwrap(), "vegalite");
+    }
+
+    #[test]
+    fn no_known_key_is_err() {
+        assert!(detect_dsl(r#"{"labels":[]}"#).is_err());
+    }
+
+    #[test]
+    fn invalid_json_is_err() {
+        assert!(detect_dsl("not json").is_err());
+    }
 }
