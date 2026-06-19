@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: IR に `ChartKind::Matrix` を追加し stub レイアウトを登録
+## Task 1: IR に `ChartKind::Matrix` を追加し stub レイアウトを登録
 
 **Files:**
 - Modify: `crates/fulgur-chart/src/ir.rs`
@@ -201,7 +201,7 @@ git commit -m "feat(ir): add ChartKind::Matrix and layout/matrix stub"
 
 ---
 
-### Task 2: スキーマ型を追加（`schema/chartjs.rs`）
+## Task 2: スキーマ型を追加（`schema/chartjs.rs`）
 
 **Files:**
 - Modify: `crates/fulgur-chart/src/schema/chartjs.rs`
@@ -320,7 +320,7 @@ git commit -m "feat(schema): add MatrixSpec types to chartjs schema"
 
 ---
 
-### Task 3: `frontend/chartjs.rs` に matrix パーサを追加
+## Task 3: `frontend/chartjs.rs` に matrix パーサを追加
 
 **Files:**
 - Modify: `crates/fulgur-chart/src/frontend/chartjs.rs`
@@ -570,7 +570,7 @@ git commit -m "feat(frontend): parse matrix chart type from chartjs JSON"
 
 ---
 
-### Task 4: レンダーテストを書き、レイアウトを検証
+## Task 4: レンダーテストを書き、レイアウトを検証
 
 **Files:**
 - Create: `crates/fulgur-chart/tests/render_matrix.rs`
@@ -702,7 +702,7 @@ git commit -m "test(matrix): add render tests and snapshot"
 
 ---
 
-### Task 5: サンプル JSON を追加してギャラリーに登録
+## Task 5: サンプル JSON を追加してギャラリーに登録
 
 **Files:**
 - Create: `examples/specs/matrix.json`

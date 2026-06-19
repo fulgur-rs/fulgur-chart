@@ -1,12 +1,19 @@
+use super::common::{
+    OUTER_PAD, TEXT_BASELINE_RATIO, TITLE_BAND, TITLE_FONT, X_LABEL_BAND, X_LABEL_CENTER_RATIO,
+};
 use crate::ir::{ChartKind, ChartSpec, Color};
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
-use super::common::{OUTER_PAD, TEXT_BASELINE_RATIO, TITLE_BAND, TITLE_FONT, X_LABEL_BAND, X_LABEL_CENTER_RATIO};
 
-const NAN_COLOR: Color = Color { r: 224, g: 224, b: 224, a: 1.0 };
+const NAN_COLOR: Color = Color {
+    r: 224,
+    g: 224,
+    b: 224,
+    a: 1.0,
+};
 
 fn lerp_color(lo: Color, hi: Color, t: f64) -> Color {
-    let t = t.clamp(0.0, 1.0);
+    let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
     Color {
         r: (lo.r as f64 + (hi.r as f64 - lo.r as f64) * t).round() as u8,
         g: (lo.g as f64 + (hi.g as f64 - lo.g as f64) * t).round() as u8,
@@ -31,22 +38,36 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let mut max_y_w = 0.0_f32;
     for s in &spec.series {
         let w = m.width(&s.name, label_font as f32);
-        if w > max_y_w { max_y_w = w; }
+        if w > max_y_w {
+            max_y_w = w;
+        }
     }
     let y_axis_w = max_y_w as f64 + 10.0;
 
-    let title_band = if spec.title.is_some() { TITLE_BAND } else { 0.0 };
+    let title_band = if spec.title.is_some() {
+        TITLE_BAND
+    } else {
+        0.0
+    };
 
-    let plot_left   = OUTER_PAD + y_axis_w;
-    let plot_right  = spec.width - OUTER_PAD;
-    let plot_top    = OUTER_PAD + title_band;
+    let plot_left = OUTER_PAD + y_axis_w;
+    let plot_right = spec.width - OUTER_PAD;
+    let plot_top = OUTER_PAD + title_band;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND;
 
     let plot_w = plot_right - plot_left;
     let plot_h = plot_bottom - plot_top;
 
-    let cell_w = if n_cols > 0 { plot_w / n_cols as f64 } else { plot_w };
-    let cell_h = if n_rows > 0 { plot_h / n_rows as f64 } else { plot_h };
+    let cell_w = if n_cols > 0 {
+        plot_w / n_cols as f64
+    } else {
+        plot_w
+    };
+    let cell_h = if n_rows > 0 {
+        plot_h / n_rows as f64
+    } else {
+        plot_h
+    };
 
     // min/max 収集（NaN スキップ）
     let mut min_v = f64::INFINITY;
@@ -54,12 +75,20 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     for s in &spec.series {
         for &v in &s.values {
             if v.is_finite() {
-                if v < min_v { min_v = v; }
-                if v > max_v { max_v = v; }
+                if v < min_v {
+                    min_v = v;
+                }
+                if v > max_v {
+                    max_v = v;
+                }
             }
         }
     }
-    let range = if (max_v - min_v).abs() < f64::EPSILON { 1.0 } else { max_v - min_v };
+    let range = if (max_v - min_v).abs() < f64::EPSILON {
+        1.0
+    } else {
+        max_v - min_v
+    };
 
     let mut items: Vec<Prim> = Vec::new();
 
@@ -85,7 +114,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             } else {
                 NAN_COLOR
             };
-            items.push(Prim::Rect { x: cell_x, y: cell_y, w: cell_w, h: cell_h, fill });
+            items.push(Prim::Rect {
+                x: cell_x,
+                y: cell_y,
+                w: cell_w,
+                h: cell_h,
+                fill,
+            });
         }
     }
 
@@ -113,5 +148,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    Scene { width: spec.width, height: spec.height, items }
+    Scene {
+        width: spec.width,
+        height: spec.height,
+        items,
+    }
 }
