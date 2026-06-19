@@ -11,6 +11,7 @@
 //! - Prim::Path の d 文字列は M/L/C/A/Z コマンドのみを含む前提（レイアウト生成コードの不変条件）。
 //! - 未知コマンドのパスは無描画でスキップ（エラー伝播しない）。
 
+use std::collections::HashMap;
 use std::f64::consts::PI;
 
 use resvg::tiny_skia::{self, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
@@ -84,9 +85,10 @@ fn scene_to_png_with_face(
         Pixmap::new(w, h).ok_or_else(|| format!("Pixmap 確保失敗: 寸法 {w}x{h} が無効です"))?;
 
     let transform = Transform::from_scale(scale, scale);
+    let mut glyph_cache: HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>> = HashMap::new();
 
     for prim in &scene.items {
-        render_prim(&mut pixmap, prim, transform, face);
+        render_prim(&mut pixmap, prim, transform, face, &mut glyph_cache);
     }
 
     pixmap
@@ -99,6 +101,7 @@ fn render_prim(
     prim: &Prim,
     transform: Transform,
     face: &ttf_parser::Face<'_>,
+    cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
 ) {
     match prim {
         Prim::Rect { x, y, w, h, fill } => {
@@ -106,13 +109,9 @@ fn render_prim(
                 return;
             };
             let path = PathBuilder::from_rect(rect);
-            pixmap.fill_path(
-                &path,
-                &solid_paint(*fill),
-                FillRule::Winding,
-                transform,
-                None,
-            );
+            let mut paint = solid_paint(*fill);
+            paint.anti_alias = false;
+            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
         }
 
         Prim::Line {
@@ -213,7 +212,7 @@ fn render_prim(
             content,
         } => {
             render_text(
-                pixmap, *x, *y, *size, *anchor, *fill, content, face, transform,
+                pixmap, *x, *y, *size, *anchor, *fill, content, face, transform, cache,
             );
         }
     }
@@ -223,67 +222,40 @@ fn render_prim(
 // テキスト描画
 // ---------------------------------------------------------------------------
 
-/// グリフ輪郭を PathBuilder に書き込む。フォント座標 (Y 上向き) を
-/// ピクセル座標 (Y 下向き) に変換しながら積む。
-struct GlyphSink<'a> {
+/// グリフ輪郭を正規化パスとして PathBuilder に書き込む。
+/// フォント座標 (Y 上向き) の Y 軸を反転するのみ（translate/scale は適用しない）。
+/// キャッシュ済みパスは描画時に Transform で位置・スケールを合成する。
+struct GlyphSinkNorm<'a> {
     builder: &'a mut PathBuilder,
-    offset_x: f32,
-    baseline_y: f32,
-    scale: f32,
 }
 
-impl OutlineBuilder for GlyphSink<'_> {
+impl OutlineBuilder for GlyphSinkNorm<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.builder.move_to(
-            self.offset_x + x * self.scale,
-            self.baseline_y - y * self.scale,
-        );
+        self.builder.move_to(x, -y);
     }
     fn line_to(&mut self, x: f32, y: f32) {
-        self.builder.line_to(
-            self.offset_x + x * self.scale,
-            self.baseline_y - y * self.scale,
-        );
+        self.builder.line_to(x, -y);
     }
     fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        self.builder.quad_to(
-            self.offset_x + x1 * self.scale,
-            self.baseline_y - y1 * self.scale,
-            self.offset_x + x * self.scale,
-            self.baseline_y - y * self.scale,
-        );
+        self.builder.quad_to(x1, -y1, x, -y);
     }
     fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        self.builder.cubic_to(
-            self.offset_x + x1 * self.scale,
-            self.baseline_y - y1 * self.scale,
-            self.offset_x + x2 * self.scale,
-            self.baseline_y - y2 * self.scale,
-            self.offset_x + x * self.scale,
-            self.baseline_y - y * self.scale,
-        );
+        self.builder.cubic_to(x1, -y1, x2, -y2, x, -y);
     }
     fn close(&mut self) {
         self.builder.close();
     }
 }
 
-/// 1 グリフ分のパスを構築する。アウトラインを持たないグリフは `None`。
-fn build_glyph_path(
+/// 正規化グリフパスを構築する（Y 反転・origin=0・scale=1）。
+/// アウトラインを持たないグリフ（スペース等）は `None`。
+fn build_canonical_glyph_path(
     face: &ttf_parser::Face<'_>,
     gid: ttf_parser::GlyphId,
-    offset_x: f32,
-    baseline_y: f32,
-    scale: f32,
 ) -> Option<tiny_skia::Path> {
     let mut builder = PathBuilder::new();
     {
-        let mut sink = GlyphSink {
-            builder: &mut builder,
-            offset_x,
-            baseline_y,
-            scale,
-        };
+        let mut sink = GlyphSinkNorm { builder: &mut builder };
         face.outline_glyph(gid, &mut sink)?;
     }
     builder.finish()
@@ -300,6 +272,7 @@ fn render_text(
     content: &str,
     face: &ttf_parser::Face<'_>,
     transform: Transform,
+    cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
 ) {
     if content.is_empty() {
         return;
@@ -335,8 +308,19 @@ fn render_text(
         };
         let adv = adv_raw as f32 * glyph_scale;
 
-        if let Some(path) = build_glyph_path(face, gid, cursor_x, baseline_y, glyph_scale) {
-            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+        // キャッシュ済みパスがなければ構築して保存する。
+        // 同一 GlyphId のパスはチャート内で再利用される（'A', '0' 等）。
+        let entry = cache
+            .entry(gid)
+            .or_insert_with(|| build_canonical_glyph_path(face, gid));
+        if let Some(path) = entry.as_ref() {
+            // 正規化パス（origin=0, scale=1, Y 反転済み）を
+            // scale(glyph_scale) → translate(cursor_x, baseline_y) → outer_transform の順に合成して描画。
+            let glyph_transform = transform.pre_concat(
+                Transform::from_translate(cursor_x, baseline_y)
+                    .pre_concat(Transform::from_scale(glyph_scale, glyph_scale)),
+            );
+            pixmap.fill_path(path, &paint, FillRule::Winding, glyph_transform, None);
         }
         cursor_x += adv;
     }

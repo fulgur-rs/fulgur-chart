@@ -238,10 +238,25 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         stroke_width: 1.0,
     });
 
-    // 4. x カテゴリラベル。
+    // 4. x カテゴリラベル（auto-skip: ラベル幅 > スロット幅なら間引く）。
     let n = spec.categories.len().max(1);
+    let slot_w = (frame.plot_right - frame.plot_left) / n as f64;
+    // 代表ラベル幅（最初の非空ラベル）＋ 4px ギャップを使って step を決める。
+    let step = spec
+        .categories
+        .iter()
+        .find(|c| !c.is_empty())
+        .map(|lbl| {
+            let lw = m.width(lbl, label_font as f32) as f64 + 4.0;
+            if slot_w > 0.0 && lw > slot_w {
+                ((lw / slot_w).ceil() as usize).max(1)
+            } else {
+                1
+            }
+        })
+        .unwrap_or(1);
     for (i, cat) in spec.categories.iter().enumerate() {
-        if !cat.is_empty() {
+        if !cat.is_empty() && i % step == 0 {
             items.push(Prim::Text {
                 x: category_center(frame, i, n),
                 y: frame.plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
@@ -384,5 +399,70 @@ pub fn value_label(x: f64, y: f64, size: f64, anchor: Anchor, fill: Color, v: f6
         anchor,
         fill,
         content: fmt_num(v),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::font::DEFAULT_FONT;
+    use crate::ir::{AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType};
+    use crate::text::TextMeasurer;
+
+    fn make_bar_spec(n: usize, width: f64) -> ChartSpec {
+        let palette = crate::palette::PALETTE.to_vec();
+        ChartSpec {
+            kind: ChartKind::Bar { horizontal: false, stacked: false },
+            categories: (0..n).map(|i| format!("Cat{i:04}")).collect(),
+            series: vec![Series {
+                name: String::new(),
+                values: vec![1.0; n],
+                points: Vec::<Point>::new(),
+                fill: vec![palette[0]],
+                stroke: vec![],
+                stroke_width: 1.0,
+                area: false,
+                tension: 0.0,
+                series_type: SeriesType::Bar,
+                point_radius: None,
+            }],
+            x_axis: AxisSpec { title: None, min: None, max: None, begin_at_zero: true, grid: true },
+            y_axis: AxisSpec { title: None, min: None, max: None, begin_at_zero: true, grid: true },
+            legend: LegendPos::None,
+            title: None,
+            width,
+            height: 400.0,
+            data_labels: false,
+            theme: crate::ir::Theme::default(),
+        }
+    }
+
+    #[test]
+    fn label_autoskip_fires_for_dense_categories() {
+        let n = 100;
+        let spec = make_bar_spec(n, 600.0);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        // title=None・legend=None なので anchor=Middle は x カテゴリラベルのみ。
+        let x_label_count = items
+            .iter()
+            .filter(|p| matches!(p, Prim::Text { anchor: Anchor::Middle, .. }))
+            .count();
+        assert!(
+            x_label_count < n,
+            "dense spec (n={n}, width=600) でラベルが間引かれるべき: 実際 {x_label_count} 個"
+        );
+    }
+
+    #[test]
+    fn label_autoskip_no_panic_on_minimal_width() {
+        // plot_left >= plot_right になりうる極小 width でパニックしないことを確認。
+        let spec = make_bar_spec(10, 1.0);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
     }
 }
