@@ -1,0 +1,29 @@
+{
+  "type": "scatter",
+  "data": {
+    "datasets": [
+      {
+        "label": "Store A",
+        "backgroundColor": "#36a2eb",
+        "data": [
+          { "x": 12, "y": 4 }, { "x": 18, "y": 7 }, { "x": 25, "y": 9 },
+          { "x": 30, "y": 14 }, { "x": 33, "y": 13 }, { "x": 38, "y": 19 }
+        ]
+      },
+      {
+        "label": "Store B",
+        "backgroundColor": "#ff6384",
+        "data": [
+          { "x": 10, "y": 9 }, { "x": 16, "y": 12 }, { "x": 22, "y": 11 },
+          { "x": 28, "y": 17 }, { "x": 35, "y": 22 }, { "x": 40, "y": 24 }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "Temperature vs. Visitors (scatter)" },
+      "legend": { "display": true, "position": "top" }
+    }
+  }
+}

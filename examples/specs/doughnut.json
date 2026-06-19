@@ -1,0 +1,15 @@
+{
+  "type": "doughnut",
+  "data": {
+    "labels": ["Chrome", "Safari", "Edge", "Firefox", "Other"],
+    "datasets": [
+      { "data": [63, 19, 8, 6, 4] }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "Browser Share (doughnut)" },
+      "legend": { "display": true, "position": "right" }
+    }
+  }
+}
