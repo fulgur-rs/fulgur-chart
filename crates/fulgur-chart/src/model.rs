@@ -116,6 +116,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Radar => "radar",
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",
+        ChartKind::Progress => "progress",
     }
 }
 
