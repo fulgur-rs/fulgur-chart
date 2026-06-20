@@ -452,6 +452,27 @@ fn schema_chartjs_is_valid_json() {
 }
 
 #[test]
+fn schema_chartjs_includes_progress() {
+    let output = Command::cargo_bin("fulgur-chart")
+        .unwrap()
+        .args(["schema"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("progress"),
+        "schema should mention progress variant"
+    );
+    // QuickChart の正式名 progressBar も schema に現れること(serde alias)。
+    // パーサが受理する型を schema 検証側も受理できるよう整合させる。
+    assert!(
+        text.contains("progressBar"),
+        "schema should include the progressBar alias"
+    );
+}
+
+#[test]
 fn schema_vegalite_is_valid_json() {
     let output = Command::cargo_bin("fulgur-chart")
         .unwrap()

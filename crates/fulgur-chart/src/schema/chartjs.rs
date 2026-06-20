@@ -28,6 +28,9 @@ pub enum ChartJsSpec {
     Bubble(BubbleSpec),
     Radar(RadarSpec),
     Matrix(MatrixSpec),
+    /// QuickChart's canonical name is `progressBar`; `progress` is accepted too.
+    #[serde(alias = "progressBar")]
+    Progress(ProgressSpec),
 }
 
 // ────────────────────────────────────────────────
@@ -415,6 +418,51 @@ pub struct MatrixPoint {
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MatrixOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<CommonPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+// ────────────────────────────────────────────────
+// Progress bar chart (QuickChart-compatible)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressSpec {
+    pub data: ProgressData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<ProgressOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressData {
+    /// Per-bar names, one per value in the first dataset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    /// First dataset = per-bar values; optional second dataset = per-bar max (default 100).
+    pub datasets: Vec<ProgressDataset>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProgressDataset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub data: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<ScalarOrArray<ColorString>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<ScalarOrArray<ColorString>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_width: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins: Option<CommonPlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -308,20 +308,26 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             "scatter" => ChartKind::Scatter,
             "bubble" => ChartKind::Bubble,
             "radar" => ChartKind::Radar,
+            // QuickChart の正式名は "progressBar"。互換のため "progress" も受理する。
+            "progress" | "progressBar" => ChartKind::Progress,
             other => return Err(format!("未対応の type: {other}")),
         }
     };
 
-    // datalabels: キーが存在し display!=false なら有効。
-    let data_labels = match &raw.options.plugins.datalabels {
-        Some(dl) => dl.display != Some(false),
-        None => false,
+    // datalabels: 既存は「キーが存在し display!=false なら有効」。
+    // progress のみ既定 ON（QuickChart 準拠）。明示 display:false は尊重する。
+    let data_labels = match (&raw.options.plugins.datalabels, &kind) {
+        (Some(dl), _) => dl.display != Some(false),
+        (None, ChartKind::Progress) => true,
+        (None, _) => false,
     };
 
     // テーマ解決(配色に使うため色解決より先に行う)。
     let theme = build_theme(raw.options.theme);
 
     let is_pie = matches!(kind, ChartKind::Pie { .. });
+    // progress も pie 同様に前景をソリッド(alpha=1.0)で塗る。
+    let is_progress = matches!(kind, ChartKind::Progress);
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
     let is_point_based = matches!(kind, ChartKind::Scatter | ChartKind::Bubble);
 
@@ -357,7 +363,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             } else {
                 values.len()
             };
-            let fill_alpha = if is_pie { 1.0_f32 } else { 0.5_f32 };
+            let fill_alpha = if is_pie || is_progress {
+                1.0_f32
+            } else {
+                0.5_f32
+            };
             let fill = resolve_colors(
                 ds.background_color,
                 is_pie,
@@ -365,8 +375,17 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 n,
                 &theme.palette,
                 fill_alpha,
+                theme.is_custom_palette,
             );
-            let stroke = resolve_colors(ds.border_color, is_pie, i, n, &theme.palette, 1.0);
+            let stroke = resolve_colors(
+                ds.border_color,
+                is_pie,
+                i,
+                n,
+                &theme.palette,
+                1.0,
+                theme.is_custom_palette,
+            );
             // 実効描画種別。線の既定線幅(3.0)を chart 基本型でなく系列種別で決めるため、
             // 単一種別(全 Line→3.0 / 全 Bar→1.0)では従来と byte 一致し、混合では line だけ太くなる。
             let series_type = series_types[i];
@@ -487,6 +506,7 @@ fn build_theme(raw: Option<RawTheme>) -> Theme {
         let parsed: Vec<Color> = entries.iter().filter_map(|c| parse_color(c)).collect();
         if !parsed.is_empty() {
             theme.palette = parsed;
+            theme.is_custom_palette = true;
         }
     }
     if let Some(c) = raw.grid_color.as_deref().and_then(parse_color) {
@@ -527,10 +547,18 @@ fn resolve_colors(
     n: usize,
     palette: &[Color],
     default_alpha: f32,
+    is_custom_palette: bool,
 ) -> Vec<Color> {
-    let pick = |i: usize| Color {
-        a: default_alpha,
-        ..palette[i % palette.len()]
+    let pick = |i: usize| {
+        let c = palette[i % palette.len()];
+        Color {
+            a: if is_custom_palette && c.a < 1.0 {
+                c.a
+            } else {
+                default_alpha
+            },
+            ..c
+        }
     };
     match spec {
         Some(s) => s

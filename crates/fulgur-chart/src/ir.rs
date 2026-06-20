@@ -110,6 +110,9 @@ pub enum ChartKind {
         color_lo: Color, // min 値のセル色（白固定）
         color_hi: Color, // max 値のセル色（backgroundColor 由来）
     },
+    /// QuickChart 互換の progress バー。軸なし水平バー。
+    /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。
+    Progress,
 }
 
 /// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。
@@ -118,6 +121,8 @@ pub enum ChartKind {
 pub struct Theme {
     /// 系列/スライスの自動配色に使う巡回パレット。
     pub palette: Vec<Color>,
+    /// カスタムパレットが指定されているかどうか。
+    pub is_custom_palette: bool,
     /// グリッド線の色。
     pub grid_color: Color,
     /// テキスト/インクの色。
@@ -132,6 +137,7 @@ impl Default for Theme {
     fn default() -> Self {
         Theme {
             palette: crate::palette::PALETTE.to_vec(),
+            is_custom_palette: false,
             grid_color: Color {
                 r: 224,
                 g: 224,
@@ -227,5 +233,11 @@ mod tests {
             point_radius: None,
         };
         assert_eq!(s.stroke_at(0), c(0, 0, 0));
+    }
+
+    #[test]
+    fn theme_default_palette_is_not_custom() {
+        let t = Theme::default();
+        assert!(!t.is_custom_palette);
     }
 }
