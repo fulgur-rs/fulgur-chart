@@ -22,7 +22,13 @@ class TestAcceptance < Minitest::Test
   end
 
   def test_dsl_override
+    # Explicit correct dsl renders.
     assert FulgurChart.render_svg(CJ, dsl: "chartjs").start_with?("<svg")
+    # Discriminating: VL auto-detects as vegalite and renders, but forcing dsl:chartjs must
+    # actually switch the parser (the vegalite spec is invalid chartjs) → ParseError. This
+    # fails if the override is silently ignored.
+    assert FulgurChart.render_svg(VL).start_with?("<svg")
+    assert_raises(Fulgur::ParseError) { FulgurChart.render_svg(VL, dsl: "chartjs") }
   end
 
   def test_scale_changes_png
