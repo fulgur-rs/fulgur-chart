@@ -17,6 +17,10 @@ export function toRgba(css) {
   ctx.fillStyle = '#000';
   ctx.fillStyle = css; // 無効なら黒のまま
   const v = ctx.fillStyle; // '#rrggbb' か 'rgba(r, g, b, a)'
+  // CanvasGradient/CanvasPattern が渡ると非文字列になるため透明にフォールバック。
+  if (typeof v !== 'string') {
+    return 'rgba(0,0,0,0)';
+  }
   let r, g, b, a = 1;
   if (v.startsWith('#')) {
     r = parseInt(v.slice(1, 3), 16);

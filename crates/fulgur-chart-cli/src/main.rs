@@ -453,15 +453,17 @@ fn run_inspect(args: InspectArgs) {
         std::process::exit(1);
     }
     // フォント読込(測定器用)。--font 指定がなければバンドルフォント。
-    let font_bytes: Vec<u8> = match &args.font {
+    // バンドルフォントは静的バイナリ埋め込み(数 MB)なので Cow で borrow し、
+    // デフォルト時のヒープコピーを避ける。
+    let font_bytes: std::borrow::Cow<'static, [u8]> = match &args.font {
         Some(path) => match std::fs::read(path) {
-            Ok(b) => b,
+            Ok(b) => std::borrow::Cow::Owned(b),
             Err(e) => {
                 eprintln!("error: failed to read font '{path}': {e}");
                 std::process::exit(1);
             }
         },
-        None => fulgur_chart::font::DEFAULT_FONT.to_vec(),
+        None => std::borrow::Cow::Borrowed(fulgur_chart::font::DEFAULT_FONT),
     };
     let measurer = match fulgur_chart::text::TextMeasurer::new(&font_bytes) {
         Ok(m) => m,

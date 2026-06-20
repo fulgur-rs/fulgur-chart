@@ -19,7 +19,7 @@ function arrNum(a, b) {
 function colorsEqual(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b)) return false;
   const n = Math.max(a.length, b.length);
-  const at = (arr, i) => (arr.length === 1 ? arr[0] : arr[i % arr.length]);
+  const at = (arr, i) => (arr.length === 1 ? arr[0] : arr[i]);
   for (let i = 0; i < n; i++) if (at(a, i) !== at(b, i)) return false;
   return true;
 }

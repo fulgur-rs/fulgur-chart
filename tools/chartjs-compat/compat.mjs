@@ -90,7 +90,8 @@ for (const name of specs) {
       { maxBuffer: MAX_BUFFER },
     );
   } catch (e) {
-    console.log(`ERROR ${name}: fulgur pipeline failed: ${e.message}`);
+    const stderr = e.stderr ? `\nStderr: ${e.stderr.toString()}` : '';
+    console.log(`ERROR ${name}: fulgur pipeline failed: ${e.message}${stderr}`);
     errored++;
     continue;
   }
@@ -142,6 +143,6 @@ console.log(
     (errored > 0 ? ` / ${errored} errored` : ''),
 );
 
-if (failed > 0) {
+if (failed > 0 || errored > 0) {
   process.exitCode = 1;
 }
