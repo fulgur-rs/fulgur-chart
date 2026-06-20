@@ -305,4 +305,27 @@ mod tests {
         let model = build_model(&spec, &m);
         assert!(model.axes.is_none());
     }
+
+    /// クロス言語フィクスチャ: ここの行は
+    /// `tools/chartjs-compat/rgba-fixture.json` と同一でなければならない。
+    /// Rust `rgba_string` と JS `fmtAlpha` の乖離をどちらか一方のテストで必ず捕捉する。
+    #[test]
+    fn rgba_string_matches_cross_language_fixture() {
+        let rows: &[(u8, u8, u8, f32, &str)] = &[
+            (0, 0, 0, 0.0, "rgba(0,0,0,0)"),
+            (1, 2, 3, 1.0, "rgba(1,2,3,1)"),
+            (54, 162, 235, 0.5, "rgba(54,162,235,0.5)"),
+            (255, 99, 132, 0.25, "rgba(255,99,132,0.25)"),
+            (10, 20, 30, 0.333, "rgba(10,20,30,0.333)"),
+            (10, 20, 30, 0.3333333, "rgba(10,20,30,0.333)"),
+            (10, 20, 30, 0.1, "rgba(10,20,30,0.1)"),
+            (10, 20, 30, 0.999, "rgba(10,20,30,0.999)"),
+            (10, 20, 30, 0.9999, "rgba(10,20,30,1)"),
+            (10, 20, 30, 0.0004, "rgba(10,20,30,0)"),
+        ];
+        for &(r, g, b, a, expected) in rows {
+            let c = Color { r, g, b, a };
+            assert_eq!(rgba_string(&c), expected, "row r={r} g={g} b={b} a={a}");
+        }
+    }
 }
