@@ -1,0 +1,18 @@
+# frozen_string_literal: true
+
+require "rake/testtask"
+require "rb_sys/extensiontask"
+
+GEMSPEC = Gem::Specification.load("fulgur_chart.gemspec")
+
+RbSys::ExtensionTask.new("fulgur_chart", GEMSPEC) do |ext|
+  ext.lib_dir = "lib/fulgur_chart"
+end
+
+Rake::TestTask.new(test: :compile) do |t|
+  t.libs << "test" << "lib"
+  t.test_files = FileList["test/test_*.rb"]
+  t.warning = false
+end
+
+task default: %i[compile test]

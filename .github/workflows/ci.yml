@@ -109,3 +109,42 @@ jobs:
 
       - name: Check
         run: cargo check --workspace --locked
+
+  ruby-binding:
+    name: Ruby binding (build + smoke)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/bindings/ruby
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/bindings/ruby
+          key: ruby-binding
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          working-directory: crates/bindings/ruby
+
+      # The native ext crate is excluded from the root workspace, so the root fmt/clippy
+      # jobs don't cover it — gate it here.
+      - name: Format check (ext)
+        run: cargo fmt --manifest-path ext/fulgur_chart/Cargo.toml -- --check
+
+      - name: Clippy (ext)
+        run: cargo clippy --manifest-path ext/fulgur_chart/Cargo.toml --all-targets --locked -- -D warnings
+
+      - name: Install gems
+        run: bundle install
+
+      - name: Compile + test
+        run: bundle exec rake

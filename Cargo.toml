@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/fulgur-chart", "crates/fulgur-chart-cli"]
+exclude = ["crates/bindings"]
 
 [workspace.package]
 edition = "2024"

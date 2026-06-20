@@ -1,0 +1,6 @@
+/target/
+/tmp/
+/lib/fulgur_chart/*.so
+/lib/fulgur_chart/*.bundle
+/Gemfile.lock
+*.gem
