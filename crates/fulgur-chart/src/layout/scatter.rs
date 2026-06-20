@@ -80,8 +80,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // x/y ドメイン → nice ticks。
     let (xmin, xmax) = axis_domain(spec, |p| p.x);
     let (ymin, ymax) = axis_domain(spec, |p| p.y);
-    let x_ticks = nice_ticks(xmin, xmax, 5);
-    let y_ticks = nice_ticks(ymin, ymax, 5);
+    let x_ticks = nice_ticks(xmin, xmax, 10);
+    let y_ticks = nice_ticks(ymin, ymax, 10);
 
     // y 軸ラベル幅(目盛りラベルの最大幅 + 余白)。
     let mut max_y_w = 0.0_f32;

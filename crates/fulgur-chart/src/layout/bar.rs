@@ -147,7 +147,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let label_font = spec.theme.font_size;
 
     let (dmin, dmax) = value_domain(spec);
-    let ticks = nice_ticks(dmin, dmax, 5);
+    let ticks = nice_ticks(dmin, dmax, 10);
 
     // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。
     let mut max_cat_w = 0.0_f32;

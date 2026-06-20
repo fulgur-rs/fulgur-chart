@@ -13,10 +13,10 @@ fn vertical_stacked_axis_reflects_total() {
     let svg = render(
         r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"label":"s1","data":[10,20]},{"label":"s2","data":[5,15]}]},"options":{"scales":{"y":{"stacked":true}}}}"#,
     );
-    // 積み上げ合計 = max(15, 35) = 35 → nice_ticks(0,35,5) は step=10, 上限=40。
-    // 非積み上げ(グループ)なら上限は 20 で、>40</text> は現れない。
+    // 積み上げ合計 = max(15, 35) = 35 → nice_ticks(0,35,10) は step=5, 上限=35。
+    // 非積み上げ(グループ)なら上限は 20 で、>35</text> は現れない。
     assert!(
-        svg.contains(">40</text>"),
+        svg.contains(">35</text>"),
         "y軸上限が積み上げ合計を反映していない: {svg}"
     );
     assert!(!svg.contains("NaN") && !svg.contains("inf"));

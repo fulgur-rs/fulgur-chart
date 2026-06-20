@@ -111,7 +111,7 @@ pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
 pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y ドメイン。
     let (domain_min, domain_max) = value_domain(spec);
-    let ticks = nice_ticks(domain_min, domain_max, 5);
+    let ticks = nice_ticks(domain_min, domain_max, 10);
 
     // y 軸ラベル幅。
     let mut max_w = 0.0_f32;
