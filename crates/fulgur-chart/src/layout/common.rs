@@ -91,9 +91,16 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
             }
         }
     }
+    // データなし: suggested を初期シードとして使う(chart.js 互換)。suggested もなければ 0..1。
     if !data_min.is_finite() || !data_max.is_finite() {
-        data_min = 0.0;
-        data_max = 1.0;
+        let lo = axis.suggested_min.filter(|s| s.is_finite()).unwrap_or(0.0);
+        let hi = axis
+            .suggested_max
+            .filter(|s| s.is_finite())
+            .unwrap_or(if lo == 0.0 { 1.0 } else { lo + 1.0 });
+        let lo = if axis.begin_at_zero { lo.min(0.0) } else { lo };
+        let hi = if axis.begin_at_zero { hi.max(0.0) } else { hi };
+        return (lo, if hi > lo { hi } else { lo + 1.0 });
     }
     let (mut domain_min, mut domain_max) = if axis.begin_at_zero {
         (data_min.min(0.0), data_max.max(0.0))
