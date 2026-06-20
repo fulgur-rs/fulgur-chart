@@ -30,23 +30,38 @@ module FulgurChart
     end
 
     # Override the chart width / height (px). Applied before input-limit validation.
-    def width(value)  = set(:width, value)
-    def height(value) = set(:height, value)
+    def width(value)
+      set(:width, value)
+    end
+
+    def height(value)
+      set(:height, value)
+    end
 
     # Raster scale factor (ignored when rendering SVG).
-    def scale(value) = set(:scale, value)
+    def scale(value)
+      set(:scale, value)
+    end
 
     # Force the input DSL ("chartjs"/"vegalite" or the matching Symbol). Omit to auto-detect.
-    def dsl(value) = set(:dsl, value)
+    def dsl(value)
+      set(:dsl, value)
+    end
 
     # TrueType/OpenType font bytes (binary String). Omit to use the bundled Noto Sans JP.
-    def font(bytes) = set(:font, bytes)
+    def font(bytes)
+      set(:font, bytes)
+    end
 
     # Reject unknown keys. `strict` => true; `strict(false)` => false.
-    def strict(value = true) = set(:strict, value)
+    def strict(value = true)
+      set(:strict, value)
+    end
 
     # Default output format for a terminal `render` with no argument (Symbol/String).
-    def format(value) = set(:format, value)
+    def format(value)
+      set(:format, value)
+    end
 
     # Render to the given format ("svg"/"png" or the matching Symbol). Format precedence:
     # explicit argument > `.format()` setter > default :svg. Returns a UTF-8 String for svg
