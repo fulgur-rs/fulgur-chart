@@ -46,3 +46,37 @@ fn no_theme_is_deterministic() {
     let json = r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#;
     assert_eq!(render(json), render(json));
 }
+#[test]
+fn custom_palette_rgba_alpha_preserved_in_fill() {
+    // rgba(255,0,0,0.3) をパレットとして設定 → fill-opacity="0.3" が SVG に現れる
+    let json = r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"theme":{"palette":["rgba(255,0,0,0.3)"]}}}"##;
+    let svg = render(json);
+    assert!(
+        svg.contains(r#"fill-opacity="0.3""#),
+        "custom palette alpha should be preserved, got:\n{svg}"
+    );
+}
+#[test]
+fn custom_palette_rgba_alpha_preserved_in_stroke() {
+    // rgba(255,0,0,0.3) をパレットとして設定 → stroke-opacity="0.3" が SVG に現れる
+    // line チャートは Prim::Polyline を使い stroke-opacity を出力する
+    // (bar チャートは Prim::Rect のみで stroke フィールドを持たないため対象外)
+    let json = r##"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+      "options":{"theme":{"palette":["rgba(255,0,0,0.3)"]}}}"##;
+    let svg = render(json);
+    assert!(
+        svg.contains(r#"stroke-opacity="0.3""#),
+        "custom palette alpha should be preserved in stroke, got:\n{svg}"
+    );
+}
+#[test]
+fn default_palette_fill_uses_default_alpha() {
+    // パレット未指定 → bar の fill は 0.5 alpha
+    let json = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#;
+    let svg = render(json);
+    assert!(
+        svg.contains(r#"fill-opacity="0.5""#),
+        "default palette should use 0.5 fill alpha, got:\n{svg}"
+    );
+}

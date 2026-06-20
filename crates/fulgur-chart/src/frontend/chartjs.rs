@@ -365,8 +365,17 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 n,
                 &theme.palette,
                 fill_alpha,
+                theme.is_custom_palette,
             );
-            let stroke = resolve_colors(ds.border_color, is_pie, i, n, &theme.palette, 1.0);
+            let stroke = resolve_colors(
+                ds.border_color,
+                is_pie,
+                i,
+                n,
+                &theme.palette,
+                1.0,
+                theme.is_custom_palette,
+            );
             // 実効描画種別。線の既定線幅(3.0)を chart 基本型でなく系列種別で決めるため、
             // 単一種別(全 Line→3.0 / 全 Bar→1.0)では従来と byte 一致し、混合では line だけ太くなる。
             let series_type = series_types[i];
@@ -487,6 +496,7 @@ fn build_theme(raw: Option<RawTheme>) -> Theme {
         let parsed: Vec<Color> = entries.iter().filter_map(|c| parse_color(c)).collect();
         if !parsed.is_empty() {
             theme.palette = parsed;
+            theme.is_custom_palette = true;
         }
     }
     if let Some(c) = raw.grid_color.as_deref().and_then(parse_color) {
@@ -527,10 +537,14 @@ fn resolve_colors(
     n: usize,
     palette: &[Color],
     default_alpha: f32,
+    is_custom_palette: bool,
 ) -> Vec<Color> {
-    let pick = |i: usize| Color {
-        a: default_alpha,
-        ..palette[i % palette.len()]
+    let pick = |i: usize| {
+        let c = palette[i % palette.len()];
+        Color {
+            a: if is_custom_palette { c.a } else { default_alpha },
+            ..c
+        }
     };
     match spec {
         Some(s) => s
