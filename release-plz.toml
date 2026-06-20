@@ -1,0 +1,18 @@
+# release-plz 設定: https://release-plz.dev/docs/config
+#
+# ワークスペース全体を 1 つのルート CHANGELOG.md に集約する
+# (デフォルトはクレートごとに crates/*/CHANGELOG.md を生成する)。
+#
+# changelog_path は package 単位のフィールドで、公式 docs は [workspace] には
+# 書けないと明記しているため、両クレートを同じルート CHANGELOG.md に向ける。
+# パスはルート Cargo.toml からの相対。release-plz はリリース順 (lib -> cli) で
+# 両クレートのエントリを同一ファイルに追記する。
+# フォーマットは Keep a Changelog (release-plz のデフォルト) で既存ファイルと互換。
+
+[[package]]
+name = "fulgur-chart"
+changelog_path = "CHANGELOG.md"
+
+[[package]]
+name = "fulgur-chart-cli"
+changelog_path = "CHANGELOG.md"
