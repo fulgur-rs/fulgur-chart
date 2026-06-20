@@ -109,3 +109,30 @@ jobs:
 
       - name: Check
         run: cargo check --workspace --locked
+
+  ruby-binding:
+    name: Ruby binding (build + smoke)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/bindings/ruby
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/bindings/ruby
+          key: ruby-binding
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          working-directory: crates/bindings/ruby
+
+      - name: Install gems
+        run: bundle install
+
+      - name: Compile + test
+        run: bundle exec rake
