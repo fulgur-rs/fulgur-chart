@@ -71,10 +71,26 @@ fn axis_domain(
             }
         }
     }
-    // 有限値がなければ既定ドメインにフォールバック。
+    // データなし: suggested を初期シードとして使う(chart.js 互換)。suggested もなければ 0..1。
     if !lo.is_finite() || !hi.is_finite() {
-        lo = 0.0;
-        hi = 1.0;
+        lo = axis_spec
+            .suggested_min
+            .filter(|s| s.is_finite())
+            .unwrap_or(0.0);
+        hi = axis_spec
+            .suggested_max
+            .filter(|s| s.is_finite())
+            .unwrap_or(if lo == 0.0 { 1.0 } else { lo + 1.0 });
+        if axis_spec.begin_at_zero {
+            lo = lo.min(0.0);
+            hi = hi.max(0.0);
+        }
+        return (lo, if hi > lo { hi } else { lo + 1.0 });
+    }
+    // begin_at_zero でドメインに 0 を含める。
+    if axis_spec.begin_at_zero {
+        lo = lo.min(0.0);
+        hi = hi.max(0.0);
     }
     // suggestedMin/suggestedMax: データが優先、suggested はドメインを広げるだけ。
     // 非有限値（Infinity/NaN）は nice_ticks で無限 range を生じさせるため無視する。

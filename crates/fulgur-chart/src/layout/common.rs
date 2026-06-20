@@ -56,16 +56,31 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut data_max = f64::NEG_INFINITY;
     if matches!(spec.kind, crate::ir::ChartKind::Bar { stacked: true, .. }) {
         // 積み上げ: カテゴリごとに正値の和(上限)・負値の和(下限)をとる。
+        // chart.js 互換: beginAtZero=false のとき 0 ではなく実データの個別値を境界にする。
+        // 全正値ケース(neg_sum が常に 0)では min_individual を下限として使う。
+        // 全負値ケース(pos_sum が常に 0)では max_individual を上限として使う。
+        let mut has_positive = false;
+        let mut has_negative = false;
+        let mut min_individual = f64::INFINITY;
+        let mut max_individual = f64::NEG_INFINITY;
         for i in 0..spec.categories.len() {
             let mut pos_sum = 0.0_f64;
             let mut neg_sum = 0.0_f64;
             for ser in &spec.series {
                 if let Some(&v) = ser.values.get(i) {
                     if v.is_finite() {
+                        if v < min_individual {
+                            min_individual = v;
+                        }
+                        if v > max_individual {
+                            max_individual = v;
+                        }
                         if v >= 0.0 {
                             pos_sum += v;
+                            has_positive = true;
                         } else {
                             neg_sum += v;
+                            has_negative = true;
                         }
                     }
                 }
@@ -76,6 +91,12 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
             if neg_sum < data_min {
                 data_min = neg_sum;
             }
+        }
+        if !has_negative && min_individual.is_finite() {
+            data_min = min_individual;
+        }
+        if !has_positive && max_individual.is_finite() {
+            data_max = max_individual;
         }
     } else {
         for s in &spec.series {
