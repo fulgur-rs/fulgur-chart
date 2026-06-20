@@ -12,9 +12,10 @@ const RADAR: &str = r#"{"type":"radar","data":{"labels":["速度","力","技"],"
 #[test]
 fn radar_has_series_polygons() {
     let svg = render(RADAR);
-    // 系列多角形は半透明塗り(fill-opacity="0.2")で識別する。グリッドは fill="none"。
+    // 系列多角形は半透明塗り(fill-opacity="0.5")で識別する。グリッドは fill="none"。
+    // (chart.js v4 互換: resolve_colors が設定した alpha=0.5 をそのまま使用)
     assert!(
-        svg.matches(r#"fill-opacity="0.2""#).count() >= 2,
+        svg.matches(r#"fill-opacity="0.5""#).count() >= 2,
         "got: {svg}"
     );
     assert!(!svg.contains("NaN") && !svg.contains("inf"));
