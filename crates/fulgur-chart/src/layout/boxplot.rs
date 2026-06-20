@@ -54,7 +54,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
         for (sidx, ser) in spec.series.iter().enumerate() {
             let Some(bp) = ser.box_points.get(i) else { continue };
-            if !bp.min.is_finite() || !bp.max.is_finite() { continue }
+            if !bp.min.is_finite() || !bp.q1.is_finite() || !bp.median.is_finite() || !bp.q3.is_finite() || !bp.max.is_finite() { continue }
 
             let cx = band_cx + (group_offset + sidx as f64) * box_w;
             let left = cx - box_w / 2.0;
