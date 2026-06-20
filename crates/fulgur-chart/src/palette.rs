@@ -82,6 +82,6 @@ mod tests {
     #[test]
     fn background_color_cycles_same_as_border() {
         let n = PALETTE.len();
-        assert_eq!(palette_background_color(0).r, palette_background_color(n).r);
+        assert_eq!(palette_background_color(0), palette_background_color(n));
     }
 }
