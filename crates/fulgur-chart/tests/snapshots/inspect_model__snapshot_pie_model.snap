@@ -1,0 +1,30 @@
+---
+source: crates/fulgur-chart/tests/inspect_model.rs
+expression: "model_yaml(\"pie\")"
+---
+meta:
+  type: pie
+  width: 800
+  height: 450
+series:
+  - label: Share
+    fill:
+      - "rgba(54,162,235,1)"
+      - "rgba(255,99,132,1)"
+      - "rgba(255,159,64,1)"
+      - "rgba(255,205,86,1)"
+    stroke:
+      - "rgba(54,162,235,1)"
+      - "rgba(255,99,132,1)"
+      - "rgba(255,159,64,1)"
+      - "rgba(255,205,86,1)"
+    values:
+      - 55
+      - 30
+      - 12
+      - 3
+counts:
+  datasets: 1
+  legend_items: 1
+  x_ticks: 4
+  y_ticks: 0

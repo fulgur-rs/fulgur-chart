@@ -1,0 +1,64 @@
+---
+source: crates/fulgur-chart/tests/inspect_model.rs
+expression: "model_yaml(\"line\")"
+---
+meta:
+  type: line
+  width: 800
+  height: 450
+axes:
+  x:
+    kind: category
+    labels:
+      - Mon
+      - Tue
+      - Wed
+      - Thu
+      - Fri
+      - Sat
+      - Sun
+  y:
+    kind: linear
+    min: 0
+    max: 30
+    step: 5
+    ticks:
+      - 0
+      - 5
+      - 10
+      - 15
+      - 20
+      - 25
+      - 30
+series:
+  - label: Tokyo
+    fill:
+      - "rgba(54,162,235,0.5)"
+    stroke:
+      - "rgba(255,99,132,1)"
+    values:
+      - 12
+      - 15
+      - 14
+      - 18
+      - 22
+      - 25
+      - 21
+  - label: Osaka
+    fill:
+      - "rgba(255,99,132,0.5)"
+    stroke:
+      - "rgba(54,162,235,1)"
+    values:
+      - 14
+      - 16
+      - 17
+      - 19
+      - 24
+      - 27
+      - 23
+counts:
+  datasets: 2
+  legend_items: 2
+  x_ticks: 7
+  y_ticks: 7

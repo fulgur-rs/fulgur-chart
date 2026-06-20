@@ -1,0 +1,47 @@
+---
+source: crates/fulgur-chart/tests/inspect_model.rs
+expression: "model_yaml(\"bar\")"
+---
+meta:
+  type: bar
+  width: 800
+  height: 450
+axes:
+  x:
+    kind: category
+    labels:
+      - Jan
+      - Feb
+      - Mar
+      - Apr
+      - May
+  y:
+    kind: linear
+    min: 0
+    max: 300
+    step: 50
+    ticks:
+      - 0
+      - 50
+      - 100
+      - 150
+      - 200
+      - 250
+      - 300
+series:
+  - label: Revenue (10k JPY)
+    fill:
+      - "rgba(54,162,235,1)"
+    stroke:
+      - "rgba(54,162,235,1)"
+    values:
+      - 120
+      - 200
+      - 150
+      - 280
+      - 240
+counts:
+  datasets: 1
+  legend_items: 1
+  x_ticks: 5
+  y_ticks: 7
