@@ -21,12 +21,6 @@ pub fn palette_color(i: usize) -> Color {
     PALETTE[i % PALETTE.len()]
 }
 
-/// chart.js v4 Colors プラグインの backgroundColor（alpha=0.5）。
-/// BACKGROUND_COLORS = BORDER_COLORS.map(rgba(..., 0.5)) に対応。
-pub fn palette_background_color(i: usize) -> Color {
-    Color { a: 0.5, ..palette_color(i) }
-}
-
 /// Vega-Lite デフォルトカラースキーム（Tableau10）。
 pub static VEGALITE_PALETTE: &[Color] = &[
     rgb(76, 120, 168),  // #4c78a8 steel blue
@@ -72,16 +66,4 @@ mod tests {
         assert_eq!((c.r, c.g, c.b), (54, 162, 235)); // #36A2EB
     }
 
-    #[test]
-    fn background_color_has_half_alpha() {
-        let c = palette_background_color(0);
-        assert_eq!((c.r, c.g, c.b), (54, 162, 235)); // RGB は変わらない
-        assert!((c.a - 0.5).abs() < 1e-6, "alpha は 0.5 であるべき、実際は {}", c.a);
-    }
-
-    #[test]
-    fn background_color_cycles_same_as_border() {
-        let n = PALETTE.len();
-        assert_eq!(palette_background_color(0), palette_background_color(n));
-    }
 }

@@ -1,14 +1,12 @@
 //! line / area チャート。共有フレーム(common)の上に折れ線・面・マーカーを重ねる。
 
 use super::common;
-use crate::ir::{ChartSpec, Color};
+use crate::ir::ChartSpec;
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 use std::fmt::Write;
 
-/// area 塗りの不透明度（系列 fill の alpha に乗ずる）。
-const AREA_FILL_ALPHA: f32 = 0.3;
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
 
@@ -51,14 +49,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 fmt_num(baseline_y)
             )
             .unwrap();
-            let f = ser.fill_at(0);
-            let area_fill = Color {
-                a: f.a * AREA_FILL_ALPHA,
-                ..f
-            };
             items.push(Prim::Path {
                 d,
-                fill: Some(area_fill),
+                fill: Some(ser.fill_at(0)),
                 stroke: None,
                 stroke_width: 0.0,
             });

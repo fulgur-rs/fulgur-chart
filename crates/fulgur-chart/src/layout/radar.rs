@@ -12,8 +12,6 @@ use crate::text::TextMeasurer;
 use std::f64::consts::PI;
 use std::fmt::Write;
 
-/// 系列塗りの不透明度（系列 fill の alpha に乗ずる）。
-const SERIES_FILL_ALPHA: f32 = 0.2;
 /// 頂点マーカー(点)の半径。
 const MARKER_R: f64 = 3.0;
 /// 円の外接半径に対する使用率(軸ラベルの余白を残す)。
@@ -238,14 +236,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             write!(d, "{} {} {} ", cmd, fmt_num(*x), fmt_num(*y)).unwrap();
         }
         d.push('Z');
-        let f = ser.fill_at(0);
-        let area_fill = Color {
-            a: f.a * SERIES_FILL_ALPHA,
-            ..f
-        };
         items.push(Prim::Path {
             d,
-            fill: Some(area_fill),
+            fill: Some(ser.fill_at(0)),
             stroke: Some(ser.stroke_at(0)),
             stroke_width: ser.stroke_width,
         });

@@ -3,7 +3,7 @@
 //! 棒/折れ線の幾何定数とヘルパは bar.rs / line.rs から複製している(意図的な重複)。
 
 use super::common;
-use crate::ir::{ChartSpec, Color, SeriesType};
+use crate::ir::{ChartSpec, SeriesType};
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
@@ -18,8 +18,6 @@ const BAND_PAD_RATIO: f64 = 0.1;
 const BAR_FILL_RATIO: f64 = 0.9;
 
 // --- line.rs から複製した折れ線の定数 ---
-/// area 塗りの不透明度（系列 fill の alpha に乗ずる）。
-const AREA_FILL_ALPHA: f32 = 0.3;
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
 
@@ -126,14 +124,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 fmt_num(baseline_y)
             )
             .unwrap();
-            let f = ser.fill_at(0);
-            let area_fill = Color {
-                a: f.a * AREA_FILL_ALPHA,
-                ..f
-            };
             items.push(Prim::Path {
                 d,
-                fill: Some(area_fill),
+                fill: Some(ser.fill_at(0)),
                 stroke: None,
                 stroke_width: 0.0,
             });
