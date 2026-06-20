@@ -205,6 +205,24 @@ fn render_png(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
     render_png_string(ruby, &spec_json, &opts)
 }
 
+// --- public API: schema ---
+
+/// Return the JSON Schema (compact JSON String) for the given DSL.
+/// Mirrors the CLI's `run_schema`; unknown DSL → ParseError (consistent with `parse_opts`).
+fn schema(ruby: &Ruby, dsl: String) -> Result<String, Error> {
+    let s = match dsl.as_str() {
+        "chartjs" => schemars::schema_for!(fulgur_chart::schema::ChartJsSpec),
+        "vegalite" => schemars::schema_for!(fulgur_chart::schema::VegaLiteSpec),
+        other => {
+            return Err(parse_err(
+                ruby,
+                format!("unsupported DSL '{other}' (supported: chartjs, vegalite)"),
+            ))
+        }
+    };
+    serde_json::to_string(&s).map_err(|e| render_err(ruby, format!("schema serialization: {e}")))
+}
+
 fn version() -> String {
     fulgur_chart::version().to_string()
 }
@@ -224,5 +242,6 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     module.define_module_function("render_svg", function!(render_svg, -1))?;
     module.define_module_function("render_image", function!(render_image, -1))?;
     module.define_module_function("render_png", function!(render_png, -1))?;
+    module.define_module_function("schema", function!(schema, 1))?;
     Ok(())
 }
