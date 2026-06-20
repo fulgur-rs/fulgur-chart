@@ -28,7 +28,7 @@ class TestAcceptance < Minitest::Test
     # actually switch the parser (the vegalite spec is invalid chartjs) → ParseError. This
     # fails if the override is silently ignored.
     assert FulgurChart.render_svg(VL).start_with?("<svg")
-    assert_raises(Fulgur::ParseError) { FulgurChart.render_svg(VL, dsl: "chartjs") }
+    assert_raises(FulgurChart::ParseError) { FulgurChart.render_svg(VL, dsl: "chartjs") }
   end
 
   def test_scale_changes_png
@@ -51,8 +51,8 @@ class TestAcceptance < Minitest::Test
   end
 
   def test_symbol_unknown_dsl_still_parse_error
-    assert_raises(Fulgur::ParseError) { FulgurChart.render_svg(CJ, dsl: :nope) }
-    assert_raises(Fulgur::ParseError) { FulgurChart.schema(:nope) }
-    assert_raises(Fulgur::ParseError) { FulgurChart.render_image(CJ, format: :zzz) }
+    assert_raises(FulgurChart::ParseError) { FulgurChart.render_svg(CJ, dsl: :nope) }
+    assert_raises(FulgurChart::ParseError) { FulgurChart.schema(:nope) }
+    assert_raises(FulgurChart::ParseError) { FulgurChart.render_image(CJ, format: :zzz) }
   end
 end

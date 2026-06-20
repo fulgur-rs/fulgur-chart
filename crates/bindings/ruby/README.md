@@ -82,16 +82,17 @@ All render methods accept the following keyword options (all optional unless not
 
 ### Errors
 
-The error hierarchy lives in the native extension under the `Fulgur` module
-(`FulgurChart` is an alias of `Fulgur`):
+The error hierarchy lives in the native extension under the `FulgurChart` module
+(the module is `FulgurChart`, not `Fulgur`, to avoid a top-level collision with the
+Fulgur PDF library when both gems are loaded in the same process):
 
-- `Fulgur::ParseError < StandardError` — invalid JSON, undetectable DSL, input-limit
+- `FulgurChart::ParseError < StandardError` — invalid JSON, undetectable DSL, input-limit
   violations.
-- `Fulgur::StrictError < Fulgur::ParseError` — unknown key encountered under `strict: true`.
-- `Fulgur::RenderError < StandardError` — raster rendering failure.
+- `FulgurChart::StrictError < FulgurChart::ParseError` — unknown key encountered under `strict: true`.
+- `FulgurChart::RenderError < StandardError` — raster rendering failure.
 
-Note the font-error asymmetry: an invalid font raises `Fulgur::ParseError` on the SVG path
-(`render_svg`) but `Fulgur::RenderError` on the image path (`render_png` / `render_image`),
+Note the font-error asymmetry: an invalid font raises `FulgurChart::ParseError` on the SVG path
+(`render_svg`) but `FulgurChart::RenderError` on the image path (`render_png` / `render_image`),
 because the two outputs go through different render pipelines.
 
 ## Note: packaging

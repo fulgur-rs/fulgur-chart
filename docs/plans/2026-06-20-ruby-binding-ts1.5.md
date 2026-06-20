@@ -1,5 +1,7 @@
 # Ruby バインディング (magnus / rb-sys) Implementation Plan
 
+> **改訂 (PR #11 レビュー後):** 本プラン中の Ruby モジュール名・エラー名前空間は当初 `Fulgur`（`FulgurChart` はエイリアス）としていたが、top-level `Fulgur` が Fulgur(PDF) ライブラリと衝突するため、**正準モジュールを `FulgurChart` に変更**した（`Fulgur` 名前空間・エイリアスは定義しない）。以下のコードブロック中の `Fulgur` / `Fulgur::*` / `FulgurChart = Fulgur` は履歴として残すが、実装・契約(`docs/binding-api-contract.md`)・README は `FulgurChart::ParseError/StrictError/RenderError` が正。
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (または subagent-driven-development) to implement this plan task-by-task.
 
 **Goal:** fulgur-chart コアを magnus + rb-sys でネイティブ拡張としてラップし、`require 'fulgur_chart'` で `FulgurChart.render_svg/render_image/render_png/schema/version` が使える gem を作る。

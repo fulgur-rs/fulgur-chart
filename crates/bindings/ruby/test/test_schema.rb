@@ -15,7 +15,7 @@ class TestSchema < Minitest::Test
   end
 
   def test_unknown_dsl_raises_parse_error
-    assert_raises(Fulgur::ParseError) { FulgurChart.schema("nope") }
+    assert_raises(FulgurChart::ParseError) { FulgurChart.schema("nope") }
   end
 
   def test_schema_determinism

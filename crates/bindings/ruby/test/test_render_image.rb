@@ -15,11 +15,11 @@ class TestRenderImage < Minitest::Test
   end
 
   def test_unknown_format_raises_parse_error
-    assert_raises(Fulgur::ParseError) { FulgurChart.render_image(Fixtures::BAR, format: "zzz") }
+    assert_raises(FulgurChart::ParseError) { FulgurChart.render_image(Fixtures::BAR, format: "zzz") }
   end
 
   def test_invalid_font_on_image_path_raises_render_error
-    assert_raises(Fulgur::RenderError) do
+    assert_raises(FulgurChart::RenderError) do
       FulgurChart.render_png(Fixtures::BAR, font: "not a font".b)
     end
   end

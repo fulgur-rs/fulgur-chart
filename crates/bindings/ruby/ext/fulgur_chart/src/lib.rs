@@ -10,8 +10,8 @@ use magnus::{
 
 fn exc_class(ruby: &Ruby, name: &str) -> ExceptionClass {
     let module = ruby
-        .define_module("Fulgur")
-        .expect("Fulgur module defined in init");
+        .define_module("FulgurChart")
+        .expect("FulgurChart module defined in init");
     module
         .const_get::<_, ExceptionClass>(name)
         .expect("error class defined in init")
@@ -252,10 +252,12 @@ fn version() -> String {
 
 #[magnus::init]
 fn init(ruby: &Ruby) -> Result<(), Error> {
-    let module = ruby.define_module("Fulgur")?;
+    // Module name is `FulgurChart` (NOT `Fulgur`): a top-level `Fulgur` would collide with the
+    // Fulgur PDF library if both gems are loaded in the same process.
+    let module = ruby.define_module("FulgurChart")?;
 
-    // Canonical error hierarchy (single source of truth). lib/fulgur_chart.rb only aliases
-    // FulgurChart = Fulgur and does NOT redefine these.
+    // Canonical error hierarchy (single source of truth). lib/fulgur_chart.rb does not redefine
+    // these or alias anything.
     let std_err = ruby.exception_standard_error();
     let parse = module.define_error("ParseError", std_err)?;
     module.define_error("StrictError", parse)?;
