@@ -1,0 +1,25 @@
+---
+source: crates/fulgur-chart/tests/inspect_model.rs
+expression: "model_yaml(\"bar-horizontal\")"
+---
+meta:
+  type: bar-horizontal
+  width: 800
+  height: 450
+series:
+  - label: Satisfaction (%)
+    fill:
+      - "rgba(54,162,235,1)"
+    stroke:
+      - "rgba(54,162,235,1)"
+    values:
+      - 87
+      - 73
+      - 78
+      - 81
+      - 69
+counts:
+  datasets: 1
+  legend_items: 1
+  x_ticks: 5
+  y_ticks: 0

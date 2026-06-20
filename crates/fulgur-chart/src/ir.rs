@@ -56,7 +56,10 @@ impl Series {
     }
 }
 
-fn color_at(colors: &[Color], i: usize) -> Color {
+/// 要素番号 i から色を解決する共有ルール(空なら黒、len==1 ならブロードキャスト、
+/// それ以外は i % len)。レンダラ(`fill_at`/`stroke_at` 経由)と意味モデル
+/// (`model::colors_to_strings`)が同一経路を使い、モデルと描画の差異を防ぐ。
+pub fn color_at(colors: &[Color], i: usize) -> Color {
     match colors.len() {
         0 => Color {
             r: 0,

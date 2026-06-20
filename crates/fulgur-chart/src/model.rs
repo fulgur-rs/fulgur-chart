@@ -20,16 +20,8 @@ fn fmt_alpha(a: f32) -> String {
         return "0".to_string();
     }
     let r = (a as f64 * 1000.0).round() / 1000.0;
-    let mut s = format!("{r}");
-    if s.contains('.') {
-        while s.ends_with('0') {
-            s.pop();
-        }
-        if s.ends_with('.') {
-            s.pop();
-        }
-    }
-    s
+    // f64 の Display は最短往復表現を出すため n/1000 に末尾ゼロは付かない。
+    format!("{r}")
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -80,6 +72,8 @@ pub struct SeriesModel {
 #[derive(Debug, Serialize, PartialEq)]
 pub struct Counts {
     pub datasets: usize,
+    /// ラベル非空のデータセット数。描画される凡例エントリ数ではない
+    /// (pie/doughnut はスライスごとに 1 エントリを描画する)。
     pub legend_items: usize,
     pub x_ticks: usize,
     pub y_ticks: usize,
@@ -95,22 +89,12 @@ fn element_count(s: &crate::ir::Series) -> usize {
 }
 
 /// 色ベクタを「要素ごと rgba」に展開しつつ、全要素同色なら長さ1へ畳む。
+/// 色解決はレンダラと共有する `ir::color_at` を使い、モデルと描画の差異を防ぐ。
 fn colors_to_strings(colors: &[Color], n: usize) -> Vec<String> {
-    use crate::ir::Color as C;
-    let at = |i: usize| -> C {
-        match colors.len() {
-            0 => C {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 1.0,
-            },
-            1 => colors[0],
-            _ => colors[i % colors.len()],
-        }
-    };
     let n = n.max(1);
-    let all: Vec<String> = (0..n).map(|i| rgba_string(&at(i))).collect();
+    let all: Vec<String> = (0..n)
+        .map(|i| rgba_string(&crate::ir::color_at(colors, i)))
+        .collect();
     if all.iter().all(|x| x == &all[0]) {
         vec![all[0].clone()]
     } else {

@@ -29,3 +29,13 @@ fn snapshot_pie_model() {
 fn snapshot_line_model() {
     insta::assert_yaml_snapshot!(model_yaml("line"));
 }
+
+#[test]
+fn snapshot_scatter_model() {
+    insta::assert_yaml_snapshot!(model_yaml("scatter"));
+}
+
+#[test]
+fn snapshot_bar_horizontal_model() {
+    insta::assert_yaml_snapshot!(model_yaml("bar-horizontal"));
+}
