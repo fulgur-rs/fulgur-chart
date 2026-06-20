@@ -111,6 +111,8 @@ pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
             domain_max = s;
         }
     }
+    // ハード制約の y_axis.min / y_axis.max は現状 wire されていない（未実装）。
+    // 実装する際は: hard min/max が suggested より優先、かつドメインを縮小できる点に注意。
     // 上限>下限を保証（縮退時の保険）。
     if domain_max <= domain_min {
         domain_max = domain_min + 1.0;
@@ -502,5 +504,33 @@ mod tests {
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
+    }
+
+    #[test]
+    fn value_domain_suggested_min_expands_below_data() {
+        // suggestedMin がデータより小さい場合 → ドメインが広がる。
+        // データは 1.0、begin_at_zero=true なので data_min は 0.0 に引き上げられる。
+        // suggested_min=-20 はその 0.0 より小さいのでドメインが -20 まで広がる。
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.suggested_min = Some(-20.0);
+        let (min, _max) = value_domain(&spec);
+        assert!(
+            min <= -20.0,
+            "suggested_min=-20 はドメインを下方向に広げるべき: 実際 min={min}"
+        );
+    }
+
+    #[test]
+    fn value_domain_suggested_min_noop_when_data_lower() {
+        // suggestedMin がデータより大きい場合 → no-op（データが優先）。
+        // データは 1.0、begin_at_zero=true なので domain_min=0.0。
+        // suggested_min=50 は domain_min(0.0) より大きいが、データ側が優先されるので無視。
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.suggested_min = Some(50.0);
+        let (min, _max) = value_domain(&spec);
+        assert!(
+            min <= 0.0,
+            "suggested_min=50 はデータの下端(0.0)を縮小してはいけない: 実際 min={min}"
+        );
     }
 }
