@@ -7,7 +7,9 @@ use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 
-/// トラック（背景）の淡灰色。
+/// トラック（背景）の淡灰色 `#e0e0e0`。
+/// 値は `common::GRID` / `matrix::NAN_COLOR` と同値だが、意味は別
+/// （こちらは progress バーのトラック背景。グリッド線や NaN セルとは無関係）。
 const TRACK_COLOR: Color = Color {
     r: 224,
     g: 224,
@@ -115,21 +117,21 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             0.0
         };
 
-        // トラック（角丸・全幅）
-        let track_r = (bar_h / 2.0).min(plot_w / 2.0);
+        // トラック（角丸・全幅）。半径は rounded_rect_path 内部で w/2・h/2 に
+        // 再クランプされるため、bar_h/2 をそのまま渡す。
         items.push(Prim::Path {
-            d: rounded_rect_path(plot_left, bar_y, plot_w, bar_h, track_r),
+            d: rounded_rect_path(plot_left, bar_y, plot_w, bar_h, bar_h / 2.0),
             fill: Some(TRACK_COLOR),
             stroke: None,
             stroke_width: 0.0,
         });
 
         // 前景（角丸・幅 = frac × 全幅）。0 幅は描かない。
+        // 半径は rounded_rect_path 内部で fg_w/2・bar_h/2 に再クランプされる。
         let fg_w = plot_w * frac;
         if fg_w > 0.0 {
-            let fg_r = (bar_h / 2.0).min(fg_w / 2.0);
             items.push(Prim::Path {
-                d: rounded_rect_path(plot_left, bar_y, fg_w, bar_h, fg_r),
+                d: rounded_rect_path(plot_left, bar_y, fg_w, bar_h, bar_h / 2.0),
                 fill: Some(spec.series[0].fill_at(i)),
                 stroke: None,
                 stroke_width: 0.0,

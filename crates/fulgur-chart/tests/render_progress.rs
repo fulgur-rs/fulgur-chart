@@ -82,3 +82,36 @@ fn progress_clamps_over_max_to_100() {
     let svg = render(r#"{"type":"progress","data":{"datasets":[{"data":[150]}]}}"#);
     assert!(svg.contains(">100%<"), "expected clamp to 100%: {svg}");
 }
+
+#[test]
+fn progress_empty_data_no_panic() {
+    let svg = render(r#"{"type":"progress","data":{"datasets":[{"data":[]}]}}"#);
+    assert!(
+        svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"),
+        "{svg}"
+    );
+    assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
+}
+
+#[test]
+fn progress_no_datasets_no_panic() {
+    let svg = render(r#"{"type":"progress","data":{"datasets":[]}}"#);
+    assert!(svg.starts_with("<svg"), "{svg}");
+}
+
+#[test]
+fn progress_deterministic() {
+    let j = r##"{"type":"progress","data":{"labels":["A","B"],
+        "datasets":[{"data":[25,90],"backgroundColor":["#36a2eb","#ff6384"]}]}}"##;
+    assert_eq!(render(j), render(j));
+}
+
+#[test]
+fn progress_snapshot() {
+    let svg = render(
+        r##"{"type":"progress","data":{"labels":["CPU","Memory","Disk"],
+        "datasets":[{"data":[30,72,95],"backgroundColor":"#36a2eb"}]},
+        "options":{"plugins":{"title":{"display":true,"text":"System Usage"}}}}"##,
+    );
+    insta::assert_snapshot!(svg);
+}
