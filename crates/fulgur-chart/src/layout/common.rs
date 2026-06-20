@@ -95,11 +95,22 @@ pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
         data_min = 0.0;
         data_max = 1.0;
     }
-    let (domain_min, mut domain_max) = if spec.y_axis.begin_at_zero {
+    let (mut domain_min, mut domain_max) = if spec.y_axis.begin_at_zero {
         (data_min.min(0.0), data_max.max(0.0))
     } else {
         (data_min, data_max)
     };
+    // suggestedMin/suggestedMax: データが優先、suggested はドメインを広げるだけ。
+    if let Some(s) = spec.y_axis.suggested_min {
+        if s < domain_min {
+            domain_min = s;
+        }
+    }
+    if let Some(s) = spec.y_axis.suggested_max {
+        if s > domain_max {
+            domain_max = s;
+        }
+    }
     // 上限>下限を保証（縮退時の保険）。
     if domain_max <= domain_min {
         domain_max = domain_min + 1.0;
@@ -433,6 +444,8 @@ mod tests {
                 title: None,
                 min: None,
                 max: None,
+                suggested_min: None,
+                suggested_max: None,
                 begin_at_zero: true,
                 grid: true,
             },
@@ -440,6 +453,8 @@ mod tests {
                 title: None,
                 min: None,
                 max: None,
+                suggested_min: None,
+                suggested_max: None,
                 begin_at_zero: true,
                 grid: true,
             },

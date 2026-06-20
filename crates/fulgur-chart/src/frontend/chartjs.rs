@@ -391,6 +391,25 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // カテゴリ系は従来どおり y のみゼロ起点。
     let y_begin_at_zero = !is_point_based;
 
+    // suggestedMin/suggestedMax: options.scales.{x,y} から取得する。
+    let scales_val = raw.options.scales.as_ref();
+    let suggested_min_y = scales_val
+        .and_then(|s| s.get("y"))
+        .and_then(|a| a.get("suggestedMin"))
+        .and_then(|v| v.as_f64());
+    let suggested_max_y = scales_val
+        .and_then(|s| s.get("y"))
+        .and_then(|a| a.get("suggestedMax"))
+        .and_then(|v| v.as_f64());
+    let suggested_min_x = scales_val
+        .and_then(|s| s.get("x"))
+        .and_then(|a| a.get("suggestedMin"))
+        .and_then(|v| v.as_f64());
+    let suggested_max_x = scales_val
+        .and_then(|s| s.get("x"))
+        .and_then(|a| a.get("suggestedMax"))
+        .and_then(|v| v.as_f64());
+
     Ok(ChartSpec {
         kind,
         series,
@@ -399,6 +418,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             title: None,
             min: None,
             max: None,
+            suggested_min: suggested_min_x,
+            suggested_max: suggested_max_x,
             begin_at_zero: false,
             grid: true,
         },
@@ -406,6 +427,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             title: None,
             min: None,
             max: None,
+            suggested_min: suggested_min_y,
+            suggested_max: suggested_max_y,
             begin_at_zero: y_begin_at_zero,
             grid: true,
         },
@@ -606,7 +629,7 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                 if let Some(ax) = scales.get(axis).and_then(|v| v.as_object()) {
                     check_object(
                         ax,
-                        &["stacked", "min", "max", "title", "grid", "beginAtZero"],
+                        &["stacked", "min", "max", "title", "grid", "beginAtZero", "suggestedMin", "suggestedMax"],
                         &format!("options.scales.{axis}"),
                     )?;
                 }
@@ -813,6 +836,8 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             title: None,
             min: None,
             max: None,
+            suggested_min: None,
+            suggested_max: None,
             begin_at_zero: false,
             grid: false,
         },
@@ -820,6 +845,8 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             title: None,
             min: None,
             max: None,
+            suggested_min: None,
+            suggested_max: None,
             begin_at_zero: false,
             grid: false,
         },

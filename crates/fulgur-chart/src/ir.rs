@@ -74,6 +74,8 @@ pub struct AxisSpec {
     pub title: Option<String>,
     pub min: Option<f64>,
     pub max: Option<f64>,
+    pub suggested_min: Option<f64>,
+    pub suggested_max: Option<f64>,
     pub begin_at_zero: bool,
     pub grid: bool,
 }
