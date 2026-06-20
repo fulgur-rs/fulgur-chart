@@ -6,6 +6,7 @@ pub mod line;
 pub mod matrix;
 pub mod mixed;
 pub mod pie;
+pub mod progress;
 pub mod radar;
 pub mod scatter;
 
@@ -23,6 +24,7 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::Radar => radar::build(spec, m),
         ChartKind::Mixed => mixed::build(spec, m),
         ChartKind::Matrix { .. } => matrix::build(spec, m),
+        ChartKind::Progress => progress::build(spec, m),
     };
 
     // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。

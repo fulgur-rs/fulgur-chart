@@ -107,6 +107,9 @@ pub enum ChartKind {
         color_lo: Color, // min 値のセル色（白固定）
         color_hi: Color, // max 値のセル色（backgroundColor 由来）
     },
+    /// QuickChart 互換の progress バー。軸なし水平バー。
+    /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。
+    Progress,
 }
 
 /// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。
