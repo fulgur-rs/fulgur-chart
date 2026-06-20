@@ -452,6 +452,21 @@ fn schema_chartjs_is_valid_json() {
 }
 
 #[test]
+fn schema_chartjs_includes_progress() {
+    let output = Command::cargo_bin("fulgur-chart")
+        .unwrap()
+        .args(["schema"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("progress"),
+        "schema should mention progress variant"
+    );
+}
+
+#[test]
 fn schema_vegalite_is_valid_json() {
     let output = Command::cargo_bin("fulgur-chart")
         .unwrap()
