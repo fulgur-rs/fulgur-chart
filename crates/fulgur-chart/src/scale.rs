@@ -139,7 +139,8 @@ mod tests {
     }
 
     // chart.js v4（maxTicksLimit=11、10インターバル）の実出力に対するピンテスト。
-    // 期待値は tools/chartjs_ticks.mjs の実行結果で確定（tools/chartjs_ticks_output.json 参照）。
+    // 期待値は tools/chartjs_ticks.mjs の実行結果で確定。
+    // 再生成: cd tools && node chartjs_ticks.mjs > chartjs_ticks_output.json
 
     #[test]
     fn chartjs_compat_0_to_100() {
