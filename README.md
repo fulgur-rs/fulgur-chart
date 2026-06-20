@@ -94,14 +94,16 @@ fulgur-chart render specs/*.json --out-dir out/ --format png
 - Bubble chart (`{x, y, r}` point data)
 - Radar chart
 - Mixed chart (per-dataset `type`, e.g. bar + line)
+- Progress bar chart (QuickChart-style; horizontal fill bar with centered percentage)
 
 ## Supported chart.js subset
 
 Supports a data-only, static subset:
 
-- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar`
+- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `progress`
 - `data.labels`
 - `data.datasets[]` — `label` / `data` (numeric array, or `{x,y}` / `{x,y,r}` for scatter/bubble) / `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts)
+- For `progress`, `datasets[0].data` holds each bar's value; an optional second dataset's `data` overrides the per-bar max (default 100). The percentage label is shown by default and can be hidden with `options.plugins.datalabels.display: false`.
 - `options.indexAxis`
 - `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right)
 - `options.plugins.datalabels` (`display` — renders a value label at each data point)

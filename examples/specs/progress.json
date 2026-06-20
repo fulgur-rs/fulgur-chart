@@ -1,0 +1,12 @@
+{
+  "type": "progress",
+  "data": {
+    "labels": ["CPU", "Memory", "Disk"],
+    "datasets": [
+      { "data": [30, 72, 95], "backgroundColor": "#36a2eb" }
+    ]
+  },
+  "options": {
+    "plugins": { "title": { "display": true, "text": "System Usage" } }
+  }
+}
