@@ -3,4 +3,8 @@
 /lib/fulgur_chart/*.so
 /lib/fulgur_chart/*.bundle
 /Gemfile.lock
+# The ext crate path-depends on the in-repo core, whose version is bumped by release-plz on
+# every release; a committed lock would go stale (and break `--locked` CI) each time. Let it
+# regenerate instead.
+/Cargo.lock
 *.gem

@@ -141,7 +141,9 @@ jobs:
         run: cargo fmt --manifest-path ext/fulgur_chart/Cargo.toml -- --check
 
       - name: Clippy (ext)
-        run: cargo clippy --manifest-path ext/fulgur_chart/Cargo.toml --all-targets --locked -- -D warnings
+        # No --locked: the ext crate's Cargo.lock is gitignored (the path-dependent core version
+        # is bumped by release-plz each release), so let cargo resolve the lock here.
+        run: cargo clippy --manifest-path ext/fulgur_chart/Cargo.toml --all-targets -- -D warnings
 
       - name: Install gems
         run: bundle install
