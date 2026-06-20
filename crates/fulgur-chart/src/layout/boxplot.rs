@@ -13,8 +13,12 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let mut data_max = f64::NEG_INFINITY;
     for ser in &spec.series {
         for bp in &ser.box_points {
-            if bp.min.is_finite() && bp.min < data_min { data_min = bp.min; }
-            if bp.max.is_finite() && bp.max > data_max { data_max = bp.max; }
+            for &v in &[bp.min, bp.q1, bp.median, bp.q3, bp.max] {
+                if v.is_finite() {
+                    if v < data_min { data_min = v; }
+                    if v > data_max { data_max = v; }
+                }
+            }
         }
     }
 
@@ -44,6 +48,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     for i in 0..spec.categories.len() {
         let band_cx = super::common::category_center(&frame, i, n);
+        // 複数系列の横オフセット基点。sidxを加えて各系列の cx を計算する。
+        // s=1→0, s=2→-0.5+0.0/+0.5, s=3→-1.0/0.0/+1.0
         let group_offset = -(s as f64 - 1.0) / 2.0;
 
         for (sidx, ser) in spec.series.iter().enumerate() {
