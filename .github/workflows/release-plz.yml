@@ -31,6 +31,7 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+          permission-contents: write # 最小権限: タグ / Release 作成に必要
 
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -72,6 +73,8 @@ jobs:
         with:
           app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
           private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+          permission-contents: write # 最小権限: バージョン更新 commit / branch に必要
+          permission-pull-requests: write # 最小権限: リリース PR の作成 / 更新に必要
 
       - name: Checkout repository
         uses: actions/checkout@v5

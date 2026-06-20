@@ -22,6 +22,8 @@ crates.io への publish は [release-plz](https://release-plz.dev) と GitHub A
 > 現在 `fulgur-chart` / `fulgur-chart-cli` は `0.1.0` が公開済みのため、次のリリースは
 > `0.1.1` または `0.2.0` になる。
 
+<!-- -->
+
 > **初回リリース PR で確認すること**:
 > - ルート `CHANGELOG.md` の `[Unreleased]`（progress チャートの手動エントリ）が、
 >   release-plz の自動生成と重複/競合していないか。重複する場合は手動エントリを削除する。
@@ -70,5 +72,10 @@ crates.io の各クレートページ → Settings → Trusted Publishing → Gi
 
 ```bash
 cargo install release-plz   # 未インストールなら
-release-plz update --dry-run
+release-plz update          # バージョン更新と CHANGELOG をローカルに反映
+git diff                    # 差分を確認
+git restore .               # 確認後、変更を元に戻す
 ```
+
+> `release-plz update` に `--dry-run` は無い。上記のように一度ローカルへ反映してから
+> `git restore .` で戻すか、`release-plz release --dry-run` で publish 前チェックを行う。
