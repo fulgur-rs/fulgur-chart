@@ -115,3 +115,43 @@ fn progress_snapshot() {
     );
     insta::assert_snapshot!(svg);
 }
+
+#[test]
+fn progress_bar_alias_is_accepted() {
+    // QuickChart の正式 type 名 "progressBar" もエイリアスとして受理する。
+    let svg = render(r#"{"type":"progressBar","data":{"datasets":[{"data":[70]}]}}"#);
+    assert!(
+        svg.contains(">70%<"),
+        "progressBar alias should render: {svg}"
+    );
+}
+
+#[test]
+fn progress_bars_render_in_png() {
+    // 回帰テスト: 角丸パスが PNG 用の直接ラスタライザ(raster_direct)で実際に
+    // 描画されること。パスのコマンドと座標が連結していると parse_path_data が
+    // 失敗し、PNG でバーが消える(テキストのみになる)。前景色のピクセルが
+    // PNG に現れることで、パスが解釈・描画されたことを保証する。
+    use resvg::tiny_skia::Pixmap;
+    let spec = chartjs::parse(
+        r##"{"type":"progress","data":{"datasets":[{"data":[100],"backgroundColor":"#36a2eb"}]}}"##,
+        false,
+    )
+    .unwrap();
+    let png = fulgur_chart::raster_direct::render_chart_to_png(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .unwrap();
+    let pixmap = Pixmap::decode_png(&png).unwrap();
+    // 前景色 #36a2eb = (54, 162, 235)。ソリッド(不透明)なので内部ピクセルは厳密一致。
+    let found = pixmap
+        .pixels()
+        .iter()
+        .any(|p| p.red() == 54 && p.green() == 162 && p.blue() == 235);
+    assert!(
+        found,
+        "progress foreground bar (#36a2eb) must be rasterized into the PNG"
+    );
+}

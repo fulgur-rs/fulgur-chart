@@ -100,10 +100,10 @@ fulgur-chart render specs/*.json --out-dir out/ --format png
 
 Supports a data-only, static subset:
 
-- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `progress`
+- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `progress` (QuickChart's `progressBar` is also accepted as an alias)
 - `data.labels`
 - `data.datasets[]` — `label` / `data` (numeric array, or `{x,y}` / `{x,y,r}` for scatter/bubble) / `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts)
-- For `progress`, `datasets[0].data` holds each bar's value; an optional second dataset's `data` overrides the per-bar max (default 100). The percentage label is shown by default and can be hidden with `options.plugins.datalabels.display: false`.
+- For `progress` (alias `progressBar`), `datasets[0].data` holds each bar's value; an optional second dataset's `data` overrides the per-bar max (default 100). The percentage label is shown by default and can be hidden with `options.plugins.datalabels.display: false`.
 - `options.indexAxis`
 - `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right)
 - `options.plugins.datalabels` (`display` — renders a value label at each data point)

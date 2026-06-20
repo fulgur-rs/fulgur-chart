@@ -308,7 +308,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             "scatter" => ChartKind::Scatter,
             "bubble" => ChartKind::Bubble,
             "radar" => ChartKind::Radar,
-            "progress" => ChartKind::Progress,
+            // QuickChart の正式名は "progressBar"。互換のため "progress" も受理する。
+            "progress" | "progressBar" => ChartKind::Progress,
             other => return Err(format!("未対応の type: {other}")),
         }
     };

@@ -160,6 +160,23 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         ));
     }
 
+    // --- progress バー数(プリミティブ数) ---
+    // progress は series[0].values の各要素が 1 本のバーになり、バーごとに
+    // トラック・前景・%ラベルで最大 3 プリミティブを生む。カテゴリ(labels)が
+    // 空だと series×categories=0 で categorical 上限を素通りするため、バー数 ×
+    // バーあたり最大プリミティブ数を categorical 上限で個別に検証する。
+    if matches!(spec.kind, crate::ir::ChartKind::Progress) {
+        const PRIMS_PER_BAR: usize = 3; // トラック + 前景 + %ラベル(最大)
+        let bars = spec.series.first().map(|s| s.values.len()).unwrap_or(0);
+        let progress_primitives = bars.saturating_mul(PRIMS_PER_BAR);
+        if progress_primitives > limits.max_categorical_primitives {
+            return Err(format!(
+                "progress バー数 {} (プリミティブ {}) が上限 {} を超えています",
+                bars, progress_primitives, limits.max_categorical_primitives,
+            ));
+        }
+    }
+
     // --- 全データ点数の合計(scatter/bubble 向け) ---
     // values と points の大きい方を各系列のコストとして合算する。
     let total_points: usize = spec
@@ -373,6 +390,32 @@ mod tests {
         };
         s.series = vec![big_series];
         assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn too_many_progress_bars_is_rejected() {
+        // progress は 1 バー = 最大 3 プリミティブ。total_data_points(1M)は通るが
+        // categorical 上限(1M)を 3 倍係数で超える本数を拒否する。
+        let mut s = chartjs::parse(
+            r#"{"type":"progress","data":{"datasets":[{"data":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        // 333,334 本 × 3 = 1,000,002 > 1,000,000（total_points 333,334 は上限内）
+        s.series[0].values = vec![1.0; DEFAULT_MAX_CATEGORICAL_PRIMITIVES / 3 + 1];
+        assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn progress_bars_within_limit_is_accepted() {
+        let mut s = chartjs::parse(
+            r#"{"type":"progress","data":{"datasets":[{"data":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        // 333,333 本 × 3 = 999,999 <= 1,000,000
+        s.series[0].values = vec![1.0; DEFAULT_MAX_CATEGORICAL_PRIMITIVES / 3];
+        assert!(validate_spec(&s, &default_limits()).is_ok());
     }
 
     #[test]

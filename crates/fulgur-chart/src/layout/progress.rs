@@ -38,8 +38,10 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     };
 
     // 左ラベル帯: バー名(categories)の最大幅。全て空なら 0。
+    // 描画されるのは先頭 n 本(値の数)のラベルのみなので、計測も take(n) に限定する。
+    // 値より多い余剰ラベルまで含めると label_band が過大になり plot 幅を圧迫する。
     let mut max_label_w = 0.0_f32;
-    for name in &spec.categories {
+    for name in spec.categories.iter().take(n) {
         if !name.is_empty() {
             let w = m.width(name, label_font as f32);
             if w > max_label_w {
@@ -161,12 +163,17 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
 /// 角丸矩形の SVG path data。半径は w/2, h/2, 0 でクランプして破綻を防ぐ。
 /// すべての座標を `fmt_num` で整形し決定的に出力する（Prim::Path の d 規約に準拠）。
+///
+/// コマンド(M/L/A/Z)と座標はすべて空白で区切る。PNG 用の直接ラスタライザ
+/// (`raster_direct::parse_path_data`)は `split_ascii_whitespace()` でトークン化し
+/// **スタンドアロンの** M/L/A/Z しか解釈しないため、`M104.28` のように連結すると
+/// パースに失敗し PNG でパスが描画されない。pie.rs と同じ空白区切り形式に揃える。
 fn rounded_rect_path(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
     let r = r.max(0.0).min(w / 2.0).min(h / 2.0);
     let x1 = x + w;
     let y1 = y + h;
     format!(
-        "M{} {}L{} {}A{} {} 0 0 1 {} {}L{} {}A{} {} 0 0 1 {} {}L{} {}A{} {} 0 0 1 {} {}L{} {}A{} {} 0 0 1 {} {}Z",
+        "M {} {} L {} {} A {} {} 0 0 1 {} {} L {} {} A {} {} 0 0 1 {} {} L {} {} A {} {} 0 0 1 {} {} L {} {} A {} {} 0 0 1 {} {} Z",
         fmt_num(x + r),
         fmt_num(y),
         fmt_num(x1 - r),
@@ -207,6 +214,19 @@ mod tests {
         assert!(d.ends_with('Z'), "must close: {d}");
         assert!(d.matches('A').count() == 4, "4 corner arcs: {d}");
         assert!(!d.contains("NaN") && !d.contains("inf"), "{d}");
+    }
+
+    #[test]
+    fn rounded_rect_path_uses_standalone_command_tokens() {
+        // PNG 用 raster_direct::parse_path_data は split_ascii_whitespace で
+        // トークン化し、スタンドアロンの M/L/A/Z しか解釈しない。コマンドが
+        // 座標と連結すると PNG でパスが描画されないため、空白区切りを固定する。
+        let d = rounded_rect_path(10.0, 20.0, 100.0, 30.0, 15.0);
+        let tokens: Vec<&str> = d.split_ascii_whitespace().collect();
+        assert_eq!(tokens.iter().filter(|t| **t == "M").count(), 1, "{d}");
+        assert_eq!(tokens.iter().filter(|t| **t == "L").count(), 4, "{d}");
+        assert_eq!(tokens.iter().filter(|t| **t == "A").count(), 4, "{d}");
+        assert_eq!(tokens.iter().filter(|t| **t == "Z").count(), 1, "{d}");
     }
 
     #[test]
