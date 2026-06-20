@@ -1,7 +1,9 @@
 //! チャート意味モデル: chart.js と数値照合するための、解決済み色・軸目盛り・
 //! counts を持つシリアライズ可能な中間表現。描画はせず IR + layout から構築する。
 
-use crate::ir::Color;
+use serde::Serialize;
+
+use crate::ir::{ChartKind, ChartSpec, Color};
 
 /// 解決済み色を正規化 rgba 文字列にする(plan の正規化規約に従う)。
 pub fn rgba_string(c: &Color) -> String {
@@ -29,9 +31,146 @@ fn fmt_alpha(a: f32) -> String {
     s
 }
 
+#[derive(Debug, Serialize, PartialEq)]
+pub struct ChartModel {
+    pub meta: Meta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub axes: Option<Axes>,
+    pub series: Vec<SeriesModel>,
+    pub counts: Counts,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct Meta {
+    pub r#type: String,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct Axes {
+    pub x: AxisModel,
+    pub y: AxisModel,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct AxisModel {
+    pub kind: String, // "linear" | "category"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticks: Option<Vec<f64>>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct SeriesModel {
+    pub label: String,
+    pub fill: Vec<String>,
+    pub stroke: Vec<String>,
+    pub values: Vec<f64>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct Counts {
+    pub datasets: usize,
+    pub legend_items: usize,
+    pub x_ticks: usize,
+    pub y_ticks: usize,
+}
+
+/// 描画要素数(scatter/bubble は points、その他は values)。
+fn element_count(s: &crate::ir::Series) -> usize {
+    if s.points.is_empty() {
+        s.values.len()
+    } else {
+        s.points.len()
+    }
+}
+
+/// 色ベクタを「要素ごと rgba」に展開しつつ、全要素同色なら長さ1へ畳む。
+fn colors_to_strings(colors: &[Color], n: usize) -> Vec<String> {
+    use crate::ir::Color as C;
+    let at = |i: usize| -> C {
+        match colors.len() {
+            0 => C {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+            1 => colors[0],
+            _ => colors[i % colors.len()],
+        }
+    };
+    let n = n.max(1);
+    let all: Vec<String> = (0..n).map(|i| rgba_string(&at(i))).collect();
+    if all.iter().all(|x| x == &all[0]) {
+        vec![all[0].clone()]
+    } else {
+        all
+    }
+}
+
+fn chart_type_name(kind: &ChartKind) -> &'static str {
+    match kind {
+        ChartKind::Bar {
+            horizontal: true, ..
+        } => "bar-horizontal",
+        ChartKind::Bar { .. } => "bar",
+        ChartKind::Line => "line",
+        ChartKind::Pie { donut_ratio } if *donut_ratio > 0.0 => "doughnut",
+        ChartKind::Pie { .. } => "pie",
+        ChartKind::Scatter => "scatter",
+        ChartKind::Bubble => "bubble",
+        ChartKind::Radar => "radar",
+        ChartKind::Mixed => "mixed",
+        ChartKind::Matrix { .. } => "matrix",
+    }
+}
+
+/// 軸抜き(meta/series/counts のみ)のコアモデル。Task 3 で軸を載せる。
+pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
+    let series: Vec<SeriesModel> = spec
+        .series
+        .iter()
+        .map(|s| {
+            let n = element_count(s);
+            SeriesModel {
+                label: s.name.clone(),
+                fill: colors_to_strings(&s.fill, n),
+                stroke: colors_to_strings(&s.stroke, n),
+                values: s.values.clone(),
+            }
+        })
+        .collect();
+    let legend_items = spec.series.iter().filter(|s| !s.name.is_empty()).count();
+    ChartModel {
+        meta: Meta {
+            r#type: chart_type_name(&spec.kind).to_string(),
+            width: spec.width,
+            height: spec.height,
+        },
+        axes: None,
+        series,
+        counts: Counts {
+            datasets: spec.series.len(),
+            legend_items,
+            x_ticks: spec.categories.len(),
+            y_ticks: 0,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::chartjs;
     use crate::ir::Color;
 
     #[test]
@@ -76,5 +215,39 @@ mod tests {
             a: 0.25,
         };
         assert_eq!(rgba_string(&c), "rgba(1,2,3,0.25)");
+    }
+
+    #[test]
+    fn builds_meta_series_counts_for_bar() {
+        let json = r#"{"type":"bar","data":{"labels":["1月","2月","3月"],
+          "datasets":[{"label":"売上","data":[120,200,150]}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let model = build_model_core(&spec);
+        assert_eq!(model.meta.r#type, "bar");
+        assert_eq!(model.series.len(), 1);
+        assert_eq!(model.series[0].label, "売上");
+        // 既定パレット先頭 #36A2EB、fill alpha=0.5 / stroke alpha=1.0(chart.js v4)
+        assert_eq!(
+            model.series[0].fill,
+            vec!["rgba(54,162,235,0.5)".to_string()]
+        );
+        assert_eq!(
+            model.series[0].stroke,
+            vec!["rgba(54,162,235,1)".to_string()]
+        );
+        assert_eq!(model.series[0].values, vec![120.0, 200.0, 150.0]);
+        assert_eq!(model.counts.datasets, 1);
+        assert_eq!(model.counts.x_ticks, 3);
+    }
+
+    #[test]
+    fn pie_emits_per_slice_fill() {
+        let json = r##"{"type":"pie","data":{"labels":["a","b","c"],
+          "datasets":[{"data":[1,2,3],
+          "backgroundColor":["#ff0000","#00ff00","#0000ff"]}]}}"##;
+        let spec = chartjs::parse(json, false).unwrap();
+        let model = build_model_core(&spec);
+        assert_eq!(model.series[0].fill.len(), 3);
+        assert_eq!(model.series[0].fill[0], "rgba(255,0,0,1)");
     }
 }
