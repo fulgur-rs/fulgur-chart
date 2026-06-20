@@ -152,6 +152,8 @@ impl DataField {
         match self {
             DataField::Boxes(rows) => rows
                 .into_iter()
+                // 5 要素未満の行は不足スロットを NaN で補完する。NaN のボックスは
+                // レンダラがスキップするため、短い行は「描画なし」として扱われる。
                 .map(|row| crate::ir::BoxPoint {
                     min:    row.get(0).copied().unwrap_or(f64::NAN),
                     q1:     row.get(1).copied().unwrap_or(f64::NAN),
@@ -356,7 +358,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // 配列、カテゴリ系は数値配列を要する。非空の不一致は空チャート化せず明示エラーに。
     for ds in &raw.data.datasets {
         let mismatched = match &ds.data {
-            DataField::Nums(v) => is_point_based && !v.is_empty(),
+            DataField::Nums(v) => (is_point_based || is_boxplot) && !v.is_empty(),
             DataField::Boxes(v) => !is_boxplot && !v.is_empty(),
             DataField::Points(v) => !is_point_based && !v.is_empty(),
         };
@@ -1010,6 +1012,18 @@ mod tests {
         assert_eq!(bp[0].max, 90.0);
         assert_eq!(bp[1].min, 5.0);
         assert_eq!(bp[1].median, 45.0);
+    }
+
+    #[test]
+    fn parse_boxplot_rejects_flat_nums() {
+        let json = r#"{
+            "type": "boxplot",
+            "data": {
+                "labels": ["A"],
+                "datasets": [{"data": [10, 25, 50, 75, 90]}]
+            }
+        }"#;
+        assert!(parse(json, false).is_err(), "boxplot with flat numbers should fail");
     }
 
     #[test]
