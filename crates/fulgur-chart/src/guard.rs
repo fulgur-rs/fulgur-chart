@@ -162,11 +162,11 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
 
     // --- progress バー数(プリミティブ数) ---
     // progress は series[0].values の各要素が 1 本のバーになり、バーごとに
-    // トラック・前景・%ラベルで最大 3 プリミティブを生む。カテゴリ(labels)が
+    // トラック・前景・バー名・%ラベルで最大 4 プリミティブを生む。カテゴリ(labels)が
     // 空だと series×categories=0 で categorical 上限を素通りするため、バー数 ×
     // バーあたり最大プリミティブ数を categorical 上限で個別に検証する。
     if matches!(spec.kind, crate::ir::ChartKind::Progress) {
-        const PRIMS_PER_BAR: usize = 3; // トラック + 前景 + %ラベル(最大)
+        const PRIMS_PER_BAR: usize = 4; // トラック + 前景 + バー名 + %ラベル(最大)
         let bars = spec.series.first().map(|s| s.values.len()).unwrap_or(0);
         let progress_primitives = bars.saturating_mul(PRIMS_PER_BAR);
         if progress_primitives > limits.max_categorical_primitives {
@@ -394,15 +394,15 @@ mod tests {
 
     #[test]
     fn too_many_progress_bars_is_rejected() {
-        // progress は 1 バー = 最大 3 プリミティブ。total_data_points(1M)は通るが
-        // categorical 上限(1M)を 3 倍係数で超える本数を拒否する。
+        // progress は 1 バー = 最大 4 プリミティブ。total_data_points(1M)は通るが
+        // categorical 上限(1M)を 4 倍係数で超える本数を拒否する。
         let mut s = chartjs::parse(
             r#"{"type":"progress","data":{"datasets":[{"data":[1]}]}}"#,
             false,
         )
         .unwrap();
-        // 333,334 本 × 3 = 1,000,002 > 1,000,000（total_points 333,334 は上限内）
-        s.series[0].values = vec![1.0; DEFAULT_MAX_CATEGORICAL_PRIMITIVES / 3 + 1];
+        // 250,001 本 × 4 = 1,000,004 > 1,000,000（total_points 250,001 は上限内）
+        s.series[0].values = vec![1.0; DEFAULT_MAX_CATEGORICAL_PRIMITIVES / 4 + 1];
         assert!(validate_spec(&s, &default_limits()).is_err());
     }
 
@@ -413,8 +413,8 @@ mod tests {
             false,
         )
         .unwrap();
-        // 333,333 本 × 3 = 999,999 <= 1,000,000
-        s.series[0].values = vec![1.0; DEFAULT_MAX_CATEGORICAL_PRIMITIVES / 3];
+        // 250,000 本 × 4 = 1,000,000 <= 1,000,000
+        s.series[0].values = vec![1.0; DEFAULT_MAX_CATEGORICAL_PRIMITIVES / 4];
         assert!(validate_spec(&s, &default_limits()).is_ok());
     }
 
