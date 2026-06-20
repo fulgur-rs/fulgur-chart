@@ -42,24 +42,24 @@ b.render              # => svg（既定）
 
 メタ情報（モジュール関数のまま）: `FulgurChart.schema(dsl)` / `FulgurChart.version`
 
-公開サーフェス: `FulgurChart.methods(false) == [:build, :schema, :version]`（`Builder` クラス + 上記3関数）。
+公開サーフェス: `FulgurChart.methods(false) == [:build, :render, :schema, :version]`（`Builder` クラス + 4関数。`render` は低レベルプリミティブ）。
 
 ## アーキテクチャ
 
-builder は純 Ruby、描画の重い処理は native の単一 private プリミティブに委譲。
+builder は純 Ruby、描画の重い処理は native の単一プリミティブ `FulgurChart.render` に委譲。
 
 ```
 lib/fulgur_chart.rb            FulgurChart.build + FulgurChart::Builder（純 Ruby）
-ext/fulgur_chart/src/lib.rs    native: schema / version（public） + __render（private）
+ext/fulgur_chart/src/lib.rs    native: render / schema / version（public）
 ```
 
 native（Rust）:
-- 公開: `schema(dsl)`, `version()`
-- 非公開: `__render(spec_json, format, **opts)` を1つ定義し `private_class_method :__render` で隠す。
+- 公開: `render(spec_json, format, **opts)`, `schema(dsl)`, `version()`
+- `render(spec_json, format, **opts)`（低レベルプリミティブ。builder の終端 `Builder#render` と同名で、builder が内部で呼ぶ。直接 `FulgurChart.render(spec, :png, width: 800)` も可）。
   - 中身は現行の `build_ir`（DSL解決→非strict parse→strict再parse→width/height override→guard）を再利用し、format で分岐:
     - `"svg"` → `render::render_chart` / `render_chart_with_font`（フォント Err → ParseError）
     - `"png"` → `raster_direct::render_chart_to_png`（フォント Err → RenderError）
-  - `opts` は kwargs（width/height/scale/strict/dsl/font）。`coerce_string` で dsl/format の Symbol を許容。
+  - `format` は `coerce_string` で String/Symbol 両対応。`opts` は kwargs（width/height/scale/strict/dsl/font。dsl も Symbol 可）。
 - 既存の `render_svg` / `render_image` モジュール関数は削除。
 
 Ruby（builder）— `lib/fulgur_chart.rb`:
@@ -80,8 +80,8 @@ module FulgurChart
     def strict(v = true) = set(:strict, v)
     def format(f) = set(:format, f)
     def render(fmt = nil)
-      f = (fmt || @opts[:format] || :svg).to_s
-      FulgurChart.__render(@spec, f, **@opts.reject { |k, _| k == :format })
+      resolved = fmt || @opts[:format] || :svg
+      FulgurChart.render(@spec, resolved, **@opts.reject { |k, _| k == :format })
     end
 
     private
@@ -108,9 +108,9 @@ end
 - `.scale` で png が変化
 
 公開サーフェスのロック:
-- `FulgurChart.methods(false).sort == [:build, :schema, :version]`
+- `FulgurChart.methods(false).sort == [:build, :render, :schema, :version]`
 - `refute respond_to?(:render_svg/:render_image/:render_png)`
-- `refute respond_to?(:__render)` かつ `assert respond_to?(:__render, true)`
+- `refute defined?(Fulgur)`（top-level Fulgur 非定義）
 
 既存テストの扱い: `test_render_svg.rb` / `test_render_image.rb` を builder ベースに統合（`test_builder.rb`）。`test_schema.rb` / `test_smoke.rb` はそのまま。`test_acceptance.rb` を builder API のスモークに更新。
 

@@ -6,53 +6,31 @@ class TestAcceptance < Minitest::Test
   CJ = Fixtures::LINE
   VL = Fixtures::VEGALITE_BAR
 
-  def test_full_api_present
-    %i[render_svg render_image render_png schema version].each do |m|
-      assert FulgurChart.respond_to?(m), "FulgurChart.#{m} missing"
-    end
+  # Public surface is exactly: build (builder entry), render (low-level primitive), schema, version.
+  def test_public_surface
+    assert_equal %i[build render schema version], FulgurChart.methods(false).sort
   end
 
-  def test_chartjs_svg_and_png
-    assert FulgurChart.render_svg(CJ).start_with?("<svg")
-    assert FulgurChart.render_png(CJ).start_with?(Fixtures::PNG_MAGIC)
+  def test_no_top_level_fulgur_constant
+    # `Fulgur` (the PDF library namespace) must not be defined by requiring this gem.
+    refute defined?(Fulgur), "top-level Fulgur must not be defined (collision with Fulgur PDF)"
   end
 
-  def test_vegalite_autodetected
-    assert FulgurChart.render_svg(VL).start_with?("<svg")
+  def test_builder_full_flow
+    assert FulgurChart.build(CJ).render(:svg).start_with?("<svg")
+    assert FulgurChart.build(CJ).render(:png).start_with?(Fixtures::PNG_MAGIC)
+    assert FulgurChart.build(VL).render(:svg).start_with?("<svg")
   end
 
-  def test_dsl_override
-    # Explicit correct dsl renders.
-    assert FulgurChart.render_svg(CJ, dsl: "chartjs").start_with?("<svg")
-    # Discriminating: VL auto-detects as vegalite and renders, but forcing dsl:chartjs must
-    # actually switch the parser (the vegalite spec is invalid chartjs) → ParseError. This
-    # fails if the override is silently ignored.
-    assert FulgurChart.render_svg(VL).start_with?("<svg")
-    assert_raises(FulgurChart::ParseError) { FulgurChart.render_svg(VL, dsl: "chartjs") }
+  def test_meta_functions
+    require "json"
+    assert_kind_of Hash, JSON.parse(FulgurChart.schema(:chartjs))
+    assert_kind_of Hash, JSON.parse(FulgurChart.schema("vegalite"))
+    assert_match(/\A\d+\.\d+\.\d+\z/, FulgurChart.version)
   end
 
-  def test_scale_changes_png
-    refute_equal FulgurChart.render_png(CJ, scale: 1.0), FulgurChart.render_png(CJ, scale: 2.0)
-  end
-
-  def test_determinism_svg_and_png
-    assert_equal FulgurChart.render_svg(CJ), FulgurChart.render_svg(CJ)
-    assert_equal FulgurChart.render_png(CJ), FulgurChart.render_png(CJ)
-  end
-
-  # Ruby callers idiomatically pass symbols for enum-like options; String and Symbol must
-  # behave identically for dsl / format / schema (no TypeError on symbols).
-  def test_symbol_options_accepted
-    assert_equal FulgurChart.render_svg(CJ, dsl: "chartjs"),
-                 FulgurChart.render_svg(CJ, dsl: :chartjs)
-    assert_equal FulgurChart.render_image(CJ, format: "png"),
-                 FulgurChart.render_image(CJ, format: :png)
-    assert_equal FulgurChart.schema("chartjs"), FulgurChart.schema(:chartjs)
-  end
-
-  def test_symbol_unknown_dsl_still_parse_error
-    assert_raises(FulgurChart::ParseError) { FulgurChart.render_svg(CJ, dsl: :nope) }
-    assert_raises(FulgurChart::ParseError) { FulgurChart.schema(:nope) }
-    assert_raises(FulgurChart::ParseError) { FulgurChart.render_image(CJ, format: :zzz) }
+  def test_determinism
+    assert_equal FulgurChart.build(CJ).render(:svg), FulgurChart.build(CJ).render(:svg)
+    assert_equal FulgurChart.build(CJ).render(:png), FulgurChart.build(CJ).render(:png)
   end
 end

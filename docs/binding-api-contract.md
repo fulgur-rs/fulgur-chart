@@ -3,6 +3,14 @@
 各言語バインディング（Python / Node.js / WASM / Ruby）が実装すべき最小・安定APIの仕様。
 命名は各言語の慣用形（snake_case / camelCase / PascalCase）に従うが、**動作は本仕様に準拠する**。
 
+> **Ruby の API 形態:** Ruby バインディングは関数ではなく **builder 形式**で公開する
+> （`FulgurChart.build(spec_json).width(…).dsl(:chartjs).render(:svg)`、`render(:png)` でラスタ）。
+> モジュール名は **`FulgurChart`**（top-level `Fulgur` は Fulgur(PDF) と衝突するため）。
+> 描画は builder に一本化し（低レベル `FulgurChart.render(spec, format, **opts)` も公開）、
+> `schema(dsl)` / `version()` はモジュール関数。**動作（DSL自動判定・RenderOptions・エラー分類・
+> 決定性・フォント非対称性）は本仕様に準拠する。** 詳細は
+> `docs/plans/2026-06-20-ruby-builder-api-design.md`。
+
 ---
 
 ## 1. 公開API（4関数）

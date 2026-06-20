@@ -167,64 +167,47 @@ fn build_ir(
     Ok(ir)
 }
 
-// --- public API: render_svg ---
+// --- public API: render (low-level primitive; the FulgurChart::Builder is the intended API) ---
 
-fn render_svg(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
-    let scanned = scan_args::<(String,), (), (), (), RHash, ()>(args)?;
-    let (spec_json,) = scanned.required;
+/// `FulgurChart.render(spec_json, format, **opts)` → String.
+///
+/// `format` is "svg" (→ UTF-8 String) or "png" (→ binary/ASCII-8BIT String), as a String or
+/// Symbol. Unknown format → ParseError. `opts` are the RenderOptions kwargs
+/// (width/height/scale/strict/dsl/font). Driven by `FulgurChart::Builder#render`, but also
+/// callable directly: `FulgurChart.render(spec, :png, width: 800)`.
+fn render(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
+    let scanned = scan_args::<(String, Value), (), (), (), RHash, ()>(args)?;
+    let (spec_json, format_val) = scanned.required;
+    let format = coerce_string(format_val)?; // accept String or Symbol
     let opts = parse_opts(ruby, scanned.keywords)?;
     let ir = build_ir(ruby, &spec_json, &opts)?;
 
-    // 6. Render: font present → render_chart_with_font (Err → ParseError on the SVG path);
-    //    else render_chart.
-    let svg = match &opts.font {
-        Some(bytes) => fulgur_chart::render::render_chart_with_font(&ir, bytes)
-            .map_err(|e| parse_err(ruby, e))?,
-        None => fulgur_chart::render::render_chart(&ir),
-    };
-    Ok(ruby.str_new(&svg))
-}
-
-// --- public API: render_image / render_png ---
-
-/// spec_json + Opts → binary PNG String (shared by render_image / render_png).
-fn render_png_string(ruby: &Ruby, spec_json: &str, opts: &Opts) -> Result<RString, Error> {
-    let ir = build_ir(ruby, spec_json, opts)?;
-    let fb: &[u8] = opts
-        .font
-        .as_deref()
-        .unwrap_or(fulgur_chart::font::DEFAULT_FONT);
-    // Invalid font on the image path → RenderError (the SVG path maps this to ParseError).
-    let png = fulgur_chart::raster_direct::render_chart_to_png(&ir, opts.scale, fb)
-        .map_err(|e| render_err(ruby, e))?;
-    Ok(ruby.str_from_slice(&png)) // ASCII-8BIT (BINARY) String
-}
-
-fn render_image(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
-    let scanned = scan_args::<(String,), (), (), (), RHash, ()>(args)?;
-    let (spec_json,) = scanned.required;
-    // Required `format` kwarg (String or Symbol). The trailing `RHash` splat tolerates leftover
-    // RenderOptions keys (width/height/scale/strict/dsl/font); the splat-less form would raise.
-    let kw = get_kwargs::<_, (Value,), (), RHash>(scanned.keywords, &["format"], &[])?;
-    let (format_val,) = kw.required;
-    let format = coerce_string(format_val)?;
-    if format != "png" {
-        return Err(parse_err(
+    match format.as_str() {
+        "svg" => {
+            // Font present → render_chart_with_font (Err → ParseError on the SVG path);
+            // else the bundled-font render.
+            let svg = match &opts.font {
+                Some(bytes) => fulgur_chart::render::render_chart_with_font(&ir, bytes)
+                    .map_err(|e| parse_err(ruby, e))?,
+                None => fulgur_chart::render::render_chart(&ir),
+            };
+            Ok(ruby.str_new(&svg)) // UTF-8 String
+        }
+        "png" => {
+            let fb: &[u8] = opts
+                .font
+                .as_deref()
+                .unwrap_or(fulgur_chart::font::DEFAULT_FONT);
+            // Invalid font on the image path → RenderError (the SVG path maps this to ParseError).
+            let png = fulgur_chart::raster_direct::render_chart_to_png(&ir, opts.scale, fb)
+                .map_err(|e| render_err(ruby, e))?;
+            Ok(ruby.str_from_slice(&png)) // ASCII-8BIT (BINARY) String
+        }
+        other => Err(parse_err(
             ruby,
-            format!("unsupported format '{format}' (supported: png)"),
-        ));
+            format!("unsupported format '{other}' (supported: svg, png)"),
+        )),
     }
-    // Re-scan the same kwargs for RenderOptions; `get_kwargs` reads (does not mutate) the hash,
-    // so the earlier `format` extraction does not interfere, and `format` is ignored here.
-    let opts = parse_opts(ruby, scanned.keywords)?;
-    render_png_string(ruby, &spec_json, &opts)
-}
-
-fn render_png(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
-    let scanned = scan_args::<(String,), (), (), (), RHash, ()>(args)?;
-    let (spec_json,) = scanned.required;
-    let opts = parse_opts(ruby, scanned.keywords)?;
-    render_png_string(ruby, &spec_json, &opts)
 }
 
 // --- public API: schema ---
@@ -264,9 +247,9 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     module.define_error("RenderError", std_err)?;
 
     module.define_module_function("version", function!(version, 0))?;
-    module.define_module_function("render_svg", function!(render_svg, -1))?;
-    module.define_module_function("render_image", function!(render_image, -1))?;
-    module.define_module_function("render_png", function!(render_png, -1))?;
     module.define_module_function("schema", function!(schema, 1))?;
+    // Low-level render primitive; the FulgurChart::Builder (FulgurChart.build(...)) is the
+    // intended API and calls this under the hood.
+    module.define_module_function("render", function!(render, -1))?;
     Ok(())
 }

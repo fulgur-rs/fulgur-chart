@@ -22,6 +22,9 @@ the minitest suite.
 
 ## Usage
 
+The API is a fluent **builder**: `FulgurChart.build(spec)` returns a builder you configure with
+chainable setters and finish with `render(:svg)` / `render(:png)`.
+
 ```ruby
 require "fulgur_chart"
 
@@ -36,18 +39,23 @@ spec = <<~JSON
 JSON
 
 # SVG (UTF-8 String)
-svg = FulgurChart.render_svg(spec)
+svg = FulgurChart.build(spec).render(:svg)
 File.write("chart.svg", svg)
 
 # PNG (binary / ASCII-8BIT String) — write with binwrite to avoid encoding mangling
-png = FulgurChart.render_png(spec)
+png = FulgurChart.build(spec).width(800).height(600).scale(2.0).render(:png)
 File.binwrite("chart.png", png)
 
-# render_image: format-dispatched raster output (currently "png" only) — binary String
-png2 = FulgurChart.render_image(spec, format: "png")
+# Set a default format with .format, then call render with no argument
+png2 = FulgurChart.build(spec).format(:png).render
+
+# The builder is reusable and reconfigurable between renders
+chart = FulgurChart.build(spec).dsl(:chartjs)
+a = chart.width(400).render(:svg)
+b = chart.width(1234).render(:svg)
 
 # JSON Schema for a DSL (compact JSON String)
-chartjs_schema  = FulgurChart.schema("chartjs")
+chartjs_schema  = FulgurChart.schema(:chartjs)
 vegalite_schema = FulgurChart.schema("vegalite")
 
 # Library version (String, e.g. "0.1.0")
@@ -55,30 +63,31 @@ FulgurChart.version
 ```
 
 The DSL is auto-detected from the spec: a top-level `mark` key selects Vega-Lite, a
-top-level `type` key selects chart.js. Pass `dsl:` to override detection.
+top-level `type` key selects chart.js. Use `.dsl(:chartjs)` / `.dsl(:vegalite)` to override.
+Options accept either a Symbol or a String (`.dsl(:chartjs)` == `.dsl("chartjs")`).
 
 ### API
 
 | Method | Returns |
 | --- | --- |
-| `FulgurChart.render_svg(spec_json, **opts)` | SVG `String` (UTF-8) |
-| `FulgurChart.render_png(spec_json, **opts)` | PNG `String` (binary / ASCII-8BIT) |
-| `FulgurChart.render_image(spec_json, format:, **opts)` | raster `String` (binary); `format:` is required, only `"png"` is supported |
-| `FulgurChart.schema(dsl)` | JSON Schema `String` for `"chartjs"` or `"vegalite"` |
+| `FulgurChart.build(spec_json)` | a `FulgurChart::Builder` |
+| `builder.render(format = nil)` | `String` — `:svg` → UTF-8, `:png` → binary (ASCII-8BIT). Format precedence: argument > `.format()` > default `:svg` |
+| `FulgurChart.render(spec_json, format, **opts)` | low-level primitive the builder calls; same return contract |
+| `FulgurChart.schema(dsl)` | JSON Schema `String` for `:chartjs` or `:vegalite` |
 | `FulgurChart.version` | version `String` |
 
-### RenderOptions
+### Builder setters
 
-All render methods accept the following keyword options (all optional unless noted):
+Each setter returns the builder for chaining; all are optional.
 
-| Option | Type | Notes |
+| Setter | Type | Notes |
 | --- | --- | --- |
-| `width` | Float | Canvas width override (applied before input-limit validation). |
-| `height` | Float | Canvas height override. |
-| `scale` | Float | Raster scale factor; raster output only (ignored by `render_svg`). Default `1.0`. |
-| `strict` | Bool | Reject unknown keys in the spec (raises `StrictError`). Default `false`. |
-| `dsl` | `"chartjs"` \| `"vegalite"` | Override DSL auto-detection. |
-| `font` | binary `String` | A TTF/OTF font to embed/use instead of the bundled default. |
+| `.width(w)` / `.height(h)` | Float | Canvas size override (applied before input-limit validation). |
+| `.scale(s)` | Float | Raster scale factor; raster output only (ignored when rendering `:svg`). Default `1.0`. |
+| `.strict` / `.strict(bool)` | Bool | Reject unknown keys (raises `StrictError`). `.strict` ⇒ `true`. Default `false`. |
+| `.dsl(d)` | `:chartjs` \| `:vegalite` (Symbol/String) | Override DSL auto-detection. |
+| `.font(bytes)` | binary `String` | A TTF/OTF font to use instead of the bundled default (Noto Sans JP). |
+| `.format(f)` | `:svg` \| `:png` (Symbol/String) | Default format for a terminal `render` with no argument. |
 
 ### Errors
 
@@ -86,14 +95,14 @@ The error hierarchy lives in the native extension under the `FulgurChart` module
 (the module is `FulgurChart`, not `Fulgur`, to avoid a top-level collision with the
 Fulgur PDF library when both gems are loaded in the same process):
 
-- `FulgurChart::ParseError < StandardError` — invalid JSON, undetectable DSL, input-limit
-  violations.
-- `FulgurChart::StrictError < FulgurChart::ParseError` — unknown key encountered under `strict: true`.
+- `FulgurChart::ParseError < StandardError` — invalid JSON, undetectable DSL, unknown format,
+  input-limit violations.
+- `FulgurChart::StrictError < FulgurChart::ParseError` — unknown key encountered under `.strict`.
 - `FulgurChart::RenderError < StandardError` — raster rendering failure.
 
-Note the font-error asymmetry: an invalid font raises `FulgurChart::ParseError` on the SVG path
-(`render_svg`) but `FulgurChart::RenderError` on the image path (`render_png` / `render_image`),
-because the two outputs go through different render pipelines.
+Note the font-error asymmetry: an invalid font raises `FulgurChart::ParseError` when rendering
+`:svg` but `FulgurChart::RenderError` when rendering `:png`, because the two outputs go through
+different render pipelines.
 
 ## Note: packaging
 
