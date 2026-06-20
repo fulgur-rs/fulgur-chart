@@ -1,6 +1,7 @@
 //! IR(ChartSpec) → Scene のレイアウト。チャート種別ごとに分岐。
 
 pub mod bar;
+pub mod boxplot;
 pub mod common;
 pub mod line;
 pub mod matrix;
@@ -25,12 +26,7 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::Mixed => mixed::build(spec, m),
         ChartKind::Matrix { .. } => matrix::build(spec, m),
         ChartKind::Progress => progress::build(spec, m),
-        // BoxPlot のレイアウトは Task 2 で実装予定。現時点では空シーンを返す。
-        ChartKind::BoxPlot => crate::scene::Scene {
-            width: spec.width,
-            height: spec.height,
-            items: vec![],
-        },
+        ChartKind::BoxPlot => boxplot::build(spec, m),
     };
 
     // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。
