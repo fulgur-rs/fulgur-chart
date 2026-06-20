@@ -6,7 +6,7 @@ use super::common::{
     LEGEND_BAND, OUTER_PAD, TEXT_BASELINE_RATIO, TITLE_BAND, TITLE_FONT, X_LABEL_BAND,
     X_LABEL_CENTER_RATIO, draw_vertical_legend, legend_band_width_vertical, legend_entry_width,
 };
-use crate::ir::{ChartKind, ChartSpec, Color, LegendPos, Point};
+use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos, Point};
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, nice_ticks};
 use crate::scene::{Anchor, Prim, Scene};
@@ -50,7 +50,12 @@ fn has_legend(spec: &ChartSpec) -> bool {
 /// 全系列の全点から 1 軸ぶんのドメインを求める。`select` で x/y を選ぶ。
 /// 非有限値は無視し、有限値が無ければ 0.0..1.0 にフォールバックする(NaN/panic 回避)。
 /// nice_ticks 側が min==max(縮退)を吸収するため、ここでは追加の拡張はしない。
-fn axis_domain(spec: &ChartSpec, select: impl Fn(&Point) -> f64) -> (f64, f64) {
+/// `axis_spec` の suggested_min/suggested_max はドメインを広げるだけ(データが優先)。
+fn axis_domain(
+    spec: &ChartSpec,
+    axis_spec: &AxisSpec,
+    select: impl Fn(&Point) -> f64,
+) -> (f64, f64) {
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
     for s in &spec.series {
@@ -66,11 +71,40 @@ fn axis_domain(spec: &ChartSpec, select: impl Fn(&Point) -> f64) -> (f64, f64) {
             }
         }
     }
+    // データなし: suggested を初期シードとして使う(chart.js 互換)。suggested もなければ 0..1。
     if !lo.is_finite() || !hi.is_finite() {
-        (0.0, 1.0)
-    } else {
-        (lo, hi)
+        lo = axis_spec
+            .suggested_min
+            .filter(|s| s.is_finite())
+            .unwrap_or(0.0);
+        hi = axis_spec
+            .suggested_max
+            .filter(|s| s.is_finite())
+            .unwrap_or(if lo == 0.0 { 1.0 } else { lo + 1.0 });
+        if axis_spec.begin_at_zero {
+            lo = lo.min(0.0);
+            hi = hi.max(0.0);
+        }
+        return (lo, if hi > lo { hi } else { lo + 1.0 });
     }
+    // begin_at_zero でドメインに 0 を含める。
+    if axis_spec.begin_at_zero {
+        lo = lo.min(0.0);
+        hi = hi.max(0.0);
+    }
+    // suggestedMin/suggestedMax: データが優先、suggested はドメインを広げるだけ。
+    // 非有限値（Infinity/NaN）は nice_ticks で無限 range を生じさせるため無視する。
+    if let Some(s) = axis_spec.suggested_min {
+        if s.is_finite() && s < lo {
+            lo = s;
+        }
+    }
+    if let Some(s) = axis_spec.suggested_max {
+        if s.is_finite() && s > hi {
+            hi = s;
+        }
+    }
+    (lo, hi)
 }
 
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
@@ -78,10 +112,10 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let label_font = spec.theme.font_size;
 
     // x/y ドメイン → nice ticks。
-    let (xmin, xmax) = axis_domain(spec, |p| p.x);
-    let (ymin, ymax) = axis_domain(spec, |p| p.y);
-    let x_ticks = nice_ticks(xmin, xmax, 5);
-    let y_ticks = nice_ticks(ymin, ymax, 5);
+    let (xmin, xmax) = axis_domain(spec, &spec.x_axis, |p| p.x);
+    let (ymin, ymax) = axis_domain(spec, &spec.y_axis, |p| p.y);
+    let x_ticks = nice_ticks(xmin, xmax, 10);
+    let y_ticks = nice_ticks(ymin, ymax, 10);
 
     // y 軸ラベル幅(目盛りラベルの最大幅 + 余白)。
     let mut max_y_w = 0.0_f32;

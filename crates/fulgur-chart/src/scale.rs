@@ -32,7 +32,8 @@ pub struct NiceTicks {
 }
 
 /// `data_min`〜`data_max` を 1-2-5 系列の「きれいな」目盛りに丸める。
-/// `target_count` は目安の目盛り数。範囲が 0（縮退）でも panic しない。
+/// `target_count` は目安の目盛り間隔数（ticks数 - 1）。chart.js `maxTicksLimit=11` に合わせる場合は 10 を渡す。
+/// 範囲が 0（縮退）でも panic しない。
 pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTicks {
     // 1. 0除算回避。
     let count = target_count.max(1);
@@ -135,5 +136,63 @@ mod tests {
     fn linear_scale_zero_domain_does_not_panic() {
         let s = LinearScale::new(5.0, 5.0, 0.0, 400.0);
         assert!(s.map(5.0).is_finite());
+    }
+
+    // chart.js v4（maxTicksLimit=11、10インターバル）の実出力に対するピンテスト。
+    // 期待値は tools/chartjs_ticks.mjs の実行結果で確定。
+    // 再生成: cd tools && node chartjs_ticks.mjs > chartjs_ticks_output.json
+
+    #[test]
+    fn chartjs_compat_0_to_100() {
+        // chart.js: [0,100] → step=10, min=0, max=100, 11本
+        let t = nice_ticks(0.0, 100.0, 10);
+        assert_eq!(t.step, 10.0);
+        assert_eq!(t.min, 0.0);
+        assert_eq!(t.max, 100.0);
+        assert_eq!(t.ticks.len(), 11);
+        assert_eq!(t.ticks[0], 0.0);
+        assert_eq!(t.ticks[10], 100.0);
+    }
+
+    #[test]
+    fn chartjs_compat_0_to_173() {
+        // chart.js: [0,173] → step=20, min=0, max=180, 10本
+        let t = nice_ticks(0.0, 173.0, 10);
+        assert_eq!(t.step, 20.0);
+        assert_eq!(t.min, 0.0);
+        assert_eq!(t.max, 180.0);
+        assert_eq!(t.ticks.len(), 10);
+    }
+
+    #[test]
+    fn chartjs_compat_neg30_to_70() {
+        // chart.js: [-30,70] → step=10, min=-30, max=70, 11本
+        let t = nice_ticks(-30.0, 70.0, 10);
+        assert_eq!(t.step, 10.0);
+        assert_eq!(t.min, -30.0);
+        assert_eq!(t.max, 70.0);
+        assert_eq!(t.ticks.len(), 11);
+    }
+
+    #[test]
+    fn chartjs_compat_0_to_1() {
+        // chart.js: [0,1] → step=0.1, min=0, max=1, 11本
+        // step は浮動小数点誤差を許容して比較する
+        let t = nice_ticks(0.0, 1.0, 10);
+        assert!((t.step - 0.1).abs() < 1e-9, "step={}", t.step);
+        assert_eq!(t.min, 0.0);
+        assert_eq!(t.max, 1.0);
+        assert_eq!(t.ticks.len(), 11);
+    }
+
+    #[test]
+    fn chartjs_compat_100_to_10000() {
+        // chart.js: [100,10000] → step=1000, min=0, max=10000, 11本
+        // nice_min = floor(100/1000)*1000 = 0 (データ範囲外に拡張)
+        let t = nice_ticks(100.0, 10000.0, 10);
+        assert_eq!(t.step, 1000.0);
+        assert_eq!(t.min, 0.0);
+        assert_eq!(t.max, 10000.0);
+        assert_eq!(t.ticks.len(), 11);
     }
 }

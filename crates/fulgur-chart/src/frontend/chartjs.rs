@@ -388,8 +388,46 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     }
 
     // scatter/bubble は線形×線形軸でゼロ起点を強制しない(データ由来のドメインを使う)。
-    // カテゴリ系は従来どおり y のみゼロ起点。
-    let y_begin_at_zero = !is_point_based;
+    // 縦棒/ライン: 値軸が Y → y_axis.begin_at_zero=true（デフォルト）。
+    // 横棒: 値軸が X → x_axis.begin_at_zero=true（デフォルト）。
+    // ユーザーが options.scales.{x,y}.beginAtZero を明示した場合はそちらを優先する。
+    let is_horizontal = matches!(
+        kind,
+        ChartKind::Bar {
+            horizontal: true,
+            ..
+        }
+    );
+    let value_begin_at_zero = !is_point_based;
+
+    // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する。
+    let scales_val = raw.options.scales.as_ref();
+    let x_baz_json = scales_val
+        .and_then(|s| s.get("x"))
+        .and_then(|a| a.get("beginAtZero"))
+        .and_then(|v| v.as_bool());
+    let y_baz_json = scales_val
+        .and_then(|s| s.get("y"))
+        .and_then(|a| a.get("beginAtZero"))
+        .and_then(|v| v.as_bool());
+    let x_begin_at_zero = x_baz_json.unwrap_or(is_horizontal && value_begin_at_zero);
+    let y_begin_at_zero = y_baz_json.unwrap_or(!is_horizontal && value_begin_at_zero);
+    let suggested_min_y = scales_val
+        .and_then(|s| s.get("y"))
+        .and_then(|a| a.get("suggestedMin"))
+        .and_then(|v| v.as_f64());
+    let suggested_max_y = scales_val
+        .and_then(|s| s.get("y"))
+        .and_then(|a| a.get("suggestedMax"))
+        .and_then(|v| v.as_f64());
+    let suggested_min_x = scales_val
+        .and_then(|s| s.get("x"))
+        .and_then(|a| a.get("suggestedMin"))
+        .and_then(|v| v.as_f64());
+    let suggested_max_x = scales_val
+        .and_then(|s| s.get("x"))
+        .and_then(|a| a.get("suggestedMax"))
+        .and_then(|v| v.as_f64());
 
     Ok(ChartSpec {
         kind,
@@ -399,13 +437,17 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             title: None,
             min: None,
             max: None,
-            begin_at_zero: false,
+            suggested_min: suggested_min_x,
+            suggested_max: suggested_max_x,
+            begin_at_zero: x_begin_at_zero,
             grid: true,
         },
         y_axis: AxisSpec {
             title: None,
             min: None,
             max: None,
+            suggested_min: suggested_min_y,
+            suggested_max: suggested_max_y,
             begin_at_zero: y_begin_at_zero,
             grid: true,
         },
@@ -606,7 +648,16 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                 if let Some(ax) = scales.get(axis).and_then(|v| v.as_object()) {
                     check_object(
                         ax,
-                        &["stacked", "min", "max", "title", "grid", "beginAtZero"],
+                        &[
+                            "stacked",
+                            "min",
+                            "max",
+                            "title",
+                            "grid",
+                            "beginAtZero",
+                            "suggestedMin",
+                            "suggestedMax",
+                        ],
                         &format!("options.scales.{axis}"),
                     )?;
                 }
@@ -813,6 +864,8 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             title: None,
             min: None,
             max: None,
+            suggested_min: None,
+            suggested_max: None,
             begin_at_zero: false,
             grid: false,
         },
@@ -820,6 +873,8 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             title: None,
             min: None,
             max: None,
+            suggested_min: None,
+            suggested_max: None,
             begin_at_zero: false,
             grid: false,
         },

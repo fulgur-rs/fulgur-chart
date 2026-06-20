@@ -1,6 +1,6 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
-use crate::ir::{ChartSpec, Color, LegendPos};
+use crate::ir::{AxisSpec, ChartSpec, Color, LegendPos};
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, nice_ticks};
 use crate::scene::{Anchor, Prim};
@@ -51,21 +51,36 @@ fn has_legend(spec: &ChartSpec) -> bool {
 
 /// 値ドメイン(begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
 /// 縦棒(compute)と横棒(build_horizontal)が同一の値域計算を共有する。
-pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
+pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
     if matches!(spec.kind, crate::ir::ChartKind::Bar { stacked: true, .. }) {
         // 積み上げ: カテゴリごとに正値の和(上限)・負値の和(下限)をとる。
+        // chart.js 互換: beginAtZero=false のとき 0 ではなく実データの個別値を境界にする。
+        // 全正値ケース(neg_sum が常に 0)では min_individual を下限として使う。
+        // 全負値ケース(pos_sum が常に 0)では max_individual を上限として使う。
+        let mut has_positive = false;
+        let mut has_negative = false;
+        let mut min_individual = f64::INFINITY;
+        let mut max_individual = f64::NEG_INFINITY;
         for i in 0..spec.categories.len() {
             let mut pos_sum = 0.0_f64;
             let mut neg_sum = 0.0_f64;
             for ser in &spec.series {
                 if let Some(&v) = ser.values.get(i) {
                     if v.is_finite() {
+                        if v < min_individual {
+                            min_individual = v;
+                        }
+                        if v > max_individual {
+                            max_individual = v;
+                        }
                         if v >= 0.0 {
                             pos_sum += v;
+                            has_positive = true;
                         } else {
                             neg_sum += v;
+                            has_negative = true;
                         }
                     }
                 }
@@ -76,6 +91,12 @@ pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
             if neg_sum < data_min {
                 data_min = neg_sum;
             }
+        }
+        if !has_negative && min_individual.is_finite() {
+            data_min = min_individual;
+        }
+        if !has_positive && max_individual.is_finite() {
+            data_max = max_individual;
         }
     } else {
         for s in &spec.series {
@@ -91,15 +112,36 @@ pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
             }
         }
     }
+    // データなし: suggested を初期シードとして使う(chart.js 互換)。suggested もなければ 0..1。
     if !data_min.is_finite() || !data_max.is_finite() {
-        data_min = 0.0;
-        data_max = 1.0;
+        let lo = axis.suggested_min.filter(|s| s.is_finite()).unwrap_or(0.0);
+        let hi = axis
+            .suggested_max
+            .filter(|s| s.is_finite())
+            .unwrap_or(if lo == 0.0 { 1.0 } else { lo + 1.0 });
+        let lo = if axis.begin_at_zero { lo.min(0.0) } else { lo };
+        let hi = if axis.begin_at_zero { hi.max(0.0) } else { hi };
+        return (lo, if hi > lo { hi } else { lo + 1.0 });
     }
-    let (domain_min, mut domain_max) = if spec.y_axis.begin_at_zero {
+    let (mut domain_min, mut domain_max) = if axis.begin_at_zero {
         (data_min.min(0.0), data_max.max(0.0))
     } else {
         (data_min, data_max)
     };
+    // suggestedMin/suggestedMax: データが優先、suggested はドメインを広げるだけ。
+    // 非有限値（Infinity/NaN）は nice_ticks で無限 range を生じさせるため無視する。
+    if let Some(s) = axis.suggested_min {
+        if s.is_finite() && s < domain_min {
+            domain_min = s;
+        }
+    }
+    if let Some(s) = axis.suggested_max {
+        if s.is_finite() && s > domain_max {
+            domain_max = s;
+        }
+    }
+    // ハード制約の y_axis.min / y_axis.max は現状 wire されていない（未実装）。
+    // 実装する際は: hard min/max が suggested より優先、かつドメインを縮小できる点に注意。
     // 上限>下限を保証（縮退時の保険）。
     if domain_max <= domain_min {
         domain_max = domain_min + 1.0;
@@ -110,8 +152,8 @@ pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
 /// spec から y ドメイン(begin_at_zero尊重)・nice_ticks・y軸ラベル幅・プロット領域・凡例帯を計算。
 pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y ドメイン。
-    let (domain_min, domain_max) = value_domain(spec);
-    let ticks = nice_ticks(domain_min, domain_max, 5);
+    let (domain_min, domain_max) = value_domain(spec, &spec.y_axis);
+    let ticks = nice_ticks(domain_min, domain_max, 10);
 
     // y 軸ラベル幅。
     let mut max_w = 0.0_f32;
@@ -433,6 +475,8 @@ mod tests {
                 title: None,
                 min: None,
                 max: None,
+                suggested_min: None,
+                suggested_max: None,
                 begin_at_zero: true,
                 grid: true,
             },
@@ -440,6 +484,8 @@ mod tests {
                 title: None,
                 min: None,
                 max: None,
+                suggested_min: None,
+                suggested_max: None,
                 begin_at_zero: true,
                 grid: true,
             },
@@ -487,5 +533,33 @@ mod tests {
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
+    }
+
+    #[test]
+    fn value_domain_suggested_min_expands_below_data() {
+        // suggestedMin がデータより小さい場合 → ドメインが広がる。
+        // データは 1.0、begin_at_zero=true なので data_min は 0.0 に引き上げられる。
+        // suggested_min=-20 はその 0.0 より小さいのでドメインが -20 まで広がる。
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.suggested_min = Some(-20.0);
+        let (min, _max) = value_domain(&spec, &spec.y_axis);
+        assert!(
+            min <= -20.0,
+            "suggested_min=-20 はドメインを下方向に広げるべき: 実際 min={min}"
+        );
+    }
+
+    #[test]
+    fn value_domain_suggested_min_noop_when_data_lower() {
+        // suggestedMin がデータより大きい場合 → no-op（データが優先）。
+        // データは 1.0、begin_at_zero=true なので domain_min=0.0。
+        // suggested_min=50 は domain_min(0.0) より大きいが、データ側が優先されるので無視。
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.suggested_min = Some(50.0);
+        let (min, _max) = value_domain(&spec, &spec.y_axis);
+        assert!(
+            min <= 0.0,
+            "suggested_min=50 はデータの下端(0.0)を縮小してはいけない: 実際 min={min}"
+        );
     }
 }

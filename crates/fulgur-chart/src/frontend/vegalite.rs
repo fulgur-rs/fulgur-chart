@@ -161,6 +161,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             title: None,
             min: None,
             max: None,
+            suggested_min: None, // Vega-Lite の scale.domainMin は未実装
+            suggested_max: None, // Vega-Lite の scale.domainMax は未実装
             begin_at_zero: false,
             grid: true,
         },
@@ -168,6 +170,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             title: None,
             min: None,
             max: None,
+            suggested_min: None, // Vega-Lite の scale.domainMin は未実装
+            suggested_max: None, // Vega-Lite の scale.domainMax は未実装
             begin_at_zero: y_begin_at_zero,
             grid: true,
         },

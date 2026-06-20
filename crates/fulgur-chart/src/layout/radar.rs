@@ -173,7 +173,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
         }
     }
-    let nice = nice_ticks(0.0, max_val, 5);
+    let nice = nice_ticks(0.0, max_val, 10);
     // 値→半径。nice.max<=0 の縮退は中心へ落とす。
     let rr = |v: f64| -> f64 {
         if nice.max > 0.0 {
