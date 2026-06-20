@@ -42,7 +42,7 @@ render_svg(spec_json: str, options?: RenderOptions) -> str
 ### 1.2 `render_image`
 
 ```
-render_image(spec_json: str, format: 'png', options?: RenderOptions) -> bytes
+render_image(spec_json: str, format: str, options?: RenderOptions) -> bytes
 ```
 
 - `spec_json`: render_svg と同じ。
