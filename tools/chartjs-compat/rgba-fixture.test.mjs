@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { fmtAlpha } from './extract.mjs';
+import { fmtAlpha } from './color-util.mjs';
 
 // Rust fmt_alpha と JS fmtAlpha が byte-for-byte 一致することを保証する
 // クロス言語フィクスチャ。同じ JSON を Rust 側テストも(インライン化して)読む。

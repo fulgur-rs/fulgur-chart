@@ -5,16 +5,9 @@
 
 import { createCanvas } from 'canvas';
 import { Chart } from 'chart.js/auto';
+import { fmtAlpha } from './color-util.mjs';
 
 Chart.defaults.font.size = 12;
-
-/// alpha を正規化整形する(>=1→"1", <=0→"0", それ以外は 3 桁丸め・末尾ゼロ除去)。
-/// String(...) が末尾ゼロを自動で落とすため、Rust 側の f64 Display と一致する。
-export function fmtAlpha(a) {
-  if (a >= 1) return '1';
-  if (a <= 0) return '0';
-  return String(Math.round(a * 1000) / 1000);
-}
 
 /// CSS 色文字列 → canonical rgba(R,G,B,A)。node-canvas の fillStyle 解釈を利用し、
 /// '#rrggbb' か 'rgba(r, g, b, a)' へ正規化したものを再整形する。

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diffModels, TOLERANCES } from './diff.mjs';
+import { diffModels } from './diff.mjs';
 
 const base = () => ({
   meta: { type: 'bar', width: 800, height: 600 },
@@ -28,10 +28,6 @@ test('目盛り不一致は FAIL', () => {
   c.axes.y.ticks = [0,25,50,75,100];
   const r = diffModels(f, c);
   assert.equal(r.dimensions.axes.pass, false);
-});
-
-test('TOLERANCES が公開されている', () => {
-  assert.equal(typeof TOLERANCES.geometryNorm, 'number');
 });
 
 test('色配列ブロードキャスト: [c] と [c,c] は一致扱い', () => {

@@ -1,7 +1,7 @@
 //! fulgur 意味モデル ⟷ chart.js 意味モデルの次元別(色 / 軸 / counts)数値照合。
 //! 各次元ごとに pass と差分リストを返し、全次元 pass で総合 pass。
 
-export const TOLERANCES = { geometryNorm: 0.02 };
+export const TOLERANCES = { geometryNorm: 0.02 }; // Phase 2: geometry 次元用(現状未使用)
 
 function num(a, b) {
   return a === b || (a != null && b != null && Math.abs(a - b) < 1e-9);

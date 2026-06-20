@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractChartjsModel, toRgba, fmtAlpha } from './extract.mjs';
+import { extractChartjsModel, toRgba } from './extract.mjs';
+import { fmtAlpha } from './color-util.mjs';
 
 test('bar: 系列色と軸目盛りを共通スキーマで抽出', async () => {
   const spec = { type: 'bar', data: { labels: ['1月','2月','3月'],

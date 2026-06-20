@@ -10,14 +10,17 @@
 //!     塗られないため(false positive 回避)。
 //!  2. 系列単位の最低保証: 各系列の fill/stroke の rgb のうち少なくとも 1 つは
 //!     SVG に塗られていなければならない(系列色丸ごと欠落/誤りを検出)。
+//!
+//! caveat (M2): text 要素の fill(`<text fill="#000000">`)も意図的に SVG 色集合へ
+//!   含める。これが問題になるのは純黒(#000000)を系列 fill に持つ場合のみで、現行
+//!   パレットでは到達不能。
+//! caveat (M3): fulgur は opacity を fmt_num(小数 2 桁)で出力する一方、alpha は
+//!   canonical 3 桁で正規化する。パレット alpha {0.25,0.5,0.75,1} では両者は一致する
+//!   が、0.01 未満の alpha では乖離しうる(現状は認識のみ)。
 
-function fmtAlpha(a) {
-  if (a >= 1) return '1';
-  if (a <= 0) return '0';
-  return String(Math.round(a * 1000) / 1000);
-}
+import { fmtAlpha } from './color-util.mjs';
 
-function hexToRgbHex(hex) {
+function normalizeHex(hex) {
   return hex.toLowerCase();
 }
 
@@ -50,27 +53,13 @@ export function svgByRgbMap(svg) {
       if (!cm) continue;
       const om = tag.match(new RegExp(`\\b${opName}="([0-9.]+)"`));
       const a = om ? parseFloat(om[1]) : 1;
-      const rgb = hexToRgbHex(cm[1]);
+      const rgb = normalizeHex(cm[1]);
       const alpha = fmtAlpha(a);
       if (!byRgb.has(rgb)) byRgb.set(rgb, new Set());
       byRgb.get(rgb).add(alpha);
     }
   }
   return byRgb;
-}
-
-/// 後方互換の参考ヘルパ: 塗られた色を canonical rgba 文字列の Set にする。
-export function svgColorSet(svg) {
-  const set = new Set();
-  for (const [rgb, alphas] of svgByRgbMap(svg)) {
-    const [r, g, b] = [
-      parseInt(rgb.slice(1, 3), 16),
-      parseInt(rgb.slice(3, 5), 16),
-      parseInt(rgb.slice(5, 7), 16),
-    ];
-    for (const a of alphas) set.add(`rgba(${r},${g},${b},${a})`);
-  }
-  return set;
 }
 
 export function crosscheckColors(model, svg) {
