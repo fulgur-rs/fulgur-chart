@@ -1,7 +1,7 @@
 //! progress チャートのレイアウト: ChartSpec → Scene。
 //! 軸なしの水平塗りつぶしバー。決定的に組み立て、NaN/Inf/panic を出さない。
 
-use super::common::{OUTER_PAD, TITLE_BAND, TITLE_FONT};
+use super::common::{OUTER_PAD, TEXT_BASELINE_RATIO, TITLE_BAND, TITLE_FONT};
 use crate::ir::{ChartSpec, Color};
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
@@ -82,7 +82,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let band_h = plot_h / n as f64;
     let bar_h = (band_h * BAR_HEIGHT_RATIO).max(0.0);
 
-    for i in 0..n {
+    for (i, &v) in values.iter().enumerate() {
         let band_top = plot_top + i as f64 * band_h;
         let bar_y = band_top + (band_h - bar_h) / 2.0;
         let center_y = band_top + band_h / 2.0;
@@ -95,7 +95,6 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             .filter(|mx| mx.is_finite() && *mx > 0.0)
             .unwrap_or(100.0);
 
-        let v = values[i];
         let frac = if v.is_finite() {
             (v / max_i).clamp(0.0, 1.0)
         } else {
@@ -123,7 +122,18 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             });
         }
 
-        let _ = (center_y, fmt_num as fn(f64) -> String); // 次タスクで使用
+        // パーセンテージ（バー中央・整数%に丸め）。
+        if spec.data_labels {
+            let pct = frac * 100.0;
+            items.push(Prim::Text {
+                x: plot_left + plot_w / 2.0,
+                y: center_y + label_font * TEXT_BASELINE_RATIO,
+                size: label_font,
+                anchor: Anchor::Middle,
+                fill: ink,
+                content: format!("{}%", fmt_num(pct.round())),
+            });
+        }
     }
 
     Scene {

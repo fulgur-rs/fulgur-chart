@@ -45,3 +45,18 @@ fn progress_foreground_uses_solid_background_color() {
         "should be solid: {svg}"
     );
 }
+
+#[test]
+fn progress_shows_percentage_by_default() {
+    let svg = render(r#"{"type":"progress","data":{"datasets":[{"data":[70]}]}}"#);
+    assert!(svg.contains(">70%<"), "percentage label missing: {svg}");
+}
+
+#[test]
+fn progress_datalabels_display_false_hides_percentage() {
+    let svg = render(
+        r#"{"type":"progress","data":{"datasets":[{"data":[70]}]},
+        "options":{"plugins":{"datalabels":{"display":false}}}}"#,
+    );
+    assert!(!svg.contains('%'), "percentage should be hidden: {svg}");
+}

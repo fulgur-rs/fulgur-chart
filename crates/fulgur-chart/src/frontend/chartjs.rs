@@ -313,10 +313,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         }
     };
 
-    // datalabels: キーが存在し display!=false なら有効。
-    let data_labels = match &raw.options.plugins.datalabels {
-        Some(dl) => dl.display != Some(false),
-        None => false,
+    // datalabels: 既存は「キーが存在し display!=false なら有効」。
+    // progress のみ既定 ON（QuickChart 準拠）。明示 display:false は尊重する。
+    let data_labels = match (&raw.options.plugins.datalabels, &kind) {
+        (Some(dl), _) => dl.display != Some(false),
+        (None, ChartKind::Progress) => true,
+        (None, _) => false,
     };
 
     // テーマ解決(配色に使うため色解決より先に行う)。
