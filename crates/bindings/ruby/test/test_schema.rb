@@ -1,8 +1,7 @@
 # frozen_string_literal: true
 
-require "minitest/autorun"
+require_relative "test_helper"
 require "json"
-require "fulgur_chart"
 
 class TestSchema < Minitest::Test
   def test_chartjs_schema_is_json

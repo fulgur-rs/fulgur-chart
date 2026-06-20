@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
-require "minitest/autorun"
-require "fulgur_chart"
+require_relative "test_helper"
 
 class TestSmoke < Minitest::Test
   def test_version_is_string
