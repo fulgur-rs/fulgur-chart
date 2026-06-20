@@ -40,6 +40,7 @@ pub static VEGALITE_PALETTE: &[Color] = &[
 pub fn vegalite_theme() -> Theme {
     Theme {
         palette: VEGALITE_PALETTE.to_vec(),
+        is_custom_palette: false,
         grid_color: rgb(221, 221, 221), // #dddddd
         text_color: rgb(51, 51, 51),    // #333333
         background: Some(rgb(255, 255, 255)),

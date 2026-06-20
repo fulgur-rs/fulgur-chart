@@ -115,6 +115,8 @@ pub enum ChartKind {
 pub struct Theme {
     /// 系列/スライスの自動配色に使う巡回パレット。
     pub palette: Vec<Color>,
+    /// カスタムパレットが指定されているかどうか。
+    pub is_custom_palette: bool,
     /// グリッド線の色。
     pub grid_color: Color,
     /// テキスト/インクの色。
@@ -129,6 +131,7 @@ impl Default for Theme {
     fn default() -> Self {
         Theme {
             palette: crate::palette::PALETTE.to_vec(),
+            is_custom_palette: false,
             grid_color: Color {
                 r: 224,
                 g: 224,
@@ -224,5 +227,11 @@ mod tests {
             point_radius: None,
         };
         assert_eq!(s.stroke_at(0), c(0, 0, 0));
+    }
+
+    #[test]
+    fn theme_default_palette_is_not_custom() {
+        let t = Theme::default();
+        assert!(!t.is_custom_palette);
     }
 }
