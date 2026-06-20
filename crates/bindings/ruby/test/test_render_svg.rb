@@ -37,7 +37,8 @@ class TestRenderSvg < Minitest::Test
 
   def test_width_height_override
     big = FulgurChart.render_svg(BAR, width: 1234.0, height: 567.0)
-    assert_includes big, "1234"
+    assert_includes big, 'width="1234"'
+    assert_includes big, "567"
   end
 
   def test_dimension_over_limit_raises_parse_error

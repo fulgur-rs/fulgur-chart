@@ -43,14 +43,14 @@ struct DslDetector {
 /// Infer DSL from spec JSON: `mark` key → vegalite, `type` key → chartjs, neither → Err.
 fn detect_dsl(json: &str) -> Result<&'static str, String> {
     let d: DslDetector =
-        serde_json::from_str(json).map_err(|e| format!("error: invalid JSON: {e}"))?;
+        serde_json::from_str(json).map_err(|e| format!("invalid JSON: {e}"))?;
     if d.mark.is_some() {
         return Ok("vegalite");
     }
     if d.r#type.is_some() {
         return Ok("chartjs");
     }
-    Err("error: cannot auto-detect DSL: specify dsl: 'chartjs' or 'vegalite'".to_string())
+    Err("cannot auto-detect DSL: specify dsl: 'chartjs' or 'vegalite'".to_string())
 }
 
 /// Parse a spec JSON string to IR using the specified DSL (chartjs or vegalite).
@@ -96,7 +96,7 @@ fn parse_opts(ruby: &Ruby, kw: RHash) -> Result<Opts, Error> {
 
     if let Some(d) = &dsl {
         if d != "chartjs" && d != "vegalite" {
-            return Err(parse_err(ruby, format!("error: unsupported DSL '{d}'")));
+            return Err(parse_err(ruby, format!("unsupported DSL '{d}'")));
         }
     }
 
@@ -128,13 +128,13 @@ fn build_ir(
     };
 
     // 2. Parse NON-strict → IR (render from this).
-    let mut ir = parse_spec(spec_json, dsl, false)
-        .map_err(|e| parse_err(ruby, format!("error: parse failed: {e}")))?;
+    // Contract §3: propagate the core's error String verbatim. The exception class — not a
+    // message prefix — conveys parse/strict/render, so no CLI-style "error: ..." decoration.
+    let mut ir = parse_spec(spec_json, dsl, false).map_err(|e| parse_err(ruby, e))?;
 
     // 3. If strict, re-parse with strict=true (discard IR; unknown key → StrictError).
     if opts.strict {
-        parse_spec(spec_json, dsl, true)
-            .map_err(|e| strict_err(ruby, format!("error: strict violation: {e}")))?;
+        parse_spec(spec_json, dsl, true).map_err(|e| strict_err(ruby, e))?;
     }
 
     // 4. Apply width/height overrides BEFORE guard.
@@ -146,7 +146,7 @@ fn build_ir(
     }
 
     // 5. Guard (failure → ParseError).
-    validate_spec(&ir, &InputLimits::default()).map_err(|e| parse_err(ruby, format!("error: {e}")))?;
+    validate_spec(&ir, &InputLimits::default()).map_err(|e| parse_err(ruby, e))?;
 
     Ok(ir)
 }
@@ -163,7 +163,7 @@ fn render_svg(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
     //    else render_chart.
     let svg = match &opts.font {
         Some(bytes) => fulgur_chart::render::render_chart_with_font(&ir, bytes)
-            .map_err(|e| parse_err(ruby, format!("error: render failed: {e}")))?,
+            .map_err(|e| parse_err(ruby, e))?,
         None => fulgur_chart::render::render_chart(&ir),
     };
     Ok(ruby.str_new(&svg))
