@@ -301,6 +301,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         s.series = vec![dummy; DEFAULT_MAX_SERIES + 1];
         assert!(validate_spec(&s, &default_limits()).is_err());
@@ -334,6 +335,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         s.series = vec![dummy; 100];
         s.categories = vec!["x".to_string(); 10_001];
@@ -361,6 +363,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         s.series = vec![dummy; 100];
         s.categories = vec!["x".to_string(); 10_000];
@@ -387,6 +390,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         s.series = vec![big_series];
         assert!(validate_spec(&s, &default_limits()).is_err());

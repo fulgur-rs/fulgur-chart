@@ -470,6 +470,7 @@ mod tests {
                 tension: 0.0,
                 series_type: SeriesType::Bar,
                 point_radius: None,
+                box_points: vec![],
             }],
             x_axis: AxisSpec {
                 title: None,

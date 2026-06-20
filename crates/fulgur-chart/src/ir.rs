@@ -18,6 +18,16 @@ pub struct Point {
     pub r: Option<f64>,
 }
 
+/// BoxPlot の5数要約。[min, q1, median, q3, max]。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoxPoint {
+    pub min: f64,
+    pub q1: f64,
+    pub median: f64,
+    pub q3: f64,
+    pub max: f64,
+}
+
 /// 系列ごとの描画種別。混合チャート(bar+line)で dataset 別 type を表す。
 /// 単一種別チャートでは全系列が同じ値になる(描画に影響しない既定は Bar)。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,6 +54,8 @@ pub struct Series {
     /// scatter のマーカー半径(chart.js pointRadius)。None なら既定値。
     /// bubble では point.r を優先し、欠落時のフォールバックに使う。
     pub point_radius: Option<f64>,
+    /// boxplot の5数要約データ。boxplot 種別のみ使用、他は空。
+    pub box_points: Vec<BoxPoint>,
 }
 
 impl Series {
@@ -113,6 +125,8 @@ pub enum ChartKind {
     /// QuickChart 互換の progress バー。軸なし水平バー。
     /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。
     Progress,
+    /// QuickChart 互換の boxplot。カテゴリ×5数要約(min/q1/median/q3/max)。
+    BoxPlot,
 }
 
 /// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。
@@ -194,6 +208,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         assert_eq!(s.fill_at(0), c(1, 2, 3));
         assert_eq!(s.fill_at(2), c(1, 2, 3)); // ブロードキャスト
@@ -212,6 +227,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         assert_eq!(s.fill_at(0), c(10, 0, 0));
         assert_eq!(s.fill_at(1), c(0, 20, 0));
@@ -231,6 +247,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         assert_eq!(s.stroke_at(0), c(0, 0, 0));
     }
@@ -239,5 +256,12 @@ mod tests {
     fn theme_default_palette_is_not_custom() {
         let t = Theme::default();
         assert!(!t.is_custom_palette);
+    }
+
+    #[test]
+    fn box_point_fields_accessible() {
+        let bp = BoxPoint { min: 1.0, q1: 2.0, median: 3.0, q3: 4.0, max: 5.0 };
+        assert_eq!(bp.median, 3.0);
+        assert_eq!(bp.max - bp.min, 4.0);
     }
 }

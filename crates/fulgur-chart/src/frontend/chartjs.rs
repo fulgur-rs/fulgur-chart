@@ -400,6 +400,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 tension: ds.tension,
                 series_type,
                 point_radius: ds.point_radius,
+                box_points: vec![],
             }
         })
         .collect();
@@ -893,6 +894,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         })
         .collect();
 
