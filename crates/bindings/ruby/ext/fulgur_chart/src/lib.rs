@@ -23,9 +23,8 @@ fn strict_err(ruby: &Ruby, msg: impl Into<String>) -> Error {
     Error::new(exc_class(ruby, "StrictError"), msg.into())
 }
 
-// Consumed by render_image (Task 3); kept here so the image path classifies raster
-// errors as RenderError. Not used on the SVG path.
-#[allow(dead_code)]
+// The image path classifies raster errors as RenderError (asymmetry vs the SVG path,
+// which maps font/render failures to ParseError).
 fn render_err(ruby: &Ruby, msg: impl Into<String>) -> Error {
     Error::new(exc_class(ruby, "RenderError"), msg.into())
 }
@@ -67,8 +66,7 @@ fn parse_spec(json: &str, dsl: &str, strict: bool) -> Result<fulgur_chart::ir::C
 struct Opts {
     width: Option<f64>,
     height: Option<f64>,
-    // Consumed by render_image (Task 3); the SVG path ignores scale.
-    #[allow(dead_code)]
+    // Consumed by the image path (render_chart_to_png); the SVG path ignores scale.
     scale: f32,
     strict: bool,
     dsl: Option<String>,
@@ -169,6 +167,44 @@ fn render_svg(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
     Ok(ruby.str_new(&svg))
 }
 
+// --- public API: render_image / render_png ---
+
+/// spec_json + Opts → binary PNG String (shared by render_image / render_png).
+fn render_png_string(ruby: &Ruby, spec_json: &str, opts: &Opts) -> Result<RString, Error> {
+    let ir = build_ir(ruby, spec_json, opts)?;
+    let fb: &[u8] = opts.font.as_deref().unwrap_or(fulgur_chart::font::DEFAULT_FONT);
+    // Invalid font on the image path → RenderError (the SVG path maps this to ParseError).
+    let png = fulgur_chart::raster_direct::render_chart_to_png(&ir, opts.scale, fb)
+        .map_err(|e| render_err(ruby, e))?;
+    Ok(ruby.str_from_slice(&png)) // ASCII-8BIT (BINARY) String
+}
+
+fn render_image(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
+    let scanned = scan_args::<(String,), (), (), (), RHash, ()>(args)?;
+    let (spec_json,) = scanned.required;
+    // Required `format` kwarg. The trailing `RHash` splat tolerates leftover RenderOptions
+    // keys (width/height/scale/strict/dsl/font); the splat-less form would raise on them.
+    let kw = get_kwargs::<_, (String,), (), RHash>(scanned.keywords, &["format"], &[])?;
+    let (format,) = kw.required;
+    if format != "png" {
+        return Err(parse_err(
+            ruby,
+            format!("unsupported format '{format}' (supported: png)"),
+        ));
+    }
+    // Re-scan the same kwargs for RenderOptions; `get_kwargs` reads (does not mutate) the hash,
+    // so the earlier `format` extraction does not interfere, and `format` is ignored here.
+    let opts = parse_opts(ruby, scanned.keywords)?;
+    render_png_string(ruby, &spec_json, &opts)
+}
+
+fn render_png(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
+    let scanned = scan_args::<(String,), (), (), (), RHash, ()>(args)?;
+    let (spec_json,) = scanned.required;
+    let opts = parse_opts(ruby, scanned.keywords)?;
+    render_png_string(ruby, &spec_json, &opts)
+}
+
 fn version() -> String {
     fulgur_chart::version().to_string()
 }
@@ -186,5 +222,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
 
     module.define_module_function("version", function!(version, 0))?;
     module.define_module_function("render_svg", function!(render_svg, -1))?;
+    module.define_module_function("render_image", function!(render_image, -1))?;
+    module.define_module_function("render_png", function!(render_png, -1))?;
     Ok(())
 }
