@@ -60,3 +60,25 @@ fn progress_datalabels_display_false_hides_percentage() {
     );
     assert!(!svg.contains('%'), "percentage should be hidden: {svg}");
 }
+
+#[test]
+fn progress_renders_bar_names_from_labels() {
+    let svg = render(
+        r#"{"type":"progress","data":{"labels":["CPU","RAM"],"datasets":[{"data":[30,80]}]}}"#,
+    );
+    assert!(svg.contains(">CPU<"), "bar name CPU missing: {svg}");
+    assert!(svg.contains(">RAM<"), "bar name RAM missing: {svg}");
+}
+
+#[test]
+fn progress_second_dataset_overrides_max() {
+    // 15 / 30 = 50%
+    let svg = render(r#"{"type":"progress","data":{"datasets":[{"data":[15]},{"data":[30]}]}}"#);
+    assert!(svg.contains(">50%<"), "expected 50%: {svg}");
+}
+
+#[test]
+fn progress_clamps_over_max_to_100() {
+    let svg = render(r#"{"type":"progress","data":{"datasets":[{"data":[150]}]}}"#);
+    assert!(svg.contains(">100%<"), "expected clamp to 100%: {svg}");
+}
