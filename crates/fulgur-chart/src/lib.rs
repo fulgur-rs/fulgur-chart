@@ -6,6 +6,7 @@ pub mod frontend;
 pub mod guard;
 pub mod ir;
 pub mod layout;
+pub mod model;
 pub mod num;
 pub mod palette;
 pub mod raster;

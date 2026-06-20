@@ -581,3 +581,21 @@ fn zero_width_exits_1() {
         .failure()
         .code(1);
 }
+
+// --- inspect サブコマンド（意味モデルを JSON で出力）---
+
+#[test]
+fn inspect_bar_emits_model_json() {
+    // bar spec を inspect して JSON モデルを stdout に得る。
+    let spec = r#"{"type":"bar","data":{"labels":["1月","2月","3月"],"datasets":[{"label":"売上","data":[120,200,150]}]}}"#;
+    let out = bin()
+        .args(["inspect", "-", "-o", "-"])
+        .write_stdin(spec)
+        .assert()
+        .success();
+    let bytes = out.get_output().stdout.clone();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+    assert_eq!(v["meta"]["type"], "bar");
+    assert!(!v["series"].as_array().unwrap().is_empty());
+    assert!(v["axes"]["y"]["ticks"].is_array());
+}

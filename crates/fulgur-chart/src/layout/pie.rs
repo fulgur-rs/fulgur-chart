@@ -9,7 +9,7 @@ use std::f64::consts::PI;
 use std::fmt::Write;
 
 /// スライス境界の白線（chart.js 風）。
-const SLICE_STROKE: Color = Color {
+pub(crate) const SLICE_STROKE: Color = Color {
     r: 255,
     g: 255,
     b: 255,

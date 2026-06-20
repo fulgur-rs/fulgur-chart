@@ -51,7 +51,7 @@ fn has_legend(spec: &ChartSpec) -> bool {
 /// 非有限値は無視し、有限値が無ければ 0.0..1.0 にフォールバックする(NaN/panic 回避)。
 /// nice_ticks 側が min==max(縮退)を吸収するため、ここでは追加の拡張はしない。
 /// `axis_spec` の suggested_min/suggested_max はドメインを広げるだけ(データが優先)。
-fn axis_domain(
+pub(crate) fn axis_domain(
     spec: &ChartSpec,
     axis_spec: &AxisSpec,
     select: impl Fn(&Point) -> f64,

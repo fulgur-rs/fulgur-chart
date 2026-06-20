@@ -16,6 +16,8 @@ enum Command {
     Render(RenderArgs),
     /// Print the JSON Schema for a supported input DSL.
     Schema(SchemaArgs),
+    /// Emit fulgur's resolved semantic model (colors, axis ticks, counts) as JSON.
+    Inspect(InspectArgs),
 }
 
 #[derive(Parser)]
@@ -23,6 +25,27 @@ struct SchemaArgs {
     /// DSL whose schema to output (chartjs or vegalite).
     #[arg(long, default_value = "chartjs")]
     dsl: String,
+}
+
+#[derive(Parser)]
+struct InspectArgs {
+    /// Input spec file path. Use '-' to read from stdin.
+    spec: String,
+    /// Output path. Use '-' for stdout (default).
+    #[arg(short, long, default_value = "-")]
+    output: String,
+    /// Input DSL (chartjs or vegalite). Auto-detected when omitted.
+    #[arg(long)]
+    dsl: Option<String>,
+    /// Override chart width.
+    #[arg(long)]
+    width: Option<f64>,
+    /// Override chart height.
+    #[arg(long)]
+    height: Option<f64>,
+    /// Font file for text metrics. Defaults to the bundled font.
+    #[arg(long)]
+    font: Option<String>,
 }
 
 #[derive(Parser)]
@@ -81,6 +104,7 @@ fn main() {
     match cli.command {
         Command::Render(args) => run_render(args),
         Command::Schema(args) => run_schema(args),
+        Command::Inspect(args) => run_inspect(args),
     }
 }
 
@@ -382,6 +406,78 @@ fn run_schema(args: SchemaArgs) {
         }
     };
     println!("{json}");
+}
+
+/// inspect サブコマンド: IR + layout から意味モデルを構築し pretty JSON で出力する。
+fn run_inspect(args: InspectArgs) {
+    let json = match read_spec(&args.spec) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: failed to read input: {e}");
+            std::process::exit(1);
+        }
+    };
+    let dsl: String = match &args.dsl {
+        Some(d) => {
+            if d != "chartjs" && d != "vegalite" {
+                eprintln!("error: unsupported DSL '{d}' (supported: chartjs, vegalite)");
+                std::process::exit(1);
+            }
+            d.clone()
+        }
+        None => match detect_dsl(&json) {
+            Ok(d) => d.to_string(),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        },
+    };
+    let mut spec_ir = match parse_spec(&json, &dsl, false) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: parse failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Some(w) = args.width {
+        spec_ir.width = w;
+    }
+    if let Some(h) = args.height {
+        spec_ir.height = h;
+    }
+    if let Err(e) =
+        fulgur_chart::guard::validate_spec(&spec_ir, &fulgur_chart::guard::InputLimits::default())
+    {
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+    // フォント読込(測定器用)。--font 指定がなければバンドルフォント。
+    // バンドルフォントは静的バイナリ埋め込み(数 MB)なので Cow で borrow し、
+    // デフォルト時のヒープコピーを避ける。
+    let font_bytes: std::borrow::Cow<'static, [u8]> = match &args.font {
+        Some(path) => match std::fs::read(path) {
+            Ok(b) => std::borrow::Cow::Owned(b),
+            Err(e) => {
+                eprintln!("error: failed to read font '{path}': {e}");
+                std::process::exit(1);
+            }
+        },
+        None => std::borrow::Cow::Borrowed(fulgur_chart::font::DEFAULT_FONT),
+    };
+    let measurer = match fulgur_chart::text::TextMeasurer::new(&font_bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("error: font load failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    let model = fulgur_chart::model::build_model(&spec_ir, &measurer);
+    let out = serde_json::to_string_pretty(&model).expect("model serialization failed");
+    if let Err(e) = write_output(&args.output, out.as_bytes()) {
+        eprintln!("error: write failed: {e}");
+        std::process::exit(3);
+    }
 }
 
 #[cfg(test)]
