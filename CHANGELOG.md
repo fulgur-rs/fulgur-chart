@@ -4,6 +4,14 @@
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に従い、
 バージョニングは [Semantic Versioning](https://semver.org/lang/ja/) に従います。
 
+## [Unreleased]
+
+### Added
+
+- `progress` チャートタイプ（QuickChart 互換のプログレスバー）に対応。角丸トラック
+  + ソリッド前景、中央のパーセンテージ表示、任意の 2 つ目 dataset による per-bar の
+  max 上書きをサポート。
+
 ## [0.1.0] - 2026-06-17
 
 ### Added

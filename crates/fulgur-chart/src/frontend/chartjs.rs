@@ -308,20 +308,26 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             "scatter" => ChartKind::Scatter,
             "bubble" => ChartKind::Bubble,
             "radar" => ChartKind::Radar,
+            // QuickChart の正式名は "progressBar"。互換のため "progress" も受理する。
+            "progress" | "progressBar" => ChartKind::Progress,
             other => return Err(format!("未対応の type: {other}")),
         }
     };
 
-    // datalabels: キーが存在し display!=false なら有効。
-    let data_labels = match &raw.options.plugins.datalabels {
-        Some(dl) => dl.display != Some(false),
-        None => false,
+    // datalabels: 既存は「キーが存在し display!=false なら有効」。
+    // progress のみ既定 ON（QuickChart 準拠）。明示 display:false は尊重する。
+    let data_labels = match (&raw.options.plugins.datalabels, &kind) {
+        (Some(dl), _) => dl.display != Some(false),
+        (None, ChartKind::Progress) => true,
+        (None, _) => false,
     };
 
     // テーマ解決(配色に使うため色解決より先に行う)。
     let theme = build_theme(raw.options.theme);
 
     let is_pie = matches!(kind, ChartKind::Pie { .. });
+    // progress も pie 同様に前景をソリッド(alpha=1.0)で塗る。
+    let is_progress = matches!(kind, ChartKind::Progress);
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
     let is_point_based = matches!(kind, ChartKind::Scatter | ChartKind::Bubble);
 
@@ -357,7 +363,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             } else {
                 values.len()
             };
-            let fill_alpha = if is_pie { 1.0_f32 } else { 0.5_f32 };
+            let fill_alpha = if is_pie || is_progress {
+                1.0_f32
+            } else {
+                0.5_f32
+            };
             let fill = resolve_colors(
                 ds.background_color,
                 is_pie,
