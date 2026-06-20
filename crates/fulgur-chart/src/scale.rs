@@ -32,7 +32,8 @@ pub struct NiceTicks {
 }
 
 /// `data_min`〜`data_max` を 1-2-5 系列の「きれいな」目盛りに丸める。
-/// `target_count` は目安の目盛り数。範囲が 0（縮退）でも panic しない。
+/// `target_count` は目安の目盛り間隔数（ticks数 - 1）。chart.js `maxTicksLimit=11` に合わせる場合は 10 を渡す。
+/// 範囲が 0（縮退）でも panic しない。
 pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTicks {
     // 1. 0除算回避。
     let count = target_count.max(1);

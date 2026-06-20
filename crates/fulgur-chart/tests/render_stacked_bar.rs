@@ -7,7 +7,7 @@ fn render(json: &str) -> String {
 }
 
 /// 縦積み上げ: 2 系列 [10,20] + [5,15] の y 軸はグループ最大値(20)ではなく
-/// 積み上げ合計(35)を反映し、目盛り上限が 40 まで伸びる。
+/// 積み上げ合計(35)を反映し、目盛り上限が 35 まで伸びる。
 #[test]
 fn vertical_stacked_axis_reflects_total() {
     let svg = render(
