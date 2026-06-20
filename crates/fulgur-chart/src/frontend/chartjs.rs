@@ -357,7 +357,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             } else {
                 values.len()
             };
-            let fill = resolve_colors(ds.background_color, is_pie, i, n, &theme.palette, 0.5);
+            let fill_alpha = if is_pie { 1.0_f32 } else { 0.5_f32 };
+            let fill = resolve_colors(ds.background_color, is_pie, i, n, &theme.palette, fill_alpha);
             let stroke = resolve_colors(ds.border_color, is_pie, i, n, &theme.palette, 1.0);
             // 実効描画種別。線の既定線幅(3.0)を chart 基本型でなく系列種別で決めるため、
             // 単一種別(全 Line→3.0 / 全 Bar→1.0)では従来と byte 一致し、混合では line だけ太くなる。
@@ -951,6 +952,19 @@ mod tests {
             (stroke_alpha - 1.0).abs() < 1e-6,
             "stroke alpha は 1.0 であるべき、実際は {}",
             stroke_alpha
+        );
+    }
+
+    #[test]
+    fn pie_auto_fill_gets_full_alpha() {
+        // pie チャートは chart.js v4 の colorizeDoughnutDataset が BORDER_COLORS を使うため alpha=1.0。
+        let json = r#"{"type": "pie", "data": {"labels": ["A", "B"], "datasets": [{"data": [1, 2]}]}}"#;
+        let spec = parse(json, false).expect("parse error");
+        let fill_alpha = spec.series[0].fill[0].a;
+        assert!(
+            (fill_alpha - 1.0).abs() < 1e-6,
+            "pie の fill alpha は 1.0 であるべき、実際は {}",
+            fill_alpha
         );
     }
 }
