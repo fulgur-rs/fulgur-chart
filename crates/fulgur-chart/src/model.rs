@@ -4,6 +4,7 @@
 use serde::Serialize;
 
 use crate::ir::{ChartKind, ChartSpec, Color};
+use crate::text::TextMeasurer;
 
 /// 解決済み色を正規化 rgba 文字列にする(plan の正規化規約に従う)。
 pub fn rgba_string(c: &Color) -> String {
@@ -167,11 +168,53 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
     }
 }
 
+/// 直交チャート(縦棒・線・mixed)か。これらは layout::common::compute が使える。
+fn is_cartesian_vertical(kind: &ChartKind) -> bool {
+    matches!(
+        kind,
+        ChartKind::Bar {
+            horizontal: false,
+            ..
+        } | ChartKind::Line
+            | ChartKind::Mixed
+    )
+}
+
+/// IR + layout から完全な意味モデルを構築する。直交チャートのみ軸を載せる。
+pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
+    let mut model = build_model_core(spec);
+    if is_cartesian_vertical(&spec.kind) {
+        let frame = crate::layout::common::compute(spec, m);
+        let t = &frame.ticks;
+        let y = AxisModel {
+            kind: "linear".to_string(),
+            labels: None,
+            min: Some(t.min),
+            max: Some(t.max),
+            step: Some(t.step),
+            ticks: Some(t.ticks.clone()),
+        };
+        let x = AxisModel {
+            kind: "category".to_string(),
+            labels: Some(spec.categories.clone()),
+            min: None,
+            max: None,
+            step: None,
+            ticks: None,
+        };
+        model.counts.y_ticks = t.ticks.len();
+        model.axes = Some(Axes { x, y });
+    }
+    model
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::font::DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::ir::Color;
+    use crate::text::TextMeasurer;
 
     #[test]
     fn rgba_opaque_uses_1() {
@@ -249,5 +292,33 @@ mod tests {
         let model = build_model_core(&spec);
         assert_eq!(model.series[0].fill.len(), 3);
         assert_eq!(model.series[0].fill[0], "rgba(255,0,0,1)");
+    }
+
+    #[test]
+    fn bar_has_linear_y_and_category_x() {
+        let json = r#"{"type":"bar","data":{"labels":["1月","2月","3月"],
+          "datasets":[{"data":[0,100,50]}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        let axes = model.axes.expect("bar には軸があるべき");
+        assert_eq!(axes.y.kind, "linear");
+        assert_eq!(axes.y.min, Some(0.0));
+        assert_eq!(axes.x.kind, "category");
+        assert_eq!(
+            axes.x.labels.as_deref(),
+            Some(&["1月".to_string(), "2月".to_string(), "3月".to_string()][..])
+        );
+        // y_ticks は目盛り数に同期
+        assert_eq!(model.counts.y_ticks, axes.y.ticks.unwrap().len());
+    }
+
+    #[test]
+    fn pie_has_no_axes() {
+        let json = r#"{"type":"pie","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        assert!(model.axes.is_none());
     }
 }
