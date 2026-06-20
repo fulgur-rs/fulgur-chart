@@ -37,6 +37,18 @@ class TestBuilder < Minitest::Test
     assert out.start_with?("<svg"), "render(:svg) must win over .format(:png)"
   end
 
+  def test_nil_argument_falls_back_to_setter_or_default
+    # nil means "no explicit format" → use the setter, else the :svg default.
+    assert FulgurChart.build(Fixtures::BAR).render(nil).start_with?("<svg")
+    assert FulgurChart.build(Fixtures::BAR).format(:png).render(nil).start_with?(Fixtures::PNG_MAGIC)
+  end
+
+  def test_explicit_false_format_is_invalid_not_silently_rendered
+    # An explicit (falsy) format argument must NOT fall back; it is an invalid format.
+    assert_raises(FulgurChart::ParseError) { FulgurChart.build(Fixtures::BAR).render(false) }
+    assert_raises(FulgurChart::ParseError) { FulgurChart.build(Fixtures::BAR).format(:png).render(false) }
+  end
+
   # --- chainable setters: width/height/scale/dsl/strict ---
 
   def test_width_height_override

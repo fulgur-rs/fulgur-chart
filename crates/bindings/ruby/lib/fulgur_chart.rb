@@ -67,7 +67,15 @@ module FulgurChart
     # explicit argument > `.format()` setter > default :svg. Returns a UTF-8 String for svg
     # and a binary (ASCII-8BIT) String for png.
     def render(fmt = nil)
-      resolved = fmt || @opts[:format] || :svg
+      # Distinguish "no explicit format" (nil) from a falsy-but-explicit one (e.g. false).
+      # An explicit argument always wins per the documented precedence; an invalid value is
+      # forwarded to the native layer to raise ParseError rather than silently falling back.
+      resolved =
+        if fmt.nil?
+          @opts.key?(:format) ? @opts[:format] : :svg
+        else
+          fmt
+        end
       FulgurChart.render(@spec, resolved, **@opts.reject { |key, _| key == :format })
     end
 
