@@ -182,7 +182,7 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
     let total_points: usize = spec
         .series
         .iter()
-        .map(|s| s.values.len().max(s.points.len()))
+        .map(|s| s.values.len().max(s.points.len()).max(s.box_points.len()))
         .sum();
     if total_points > limits.max_total_data_points {
         return Err(format!(

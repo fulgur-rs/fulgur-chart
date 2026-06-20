@@ -7,8 +7,9 @@ use crate::text::TextMeasurer;
 const BOX_RATIO: f64 = 0.6;
 const CAP_RATIO: f64 = 0.4;
 
-pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
-    // 1. Yドメインをbox_pointsから収集する
+/// Yドメインをbox_pointsから収集し、ユーザーのsuggested_min/maxを保持しながら
+/// データ範囲で拡張したクローンspecを返す。begin_at_zeroはパーサーの解決値を保持する。
+fn aux_spec(spec: &ChartSpec) -> ChartSpec {
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
     for ser in &spec.series {
@@ -21,19 +22,27 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
         }
     }
-
-    // 2. ドメインヒントを注入したspecクローンでcommon::computeを再利用する。
-    //    Series.valuesが空のためvalue_domainがsuggested_min/maxにフォールバックする。
     let mut aux = spec.clone();
+    // suggested_min/max はデータ範囲を「拡張する」だけ。ユーザー指定値を上書きしない。
     if data_min.is_finite() {
-        aux.y_axis.suggested_min = Some(data_min);
+        let prev = aux.y_axis.suggested_min.filter(|s| s.is_finite()).unwrap_or(data_min);
+        aux.y_axis.suggested_min = Some(data_min.min(prev));
     }
     if data_max.is_finite() {
-        aux.y_axis.suggested_max = Some(data_max);
+        let prev = aux.y_axis.suggested_max.filter(|s| s.is_finite()).unwrap_or(data_max);
+        aux.y_axis.suggested_max = Some(data_max.max(prev));
     }
-    aux.y_axis.begin_at_zero = false;
+    // begin_at_zero はパーサーで解決済み（デフォルト false、ユーザー明示時は保持）。
+    aux
+}
 
-    let frame = super::common::compute(&aux, m);
+/// model.rs の compute_axes から再利用できるよう Frame を公開する。
+pub fn compute_frame(spec: &ChartSpec, m: &TextMeasurer) -> super::common::Frame {
+    super::common::compute(&aux_spec(spec), m)
+}
+
+pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
+    let frame = compute_frame(spec, m);
 
     let mut items: Vec<Prim> = Vec::new();
     super::common::draw_frame(&mut items, spec, &frame, m);
