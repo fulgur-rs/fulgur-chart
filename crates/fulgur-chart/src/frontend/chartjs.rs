@@ -388,8 +388,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     }
 
     // scatter/bubble は線形×線形軸でゼロ起点を強制しない(データ由来のドメインを使う)。
-    // カテゴリ系は従来どおり y のみゼロ起点。
-    let y_begin_at_zero = !is_point_based;
+    // 縦棒/ライン: 値軸が Y → y_axis.begin_at_zero=true。
+    // 横棒: 値軸が X → x_axis.begin_at_zero=true。
+    let is_horizontal = matches!(kind, ChartKind::Bar { horizontal: true, .. });
+    let value_begin_at_zero = !is_point_based;
+    let x_begin_at_zero = is_horizontal && value_begin_at_zero;
+    let y_begin_at_zero = !is_horizontal && value_begin_at_zero;
 
     // suggestedMin/suggestedMax: options.scales.{x,y} から取得する。
     let scales_val = raw.options.scales.as_ref();
@@ -420,7 +424,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             max: None,
             suggested_min: suggested_min_x,
             suggested_max: suggested_max_x,
-            begin_at_zero: false,
+            begin_at_zero: x_begin_at_zero,
             grid: true,
         },
         y_axis: AxisSpec {

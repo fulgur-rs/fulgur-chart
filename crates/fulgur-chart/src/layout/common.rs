@@ -1,6 +1,6 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
-use crate::ir::{ChartSpec, Color, LegendPos};
+use crate::ir::{AxisSpec, ChartSpec, Color, LegendPos};
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, nice_ticks};
 use crate::scene::{Anchor, Prim};
@@ -51,7 +51,7 @@ fn has_legend(spec: &ChartSpec) -> bool {
 
 /// 値ドメイン(begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
 /// 縦棒(compute)と横棒(build_horizontal)が同一の値域計算を共有する。
-pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
+pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
     if matches!(spec.kind, crate::ir::ChartKind::Bar { stacked: true, .. }) {
@@ -95,19 +95,19 @@ pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
         data_min = 0.0;
         data_max = 1.0;
     }
-    let (mut domain_min, mut domain_max) = if spec.y_axis.begin_at_zero {
+    let (mut domain_min, mut domain_max) = if axis.begin_at_zero {
         (data_min.min(0.0), data_max.max(0.0))
     } else {
         (data_min, data_max)
     };
     // suggestedMin/suggestedMax: データが優先、suggested はドメインを広げるだけ。
     // 非有限値（Infinity/NaN）は nice_ticks で無限 range を生じさせるため無視する。
-    if let Some(s) = spec.y_axis.suggested_min {
+    if let Some(s) = axis.suggested_min {
         if s.is_finite() && s < domain_min {
             domain_min = s;
         }
     }
-    if let Some(s) = spec.y_axis.suggested_max {
+    if let Some(s) = axis.suggested_max {
         if s.is_finite() && s > domain_max {
             domain_max = s;
         }
@@ -124,7 +124,7 @@ pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
 /// spec から y ドメイン(begin_at_zero尊重)・nice_ticks・y軸ラベル幅・プロット領域・凡例帯を計算。
 pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y ドメイン。
-    let (domain_min, domain_max) = value_domain(spec);
+    let (domain_min, domain_max) = value_domain(spec, &spec.y_axis);
     let ticks = nice_ticks(domain_min, domain_max, 10);
 
     // y 軸ラベル幅。
@@ -514,7 +514,7 @@ mod tests {
         // suggested_min=-20 はその 0.0 より小さいのでドメインが -20 まで広がる。
         let mut spec = make_bar_spec(1, 600.0);
         spec.y_axis.suggested_min = Some(-20.0);
-        let (min, _max) = value_domain(&spec);
+        let (min, _max) = value_domain(&spec, &spec.y_axis);
         assert!(
             min <= -20.0,
             "suggested_min=-20 はドメインを下方向に広げるべき: 実際 min={min}"
@@ -528,7 +528,7 @@ mod tests {
         // suggested_min=50 は domain_min(0.0) より大きいが、データ側が優先されるので無視。
         let mut spec = make_bar_spec(1, 600.0);
         spec.y_axis.suggested_min = Some(50.0);
-        let (min, _max) = value_domain(&spec);
+        let (min, _max) = value_domain(&spec, &spec.y_axis);
         assert!(
             min <= 0.0,
             "suggested_min=50 はデータの下端(0.0)を縮小してはいけない: 実際 min={min}"
