@@ -147,4 +147,19 @@ mod tests {
         assert_eq!(scene.width, spec.width);
         assert_eq!(scene.height, spec.height);
     }
+
+    #[test]
+    fn boxplot_box_top_is_above_box_bottom() {
+        // Q3 > Q1 (値空間) → スクリーン座標ではQ3のy座標 < Q1のy座標 (上が小さい)
+        // box_top = min(y_q3, y_q1) なのでbox_topはbox_bottom(max)より小さいはず
+        let spec = boxplot_spec();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rect = scene.items.iter().find_map(|p| {
+            if let Prim::Rect { y, h, .. } = p { Some((*y, *h)) } else { None }
+        }).expect("should have at least one Rect");
+        let (box_top, h) = rect;
+        assert!(h > 0.0, "box height must be positive (Q1 != Q3)");
+        assert!(box_top > 0.0, "box_top should be within the plot area");
+    }
 }

@@ -155,7 +155,7 @@ impl DataField {
                 // 5 要素未満の行は不足スロットを NaN で補完する。NaN のボックスは
                 // レンダラがスキップするため、短い行は「描画なし」として扱われる。
                 .map(|row| crate::ir::BoxPoint {
-                    min:    row.get(0).copied().unwrap_or(f64::NAN),
+                    min:    row.first().copied().unwrap_or(f64::NAN),
                     q1:     row.get(1).copied().unwrap_or(f64::NAN),
                     median: row.get(2).copied().unwrap_or(f64::NAN),
                     q3:     row.get(3).copied().unwrap_or(f64::NAN),
