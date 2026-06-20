@@ -45,6 +45,9 @@ const DEFAULT_SPECS = [
   'bubble',
 ];
 
+// chart.js コアが描画できない型。これらの抽出失敗のみ SKIP 扱いにする。
+const CHARTJS_UNSUPPORTED_TYPES = new Set(['matrix', 'progress']);
+
 const args = process.argv.slice(2);
 const specs = args.length > 0 ? args : DEFAULT_SPECS;
 
@@ -99,13 +102,21 @@ for (const name of specs) {
   const width = Math.round(fulgurModel.meta.width);
   const height = Math.round(fulgurModel.meta.height);
 
-  // --- chart.js 側(未対応型は SKIP) ---
+  // --- chart.js 側 ---
+  // chart.js コアが未対応の型(matrix/progress 等)だけを SKIP し、サポート型での
+  // 抽出失敗は ERROR にする。さもないと壊れた extractor / chart.js ランタイムでも
+  // サポート spec が「比較ゼロ」で green 終了してしまう。
   let chartjs;
   try {
     chartjs = await extractChartjsModel(specObj, width, height);
   } catch (e) {
-    console.log(`SKIP ${name}: chart.js extract failed: ${e.message}`);
-    skipped++;
+    if (CHARTJS_UNSUPPORTED_TYPES.has(specObj.type)) {
+      console.log(`SKIP ${name}: chart.js does not support type '${specObj.type}'`);
+      skipped++;
+    } else {
+      console.log(`ERROR ${name}: chart.js extract failed: ${e.message}`);
+      errored++;
+    }
     continue;
   }
 

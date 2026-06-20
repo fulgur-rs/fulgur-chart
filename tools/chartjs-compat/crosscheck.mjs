@@ -11,14 +11,24 @@
 //!  2. 系列単位の最低保証: 各系列の fill/stroke の rgb のうち少なくとも 1 つは
 //!     SVG に塗られていなければならない(系列色丸ごと欠落/誤りを検出)。
 //!
-//! caveat (M2): text 要素の fill(`<text fill="#000000">`)も意図的に SVG 色集合へ
-//!   含める。これが問題になるのは純黒(#000000)を系列 fill に持つ場合のみで、現行
-//!   パレットでは到達不能。
+//! 走査対象(M2): データマークのタグ(rect/circle/path/polyline/polygon)のみを
+//!   見る。グリッド線・軸ベースライン(`<line>`)とラベル・タイトル(`<text>`)は
+//!   chrome であり系列塗装ではないため除外する。これにより、系列色が chrome の色
+//!   (例: テキスト #666666 と系列 rgba(102,102,102,…))と衝突しても、chrome の
+//!   alpha が系列の主張集合と誤照合されることを防ぐ。
+//! 役割別追跡(M2b): fill と stroke の alpha を役割ごとに分けて検証する。fill と
+//!   stroke が同一 RGB・異なる alpha(棒の典型: fill 0.5 / stroke 1)を持つ場合に、
+//!   一方の役割の主張で他方の塗装を取りこぼさないようにする。
 //! caveat (M3): fulgur は opacity を fmt_num(小数 2 桁)で出力する一方、alpha は
 //!   canonical 3 桁で正規化する。パレット alpha {0.25,0.5,0.75,1} では両者は一致する
 //!   が、0.01 未満の alpha では乖離しうる(現状は認識のみ)。
 
 import { fmtAlpha } from './color-util.mjs';
+
+const ROLES = [
+  ['fill', 'fill-opacity'],
+  ['stroke', 'stroke-opacity'],
+];
 
 function normalizeHex(hex) {
   return hex.toLowerCase();
@@ -37,62 +47,71 @@ function parseRgba(s) {
   return { rgb, alpha: fmtAlpha(parseFloat(m[4])) };
 }
 
-/// SVG 文字列から、各要素タグの fill/fill-opacity・stroke/stroke-opacity ペアを
-/// 抽出し、RGB hex(小文字)→ 実際に塗られた canonical alpha 文字列の Set を返す。
-export function svgByRgbMap(svg) {
-  const byRgb = new Map();
-  const tagRe = /<(rect|circle|path|line|polyline|polygon|text)\b[^>]*>/g;
+/// SVG 文字列から、データマークの fill/stroke を役割別に抽出する。
+/// 返り値: { fill: Map<rgb, Set<alpha>>, stroke: Map<rgb, Set<alpha>> }。
+/// chrome(`<line>` グリッド/軸・`<text>` ラベル)は走査対象外(M2 参照)。
+export function svgByRole(svg) {
+  const byRole = { fill: new Map(), stroke: new Map() };
+  const tagRe = /<(rect|circle|path|polyline|polygon)\b[^>]*>/g;
   let m;
   while ((m = tagRe.exec(svg))) {
     const tag = m[0];
-    for (const [kind, opName] of [
-      ['fill', 'fill-opacity'],
-      ['stroke', 'stroke-opacity'],
-    ]) {
-      const cm = tag.match(new RegExp(`\\b${kind}="(#[0-9a-fA-F]{6})"`));
+    for (const [role, opName] of ROLES) {
+      const cm = tag.match(new RegExp(`\\b${role}="(#[0-9a-fA-F]{6})"`));
       if (!cm) continue;
       const om = tag.match(new RegExp(`\\b${opName}="([0-9.]+)"`));
       const a = om ? parseFloat(om[1]) : 1;
       const rgb = normalizeHex(cm[1]);
-      const alpha = fmtAlpha(a);
-      if (!byRgb.has(rgb)) byRgb.set(rgb, new Set());
-      byRgb.get(rgb).add(alpha);
+      const map = byRole[role];
+      if (!map.has(rgb)) map.set(rgb, new Set());
+      map.get(rgb).add(fmtAlpha(a));
     }
   }
-  return byRgb;
+  return byRole;
 }
 
 export function crosscheckColors(model, svg) {
-  const svgByRgb = svgByRgbMap(svg);
+  const svgByR = svgByRole(svg);
 
-  // モデルが主張する色集合(rgb → 主張 alpha の Set)。alpha 0(完全透明)は無視。
-  const modelByRgb = new Map();
+  // モデルが主張する色を役割別に集計(rgb → 主張 alpha の Set)。alpha 0 は無視。
+  const modelByRole = { fill: new Map(), stroke: new Map() };
   for (const s of model.series) {
-    for (const c of [...(s.fill || []), ...(s.stroke || [])]) {
-      const p = parseRgba(c);
-      if (!p || p.alpha === '0') continue;
-      if (!modelByRgb.has(p.rgb)) modelByRgb.set(p.rgb, new Set());
-      modelByRgb.get(p.rgb).add(p.alpha);
-    }
-  }
-
-  // 1. alpha 整合性: モデルにもある rgb について painted ⊆ claimed。
-  const divergences = [];
-  for (const [rgb, claimedAlphas] of modelByRgb) {
-    const paintedAlphas = svgByRgb.get(rgb);
-    if (!paintedAlphas) continue; // 塗られていなければ(2)で系列単位に判定。
-    for (const paintedAlpha of paintedAlphas) {
-      if (!claimedAlphas.has(paintedAlpha)) {
-        divergences.push({
-          rgb,
-          paintedAlpha,
-          modelAlphas: [...claimedAlphas],
-        });
+    for (const [role, list] of [
+      ['fill', s.fill],
+      ['stroke', s.stroke],
+    ]) {
+      for (const c of list || []) {
+        const p = parseRgba(c);
+        if (!p || p.alpha === '0') continue;
+        const map = modelByRole[role];
+        if (!map.has(p.rgb)) map.set(p.rgb, new Set());
+        map.get(p.rgb).add(p.alpha);
       }
     }
   }
 
-  // 2. 系列単位: 各系列の fill/stroke の rgb の少なくとも 1 つが SVG に塗られている。
+  // 1. alpha 整合性(役割別): モデルにもある (role,rgb) について painted ⊆ claimed。
+  //    塗られていなければ(2)で系列単位に判定。
+  const divergences = [];
+  for (const role of ['fill', 'stroke']) {
+    for (const [rgb, claimedAlphas] of modelByRole[role]) {
+      const paintedAlphas = svgByR[role].get(rgb);
+      if (!paintedAlphas) continue;
+      for (const paintedAlpha of paintedAlphas) {
+        if (!claimedAlphas.has(paintedAlpha)) {
+          divergences.push({
+            role,
+            rgb,
+            paintedAlpha,
+            modelAlphas: [...claimedAlphas],
+          });
+        }
+      }
+    }
+  }
+
+  // 2. 系列単位: 各系列の rgb のうち少なくとも 1 つが(役割を問わず)塗られている。
+  //    丸ごと欠落/誤りのみを捉えるため、ここでは fill/stroke を区別せず存在判定する。
   const unpainted = [];
   for (let i = 0; i < model.series.length; i++) {
     const s = model.series[i];
@@ -103,7 +122,9 @@ export function crosscheckColors(model, svg) {
       rgbs.push(p.rgb);
     }
     if (rgbs.length === 0) continue; // 主張色が無ければ判定対象外。
-    const anyPainted = rgbs.some((rgb) => svgByRgb.has(rgb));
+    const anyPainted = rgbs.some(
+      (rgb) => svgByR.fill.has(rgb) || svgByR.stroke.has(rgb),
+    );
     if (!anyPainted) {
       unpainted.push({ series: i, rgbs: [...new Set(rgbs)] });
     }

@@ -90,8 +90,12 @@ fn element_count(s: &crate::ir::Series) -> usize {
 
 /// 色ベクタを「要素ごと rgba」に展開しつつ、全要素同色なら長さ1へ畳む。
 /// 色解決はレンダラと共有する `ir::color_at` を使い、モデルと描画の差異を防ぐ。
+/// 要素数 0(空データセット)では描画マークが無いため空ベクタを返す
+/// (chart.js 抽出器も `meta.data.length`=0 で空配列を返すため、これに揃える)。
 fn colors_to_strings(colors: &[Color], n: usize) -> Vec<String> {
-    let n = n.max(1);
+    if n == 0 {
+        return Vec::new();
+    }
     let all: Vec<String> = (0..n)
         .map(|i| rgba_string(&crate::ir::color_at(colors, i)))
         .collect();
@@ -122,15 +126,25 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
 
 /// 軸抜き(meta/series/counts のみ)のコアモデル。Task 3 で軸を載せる。
 pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
+    // pie/doughnut のスライス境界は renderer が白(pie::SLICE_STROKE)で固定描画し、
+    // 解析済み borderColor を使わない。モデルも実描画に合わせて白を主張する
+    // (spec が borderColor を指定しても fulgur はそれを無視して白を描く点を、
+    // chart.js との diff で正しく顕在化させるため)。
+    let is_pie = matches!(spec.kind, ChartKind::Pie { .. });
     let series: Vec<SeriesModel> = spec
         .series
         .iter()
         .map(|s| {
             let n = element_count(s);
+            let stroke = if is_pie {
+                colors_to_strings(&[crate::layout::pie::SLICE_STROKE], n)
+            } else {
+                colors_to_strings(&s.stroke, n)
+            };
             SeriesModel {
                 label: s.name.clone(),
                 fill: colors_to_strings(&s.fill, n),
-                stroke: colors_to_strings(&s.stroke, n),
+                stroke,
                 values: s.values.clone(),
             }
         })
@@ -153,41 +167,82 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
     }
 }
 
-/// 直交チャート(縦棒・線・mixed)か。これらは layout::common::compute が使える。
-fn is_cartesian_vertical(kind: &ChartKind) -> bool {
-    matches!(
-        kind,
-        ChartKind::Bar {
-            horizontal: false,
-            ..
-        } | ChartKind::Line
-            | ChartKind::Mixed
-    )
+/// NiceTicks を線形軸モデルへ変換する。
+fn linear_axis(t: &crate::scale::NiceTicks) -> AxisModel {
+    AxisModel {
+        kind: "linear".to_string(),
+        labels: None,
+        min: Some(t.min),
+        max: Some(t.max),
+        step: Some(t.step),
+        ticks: Some(t.ticks.clone()),
+    }
 }
 
-/// IR + layout から完全な意味モデルを構築する。直交チャートのみ軸を載せる。
+/// カテゴリ軸モデル(ラベルのみ)。
+fn category_axis(labels: &[String]) -> AxisModel {
+    AxisModel {
+        kind: "category".to_string(),
+        labels: Some(labels.to_vec()),
+        min: None,
+        max: None,
+        step: None,
+        ticks: None,
+    }
+}
+
+/// 直交チャートの (x 軸, y 軸, y 目盛り数) を計算する。値(線形)軸は描画上の向きに
+/// 関わらず常に `y` に載せ、カテゴリ軸を `x` に載せる — JS 抽出器の正規化規約
+/// (線形値軸→y・カテゴリ→x)と揃え、apples-to-apples 照合を可能にするため。
+/// 値域・nice_ticks は renderer の各 layout と同じ関数を共有し、描画との乖離を防ぐ。
+/// 軸を持たないチャート(pie/radar/matrix/progress)は None を返す。
+fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisModel, usize)> {
+    use crate::scale::nice_ticks;
+    match &spec.kind {
+        // 縦棒・線・mixed: 値軸=y(layout::common::compute と共有)、カテゴリ=x。
+        ChartKind::Bar {
+            horizontal: false, ..
+        }
+        | ChartKind::Line
+        | ChartKind::Mixed => {
+            let t = crate::layout::common::compute(spec, m).ticks;
+            Some((
+                category_axis(&spec.categories),
+                linear_axis(&t),
+                t.ticks.len(),
+            ))
+        }
+        // 横棒: 値軸は描画上 x だが照合のため y に載せる。値域は build_horizontal と
+        // 同じく x_axis から読む。カテゴリ=x。
+        ChartKind::Bar {
+            horizontal: true, ..
+        } => {
+            let (lo, hi) = crate::layout::common::value_domain(spec, &spec.x_axis);
+            let t = nice_ticks(lo, hi, 10);
+            Some((
+                category_axis(&spec.categories),
+                linear_axis(&t),
+                t.ticks.len(),
+            ))
+        }
+        // scatter/bubble: x・y とも線形。renderer (scatter::build) と同じ axis_domain を共有。
+        ChartKind::Scatter | ChartKind::Bubble => {
+            let (xlo, xhi) = crate::layout::scatter::axis_domain(spec, &spec.x_axis, |p| p.x);
+            let (ylo, yhi) = crate::layout::scatter::axis_domain(spec, &spec.y_axis, |p| p.y);
+            let xt = nice_ticks(xlo, xhi, 10);
+            let yt = nice_ticks(ylo, yhi, 10);
+            Some((linear_axis(&xt), linear_axis(&yt), yt.ticks.len()))
+        }
+        _ => None,
+    }
+}
+
+/// IR + layout から完全な意味モデルを構築する。直交チャート(縦棒・横棒・線・
+/// mixed・scatter・bubble)に軸を載せる。
 pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
     let mut model = build_model_core(spec);
-    if is_cartesian_vertical(&spec.kind) {
-        let frame = crate::layout::common::compute(spec, m);
-        let t = &frame.ticks;
-        let y = AxisModel {
-            kind: "linear".to_string(),
-            labels: None,
-            min: Some(t.min),
-            max: Some(t.max),
-            step: Some(t.step),
-            ticks: Some(t.ticks.clone()),
-        };
-        let x = AxisModel {
-            kind: "category".to_string(),
-            labels: Some(spec.categories.clone()),
-            min: None,
-            max: None,
-            step: None,
-            ticks: None,
-        };
-        model.counts.y_ticks = t.ticks.len();
+    if let Some((x, y, y_ticks)) = compute_axes(spec, m) {
+        model.counts.y_ticks = y_ticks;
         model.axes = Some(Axes { x, y });
     }
     model
@@ -305,6 +360,59 @@ mod tests {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let model = build_model(&spec, &m);
         assert!(model.axes.is_none());
+    }
+
+    #[test]
+    fn horizontal_bar_puts_value_axis_on_y() {
+        // 横棒でも値(線形)軸は y に、カテゴリは x に載る(JS 抽出器の規約に揃える)。
+        let json = r#"{"type":"bar","data":{"labels":["a","b"],
+          "datasets":[{"data":[10,90]}]},"options":{"indexAxis":"y"}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        let axes = model.axes.expect("横棒には軸があるべき");
+        assert_eq!(axes.y.kind, "linear");
+        assert_eq!(axes.y.min, Some(0.0));
+        assert_eq!(axes.x.kind, "category");
+        assert!(model.counts.y_ticks > 0);
+        assert_eq!(model.counts.y_ticks, axes.y.ticks.unwrap().len());
+    }
+
+    #[test]
+    fn scatter_has_linear_x_and_y_axes() {
+        let json = r#"{"type":"scatter","data":{"datasets":[{"data":[
+          {"x":1,"y":2},{"x":3,"y":8}]}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        let axes = model.axes.expect("scatter には軸があるべき");
+        assert_eq!(axes.x.kind, "linear");
+        assert_eq!(axes.y.kind, "linear");
+        assert!(model.counts.y_ticks > 0);
+        assert_eq!(model.counts.y_ticks, axes.y.ticks.unwrap().len());
+    }
+
+    #[test]
+    fn pie_stroke_claims_rendered_white() {
+        // renderer は borderColor を無視し白でスライス境界を描くので、モデルも白を主張する。
+        let json = r##"{"type":"pie","data":{"labels":["a","b"],
+          "datasets":[{"data":[1,2],"borderColor":"#ff0000"}]}}"##;
+        let spec = chartjs::parse(json, false).unwrap();
+        let model = build_model_core(&spec);
+        assert_eq!(
+            model.series[0].stroke,
+            vec!["rgba(255,255,255,1)".to_string()]
+        );
+    }
+
+    #[test]
+    fn empty_dataset_emits_no_element_colors() {
+        // 空データセットは描画マークが無いため fill/stroke とも空(chart.js と一致)。
+        let json = r#"{"type":"bar","data":{"labels":[],"datasets":[{"data":[]}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let model = build_model_core(&spec);
+        assert!(model.series[0].fill.is_empty());
+        assert!(model.series[0].stroke.is_empty());
     }
 
     /// クロス言語フィクスチャ: ここの行は

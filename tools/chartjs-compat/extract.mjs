@@ -75,9 +75,15 @@ export async function extractChartjsModel(spec, width, height) {
   });
 
   // 軸(線形スケールがあれば)。linear を y、category を x とみなす単純規則。
+  // scatter/bubble は x・y とも linear なので、値軸として y 軸(axis==='y')の
+  // スケールを優先する。無ければ最初の linear にフォールバック。
   let axes;
   const scaleIds = Object.keys(chart.scales);
-  const linId = scaleIds.find((id) => chart.scales[id].type === 'linear');
+  const linId =
+    scaleIds.find(
+      (id) =>
+        chart.scales[id].type === 'linear' && chart.scales[id].axis === 'y',
+    ) ?? scaleIds.find((id) => chart.scales[id].type === 'linear');
   const catId = scaleIds.find((id) => chart.scales[id].type === 'category');
   if (linId) {
     const s = chart.scales[linId];

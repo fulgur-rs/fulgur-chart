@@ -880,34 +880,35 @@ git commit -m "feat(compat): semantic diff engine with per-dimension verdicts"
 - Create: `tools/chartjs-compat/crosscheck.mjs`
 - Test: `tools/chartjs-compat/crosscheck.test.mjs`
 
-**目的:** fulgur 意味モデルの系列色が、実 fulgur SVG に実在するか検証。SVG は `fill="#rrggbb" fill-opacity="0.5"` 形式なので、SVG から (色,opacity) を rgba へ正規化した集合を作り、モデル色が部分集合かを判定。
+**目的:** fulgur 意味モデルの系列色が、実 fulgur SVG に実在し、かつ意図しない alpha で描かれていないか検証。SVG は `fill="#rrggbb" fill-opacity="0.5"`(stroke も同様)形式なので、データマークのタグから (RGB, alpha) を **fill/stroke の役割別**に抽出し、(1) alpha 整合性(painted ⊆ claimed)と (2) 系列単位の塗装存在を判定する。
 
-**Step 1: 失敗するテストを書く**
+> 実装メモ(計画から進化した点):
+> - 返却は `{ pass, divergences, unpainted }`(当初案の `missing` 単一リストではない)。`divergences` は role/rgb/paintedAlpha/modelAlphas を持つ alpha 不整合、`unpainted` は系列丸ごと未塗装。
+> - fill と stroke の alpha は**役割別**に追跡する(同一 RGB で fill 0.5 / stroke 1 の棒の典型ケースを取りこぼさない)。
+> - 走査は**データマーク**(`rect`/`circle`/`path`/`polyline`/`polygon`)のみ。chrome である `line`(グリッド/軸)と `text`(ラベル)は除外し、系列色と同 RGB の chrome による偽の不整合を防ぐ。
+
+**Step 1: テストを書く**
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { svgColorSet, crosscheckColors } from './crosscheck.mjs';
+import { crosscheckColors } from './crosscheck.mjs';
 
-const svg = `<svg><rect x="1" y="2" width="3" height="4" fill="#36a2eb" fill-opacity="0.5"/>
-  <line x1="0" y1="0" x2="1" y2="1" stroke="#36a2eb" stroke-width="2"/></svg>`;
-
-test('SVG の fill+opacity を rgba 集合へ', () => {
-  const set = svgColorSet(svg);
-  assert.ok(set.has('rgba(54,162,235,0.5)'));   // fill+opacity
-  assert.ok(set.has('rgba(54,162,235,1)'));      // stroke(opacity 無し → a=1)
-});
-
-test('モデル色が SVG に無ければ FAIL(alpha 乗算バグ検出)', () => {
-  const model = { series: [{ fill: ['rgba(54,162,235,0.25)'], stroke: ['rgba(54,162,235,1)'] }] };
-  const r = crosscheckColors(model, svg);
-  assert.equal(r.pass, false);
-  assert.deepEqual(r.missing, ['rgba(54,162,235,0.25)']);
-});
-
-test('一致すれば PASS', () => {
+// fill@0.5 と stroke@1 を両方描けば PASS。
+test('MATCH: fill@0.5 + stroke@1 を SVG が両方描く → PASS', () => {
+  const svg = `<svg><rect fill="#36a2eb" fill-opacity="0.5"/><path stroke="#36a2eb"/></svg>`;
   const model = { series: [{ fill: ['rgba(54,162,235,0.5)'], stroke: ['rgba(54,162,235,1)'] }] };
   assert.equal(crosscheckColors(model, svg).pass, true);
+});
+
+// fill が @0.25 で描かれる → fill 役割の主張 {0.5} に無い → divergence で FAIL。
+test('ALPHA-MULTIPLIER BUG: fill@0.25 → fill 役割の divergence で FAIL', () => {
+  const svg = `<svg><rect fill="#36a2eb" fill-opacity="0.25"/><path stroke="#36a2eb"/></svg>`;
+  const model = { series: [{ fill: ['rgba(54,162,235,0.5)'], stroke: ['rgba(54,162,235,1)'] }] };
+  const r = crosscheckColors(model, svg);
+  assert.equal(r.pass, false);
+  assert.equal(r.divergences[0].role, 'fill');
+  assert.deepEqual(r.divergences[0].modelAlphas, ['0.5']);
 });
 ```
 
@@ -916,46 +917,77 @@ test('一致すれば PASS', () => {
 Run: `cd tools && node --test chartjs-compat/crosscheck.test.mjs 2>&1 | tail -20`
 Expected: 未定義で失敗。
 
-**Step 3: 最小実装**(`tools/chartjs-compat/crosscheck.mjs`)
+**Step 3: 実装**(`tools/chartjs-compat/crosscheck.mjs`)
 
 ```js
-function hexToRgb(hex) {
-  const h = hex.replace('#', '');
-  return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
-}
-function fmtAlpha(a) { if (a >= 1) return '1'; if (a <= 0) return '0'; return String(Math.round(a*1000)/1000); }
+import { fmtAlpha } from './color-util.mjs';
 
-// SVG 文字列から fill/stroke の (hex, opacity) ペアを抽出し rgba 集合にする。
-export function svgColorSet(svg) {
-  const set = new Set();
-  // 各要素タグ単位で属性を見て、その要素の fill-opacity / stroke-opacity を対にする。
-  const tagRe = /<(rect|circle|path|line|polyline|polygon|text)\b[^>]*>/g;
+const ROLES = [['fill', 'fill-opacity'], ['stroke', 'stroke-opacity']];
+const normalizeHex = (hex) => hex.toLowerCase();
+
+// 'rgba(r,g,b,a)' → { rgb: '#rrggbb', alpha: '<canonical>' }。
+function parseRgba(s) {
+  const m = s.match(/^rgba\((\d+),(\d+),(\d+),([\d.]+)\)$/);
+  if (!m) return null;
+  const rgb = '#' + [+m[1], +m[2], +m[3]].map((v) => v.toString(16).padStart(2, '0')).join('');
+  return { rgb, alpha: fmtAlpha(parseFloat(m[4])) };
+}
+
+// データマークの fill/stroke を役割別に抽出: { fill: Map<rgb,Set>, stroke: Map<rgb,Set> }。
+// chrome(<line> グリッド/軸・<text> ラベル)は走査しない。
+export function svgByRole(svg) {
+  const byRole = { fill: new Map(), stroke: new Map() };
+  const tagRe = /<(rect|circle|path|polyline|polygon)\b[^>]*>/g;
   let m;
   while ((m = tagRe.exec(svg))) {
     const tag = m[0];
-    for (const [kind, opName] of [['fill','fill-opacity'], ['stroke','stroke-opacity']]) {
-      const cm = tag.match(new RegExp(`\\b${kind}="(#[0-9a-fA-F]{6})"`));
+    for (const [role, opName] of ROLES) {
+      const cm = tag.match(new RegExp(`\\b${role}="(#[0-9a-fA-F]{6})"`));
       if (!cm) continue;
       const om = tag.match(new RegExp(`\\b${opName}="([0-9.]+)"`));
       const a = om ? parseFloat(om[1]) : 1;
-      const [r,g,b] = hexToRgb(cm[1]);
-      set.add(`rgba(${r},${g},${b},${fmtAlpha(a)})`);
+      const rgb = normalizeHex(cm[1]);
+      const map = byRole[role];
+      if (!map.has(rgb)) map.set(rgb, new Set());
+      map.get(rgb).add(fmtAlpha(a));
     }
   }
-  return set;
+  return byRole;
 }
 
 export function crosscheckColors(model, svg) {
-  const set = svgColorSet(svg);
-  const missing = [];
+  const svgByR = svgByRole(svg);
+  const modelByRole = { fill: new Map(), stroke: new Map() };
   for (const s of model.series) {
-    for (const c of [...(s.fill || []), ...(s.stroke || [])]) {
-      // 完全透明(a=0)は SVG に出ない場合があるので無視。
-      if (c.endsWith(',0)')) continue;
-      if (!set.has(c)) missing.push(c);
+    for (const [role, list] of [['fill', s.fill], ['stroke', s.stroke]]) {
+      for (const c of list || []) {
+        const p = parseRgba(c);
+        if (!p || p.alpha === '0') continue;
+        if (!modelByRole[role].has(p.rgb)) modelByRole[role].set(p.rgb, new Set());
+        modelByRole[role].get(p.rgb).add(p.alpha);
+      }
     }
   }
-  return { pass: missing.length === 0, missing: [...new Set(missing)] };
+  // 1. alpha 整合性(役割別): painted ⊆ claimed。
+  const divergences = [];
+  for (const role of ['fill', 'stroke']) {
+    for (const [rgb, claimed] of modelByRole[role]) {
+      const painted = svgByR[role].get(rgb);
+      if (!painted) continue;
+      for (const a of painted)
+        if (!claimed.has(a)) divergences.push({ role, rgb, paintedAlpha: a, modelAlphas: [...claimed] });
+    }
+  }
+  // 2. 系列単位: 各系列の rgb の少なくとも 1 つが(役割を問わず)塗られている。
+  const unpainted = [];
+  for (let i = 0; i < model.series.length; i++) {
+    const rgbs = [...(model.series[i].fill || []), ...(model.series[i].stroke || [])]
+      .map(parseRgba).filter((p) => p && p.alpha !== '0').map((p) => p.rgb);
+    if (rgbs.length === 0) continue;
+    if (!rgbs.some((rgb) => svgByR.fill.has(rgb) || svgByR.stroke.has(rgb)))
+      unpainted.push({ series: i, rgbs: [...new Set(rgbs)] });
+  }
+  return { pass: divergences.length === 0 && unpainted.length === 0, divergences, unpainted };
 }
 ```
 

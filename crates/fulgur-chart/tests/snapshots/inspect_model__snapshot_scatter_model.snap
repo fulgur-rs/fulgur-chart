@@ -6,6 +6,37 @@ meta:
   type: scatter
   width: 800
   height: 450
+axes:
+  x:
+    kind: linear
+    min: 10
+    max: 40
+    step: 5
+    ticks:
+      - 10
+      - 15
+      - 20
+      - 25
+      - 30
+      - 35
+      - 40
+  y:
+    kind: linear
+    min: 4
+    max: 24
+    step: 2
+    ticks:
+      - 4
+      - 6
+      - 8
+      - 10
+      - 12
+      - 14
+      - 16
+      - 18
+      - 20
+      - 22
+      - 24
 series:
   - label: Store A
     fill:
@@ -23,4 +54,4 @@ counts:
   datasets: 2
   legend_items: 2
   x_ticks: 0
-  y_ticks: 0
+  y_ticks: 11
