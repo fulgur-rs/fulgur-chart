@@ -146,7 +146,18 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let ink = spec.theme.text_color;
     let label_font = spec.theme.font_size;
 
-    let (dmin, dmax) = value_domain(spec);
+    let (mut dmin, mut dmax) = value_domain(spec);
+    // 横棒は値軸が x のため value_domain（y_axis 参照）の後に x_axis.suggested を追加適用する。
+    if let Some(s) = spec.x_axis.suggested_min {
+        if s.is_finite() && s < dmin {
+            dmin = s;
+        }
+    }
+    if let Some(s) = spec.x_axis.suggested_max {
+        if s.is_finite() && s > dmax {
+            dmax = s;
+        }
+    }
     let ticks = nice_ticks(dmin, dmax, 10);
 
     // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。

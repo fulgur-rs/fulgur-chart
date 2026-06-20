@@ -24,6 +24,10 @@ async function getTicks(label, data, yOpts = {}) {
   });
 
   const scale = chart.scales.y;
+  if (!scale) {
+    chart.destroy();
+    throw new Error(`chart.scales.y が未定義です (label=${label})`);
+  }
   const result = {
     label,
     data,

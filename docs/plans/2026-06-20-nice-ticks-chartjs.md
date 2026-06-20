@@ -1,7 +1,5 @@
 # nice-ticks chart.js 一致 実装プラン
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** `scale.rs` の `nice_ticks` を chart.js v4 の目盛り挙動（`maxTicksLimit=11`、`beginAtZero`、`suggestedMin`/`suggestedMax`）に精密一致させる。
 
 **Architecture:** (1) Node.js スクリプトで chart.js 実出力を取得して差分を確定する。(2) `nice_ticks` の呼び出し側 `target_count` を 5→10 に修正する。(3) `AxisSpec` に `suggested_min`/`suggested_max` を追加して frontend と `value_domain` に接続する。(4) 確定した期待値で scale.rs にピンテストを追加する。
@@ -10,7 +8,7 @@
 
 ---
 
-### Task 1: 調査スクリプト `tools/chartjs_ticks.mjs` を作成して実行する
+## Task 1: 調査スクリプト `tools/chartjs_ticks.mjs` を作成して実行する
 
 **Files:**
 - Create: `tools/package.json`
@@ -127,7 +125,7 @@ git commit -m "feat(tools): add chartjs_ticks.mjs investigation script"
 
 ---
 
-### Task 2: `nice_ticks` の `target_count` を 5 から 10 に変更する
+## Task 2: `nice_ticks` の `target_count` を 5 から 10 に変更する
 
 > **前提:** Task 1 の出力で chart.js がデフォルト 11 目盛り（10 インターバル）を生成することを確認済み。
 > 現在のコードは `target_count=5`（5 インターバル）を渡しているため、目盛り数が約半分になっている。
@@ -231,7 +229,7 @@ git commit -m "fix(scale): align nice_ticks target_count with chart.js maxTicksL
 
 ---
 
-### Task 3: `AxisSpec` に `suggested_min`/`suggested_max` を追加して接続する
+## Task 3: `AxisSpec` に `suggested_min`/`suggested_max` を追加して接続する
 
 > chart.js の `suggestedMin`/`suggestedMax` はソフト制約。
 > データが suggested 範囲を超えても問題ない（データが優先される）。
@@ -376,7 +374,7 @@ git commit -m "feat(scale): add suggestedMin/suggestedMax to AxisSpec and wire t
 
 ---
 
-### Task 4: `scale.rs` に chart.js 出力との一致をピンするテストを追加する
+## Task 4: `scale.rs` に chart.js 出力との一致をピンするテストを追加する
 
 > Task 1 の `chartjs_ticks_output.json` の値を使って期待値を確定する。
 > このテストが regression guard になる。
@@ -457,12 +455,12 @@ git commit -m "test(scale): add chart.js v4 compatibility pin tests for nice_tic
 
 ---
 
-### Task 5: 全テストを実行して完了確認する
+## Task 5: 全テストを実行して完了確認する
 
 **Step 1: workspace 全体でテストを実行する**
 
 ```bash
-cargo test --manifest-path /home/ubuntu/fulgur-chart/.worktrees/feat/nice-ticks-chartjs/Cargo.toml 2>&1 | grep "test result"
+cargo test 2>&1 | grep "test result"
 ```
 
 Expected: すべての crate で `ok` が出ること。

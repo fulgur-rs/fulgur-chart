@@ -77,13 +77,14 @@ fn axis_domain(
         hi = 1.0;
     }
     // suggestedMin/suggestedMax: データが優先、suggested はドメインを広げるだけ。
+    // 非有限値（Infinity/NaN）は nice_ticks で無限 range を生じさせるため無視する。
     if let Some(s) = axis_spec.suggested_min {
-        if s < lo {
+        if s.is_finite() && s < lo {
             lo = s;
         }
     }
     if let Some(s) = axis_spec.suggested_max {
-        if s > hi {
+        if s.is_finite() && s > hi {
             hi = s;
         }
     }

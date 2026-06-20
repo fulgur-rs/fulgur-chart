@@ -101,13 +101,14 @@ pub fn value_domain(spec: &ChartSpec) -> (f64, f64) {
         (data_min, data_max)
     };
     // suggestedMin/suggestedMax: データが優先、suggested はドメインを広げるだけ。
+    // 非有限値（Infinity/NaN）は nice_ticks で無限 range を生じさせるため無視する。
     if let Some(s) = spec.y_axis.suggested_min {
-        if s < domain_min {
+        if s.is_finite() && s < domain_min {
             domain_min = s;
         }
     }
     if let Some(s) = spec.y_axis.suggested_max {
-        if s > domain_max {
+        if s.is_finite() && s > domain_max {
             domain_max = s;
         }
     }
