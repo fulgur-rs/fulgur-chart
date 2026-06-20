@@ -542,7 +542,11 @@ fn resolve_colors(
     let pick = |i: usize| {
         let c = palette[i % palette.len()];
         Color {
-            a: if is_custom_palette { c.a } else { default_alpha },
+            a: if is_custom_palette && c.a < 1.0 {
+                c.a
+            } else {
+                default_alpha
+            },
             ..c
         }
     };
