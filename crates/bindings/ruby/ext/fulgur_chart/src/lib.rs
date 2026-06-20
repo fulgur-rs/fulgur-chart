@@ -9,7 +9,9 @@ use magnus::{
 // --- error helpers (classification is by CALL SITE, never by parsing the message) ---
 
 fn exc_class(ruby: &Ruby, name: &str) -> ExceptionClass {
-    let module = ruby.define_module("Fulgur").expect("Fulgur module defined in init");
+    let module = ruby
+        .define_module("Fulgur")
+        .expect("Fulgur module defined in init");
     module
         .const_get::<_, ExceptionClass>(name)
         .expect("error class defined in init")
@@ -41,8 +43,7 @@ struct DslDetector {
 
 /// Infer DSL from spec JSON: `mark` key → vegalite, `type` key → chartjs, neither → Err.
 fn detect_dsl(json: &str) -> Result<&'static str, String> {
-    let d: DslDetector =
-        serde_json::from_str(json).map_err(|e| format!("invalid JSON: {e}"))?;
+    let d: DslDetector = serde_json::from_str(json).map_err(|e| format!("invalid JSON: {e}"))?;
     if d.mark.is_some() {
         return Ok("vegalite");
     }
@@ -89,7 +90,11 @@ fn parse_opts(ruby: &Ruby, kw: RHash) -> Result<Opts, Error> {
             Option<RString>,
         ),
         RHash, // splat: collect + ignore unknown keys
-    >(kw, &[], &["width", "height", "scale", "strict", "dsl", "font"])?;
+    >(
+        kw,
+        &[],
+        &["width", "height", "scale", "strict", "dsl", "font"],
+    )?;
     let (width, height, scale, strict, dsl, font) = args.optional;
 
     if let Some(d) = &dsl {
@@ -172,7 +177,10 @@ fn render_svg(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
 /// spec_json + Opts → binary PNG String (shared by render_image / render_png).
 fn render_png_string(ruby: &Ruby, spec_json: &str, opts: &Opts) -> Result<RString, Error> {
     let ir = build_ir(ruby, spec_json, opts)?;
-    let fb: &[u8] = opts.font.as_deref().unwrap_or(fulgur_chart::font::DEFAULT_FONT);
+    let fb: &[u8] = opts
+        .font
+        .as_deref()
+        .unwrap_or(fulgur_chart::font::DEFAULT_FONT);
     // Invalid font on the image path → RenderError (the SVG path maps this to ParseError).
     let png = fulgur_chart::raster_direct::render_chart_to_png(&ir, opts.scale, fb)
         .map_err(|e| render_err(ruby, e))?;
