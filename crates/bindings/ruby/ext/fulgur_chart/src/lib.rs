@@ -31,6 +31,13 @@ fn render_err(ruby: &Ruby, msg: impl Into<String>) -> Error {
     Error::new(exc_class(ruby, "RenderError"), msg.into())
 }
 
+/// Coerce a Ruby argument to a String, accepting both String and Symbol (idiomatic Ruby lets
+/// callers pass `dsl: :chartjs` / `format: :png`). magnus's String conversion rejects Symbols,
+/// so without this `to_s` coercion a symbol would raise TypeError instead of being accepted.
+fn coerce_string(v: Value) -> Result<String, Error> {
+    v.funcall("to_s", ())
+}
+
 // --- DSL detection + parse (mirrors fulgur-chart-cli `detect_dsl` / `parse_spec`) ---
 
 /// Lightweight serde helper that only deserialises the top-level keys used for DSL detection.
@@ -86,7 +93,7 @@ fn parse_opts(ruby: &Ruby, kw: RHash) -> Result<Opts, Error> {
             Option<f64>,
             Option<f64>,
             Option<bool>,
-            Option<String>,
+            Option<Value>,
             Option<RString>,
         ),
         RHash, // splat: collect + ignore unknown keys
@@ -95,13 +102,19 @@ fn parse_opts(ruby: &Ruby, kw: RHash) -> Result<Opts, Error> {
         &[],
         &["width", "height", "scale", "strict", "dsl", "font"],
     )?;
-    let (width, height, scale, strict, dsl, font) = args.optional;
+    let (width, height, scale, strict, dsl_val, font) = args.optional;
 
-    if let Some(d) = &dsl {
-        if d != "chartjs" && d != "vegalite" {
-            return Err(parse_err(ruby, format!("unsupported DSL '{d}'")));
+    // Accept String or Symbol for `dsl`; an explicit nil arrives as None (→ auto-detect).
+    let dsl = match dsl_val {
+        Some(v) => {
+            let d = coerce_string(v)?;
+            if d != "chartjs" && d != "vegalite" {
+                return Err(parse_err(ruby, format!("unsupported DSL '{d}'")));
+            }
+            Some(d)
         }
-    }
+        None => None,
+    };
 
     // Copy the font bytes out of the Ruby string immediately; the borrow is unsafe and must
     // not outlive any subsequent VM allocation.
@@ -190,10 +203,11 @@ fn render_png_string(ruby: &Ruby, spec_json: &str, opts: &Opts) -> Result<RStrin
 fn render_image(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
     let scanned = scan_args::<(String,), (), (), (), RHash, ()>(args)?;
     let (spec_json,) = scanned.required;
-    // Required `format` kwarg. The trailing `RHash` splat tolerates leftover RenderOptions
-    // keys (width/height/scale/strict/dsl/font); the splat-less form would raise on them.
-    let kw = get_kwargs::<_, (String,), (), RHash>(scanned.keywords, &["format"], &[])?;
-    let (format,) = kw.required;
+    // Required `format` kwarg (String or Symbol). The trailing `RHash` splat tolerates leftover
+    // RenderOptions keys (width/height/scale/strict/dsl/font); the splat-less form would raise.
+    let kw = get_kwargs::<_, (Value,), (), RHash>(scanned.keywords, &["format"], &[])?;
+    let (format_val,) = kw.required;
+    let format = coerce_string(format_val)?;
     if format != "png" {
         return Err(parse_err(
             ruby,
@@ -215,9 +229,10 @@ fn render_png(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
 
 // --- public API: schema ---
 
-/// Return the JSON Schema (compact JSON String) for the given DSL.
+/// Return the JSON Schema (compact JSON String) for the given DSL (String or Symbol).
 /// Mirrors the CLI's `run_schema`; unknown DSL → ParseError (consistent with `parse_opts`).
-fn schema(ruby: &Ruby, dsl: String) -> Result<String, Error> {
+fn schema(ruby: &Ruby, dsl: Value) -> Result<String, Error> {
+    let dsl = coerce_string(dsl)?;
     let s = match dsl.as_str() {
         "chartjs" => schemars::schema_for!(fulgur_chart::schema::ChartJsSpec),
         "vegalite" => schemars::schema_for!(fulgur_chart::schema::VegaLiteSpec),

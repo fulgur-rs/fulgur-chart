@@ -39,4 +39,20 @@ class TestAcceptance < Minitest::Test
     assert_equal FulgurChart.render_svg(CJ), FulgurChart.render_svg(CJ)
     assert_equal FulgurChart.render_png(CJ), FulgurChart.render_png(CJ)
   end
+
+  # Ruby callers idiomatically pass symbols for enum-like options; String and Symbol must
+  # behave identically for dsl / format / schema (no TypeError on symbols).
+  def test_symbol_options_accepted
+    assert_equal FulgurChart.render_svg(CJ, dsl: "chartjs"),
+                 FulgurChart.render_svg(CJ, dsl: :chartjs)
+    assert_equal FulgurChart.render_image(CJ, format: "png"),
+                 FulgurChart.render_image(CJ, format: :png)
+    assert_equal FulgurChart.schema("chartjs"), FulgurChart.schema(:chartjs)
+  end
+
+  def test_symbol_unknown_dsl_still_parse_error
+    assert_raises(Fulgur::ParseError) { FulgurChart.render_svg(CJ, dsl: :nope) }
+    assert_raises(Fulgur::ParseError) { FulgurChart.schema(:nope) }
+    assert_raises(Fulgur::ParseError) { FulgurChart.render_image(CJ, format: :zzz) }
+  end
 end
