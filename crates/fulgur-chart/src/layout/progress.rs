@@ -2,13 +2,62 @@
 //! 軸なしの水平塗りつぶしバー。決定的に組み立て、NaN/Inf/panic を出さない。
 
 use super::common::{OUTER_PAD, TITLE_BAND, TITLE_FONT};
-use crate::ir::ChartSpec;
+use crate::ir::{ChartSpec, Color};
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 
-pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
+/// トラック（背景）の淡灰色。
+const TRACK_COLOR: Color = Color {
+    r: 224,
+    g: 224,
+    b: 224,
+    a: 1.0,
+};
+/// バンド高に対するバー高の比。
+const BAR_HEIGHT_RATIO: f64 = 0.6;
+
+pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let ink = spec.theme.text_color;
+    let label_font = spec.theme.font_size;
+
+    // series[0] が各バーの値。無ければ空。
+    let values: &[f64] = spec
+        .series
+        .first()
+        .map(|s| s.values.as_slice())
+        .unwrap_or(&[]);
+    let n = values.len();
+
+    let title_band = if spec.title.is_some() {
+        TITLE_BAND
+    } else {
+        0.0
+    };
+
+    // 左ラベル帯: バー名(categories)の最大幅。全て空なら 0。
+    let mut max_label_w = 0.0_f32;
+    for name in &spec.categories {
+        if !name.is_empty() {
+            let w = m.width(name, label_font as f32);
+            if w > max_label_w {
+                max_label_w = w;
+            }
+        }
+    }
+    let label_band = if max_label_w > 0.0 {
+        max_label_w as f64 + 10.0
+    } else {
+        0.0
+    };
+
+    let plot_left = OUTER_PAD + label_band;
+    let plot_right = spec.width - OUTER_PAD;
+    let plot_top = OUTER_PAD + title_band;
+    let plot_bottom = spec.height - OUTER_PAD;
+    let plot_w = (plot_right - plot_left).max(0.0);
+    let plot_h = (plot_bottom - plot_top).max(0.0);
+
     let mut items: Vec<Prim> = Vec::new();
 
     if let Some(title) = &spec.title {
@@ -21,7 +70,61 @@ pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
             content: title.clone(),
         });
     }
-    let _ = TITLE_BAND; // 後続タスクで使用
+
+    if n == 0 {
+        return Scene {
+            width: spec.width,
+            height: spec.height,
+            items,
+        };
+    }
+
+    let band_h = plot_h / n as f64;
+    let bar_h = (band_h * BAR_HEIGHT_RATIO).max(0.0);
+
+    for i in 0..n {
+        let band_top = plot_top + i as f64 * band_h;
+        let bar_y = band_top + (band_h - bar_h) / 2.0;
+        let center_y = band_top + band_h / 2.0;
+
+        // per-bar max: series.get(1).values[i]。非有限/≤0 は 100。
+        let max_i = spec
+            .series
+            .get(1)
+            .and_then(|s| s.values.get(i).copied())
+            .filter(|mx| mx.is_finite() && *mx > 0.0)
+            .unwrap_or(100.0);
+
+        let v = values[i];
+        let frac = if v.is_finite() {
+            (v / max_i).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
+        // トラック（角丸・全幅）
+        let track_r = (bar_h / 2.0).min(plot_w / 2.0);
+        items.push(Prim::Path {
+            d: rounded_rect_path(plot_left, bar_y, plot_w, bar_h, track_r),
+            fill: Some(TRACK_COLOR),
+            stroke: None,
+            stroke_width: 0.0,
+        });
+
+        // 前景（角丸・幅 = frac × 全幅）。0 幅は描かない。
+        let fg_w = plot_w * frac;
+        if fg_w > 0.0 {
+            let fg_r = (bar_h / 2.0).min(fg_w / 2.0);
+            items.push(Prim::Path {
+                d: rounded_rect_path(plot_left, bar_y, fg_w, bar_h, fg_r),
+                fill: Some(spec.series[0].fill_at(i)),
+                stroke: None,
+                stroke_width: 0.0,
+            });
+        }
+
+        let _ = (center_y, fmt_num as fn(f64) -> String); // 次タスクで使用
+    }
 
     Scene {
         width: spec.width,

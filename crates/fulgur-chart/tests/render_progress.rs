@@ -14,3 +14,34 @@ fn progress_renders_svg() {
     );
     assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
 }
+
+fn count(hay: &str, needle: &str) -> usize {
+    hay.matches(needle).count()
+}
+
+#[test]
+fn progress_two_bars_two_tracks_two_foregrounds() {
+    // 値が 2 つ → トラック 2 + 前景 2 = path 4
+    let svg = render(r#"{"type":"progress","data":{"datasets":[{"data":[70,40]}]}}"#);
+    assert_eq!(count(&svg, "<path"), 4, "{svg}");
+}
+
+#[test]
+fn progress_zero_value_is_track_only() {
+    // 0% は前景パスを描かない（トラックのみ → path 1）
+    let svg = render(r#"{"type":"progress","data":{"datasets":[{"data":[0]}]}}"#);
+    assert_eq!(count(&svg, "<path"), 1, "{svg}");
+}
+
+#[test]
+fn progress_foreground_uses_solid_background_color() {
+    // 前景色は backgroundColor、ソリッド（fill-opacity の半透明指定がない）
+    let svg = render(
+        r##"{"type":"progress","data":{"datasets":[{"data":[60],"backgroundColor":"#ff0000"}]}}"##,
+    );
+    assert!(svg.contains("#ff0000"), "foreground color missing: {svg}");
+    assert!(
+        !svg.contains("fill-opacity=\"0.5\""),
+        "should be solid: {svg}"
+    );
+}

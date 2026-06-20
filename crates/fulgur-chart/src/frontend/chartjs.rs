@@ -323,6 +323,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let theme = build_theme(raw.options.theme);
 
     let is_pie = matches!(kind, ChartKind::Pie { .. });
+    // progress も pie 同様に前景をソリッド(alpha=1.0)で塗る。
+    let is_progress = matches!(kind, ChartKind::Progress);
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
     let is_point_based = matches!(kind, ChartKind::Scatter | ChartKind::Bubble);
 
@@ -358,7 +360,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             } else {
                 values.len()
             };
-            let fill_alpha = if is_pie { 1.0_f32 } else { 0.5_f32 };
+            let fill_alpha = if is_pie || is_progress {
+                1.0_f32
+            } else {
+                0.5_f32
+            };
             let fill = resolve_colors(
                 ds.background_color,
                 is_pie,
