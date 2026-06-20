@@ -65,5 +65,4 @@ mod tests {
         let c = palette_color(0);
         assert_eq!((c.r, c.g, c.b), (54, 162, 235)); // #36A2EB
     }
-
 }
