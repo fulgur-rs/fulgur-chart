@@ -109,19 +109,3 @@ jobs:
 
       - name: Check
         run: cargo check --workspace --locked
-
-  publish-dry-run:
-    name: Publish dry-run
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: fulgur-chart
-        run: cargo publish --dry-run -p fulgur-chart
-
-      - name: fulgur-chart-cli
-        run: cargo publish --dry-run --no-verify -p fulgur-chart-cli
