@@ -464,6 +464,12 @@ fn schema_chartjs_includes_progress() {
         text.contains("progress"),
         "schema should mention progress variant"
     );
+    // QuickChart の正式名 progressBar も schema に現れること(serde alias)。
+    // パーサが受理する型を schema 検証側も受理できるよう整合させる。
+    assert!(
+        text.contains("progressBar"),
+        "schema should include the progressBar alias"
+    );
 }
 
 #[test]

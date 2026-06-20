@@ -28,6 +28,8 @@ pub enum ChartJsSpec {
     Bubble(BubbleSpec),
     Radar(RadarSpec),
     Matrix(MatrixSpec),
+    /// QuickChart's canonical name is `progressBar`; `progress` is accepted too.
+    #[serde(alias = "progressBar")]
     Progress(ProgressSpec),
 }
 
