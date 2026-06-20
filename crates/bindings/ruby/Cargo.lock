@@ -232,8 +232,8 @@ version = "0.1.0"
 dependencies = [
  "fulgur-chart",
  "magnus",
- "rb-sys-env",
  "schemars",
+ "serde",
  "serde_json",
 ]
 

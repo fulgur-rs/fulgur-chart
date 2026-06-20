@@ -2,13 +2,6 @@
 
 require_relative "fulgur_chart/fulgur_chart" # native ext (Init_fulgur_chart -> module Fulgur)
 
-# Contract-compliant error hierarchy. native side defines these; this is a safety net
-# (idempotent via const_defined? guards) so requiring the file is robust.
-module Fulgur
-  class ParseError < StandardError; end unless const_defined?(:ParseError)
-  class StrictError < ParseError; end unless const_defined?(:StrictError)
-  class RenderError < StandardError; end unless const_defined?(:RenderError)
-end
-
-# Acceptance criteria use FulgurChart.* — provide it as an alias of Fulgur.
+# 公開 API・エラー階層は native(ext) 側で定義される。ここでは受け入れ基準が要求する
+# FulgurChart.* を Fulgur のエイリアスとして提供するのみ（定義の単一ソース化）。
 FulgurChart = Fulgur unless defined?(FulgurChart)
