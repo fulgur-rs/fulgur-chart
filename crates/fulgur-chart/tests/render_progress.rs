@@ -155,3 +155,13 @@ fn progress_bars_render_in_png() {
         "progress foreground bar (#36a2eb) must be rasterized into the PNG"
     );
 }
+
+#[test]
+fn progress_strict_accepts_datalabels() {
+    // datalabels は ProgressPlugins に残っているため strict でも通る（回帰確認）
+    let ok = chartjs::parse(
+        r##"{"type":"progress","data":{"datasets":[{"data":[70]}]},"options":{"plugins":{"datalabels":{"display":false}}}}"##,
+        true,
+    );
+    assert!(ok.is_ok(), "datalabels should be accepted: {:?}", ok);
+}
