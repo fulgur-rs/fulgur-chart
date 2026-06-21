@@ -124,98 +124,41 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let mut items: Vec<Prim> = Vec::new();
     super::common::draw_frame(&mut items, spec, &frame, m);
 
-    // bar 本体: カテゴリ band 内に系列グループの矩形を重ねる。
-    let n = spec.categories.len().max(1);
-    let band_w = super::common::band_width(&frame, n);
-    let s = spec.series.len().max(1);
-    let group_w = band_w * GROUP_RATIO;
-    let bar_w = group_w / s as f64;
-
+    // bar 本体: 矩形は共有 vertical_bar_boxes(単一真実源)から、値ラベルは box から導出。
     let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
-    let baseline_y = frame.ys.map(base_v);
-
     let stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { stacked: true, .. });
-
-    if stacked {
-        // 積み上げ: 1 カテゴリにつき group 幅 1 本に系列を値空間で積む。
-        let stack_w = (group_w * BAR_FILL_RATIO).max(0.0);
-        for i in 0..spec.categories.len() {
-            let band_left = super::common::category_center(&frame, i, n) - band_w / 2.0;
-            let bx = band_left + band_w * BAND_PAD_RATIO;
-            let cx = bx + stack_w / 2.0;
-            let mut pos_acc = 0.0_f64;
-            let mut neg_acc = 0.0_f64;
-            for ser in &spec.series {
-                let Some(&v) = ser.values.get(i) else {
-                    continue;
-                };
-                if !v.is_finite() {
-                    continue;
-                }
-                let (v0, v1) = if v >= 0.0 {
-                    let lo = pos_acc;
-                    pos_acc += v;
-                    (lo, pos_acc)
-                } else {
-                    let hi = neg_acc;
-                    neg_acc += v;
-                    (neg_acc, hi)
-                };
-                let y0 = frame.ys.map(v0);
-                let y1 = frame.ys.map(v1);
-                let y_top = y0.min(y1);
-                let h = (y1 - y0).abs();
-                items.push(Prim::Rect {
-                    x: bx,
-                    y: y_top,
-                    w: stack_w,
-                    h,
-                    fill: ser.fill_at(i),
-                });
-                if spec.data_labels {
-                    // セグメント中央(値中点)に値ラベルを置く。
-                    let mid_y = frame.ys.map((v0 + v1) / 2.0);
-                    items.push(value_label(
-                        cx,
-                        mid_y + label_font * super::common::TEXT_BASELINE_RATIO,
-                        label_font,
-                        Anchor::Middle,
-                        ink,
-                        v,
-                    ));
-                }
-            }
+    for b in vertical_bar_boxes(spec, &frame) {
+        let ser = &spec.series[b.series];
+        items.push(Prim::Rect {
+            x: b.x,
+            y: b.y,
+            w: b.w,
+            h: b.h,
+            fill: ser.fill_at(b.index),
+        });
+        if !spec.data_labels {
+            continue;
         }
-    } else {
-        for i in 0..spec.categories.len() {
-            let band_left = super::common::category_center(&frame, i, n) - band_w / 2.0;
-
-            for (sidx, ser) in spec.series.iter().enumerate() {
-                let bx = band_left + band_w * BAND_PAD_RATIO + sidx as f64 * bar_w;
-                let v = ser.values.get(i).copied().unwrap_or(0.0);
-                let vy = frame.ys.map(v);
-                let y_top = vy.min(baseline_y);
-                let h = (vy - baseline_y).abs();
-                items.push(Prim::Rect {
-                    x: bx,
-                    y: y_top,
-                    w: (bar_w * BAR_FILL_RATIO).max(0.0),
-                    h,
-                    fill: ser.fill_at(i),
-                });
-                if spec.data_labels && ser.values.get(i).is_some() && v.is_finite() {
-                    let cx = bx + (bar_w * BAR_FILL_RATIO) / 2.0;
-                    // 正の棒は上に伸びるので上端の少し上(LABEL_GAP)に置く。
-                    // 負の棒は下端の下に置くが、テキストのベースラインが棒の下辺より
-                    // 下に来るよう ほぼ1行分(LABEL_FONT) 下げる(オフセットが非対称な理由)。
-                    let label_y = if v >= base_v {
-                        y_top - LABEL_GAP
-                    } else {
-                        y_top + h + label_font
-                    };
-                    items.push(value_label(cx, label_y, label_font, Anchor::Middle, ink, v));
-                }
-            }
+        let cx = b.x + b.w / 2.0;
+        if stacked {
+            // セグメント中央(box 中心 = 値中点; ys は線形なので一致)に値ラベル。
+            let mid_y = b.y + b.h / 2.0;
+            items.push(value_label(
+                cx,
+                mid_y + label_font * super::common::TEXT_BASELINE_RATIO,
+                label_font,
+                Anchor::Middle,
+                ink,
+                b.value,
+            ));
+        } else if ser.values.get(b.index).is_some() && b.value.is_finite() {
+            // 正の棒は上端の少し上、負の棒は下端の下にラベル。
+            let label_y = if b.value >= base_v {
+                b.y - LABEL_GAP
+            } else {
+                b.y + b.h + label_font
+            };
+            items.push(value_label(cx, label_y, label_font, Anchor::Middle, ink, b.value));
         }
     }
 
