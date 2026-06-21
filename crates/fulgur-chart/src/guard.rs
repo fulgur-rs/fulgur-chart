@@ -204,17 +204,18 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
     }
 
     // --- outlabeledPie プリミティブ数 ---
-    // スライスごとに Path + Polyline + Rect + Text×2 = 5 プリミティブを生成する。
-    // categories/series 上限は values 数を間接的に制限するが、primitive cap を直接チェックする。
-    if matches!(spec.kind, crate::ir::ChartKind::OutlabeledPie { .. }) {
-        const PRIMS_PER_OUTLABEL_SLICE: usize = 5;
+    // スライスごとに Path + Polyline + Rect + Text×N を生成する（N = テンプレート行数）。
+    // テンプレートに改行が多いほど Text が増えるため、行数を動的にカウントする。
+    if let crate::ir::ChartKind::OutlabeledPie { ref outlabel, .. } = spec.kind {
+        let n_lines = outlabel.text.split('\n').count().max(1);
+        let prims_per_slice = 3 + n_lines; // path + polyline + rect + text×n_lines
         let slices = spec.series.first().map(|s| s.values.len()).unwrap_or(0);
-        let outlabeled_primitives = slices.saturating_mul(PRIMS_PER_OUTLABEL_SLICE);
+        let outlabeled_primitives = slices.saturating_mul(prims_per_slice);
         if outlabeled_primitives > limits.max_categorical_primitives {
             return Err(format!(
                 "outlabeledPie: スライス数 {} × {} プリミティブ = {} が上限 {} を超えます",
                 slices,
-                PRIMS_PER_OUTLABEL_SLICE,
+                prims_per_slice,
                 outlabeled_primitives,
                 limits.max_categorical_primitives,
             ));
@@ -499,6 +500,7 @@ mod tests {
             donut_ratio: 0.0,
             outlabel: OutlabelConfig::default(),
         };
+        // デフォルトテンプレート "%l\n%p%" は 2 行 → prims_per_slice = 3 + 2 = 5
         // 200,001 スライス × 5 プリミティブ = 1,000,005 > 1,000,000 limit
         spec.series[0].values = vec![1.0; 200_001];
         let limits = default_limits();
