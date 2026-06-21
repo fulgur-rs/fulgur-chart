@@ -10,6 +10,7 @@ pub mod pie;
 pub mod progress;
 pub mod radar;
 pub mod scatter;
+pub mod sparkline;
 
 use crate::ir::{ChartKind, ChartSpec};
 use crate::scene::{Prim, Scene};
@@ -27,6 +28,7 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::Matrix { .. } => matrix::build(spec, m),
         ChartKind::Progress => progress::build(spec, m),
         ChartKind::BoxPlot => boxplot::build(spec, m),
+        ChartKind::Sparkline => sparkline::build(spec, m),
     };
 
     // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。
