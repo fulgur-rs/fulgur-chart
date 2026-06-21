@@ -125,6 +125,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Progress => "progress",
         ChartKind::BoxPlot => "boxplot",
         ChartKind::Sparkline => "sparkline",
+        ChartKind::PolarArea => "polarArea",
         ChartKind::RadialGauge { .. } => "radialGauge",
         ChartKind::Gauge { .. } => "gauge",
     }
@@ -136,7 +137,7 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
     // 解析済み borderColor を使わない。モデルも実描画に合わせて白を主張する
     // (spec が borderColor を指定しても fulgur はそれを無視して白を描く点を、
     // chart.js との diff で正しく顕在化させるため)。
-    let is_pie = matches!(spec.kind, ChartKind::Pie { .. });
+    let is_pie = matches!(spec.kind, ChartKind::Pie { .. } | ChartKind::PolarArea);
     let series: Vec<SeriesModel> = spec
         .series
         .iter()

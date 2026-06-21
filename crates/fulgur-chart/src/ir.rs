@@ -129,6 +129,8 @@ pub enum ChartKind {
     BoxPlot,
     /// QuickChart 互換のスパークライン。軸・ラベル・凡例なしのミニマル折れ線。
     Sparkline,
+    /// Chart.js v4 polarArea: 角度等分・半径が値に比例する極座標チャート。
+    PolarArea,
     /// QuickChart radialGauge: 全円。値まで塗りつぶす弧 + トラック + 中央値テキスト。
     /// series[0].values[0]=値、series[0].fill[0]=塗り色。スカラ構造値はここに持つ。
     RadialGauge {

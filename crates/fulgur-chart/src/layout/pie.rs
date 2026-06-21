@@ -17,7 +17,7 @@ pub(crate) const SLICE_STROKE: Color = Color {
 };
 
 /// データラベルの文字色(スライス上で読めるよう白)。
-const LABEL_COLOR: Color = Color {
+pub(crate) const LABEL_COLOR: Color = Color {
     r: 255,
     g: 255,
     b: 255,
@@ -224,15 +224,15 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 }
 
 /// 円スライスのジオメトリ（中心と内外半径）。
-struct Geom {
-    cx: f64,
-    cy: f64,
-    r_outer: f64,
-    r_inner: f64,
+pub(crate) struct Geom {
+    pub(crate) cx: f64,
+    pub(crate) cy: f64,
+    pub(crate) r_outer: f64,
+    pub(crate) r_inner: f64,
 }
 
 /// 1 スライス分の Path プリミティブを生成する。
-fn make_slice(g: &Geom, a0: f64, a1: f64, fill: Color) -> Prim {
+pub(crate) fn make_slice(g: &Geom, a0: f64, a1: f64, fill: Color) -> Prim {
     Prim::Path {
         d: slice_path(g, a0, a1),
         fill: Some(fill),

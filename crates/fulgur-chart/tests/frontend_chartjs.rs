@@ -92,7 +92,7 @@ fn invalid_json_is_err() {
 
 #[test]
 fn unknown_type_is_err() {
-    let json = r#"{ "type":"polarArea","data":{"labels":[],"datasets":[]} }"#;
+    let json = r#"{ "type":"unknownChart","data":{"labels":[],"datasets":[]} }"#;
     assert!(chartjs::parse(json, false).is_err());
 }
 
@@ -469,4 +469,19 @@ fn matrix_strict_mode_accepts_v_key() {
         chartjs::parse(json, true).is_ok(),
         "strict mode should accept matrix with v key"
     );
+}
+
+#[test]
+fn parses_polar_area_spec() {
+    let json = r#"{
+      "type": "polarArea",
+      "data": {
+        "labels": ["A", "B", "C"],
+        "datasets": [{ "data": [10, 20, 30] }]
+      }
+    }"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::PolarArea));
+    assert_eq!(spec.categories, vec!["A", "B", "C"]);
+    assert_eq!(spec.series[0].values, vec![10.0, 20.0, 30.0]);
 }

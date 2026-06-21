@@ -35,6 +35,8 @@ pub enum ChartJsSpec {
     /// QuickChart-compatible sparkline: minimal line chart with no axes, labels, or legend.
     Sparkline(SparklineSpec),
     Gauge(GaugeSpec),
+    #[serde(rename = "polarArea")]
+    PolarArea(PieSpec),
     #[serde(rename = "radialGauge")]
     RadialGauge(RadialGaugeSpec),
 }
