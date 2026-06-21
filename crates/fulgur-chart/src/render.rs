@@ -82,4 +82,35 @@ mod tests {
             "{out}"
         );
     }
+
+    #[test]
+    fn boxplot_renders_to_svg() {
+        let json = r#"{
+            "type": "boxplot",
+            "data": {
+                "labels": ["Mon", "Tue", "Wed"],
+                "datasets": [{
+                    "label": "Temperature",
+                    "backgroundColor": "rgba(54, 162, 235, 0.5)",
+                    "borderColor": "rgb(54, 162, 235)",
+                    "data": [
+                        [10, 25, 50, 75, 90],
+                        [5, 20, 45, 70, 95],
+                        [15, 30, 55, 80, 100]
+                    ]
+                }]
+            }
+        }"#;
+        let spec = chartjs::parse(json, false).expect("parse error");
+        let svg = render_chart(&spec);
+        assert!(svg.starts_with("<svg"), "should produce valid SVG");
+        assert!(
+            svg.contains("rect"),
+            "SVG should contain rect elements for boxes"
+        );
+        assert!(
+            svg.contains("line"),
+            "SVG should contain line elements for whiskers"
+        );
+    }
 }

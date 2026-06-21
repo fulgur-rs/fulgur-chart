@@ -104,12 +104,13 @@ struct RawDataset {
     point_radius: Option<f64>,
 }
 
-/// `data`: 数値配列(カテゴリ系)または点オブジェクト配列(scatter/bubble)。
-/// untagged は `Nums` を先に試すので `[1,2]`→Nums、`[{x,y}]`→Points に解決される。
+/// `data`: 数値配列(カテゴリ系)、ネスト配列(boxplot)、または点オブジェクト配列(scatter/bubble)。
+/// untagged は順に試す: `Nums` → `[1,2]`、`Boxes` → `[[1,2,3,4,5]]`、`Points` → `[{x,y}]`。
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum DataField {
     Nums(Vec<f64>),
+    Boxes(Vec<Vec<f64>>),
     Points(Vec<RawPoint>),
 }
 
@@ -122,11 +123,11 @@ struct RawPoint {
 }
 
 impl DataField {
-    /// 数値配列なら採用、点配列なら空。カテゴリ系チャートの `values` 用。
+    /// 数値配列なら採用、それ以外は空。カテゴリ系チャートの `values` 用。
     fn into_values(self) -> Vec<f64> {
         match self {
             DataField::Nums(v) => v,
-            DataField::Points(_) => vec![],
+            _ => vec![],
         }
     }
 
@@ -141,7 +142,37 @@ impl DataField {
                     r: p.r,
                 })
                 .collect(),
-            DataField::Nums(_) => vec![],
+            _ => vec![],
+        }
+    }
+
+    /// ネスト配列なら IR の `BoxPoint` へ変換する。boxplot の `box_points` 用。
+    /// 各行は厳密に [min, q1, median, q3, max] の 5 要素でなければならない。
+    /// 5 要素以外の行はバイト数ガードをバイパスできるため拒否し NaN 行として扱う。
+    fn into_box_points(self) -> Vec<crate::ir::BoxPoint> {
+        match self {
+            DataField::Boxes(rows) => rows
+                .into_iter()
+                .map(|row| {
+                    if row.len() != 5 {
+                        return crate::ir::BoxPoint {
+                            min: f64::NAN,
+                            q1: f64::NAN,
+                            median: f64::NAN,
+                            q3: f64::NAN,
+                            max: f64::NAN,
+                        };
+                    }
+                    crate::ir::BoxPoint {
+                        min: row[0],
+                        q1: row[1],
+                        median: row[2],
+                        q3: row[3],
+                        max: row[4],
+                    }
+                })
+                .collect(),
+            _ => vec![],
         }
     }
 }
@@ -310,6 +341,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             "radar" => ChartKind::Radar,
             // QuickChart の正式名は "progressBar"。互換のため "progress" も受理する。
             "progress" | "progressBar" => ChartKind::Progress,
+            "boxplot" => ChartKind::BoxPlot,
             other => return Err(format!("未対応の type: {other}")),
         }
     };
@@ -330,12 +362,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let is_progress = matches!(kind, ChartKind::Progress);
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
     let is_point_based = matches!(kind, ChartKind::Scatter | ChartKind::Bubble);
+    let is_boxplot = matches!(kind, ChartKind::BoxPlot);
 
     // データ形状とチャート種の整合を検査する。点ベース(scatter/bubble)は {x,y(,r)}
     // 配列、カテゴリ系は数値配列を要する。非空の不一致は空チャート化せず明示エラーに。
     for ds in &raw.data.datasets {
         let mismatched = match &ds.data {
-            DataField::Nums(v) => is_point_based && !v.is_empty(),
+            DataField::Nums(v) => (is_point_based || is_boxplot) && !v.is_empty(),
+            DataField::Boxes(v) => !is_boxplot && !v.is_empty(),
             DataField::Points(v) => !is_point_based && !v.is_empty(),
         };
         if mismatched {
@@ -352,14 +386,18 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .into_iter()
         .enumerate()
         .map(|(i, ds)| {
-            // 点ベースは点データ、それ以外は数値配列を採る。`data` は一度だけ消費する。
-            let (values, points) = if is_point_based {
-                (vec![], ds.data.into_points())
+            // 点ベースは点データ、boxplot はボックスデータ、それ以外は数値配列を採る。`data` は一度だけ消費する。
+            let (values, points, box_points) = if is_point_based {
+                (vec![], ds.data.into_points(), vec![])
+            } else if is_boxplot {
+                (vec![], vec![], ds.data.into_box_points())
             } else {
-                (ds.data.into_values(), vec![])
+                (ds.data.into_values(), vec![], vec![])
             };
             let n = if is_point_based {
                 points.len()
+            } else if is_boxplot {
+                box_points.len()
             } else {
                 values.len()
             };
@@ -400,6 +438,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 tension: ds.tension,
                 series_type,
                 point_radius: ds.point_radius,
+                box_points,
             }
         })
         .collect();
@@ -438,7 +477,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .and_then(|a| a.get("beginAtZero"))
         .and_then(|v| v.as_bool());
     let x_begin_at_zero = x_baz_json.unwrap_or(is_horizontal && value_begin_at_zero);
-    let y_begin_at_zero = y_baz_json.unwrap_or(!is_horizontal && value_begin_at_zero);
+    let y_begin_at_zero =
+        y_baz_json.unwrap_or(!is_horizontal && value_begin_at_zero && !is_boxplot);
     let suggested_min_y = scales_val
         .and_then(|s| s.get("y"))
         .and_then(|a| a.get("suggestedMin"))
@@ -893,6 +933,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         })
         .collect();
 
@@ -954,6 +995,50 @@ fn check_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_boxplot_basic() {
+        let json = r#"{
+            "type": "boxplot",
+            "data": {
+                "labels": ["Mon", "Tue"],
+                "datasets": [{
+                    "label": "Values",
+                    "data": [
+                        [10, 25, 50, 75, 90],
+                        [5, 20, 45, 70, 95]
+                    ]
+                }]
+            }
+        }"#;
+        let spec = parse(json, false).expect("parse error");
+        assert!(matches!(spec.kind, crate::ir::ChartKind::BoxPlot));
+        assert_eq!(spec.series.len(), 1);
+        let bp = &spec.series[0].box_points;
+        assert_eq!(bp.len(), 2);
+        assert_eq!(bp[0].min, 10.0);
+        assert_eq!(bp[0].q1, 25.0);
+        assert_eq!(bp[0].median, 50.0);
+        assert_eq!(bp[0].q3, 75.0);
+        assert_eq!(bp[0].max, 90.0);
+        assert_eq!(bp[1].min, 5.0);
+        assert_eq!(bp[1].median, 45.0);
+    }
+
+    #[test]
+    fn parse_boxplot_rejects_flat_nums() {
+        let json = r#"{
+            "type": "boxplot",
+            "data": {
+                "labels": ["A"],
+                "datasets": [{"data": [10, 25, 50, 75, 90]}]
+            }
+        }"#;
+        assert!(
+            parse(json, false).is_err(),
+            "boxplot with flat numbers should fail"
+        );
+    }
 
     #[test]
     fn auto_fill_gets_half_alpha() {

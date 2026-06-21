@@ -31,6 +31,7 @@ pub enum ChartJsSpec {
     /// QuickChart's canonical name is `progressBar`; `progress` is accepted too.
     #[serde(alias = "progressBar")]
     Progress(ProgressSpec),
+    Boxplot(BoxplotSpec),
 }
 
 // ────────────────────────────────────────────────
@@ -465,6 +466,52 @@ pub struct ProgressDataset {
 pub struct ProgressOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins: Option<CommonPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+// ────────────────────────────────────────────────
+// Boxplot chart
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoxplotSpec {
+    pub data: BoxplotData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<BoxplotOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoxplotData {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    pub datasets: Vec<BoxplotDataset>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BoxplotDataset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Each data point is `[min, q1, median, q3, max]` — a five-number summary.
+    pub data: Vec<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<ScalarOrArray<ColorString>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<ScalarOrArray<ColorString>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_width: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BoxplotOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<CommonPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scales: Option<BarScales>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOptions>,
 }

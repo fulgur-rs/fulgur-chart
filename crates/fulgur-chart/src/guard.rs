@@ -177,12 +177,38 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         }
     }
 
+    // --- boxplot プリミティブ数 ---
+    // 1 ボックスあたり rect×1 + 枠線×4 + 中央値×1 + ヒゲ×2 + キャップ×2 = 10 プリミティブ。
+    // categories/series 上限は箱数を間接的に制限するが、primitive cap を直接チェックする。
+    if matches!(spec.kind, crate::ir::ChartKind::BoxPlot) {
+        const PRIMS_PER_BOX: usize = 10;
+        let boxes = spec
+            .series
+            .iter()
+            .flat_map(|s| s.box_points.iter())
+            .filter(|p| {
+                p.min.is_finite()
+                    && p.q1.is_finite()
+                    && p.median.is_finite()
+                    && p.q3.is_finite()
+                    && p.max.is_finite()
+            })
+            .count();
+        let boxplot_primitives = boxes.saturating_mul(PRIMS_PER_BOX);
+        if boxplot_primitives > limits.max_categorical_primitives {
+            return Err(format!(
+                "boxplot ボックス数 {} (プリミティブ {}) が上限 {} を超えています",
+                boxes, boxplot_primitives, limits.max_categorical_primitives,
+            ));
+        }
+    }
+
     // --- 全データ点数の合計(scatter/bubble 向け) ---
     // values と points の大きい方を各系列のコストとして合算する。
     let total_points: usize = spec
         .series
         .iter()
-        .map(|s| s.values.len().max(s.points.len()))
+        .map(|s| s.values.len().max(s.points.len()).max(s.box_points.len()))
         .sum();
     if total_points > limits.max_total_data_points {
         return Err(format!(
@@ -301,6 +327,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         s.series = vec![dummy; DEFAULT_MAX_SERIES + 1];
         assert!(validate_spec(&s, &default_limits()).is_err());
@@ -334,6 +361,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         s.series = vec![dummy; 100];
         s.categories = vec!["x".to_string(); 10_001];
@@ -361,6 +389,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         s.series = vec![dummy; 100];
         s.categories = vec!["x".to_string(); 10_000];
@@ -387,6 +416,7 @@ mod tests {
             tension: 0.0,
             series_type: SeriesType::Bar,
             point_radius: None,
+            box_points: vec![],
         };
         s.series = vec![big_series];
         assert!(validate_spec(&s, &default_limits()).is_err());

@@ -79,9 +79,11 @@ pub struct Counts {
     pub y_ticks: usize,
 }
 
-/// 描画要素数(scatter/bubble は points、その他は values)。
+/// 描画要素数(scatter/bubble は points、boxplot は box_points、その他は values)。
 fn element_count(s: &crate::ir::Series) -> usize {
-    if s.points.is_empty() {
+    if !s.box_points.is_empty() {
+        s.box_points.len()
+    } else if s.points.is_empty() {
         s.values.len()
     } else {
         s.points.len()
@@ -121,6 +123,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",
         ChartKind::Progress => "progress",
+        ChartKind::BoxPlot => "boxplot",
     }
 }
 
@@ -232,6 +235,15 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
             let xt = nice_ticks(xlo, xhi, 10);
             let yt = nice_ticks(ylo, yhi, 10);
             Some((linear_axis(&xt), linear_axis(&yt), yt.ticks.len()))
+        }
+        // boxplot: カテゴリ x、線形 y。ドメインは layout::boxplot と共有。
+        ChartKind::BoxPlot => {
+            let t = crate::layout::boxplot::compute_frame(spec, m).ticks;
+            Some((
+                category_axis(&spec.categories),
+                linear_axis(&t),
+                t.ticks.len(),
+            ))
         }
         _ => None,
     }
