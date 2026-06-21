@@ -629,7 +629,16 @@ fn build_outlabel_config(raw: &Option<RawOutlabels>) -> crate::ir::OutlabelConfi
     let mut cfg = OutlabelConfig::default();
     let Some(raw) = raw else { return cfg };
     if let Some(t) = &raw.text {
-        cfg.text = t.clone();
+        // DoS 防止: テンプレートを MAX_LABEL_BYTES でクランプ。
+        const MAX_TEMPLATE_BYTES: usize = crate::guard::DEFAULT_MAX_LABEL_BYTES;
+        if t.len() <= MAX_TEMPLATE_BYTES {
+            cfg.text = t.clone();
+        } else {
+            cfg.text = t
+                .chars()
+                .take(MAX_TEMPLATE_BYTES / 4) // 1文字最大4バイトなので安全
+                .collect();
+        }
     }
     if let Some(c) = raw.color.as_deref().and_then(parse_color) {
         cfg.color = c;

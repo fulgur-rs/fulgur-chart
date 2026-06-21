@@ -223,22 +223,14 @@ fn draw_outlabel(
         stroke_width: 1.5,
     });
 
-    // テキスト生成。
+    // テキスト生成（N行対応）。
     let label_str = categories.get(idx).map(|s| s.as_str()).unwrap_or("");
     let pct = (frac * 100.0).round() as i64;
-    let lines: Vec<&str> = cfg.text.splitn(2, '\n').collect();
-    let line1 = expand_template(
-        lines.first().copied().unwrap_or("%l"),
-        label_str,
-        value,
-        pct,
-    );
-    let line2 = expand_template(
-        lines.get(1).copied().unwrap_or("%p%"),
-        label_str,
-        value,
-        pct,
-    );
+    let lines: Vec<String> = cfg
+        .text
+        .split('\n')
+        .map(|tmpl| expand_template(tmpl, label_str, value, pct))
+        .collect();
 
     // テキスト位置。
     let (anchor, text_x) = if on_right {
@@ -247,14 +239,17 @@ fn draw_outlabel(
         (Anchor::End, p2.0 - LABEL_PAD)
     };
     let line_h = font_size + LINE_GAP;
-    let text_y_top = p2.1 - line_h / 2.0;
+    let n_lines = lines.len() as f64;
+    let text_y_top = p2.1 - (n_lines - 1.0) * line_h / 2.0;
 
     // ラベル背景ボックス。
     let bg_color = cfg.background.unwrap_or(slice_fill);
-    let w1 = m.width(&line1, font_size as f32) as f64;
-    let w2 = m.width(&line2, font_size as f32) as f64;
-    let box_w = w1.max(w2) + LABEL_PAD * 2.0;
-    let box_h = line_h * 2.0 + LABEL_PAD * 2.0;
+    let max_w = lines
+        .iter()
+        .map(|l| m.width(l, font_size as f32) as f64)
+        .fold(0.0_f64, f64::max);
+    let box_w = max_w + LABEL_PAD * 2.0;
+    let box_h = line_h * n_lines + LABEL_PAD * 2.0;
     let box_x = if on_right { p2.0 } else { p2.0 - box_w };
     let box_y = text_y_top - LABEL_PAD;
     out.push(Prim::Rect {
@@ -265,24 +260,17 @@ fn draw_outlabel(
         fill: bg_color,
     });
 
-    // 1行目テキスト。
-    out.push(Prim::Text {
-        x: text_x,
-        y: text_y_top + font_size * common::TEXT_BASELINE_RATIO,
-        size: font_size,
-        anchor,
-        fill: cfg.color,
-        content: line1,
-    });
-    // 2行目テキスト。
-    out.push(Prim::Text {
-        x: text_x,
-        y: text_y_top + line_h + font_size * common::TEXT_BASELINE_RATIO,
-        size: font_size,
-        anchor,
-        fill: cfg.color,
-        content: line2,
-    });
+    // 各行のテキストを描画。
+    for (i, line) in lines.into_iter().enumerate() {
+        out.push(Prim::Text {
+            x: text_x,
+            y: text_y_top + (i as f64) * line_h + font_size * common::TEXT_BASELINE_RATIO,
+            size: font_size,
+            anchor,
+            fill: cfg.color,
+            content: line,
+        });
+    }
 }
 
 /// `%l`, `%v`, `%p` をそれぞれカテゴリ名・値・パーセントに展開する。

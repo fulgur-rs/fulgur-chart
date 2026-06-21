@@ -203,6 +203,24 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         }
     }
 
+    // --- outlabeledPie プリミティブ数 ---
+    // スライスごとに Path + Polyline + Rect + Text×2 = 5 プリミティブを生成する。
+    // categories/series 上限は values 数を間接的に制限するが、primitive cap を直接チェックする。
+    if matches!(spec.kind, crate::ir::ChartKind::OutlabeledPie { .. }) {
+        const PRIMS_PER_OUTLABEL_SLICE: usize = 5;
+        let slices = spec.series.first().map(|s| s.values.len()).unwrap_or(0);
+        let outlabeled_primitives = slices.saturating_mul(PRIMS_PER_OUTLABEL_SLICE);
+        if outlabeled_primitives > limits.max_categorical_primitives {
+            return Err(format!(
+                "outlabeledPie: スライス数 {} × {} プリミティブ = {} が上限 {} を超えます",
+                slices,
+                PRIMS_PER_OUTLABEL_SLICE,
+                outlabeled_primitives,
+                limits.max_categorical_primitives,
+            ));
+        }
+    }
+
     // --- 全データ点数の合計(scatter/bubble 向け) ---
     // values と points の大きい方を各系列のコストとして合算する。
     let total_points: usize = spec
@@ -467,6 +485,25 @@ mod tests {
         let mut s = base_spec();
         s.title = Some("x".repeat(DEFAULT_MAX_LABEL_BYTES + 1));
         assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn outlabeled_pie_primitive_guard_rejects_too_many_slices() {
+        use crate::ir::OutlabelConfig;
+        let mut spec = chartjs::parse(
+            r#"{"type":"outlabeledPie","data":{"labels":["A"],"datasets":[{"data":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.kind = crate::ir::ChartKind::OutlabeledPie {
+            donut_ratio: 0.0,
+            outlabel: OutlabelConfig::default(),
+        };
+        // 200,001 スライス × 5 プリミティブ = 1,000,005 > 1,000,000 limit
+        spec.series[0].values = vec![1.0; 200_001];
+        let limits = default_limits();
+        let result = validate_spec(&spec, &limits);
+        assert!(result.is_err(), "must reject too many outlabel primitives");
     }
 
     #[test]
