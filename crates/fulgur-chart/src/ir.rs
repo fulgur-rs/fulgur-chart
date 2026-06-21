@@ -127,6 +127,8 @@ pub enum ChartKind {
     Progress,
     /// QuickChart 互換の boxplot。カテゴリ×5数要約(min/q1/median/q3/max)。
     BoxPlot,
+    /// QuickChart 互換のスパークライン。軸・ラベル・凡例なしのミニマル折れ線。
+    Sparkline,
 }
 
 /// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。
