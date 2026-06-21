@@ -262,7 +262,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // chart 基本型。bar/line のときだけ dataset 別 type による混合が起こりうる。
     // 基本型は SeriesType のフォールバックにも使う(bar→Bar, line→Line, それ以外→Bar(未使用))。
     let base_series_type = match raw.chart_type.as_str() {
-        "line" => SeriesType::Line,
+        "line" | "sparkline" => SeriesType::Line,
         _ => SeriesType::Bar,
     };
 

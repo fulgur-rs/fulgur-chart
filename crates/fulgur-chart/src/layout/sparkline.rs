@@ -19,6 +19,15 @@ pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
     let plot_left = PAD;
     let plot_right = spec.width - PAD;
 
+    // 全系列で共有する x スケール（異なる長さの系列も同一 index が同 x に並ぶ）。
+    let max_count = spec
+        .series
+        .iter()
+        .map(|s| s.values.len())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+
     let mut items: Vec<Prim> = Vec::new();
 
     for ser in &spec.series {
@@ -26,10 +35,10 @@ pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
         if count == 0 {
             continue;
         }
-        // 等間隔でプロット
+        // 等間隔でプロット（全系列共通の max_count を基準に x を決める）
         let pts: Vec<(f64, f64)> = (0..count)
             .map(|i| {
-                let x = plot_left + (i as f64 + 0.5) * (plot_right - plot_left) / count as f64;
+                let x = plot_left + (i as f64 + 0.5) * (plot_right - plot_left) / max_count as f64;
                 let v = ser.values[i];
                 (x, ys.map(v))
             })
