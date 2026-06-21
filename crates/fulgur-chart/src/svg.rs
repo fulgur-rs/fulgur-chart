@@ -138,21 +138,21 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
             let cy = fmt_num(*cy);
             let r = fmt_num(*r);
             let fill_hex = color_hex(fill);
-            let mut tail = String::new();
+            write!(
+                s,
+                r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="{fill_hex}""#
+            )
+            .unwrap();
             if *stroke_width > 0.0 {
                 let stroke_hex = color_hex(stroke);
                 let sw = fmt_num(*stroke_width);
-                write!(tail, r#" stroke="{stroke_hex}" stroke-width="{sw}""#).unwrap();
+                write!(s, r#" stroke="{stroke_hex}" stroke-width="{sw}""#).unwrap();
             }
-            tail.push_str(&opacity_attr("fill-opacity", fill.a));
+            s.push_str(&opacity_attr("fill-opacity", fill.a));
             if *stroke_width > 0.0 {
-                tail.push_str(&opacity_attr("stroke-opacity", stroke.a));
+                s.push_str(&opacity_attr("stroke-opacity", stroke.a));
             }
-            write!(
-                s,
-                r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="{fill_hex}"{tail}/>"#
-            )
-            .unwrap();
+            s.push_str("/>");
         }
         Prim::Text {
             x,
