@@ -99,8 +99,8 @@ fn build_radial(
     max: f64,
     track: Color,
     inner_ratio: f64,
-    _rounded: bool,      // Task 4 で使用
-    _display_text: bool, // Task 4 で使用
+    rounded: bool,
+    display_text: bool,
 ) {
     let (cx, cy, r_outer) = area_geom(spec, title_band);
     let r_inner = (r_outer * inner_ratio).clamp(0.0, r_outer);
@@ -144,24 +144,64 @@ fn build_radial(
         // 全周(frac==1)は 2 分割。
         if frac >= 1.0 - 1e-9 {
             let amid = start + PI;
-            items.push(Prim::Path {
-                d: ring_segment_path(cx, cy, r_outer, r_inner, start, amid),
-                fill: Some(fill),
-                stroke: None,
-                stroke_width: 0.0,
-            });
-            items.push(Prim::Path {
-                d: ring_segment_path(cx, cy, r_outer, r_inner, amid, start + 2.0 * PI),
-                fill: Some(fill),
-                stroke: None,
-                stroke_width: 0.0,
-            });
+            push_value_arc(items, cx, cy, r_outer, r_inner, start, amid, fill, false);
+            push_value_arc(
+                items,
+                cx,
+                cy,
+                r_outer,
+                r_inner,
+                amid,
+                start + 2.0 * PI,
+                fill,
+                false,
+            );
         } else {
-            items.push(Prim::Path {
-                d: ring_segment_path(cx, cy, r_outer, r_inner, start, end),
-                fill: Some(fill),
-                stroke: None,
-                stroke_width: 0.0,
+            push_value_arc(items, cx, cy, r_outer, r_inner, start, end, fill, rounded);
+        }
+    }
+
+    if display_text {
+        items.push(Prim::Text {
+            x: cx,
+            y: cy + spec.theme.font_size * super::common::TEXT_BASELINE_RATIO,
+            size: spec.theme.font_size * 1.6, // 中央値は大きめ。
+            anchor: Anchor::Middle,
+            fill: spec.theme.text_color,
+            content: fmt_num(value.round()),
+        });
+    }
+}
+
+/// 値弧を描く。rounded のとき両端に半円キャップ(Circle 代用に小さなリング無しの
+/// 半円 path)を足す。簡易には端点に直径=帯幅の円を描く。
+#[allow(clippy::too_many_arguments)]
+fn push_value_arc(
+    items: &mut Vec<Prim>,
+    cx: f64,
+    cy: f64,
+    r_outer: f64,
+    r_inner: f64,
+    a0: f64,
+    a1: f64,
+    fill: Color,
+    rounded: bool,
+) {
+    items.push(Prim::Path {
+        d: ring_segment_path(cx, cy, r_outer, r_inner, a0, a1),
+        fill: Some(fill),
+        stroke: None,
+        stroke_width: 0.0,
+    });
+    if rounded {
+        let cap_r = (r_outer - r_inner) / 2.0;
+        let mid_r = (r_outer + r_inner) / 2.0;
+        for a in [a0, a1] {
+            items.push(Prim::Circle {
+                cx: cx + mid_r * a.cos(),
+                cy: cy + mid_r * a.sin(),
+                r: cap_r.max(0.0),
+                fill,
             });
         }
     }

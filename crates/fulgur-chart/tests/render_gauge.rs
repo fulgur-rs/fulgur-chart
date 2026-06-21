@@ -64,3 +64,40 @@ fn radial_gauge_clamps_over_domain() {
         "clamp to full circle = 2 track + 2 value arc paths: {svg}"
     );
 }
+
+#[test]
+fn radial_gauge_shows_center_value_by_default() {
+    // displayText 既定 true → 中央に丸めた値テキスト。
+    let svg = render(r#"{"type":"radialGauge","data":{"datasets":[{"data":[72]}]}}"#);
+    assert!(svg.contains(">72<"), "center value missing: {svg}");
+}
+
+#[test]
+fn radial_gauge_center_text_hidden_when_disabled() {
+    let svg = render(
+        r#"{"type":"radialGauge","data":{"datasets":[{"data":[72]}]},
+        "options":{"centerArea":{"displayText":false}}}"#,
+    );
+    assert!(
+        !svg.contains(">72<"),
+        "center value should be hidden: {svg}"
+    );
+}
+
+#[test]
+fn radial_gauge_rounded_default_adds_caps() {
+    // roundedCorners 既定 true → 値弧の両端に半円キャップ(<circle>)が出る。
+    // flat(false)指定時はキャップなし(radialGauge は針なし=他に circle 無し)。
+    // 値が中間(両端が露出)で比較。キャップは Prim::Circle → <circle> 要素。
+    let rounded = render(r#"{"type":"radialGauge","data":{"datasets":[{"data":[50]}]}}"#);
+    let flat = render(
+        r#"{"type":"radialGauge","data":{"datasets":[{"data":[50]}]},
+        "options":{"roundedCorners":false}}"#,
+    );
+    assert!(
+        rounded.matches("<circle").count() > flat.matches("<circle").count(),
+        "rounded should add cap circles: rounded={} flat={}",
+        rounded.matches("<circle").count(),
+        flat.matches("<circle").count()
+    );
+}
