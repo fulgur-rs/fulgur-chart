@@ -64,7 +64,7 @@ Key options:
 - `--scale <factor>` — PNG resolution multiplier (default 1.0).
 - `--font <path>` — Replace the font used for measurement, SVG, and PNG (default: bundled Noto Sans JP).
 - `--out-dir <dir>` — Output directory for batch generation (see below).
-- `--dsl chartjs|vegalite` — Input DSL (default `chartjs`; see Vega-Lite section below).
+- `--dsl chartjs|vegalite` — Input DSL. Auto-detected when omitted: a top-level `mark` key selects Vega-Lite; a top-level `type` key selects chart.js.
 - `--strict` — Treat unknown / unsupported keys as errors (silently ignored by default).
 
 ```sh
@@ -82,6 +82,17 @@ fulgur-chart render specs/*.json --out-dir out/            # each → out/<name>
 fulgur-chart render specs/*.json --out-dir out/ --format png
 ```
 
+### Other subcommands
+
+```sh
+# Print the JSON Schema for an input DSL (useful for validation tooling)
+fulgur-chart schema chartjs
+fulgur-chart schema vegalite
+
+# Inspect the semantic model (IR + layout) for a spec — pretty JSON
+fulgur-chart inspect chart.json
+```
+
 ## Supported chart types
 
 - Bar chart (vertical / horizontal; horizontal via `options.indexAxis: "y"`)
@@ -95,19 +106,21 @@ fulgur-chart render specs/*.json --out-dir out/ --format png
 - Radar chart
 - Mixed chart (per-dataset `type`, e.g. bar + line)
 - Progress bar chart (QuickChart-style; horizontal fill bar with centered percentage)
+- Matrix chart / heatmap (`{x, y, v}` point data; cells shaded by interpolating between two colors)
+- Box plot chart (5-number summary: `type: "boxplot"`, `data` as nested arrays `[min, q1, median, q3, max]`)
 
 ## Supported chart.js subset
 
 Supports a data-only, static subset:
 
-- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `progress` (QuickChart's `progressBar` is also accepted as an alias)
+- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `boxplot` / `progress` (QuickChart's `progressBar` is also accepted as an alias)
 - `data.labels`
-- `data.datasets[]` — `label` / `data` (numeric array, or `{x,y}` / `{x,y,r}` for scatter/bubble) / `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts)
+- `data.datasets[]` — `label` / `data` (numeric array; `{x,y}` / `{x,y,r}` for scatter/bubble; `{x,y,v}` for matrix; nested `[min,q1,median,q3,max]` arrays for boxplot) / `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts)
 - For `progress` (alias `progressBar`), `datasets[0].data` holds each bar's value; an optional second dataset's `data` overrides the per-bar max (default 100). The percentage label is shown by default and can be hidden with `options.plugins.datalabels.display: false`.
 - `options.indexAxis`
 - `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right)
 - `options.plugins.datalabels` (`display` — renders a value label at each data point)
-- `options.scales` (`stacked` and a subset of other options)
+- `options.scales` (`stacked` / `suggestedMin` / `suggestedMax` and a subset of other options)
 - `options.theme` (extension; see below)
 
 Dynamic JavaScript features (`callback` / `animation` / `interaction` / plugin scripts)
@@ -132,13 +145,37 @@ Colors accept `#rgb` / `#rrggbb` / `rgb()` / `rgba()` / `hsl()` / `hsla()` / CSS
 In addition to chart.js specs, a minimal Vega-Lite subset is accepted as input:
 
 ```sh
+# Explicit
 fulgur-chart render chart.vl.json -o chart.svg --dsl vegalite
+
+# Auto-detected (top-level "mark" key selects Vega-Lite)
+fulgur-chart render chart.vl.json -o chart.svg
 ```
 
 Supported subset: `mark` (`bar` / `line` / `point` → scatter / `arc` → pie), inline
-`data.values`, and `encoding` fields `x` / `y` / `color` / `theta`. Input is converted
-to a shared intermediate representation, so output determinism and Fulgur integration
-are identical to chart.js input.
+`data.values`, and `encoding` fields `x` / `y` / `color` / `theta`. The Tableau10 color
+palette is applied automatically to Vega-Lite specs. Input is converted to a shared
+intermediate representation, so output determinism and Fulgur integration are identical
+to chart.js input.
+
+## Ruby binding
+
+An in-repository Ruby gem (`crates/bindings/ruby`) wraps the same rendering core via a
+Rust native extension (magnus / rb-sys). It is build-from-source only (not yet published
+to RubyGems) and requires a Rust toolchain.
+
+```sh
+cd crates/bindings/ruby
+bundle install && bundle exec rake   # compile extension + run tests
+```
+
+```ruby
+require "fulgur_chart"
+svg = FulgurChart.build(spec_json).width(800).height(450).render(:svg)
+png = FulgurChart.build(spec_json).scale(2.0).render(:png)
+```
+
+See [`crates/bindings/ruby/README.md`](crates/bindings/ruby/README.md) for the full API reference.
 
 ## Fulgur integration
 
