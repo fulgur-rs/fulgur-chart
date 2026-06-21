@@ -152,7 +152,10 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 b.value,
             ));
         } else if ser.values.get(b.index).is_some() && b.value.is_finite() {
-            // 正の棒は上端の少し上、負の棒は下端の下にラベル。
+            // 正は上端の少し上(- LABEL_GAP)、負は下端の下にラベル。負側は
+            // LABEL_GAP ではなく + label_font(≒1行高)を足すのは、SVG の y が
+            // ベースラインで字面が上に伸びるため、僅かな隙間だと棒下端に重なるから。
+            // この上下非対称(- LABEL_GAP / + label_font)は意図的。
             let label_y = if b.value >= base_v {
                 b.y - LABEL_GAP
             } else {
