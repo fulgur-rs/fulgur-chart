@@ -7,6 +7,7 @@ pub mod gauge;
 pub mod line;
 pub mod matrix;
 pub mod mixed;
+pub mod outlabeled_pie;
 pub mod pie;
 pub mod polar_area;
 pub mod progress;
@@ -33,7 +34,7 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::BoxPlot => boxplot::build(spec, m),
         ChartKind::Sparkline => sparkline::build(spec, m),
         ChartKind::RadialGauge { .. } | ChartKind::Gauge { .. } => gauge::build(spec, m),
-        ChartKind::OutlabeledPie { .. } => todo!("OutlabeledPie renderer"),
+        ChartKind::OutlabeledPie { .. } => outlabeled_pie::build(spec, m),
     };
 
     // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。
