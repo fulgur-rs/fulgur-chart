@@ -86,6 +86,27 @@ fn build_ir(
 }
 
 #[pyfunction]
+#[pyo3(signature = (spec_json, *, width=None, height=None, scale=1.0, strict=false, dsl=None, font=None))]
+fn render_svg(
+    spec_json: &str,
+    width: Option<f64>,
+    height: Option<f64>,
+    scale: f64,
+    strict: bool,
+    dsl: Option<&str>,
+    font: Option<&[u8]>,
+) -> PyResult<String> {
+    let _ = scale; // render_svg では scale を使用しない（API 仕様通り）
+    let spec = build_ir(spec_json, width, height, strict, dsl)?;
+    if let Some(font_bytes) = font {
+        // SVG パスのフォントエラー → ParseError（binding-api-contract の非対称規約）
+        fulgur_core::render::render_chart_with_font(&spec, font_bytes).map_err(parse_error)
+    } else {
+        Ok(fulgur_core::render::render_chart(&spec))
+    }
+}
+
+#[pyfunction]
 fn version() -> &'static str {
     fulgur_core::version()
 }
@@ -111,6 +132,7 @@ fn fulgur_chart(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("FulgurParseError", m.py().get_type::<FulgurParseError>())?;
     m.add("FulgurStrictError", m.py().get_type::<FulgurStrictError>())?;
     m.add("FulgurRenderError", m.py().get_type::<FulgurRenderError>())?;
+    m.add_function(wrap_pyfunction!(render_svg, m)?)?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(schema, m)?)?;
     Ok(())
