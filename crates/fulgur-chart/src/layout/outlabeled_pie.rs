@@ -129,6 +129,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 &spec.categories,
                 &outlabel,
                 label_font,
+                m,
             );
 
             a0 = a1;
@@ -156,6 +157,7 @@ fn draw_outlabel(
     categories: &[String],
     cfg: &OutlabelConfig,
     font_size: f64,
+    m: &TextMeasurer,
 ) {
     // P0: 外周上の点。
     let p0 = (cx + radius * amid.cos(), cy + radius * amid.sin());
@@ -191,8 +193,8 @@ fn draw_outlabel(
 
     // ラベル背景ボックス。
     let bg_color = cfg.background.unwrap_or(slice_fill);
-    let w1 = estimate_text_width(&line1, font_size);
-    let w2 = estimate_text_width(&line2, font_size);
+    let w1 = m.width(&line1, font_size as f32) as f64;
+    let w2 = m.width(&line2, font_size as f32) as f64;
     let box_w = w1.max(w2) + LABEL_PAD * 2.0;
     let box_h = line_h * 2.0 + LABEL_PAD * 2.0;
     let box_x = if on_right { p2.0 } else { p2.0 - box_w };
@@ -220,15 +222,25 @@ fn draw_outlabel(
 }
 
 /// `%l`, `%v`, `%p` をそれぞれカテゴリ名・値・パーセントに展開する。
+/// 連鎖置換を避けるため一回走査で処理する。
 fn expand_template(tmpl: &str, label: &str, value: f64, pct: i64) -> String {
-    tmpl.replace("%l", label)
-        .replace("%v", &fmt_num(value))
-        .replace("%p", &pct.to_string())
-}
-
-/// テキスト幅の粗い見積もり（フォントメトリクスなしの近似）。
-fn estimate_text_width(text: &str, font_size: f64) -> f64 {
-    text.chars().count() as f64 * font_size * 0.6
+    let value_str = fmt_num(value);
+    let pct_str = pct.to_string();
+    let mut result = String::with_capacity(tmpl.len() + label.len() + 8);
+    let mut chars = tmpl.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            match chars.peek() {
+                Some(&'l') => { chars.next(); result.push_str(label); }
+                Some(&'v') => { chars.next(); result.push_str(&value_str); }
+                Some(&'p') => { chars.next(); result.push_str(&pct_str); }
+                _ => result.push('%'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 #[cfg(test)]

@@ -775,11 +775,18 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             check_object(
                 plugins,
-                &["title", "legend", "datalabels"],
+                &["title", "legend", "datalabels", "outlabels"],
                 "options.plugins",
             )?;
             if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
                 check_object(dl, &["display"], "options.plugins.datalabels")?;
+            }
+            if let Some(ol) = plugins.get("outlabels").and_then(|v| v.as_object()) {
+                check_object(
+                    ol,
+                    &["text", "color", "backgroundColor", "stretch"],
+                    "options.plugins.outlabels",
+                )?;
             }
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
@@ -1697,5 +1704,17 @@ mod tests {
         let json = r#"{"type":"outlabeledPie","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}}"#;
         let spec = parse(json, false).expect("parse error");
         assert!((spec.series[0].fill[0].a - 1.0).abs() < 1e-6, "fill alpha must be 1.0");
+    }
+
+    #[test]
+    fn parse_outlabeled_pie_strict_with_outlabels_plugin() {
+        // strict モードで outlabels プラグインが正しく受け付けられること。
+        let json = r#"{
+            "type": "outlabeledPie",
+            "data": {"labels": ["A", "B"], "datasets": [{"data": [60, 40]}]},
+            "options": {"plugins": {"outlabels": {"stretch": 50.0, "text": "%l: %p%"}}}
+        }"#;
+        let result = parse(json, true);
+        assert!(result.is_ok(), "strict mode should accept outlabels plugin: {:?}", result);
     }
 }
