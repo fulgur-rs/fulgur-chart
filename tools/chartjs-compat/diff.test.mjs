@@ -53,10 +53,21 @@ test('軸が片方欠ける場合は axes を skip', () => {
   assert.equal(r.dimensions.axes.pass, true);
 });
 
-test('y_ticks の差分は counts 失敗を引き起こさない', () => {
+test('y_ticks の差分は counts 失敗を引き起こさない(両軸あり)', () => {
   const f = base(); const c = base();
+  f.counts.y_ticks = 6;
   c.counts.y_ticks = 99; // わざと違う値
   const r = diffModels(f, c);
-  assert.equal(r.dimensions.counts.pass, true, 'counts は y_ticks を無視するべき');
+  assert.equal(r.dimensions.counts.pass, true, 'axes 比較済みなら counts は y_ticks を無視するべき');
   assert.equal(r.pass, true);
+});
+
+test('axes が skipped のとき y_ticks 差分は counts 失敗になる', () => {
+  const f = base(); const c = base();
+  f.counts.y_ticks = 6;
+  c.counts.y_ticks = 0; // axes なし相当の値
+  delete c.axes; // axes skipped を誘発
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.axes.skipped, true, 'axes は skipped のはず');
+  assert.equal(r.dimensions.counts.pass, false, 'axes skipped 時は y_ticks を counts でチェックするべき');
 });

@@ -67,8 +67,14 @@ export function diffModels(fulgur, chartjs) {
   }
 
   // counts
+  // y_ticks は両 axes.y が比較された場合は axes 次元に委ねる(冗長ノイズ回避)。
+  // axes が skipped(片方のみ axes.y あり)の場合はフォールバックとして y_ticks を比較する。
+  const axesActuallyCompared = !!(fulgur.axes?.y && chartjs.axes?.y);
+  const countKeys = axesActuallyCompared
+    ? ['datasets', 'legend_items', 'x_ticks']
+    : ['datasets', 'legend_items', 'x_ticks', 'y_ticks'];
   const countDiffs = [];
-  for (const k of ['datasets', 'legend_items', 'x_ticks']) {
+  for (const k of countKeys) {
     if (fulgur.counts[k] !== chartjs.counts[k])
       countDiffs.push({ field: k, fulgur: fulgur.counts[k], chartjs: chartjs.counts[k] });
   }
