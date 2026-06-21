@@ -9,17 +9,14 @@ fn parse_error(msg: impl Into<String>) -> PyErr {
     FulgurParseError::new_err(msg.into())
 }
 
-#[allow(dead_code)]
 fn strict_error(msg: impl Into<String>) -> PyErr {
     FulgurStrictError::new_err(msg.into())
 }
 
-#[allow(dead_code)]
 fn render_error(msg: impl Into<String>) -> PyErr {
     FulgurRenderError::new_err(msg.into())
 }
 
-#[allow(dead_code)]
 fn detect_dsl(json: &str) -> Option<&'static str> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     if v.get("mark").is_some() {
@@ -31,7 +28,6 @@ fn detect_dsl(json: &str) -> Option<&'static str> {
     }
 }
 
-#[allow(dead_code)]
 fn parse_spec(
     json: &str,
     strict: bool,
@@ -58,7 +54,6 @@ fn parse_spec(
     Ok(spec)
 }
 
-#[allow(dead_code)]
 fn build_ir(
     spec_json: &str,
     width: Option<f64>,
@@ -106,6 +101,7 @@ fn render_svg(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 #[pyo3(signature = (spec_json, format, *, width=None, height=None, scale=1.0, strict=false, dsl=None, font=None))]
 fn render_image<'py>(
