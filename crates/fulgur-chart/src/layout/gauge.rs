@@ -210,20 +210,106 @@ fn push_value_arc(
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
+#[allow(clippy::too_many_arguments)]
 fn build_semi(
-    _items: &mut Vec<Prim>,
-    _spec: &ChartSpec,
+    items: &mut Vec<Prim>,
+    spec: &ChartSpec,
     _m: &TextMeasurer,
-    _title_band: f64,
-    _value: f64,
-    _min: f64,
-    _needle: Color,
-    _label: bool,
-    _label_color: Color,
-    _label_bg: Color,
+    title_band: f64,
+    value: f64,
+    min: f64,
+    needle: Color,
+    label: bool,
+    label_color: Color,
+    label_bg: Color,
 ) {
-    // Task 5/6 で実装。
+    // 半円は縦に半分しか使わないため、領域の下端を支点に取り直す。
+    let area_top = OUTER_PAD + title_band;
+    let area_bottom = spec.height - OUTER_PAD;
+    let area_left = OUTER_PAD;
+    let area_right = spec.width - OUTER_PAD;
+    // 半円の幅基準半径(横幅の半分)と高さ基準で小さい方。
+    let r_outer = (((area_right - area_left) / 2.0).min(area_bottom - area_top) * 0.9).max(0.0);
+    let cx = (area_left + area_right) / 2.0;
+    // 支点 cy は半円の底辺。中央やや下に置く。
+    let cy = (area_top + area_bottom) / 2.0 + r_outer / 2.0;
+    let r_inner = r_outer * 0.5; // cutout 50%。
+    if r_outer <= 0.0 {
+        return;
+    }
+
+    let series = spec.series.first();
+    let thresholds: &[f64] = series.map(|s| s.values.as_slice()).unwrap_or(&[]);
+    if thresholds.is_empty() {
+        return;
+    }
+    // max = 閾値末尾(有限)。min との縮退は range=1 で防御。
+    let max = thresholds
+        .iter()
+        .rev()
+        .find(|v| v.is_finite())
+        .copied()
+        .unwrap_or(min + 1.0);
+    let range = if (max - min).abs() > f64::EPSILON {
+        max - min
+    } else {
+        1.0
+    };
+    let angle = |frac: f64| PI + frac.clamp(0.0, 1.0) * PI;
+
+    // ゾーン: 各閾値境界を角度に変換し帯を塗る。
+    let mut lo = min;
+    for (i, &thr) in thresholds.iter().enumerate() {
+        if !thr.is_finite() {
+            continue;
+        }
+        let hi = thr;
+        let a0 = angle((lo - min) / range);
+        let a1 = angle((hi - min) / range);
+        if a1 > a0 {
+            let fill = series.map(|s| s.fill_at(i)).unwrap_or(needle);
+            items.push(Prim::Path {
+                d: ring_segment_path(cx, cy, r_outer, r_inner, a0, a1),
+                fill: Some(fill),
+                stroke: None,
+                stroke_width: 0.0,
+            });
+        }
+        lo = hi;
+    }
+
+    // 針: 支点から value 角へ向かう三角形 + 支点の小円。
+    let va = angle((value - min) / range);
+    let needle_len = r_outer * 0.8;
+    let tip = (cx + needle_len * va.cos(), cy + needle_len * va.sin());
+    // 支点で針幅を取るための直交方向。
+    let half_w = (r_outer * 0.032).max(1.5); // widthPercentage 3.2。
+    let perp = va + PI / 2.0;
+    let base1 = (cx + half_w * perp.cos(), cy + half_w * perp.sin());
+    let base2 = (cx - half_w * perp.cos(), cy - half_w * perp.sin());
+    items.push(Prim::Path {
+        d: format!(
+            "M {} {} L {} {} L {} {} Z",
+            fmt_num(tip.0),
+            fmt_num(tip.1),
+            fmt_num(base1.0),
+            fmt_num(base1.1),
+            fmt_num(base2.0),
+            fmt_num(base2.1),
+        ),
+        fill: Some(needle),
+        stroke: None,
+        stroke_width: 0.0,
+    });
+    items.push(Prim::Circle {
+        cx,
+        cy,
+        r: (r_outer * 0.04).max(2.0), // radiusPercentage 2。
+        fill: needle,
+    });
+
+    // 値ラベルは Task 6。
+    let _ = (label, label_color, label_bg);
 }
 
 /// 内外半径ありの円弧帯(リングセグメント)の SVG path data。

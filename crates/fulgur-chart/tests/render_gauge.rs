@@ -101,3 +101,34 @@ fn radial_gauge_rounded_default_adds_caps() {
         flat.matches("<circle").count()
     );
 }
+
+#[test]
+fn gauge_renders_one_path_per_zone() {
+    // data=[2,4,6] → 3 ゾーン。各ゾーン 1 path + 針。ゾーン path は 3 つ以上。
+    let svg = render(
+        r##"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4,6],
+        "backgroundColor":["#00ff00","#ffff00","#ff0000"]}]}}"##,
+    );
+    assert!(count(&svg, "<path") >= 3, "3 zones: {svg}");
+    assert!(
+        svg.contains("#00ff00") && svg.contains("#ff0000"),
+        "zone colors: {svg}"
+    );
+}
+
+#[test]
+fn gauge_needle_present() {
+    // 針(三角形 path or polygon)が描かれる。針色 黒(既定)。
+    let svg = render(
+        r##"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4,6],
+        "backgroundColor":["#00ff00","#ffff00","#ff0000"]}]}}"##,
+    );
+    // 針は polygon/path。最低限 path 数がゾーン数より多い(針を足した分)。
+    assert!(count(&svg, "<path") >= 4, "needle adds a path: {svg}");
+}
+
+#[test]
+fn gauge_no_panic_on_empty_zones() {
+    let svg = render(r#"{"type":"gauge","data":{"datasets":[{"value":0,"data":[]}]}}"#);
+    assert!(svg.starts_with("<svg") && !svg.contains("NaN"), "{svg}");
+}
