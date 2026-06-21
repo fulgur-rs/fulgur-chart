@@ -1,8 +1,13 @@
 # frozen_string_literal: true
 
+# Version is read dynamically from ext/fulgur_chart/Cargo.toml so that
+# `gem build` in CI always picks up the version set by the release workflow.
+ext_toml = File.read(File.join(__dir__, "ext/fulgur_chart/Cargo.toml"))
+crate_version = ext_toml.match(/^\[package\].*?^version\s*=\s*"([^"]+)"/m)[1]
+
 Gem::Specification.new do |spec|
   spec.name = "fulgur_chart"
-  spec.version = "0.1.0"
+  spec.version = crate_version
   spec.authors = ["Fulgur"]
   spec.summary = "Render chart.js / Vega-Lite specs to deterministic SVG/PNG (Rust core)"
   spec.description = spec.summary
@@ -10,7 +15,13 @@ Gem::Specification.new do |spec|
   spec.license = "MIT OR Apache-2.0"
   spec.required_ruby_version = ">= 3.0"
 
-  spec.files = Dir["lib/**/*.rb", "ext/**/*.{rs,toml,rb,lock}", "README.md"]
+  spec.metadata = {
+    "homepage_uri"    => spec.homepage,
+    "source_code_uri" => spec.homepage,
+    "changelog_uri"   => "#{spec.homepage}/blob/main/crates/fulgur-chart/CHANGELOG.md",
+  }
+
+  spec.files = Dir["lib/**/*.rb", "ext/**/*.{rs,toml,rb,lock}", "Cargo.lock", "README.md"]
   spec.require_paths = ["lib"]
   spec.extensions = ["ext/fulgur_chart/extconf.rb"]
 
