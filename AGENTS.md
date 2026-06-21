@@ -82,3 +82,11 @@ bd close <id>         # Complete work
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
+
+## autofix-pr only
+
+The following rules apply only when running as an automated `/autofix-pr` background session:
+
+- **Respond in Japanese**
+- **Always reply to the review thread after addressing a comment** (describe what was changed and how)
+- **If a comment is not acted upon, leave a reply explaining why** (e.g., out of scope, intentional design decision)
