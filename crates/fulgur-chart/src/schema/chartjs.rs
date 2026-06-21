@@ -208,6 +208,16 @@ pub struct GaugePlugins {
     pub title: Option<TitlePlugin>,
 }
 
+/// progress バーには凡例が描けないため legend は非公開。datalabels は % 表示制御に使用。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressPlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub datalabels: Option<DataLabelsPlugin>,
+}
+
 // ────────────────────────────────────────────────
 // Pie and doughnut charts
 // ────────────────────────────────────────────────
@@ -475,7 +485,7 @@ pub struct ProgressDataset {
 #[serde(deny_unknown_fields)]
 pub struct ProgressOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plugins: Option<CommonPlugins>,
+    pub plugins: Option<ProgressPlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOptions>,
 }
