@@ -1134,10 +1134,41 @@ mod tests {
         let spec = parse(json, false).expect("parse error");
         let fill = spec.series[0].fill[0];
         let stroke = spec.series[0].stroke[0];
-        assert_eq!(stroke.r, fill.r);
-        assert_eq!(stroke.g, fill.g);
-        assert_eq!(stroke.b, fill.b);
+        assert_eq!(stroke.r, fill.r, "stroke.r must match fill.r");
+        assert_eq!(stroke.g, fill.g, "stroke.g must match fill.g");
+        assert_eq!(stroke.b, fill.b, "stroke.b must match fill.b");
         assert!((stroke.a - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scatter_no_colors_stroke_derives_from_auto_fill() {
+        // backgroundColor も borderColor も未指定の scatter では
+        // stroke が fill と同 RGB (= palette色)、alpha=1.0 になる。
+        let json = r#"{
+            "type": "scatter",
+            "data": {
+                "datasets": [{"data": [{"x":1,"y":2}]}]
+            }
+        }"#;
+        let spec = parse(json, false).expect("parse error");
+        let fill = spec.series[0].fill[0];
+        let stroke = spec.series[0].stroke[0];
+        // stroke RGB は fill (パレット由来) と一致する
+        assert_eq!(stroke.r, fill.r, "stroke.r must match fill.r (palette color)");
+        assert_eq!(stroke.g, fill.g, "stroke.g must match fill.g (palette color)");
+        assert_eq!(stroke.b, fill.b, "stroke.b must match fill.b (palette color)");
+        // stroke alpha は 1.0
+        assert!(
+            (stroke.a - 1.0).abs() < 1e-6,
+            "stroke alpha must be 1.0, got {}",
+            stroke.a
+        );
+        // fill alpha は 0.5 (scatter は半透明)
+        assert!(
+            (fill.a - 0.5).abs() < 1e-6,
+            "fill alpha must be 0.5, got {}",
+            fill.a
+        );
     }
 
     #[test]
