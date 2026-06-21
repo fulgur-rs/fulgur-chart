@@ -19,8 +19,12 @@ use ttf_parser::OutlineBuilder;
 
 use crate::font::DEFAULT_FONT;
 use crate::ir::Color;
-use crate::raster::MAX_PNG_AREA_PIXELS;
 use crate::scene::{Anchor, Prim, Scene};
+
+/// PNG 出力の最大ピクセル面積(幅 × 高さ)。
+/// scale 適用後のピクセル数がこれを超えると OOM のリスクがあるため Err とする。
+/// 64M px ≒ 8000×8000 → raw RGBA で約 256 MB。
+const MAX_PNG_AREA_PIXELS: u64 = 64_000_000;
 
 // ---------------------------------------------------------------------------
 // 公開エントリポイント
