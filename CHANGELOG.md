@@ -6,6 +6,74 @@
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.2...fulgur-chart-cli-v0.1.3) - 2026-06-21
+
+### Added
+
+- *(gauge)* add Gauge/RadialGauge variants to JSON schema
+
+### Fixed
+
+- *(gauge)* reject plugins.legend for gauge/radialGauge in schema + strict
+- address AI review feedback on gauge/radialGauge
+
+### Other
+
+- apply rustfmt to CLI help attributes
+- *(cli)* add examples and exit-code docs to --help
+- Merge pull request #22 from fulgur-rs/feat/gauge-radialgauge
+- *(gauge)* add example specs, README and CHANGELOG entries
+- update README with new chart types, CLI options, and Ruby binding
+
+## [0.4.0](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.3.0...fulgur-chart-v0.4.0) - 2026-06-21
+
+### Added
+
+- *(gauge)* add Gauge/RadialGauge variants to JSON schema
+- *(gauge)* strict unknown-key validation + options.theme support
+- *(gauge)* value label with rounded background
+- *(gauge)* semicircle color zones + needle
+- *(gauge)* radialGauge rounded caps + center value text
+- *(gauge)* radialGauge track ring + clamped value arc
+- *(gauge)* add deterministic ring_segment_path helper
+- *(gauge)* add RadialGauge/Gauge ChartKind, dedicated parse path, layout scaffold
+- add sparkline to chart_type_name in model.rs
+- add layout/sparkline.rs and dispatch in mod.rs
+- parse "sparkline" type to ChartKind::Sparkline
+- add ChartKind::Sparkline variant to ir
+- *(scene)* add stroke/stroke_width to Prim::Circle; update all callers
+
+### Fixed
+
+- *(gauge)* reject plugins.legend for gauge/radialGauge in schema + strict
+- *(gauge)* broadcast scalar zone color; reject dataset borders in strict
+- *(gauge)* adapt to Series.box_points and Prim::Circle stroke after rebase
+- address AI review feedback on gauge/radialGauge
+- *(num)* fmt_num never emits inf for huge finite values
+- *(schema)* gauge plugins expose only title/legend (no datalabels) to match parser
+- *(gauge)* scale radialGauge center value with inner radius for QuickChart fidelity
+- *(gauge)* keep value label on-canvas by reserving a bottom label band
+- *(gauge)* center value text baseline must scale with rendered size
+- address Codex review P2 feedback on sparkline
+- address AI review feedback
+- *(scatter)* correct stroke fallback to rgba(0,0,0,0.1) when backgroundColor is set
+- *(svg)* align Circle stroke attr order with Path; add stroke SVG test
+- *(scatter)* derive stroke from backgroundColor when borderColor is absent
+
+### Other
+
+- Merge pull request #22 from fulgur-rs/feat/gauge-radialgauge
+- *(gauge)* document strict validator as intentional lenient union; drop unused param
+- *(gauge)* add example specs, README and CHANGELOG entries
+- *(gauge)* edge cases, determinism, snapshots, PNG regression
+- *(gauge)* name needle/cutout constants; guard non-finite needle value
+- update README with new chart types, CLI options, and Ruby binding
+- harden sparkline Z/C assertions per coderabbit feedback
+- add render_sparkline tests with snapshot
+- *(svg)* write Circle attrs directly to output, avoid temp allocation
+- apply rustfmt
+- *(scatter)* add missing test for no-backgroundColor + no-borderColor case
+
 ### Added
 
 - `gauge` チャートタイプ（QuickChart 互換の chartjs-gauge）に対応。累積閾値から成る
