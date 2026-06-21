@@ -147,19 +147,29 @@ impl DataField {
     }
 
     /// ネスト配列なら IR の `BoxPoint` へ変換する。boxplot の `box_points` 用。
-    /// 各行は [min, q1, median, q3, max] の順を期待する。
+    /// 各行は厳密に [min, q1, median, q3, max] の 5 要素でなければならない。
+    /// 5 要素以外の行はバイト数ガードをバイパスできるため拒否し NaN 行として扱う。
     fn into_box_points(self) -> Vec<crate::ir::BoxPoint> {
         match self {
             DataField::Boxes(rows) => rows
                 .into_iter()
-                // 5 要素未満の行は不足スロットを NaN で補完する。NaN のボックスは
-                // レンダラがスキップするため、短い行は「描画なし」として扱われる。
-                .map(|row| crate::ir::BoxPoint {
-                    min:    row.first().copied().unwrap_or(f64::NAN),
-                    q1:     row.get(1).copied().unwrap_or(f64::NAN),
-                    median: row.get(2).copied().unwrap_or(f64::NAN),
-                    q3:     row.get(3).copied().unwrap_or(f64::NAN),
-                    max:    row.get(4).copied().unwrap_or(f64::NAN),
+                .map(|row| {
+                    if row.len() != 5 {
+                        return crate::ir::BoxPoint {
+                            min: f64::NAN,
+                            q1: f64::NAN,
+                            median: f64::NAN,
+                            q3: f64::NAN,
+                            max: f64::NAN,
+                        };
+                    }
+                    crate::ir::BoxPoint {
+                        min: row[0],
+                        q1: row[1],
+                        median: row[2],
+                        q3: row[3],
+                        max: row[4],
+                    }
                 })
                 .collect(),
             _ => vec![],
@@ -467,7 +477,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .and_then(|a| a.get("beginAtZero"))
         .and_then(|v| v.as_bool());
     let x_begin_at_zero = x_baz_json.unwrap_or(is_horizontal && value_begin_at_zero);
-    let y_begin_at_zero = y_baz_json.unwrap_or(!is_horizontal && value_begin_at_zero && !is_boxplot);
+    let y_begin_at_zero =
+        y_baz_json.unwrap_or(!is_horizontal && value_begin_at_zero && !is_boxplot);
     let suggested_min_y = scales_val
         .and_then(|s| s.get("y"))
         .and_then(|a| a.get("suggestedMin"))
@@ -1023,7 +1034,10 @@ mod tests {
                 "datasets": [{"data": [10, 25, 50, 75, 90]}]
             }
         }"#;
-        assert!(parse(json, false).is_err(), "boxplot with flat numbers should fail");
+        assert!(
+            parse(json, false).is_err(),
+            "boxplot with flat numbers should fail"
+        );
     }
 
     #[test]

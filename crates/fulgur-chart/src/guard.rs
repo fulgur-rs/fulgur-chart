@@ -177,6 +177,21 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         }
     }
 
+    // --- boxplot プリミティブ数 ---
+    // 1 ボックスあたり rect×1 + 枠線×4 + 中央値×1 + ヒゲ×2 + キャップ×2 = 10 プリミティブ。
+    // categories/series 上限は箱数を間接的に制限するが、primitive cap を直接チェックする。
+    if matches!(spec.kind, crate::ir::ChartKind::BoxPlot) {
+        const PRIMS_PER_BOX: usize = 10;
+        let boxes: usize = spec.series.iter().map(|s| s.box_points.len()).sum();
+        let boxplot_primitives = boxes.saturating_mul(PRIMS_PER_BOX);
+        if boxplot_primitives > limits.max_categorical_primitives {
+            return Err(format!(
+                "boxplot ボックス数 {} (プリミティブ {}) が上限 {} を超えています",
+                boxes, boxplot_primitives, limits.max_categorical_primitives,
+            ));
+        }
+    }
+
     // --- 全データ点数の合計(scatter/bubble 向け) ---
     // values と points の大きい方を各系列のコストとして合算する。
     let total_points: usize = spec

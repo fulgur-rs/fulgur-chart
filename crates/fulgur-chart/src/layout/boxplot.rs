@@ -14,25 +14,43 @@ fn aux_spec(spec: &ChartSpec) -> ChartSpec {
     let mut data_max = f64::NEG_INFINITY;
     for ser in &spec.series {
         for bp in &ser.box_points {
+            // 5値すべてが finite な行のみドメインに含める。不完全行は build() でも
+            // スキップされるため、ここで混入させるとスケールが狂う。
+            if !bp.min.is_finite()
+                || !bp.q1.is_finite()
+                || !bp.median.is_finite()
+                || !bp.q3.is_finite()
+                || !bp.max.is_finite()
+            {
+                continue;
+            }
             for &v in &[bp.min, bp.q1, bp.median, bp.q3, bp.max] {
-                if v.is_finite() {
-                    if v < data_min { data_min = v; }
-                    if v > data_max { data_max = v; }
+                if v < data_min {
+                    data_min = v;
+                }
+                if v > data_max {
+                    data_max = v;
                 }
             }
         }
     }
     let mut aux = spec.clone();
-    // suggested_min/max はデータ範囲を「拡張する」だけ。ユーザー指定値を上書きしない。
     if data_min.is_finite() {
-        let prev = aux.y_axis.suggested_min.filter(|s| s.is_finite()).unwrap_or(data_min);
+        let prev = aux
+            .y_axis
+            .suggested_min
+            .filter(|s| s.is_finite())
+            .unwrap_or(data_min);
         aux.y_axis.suggested_min = Some(data_min.min(prev));
     }
     if data_max.is_finite() {
-        let prev = aux.y_axis.suggested_max.filter(|s| s.is_finite()).unwrap_or(data_max);
+        let prev = aux
+            .y_axis
+            .suggested_max
+            .filter(|s| s.is_finite())
+            .unwrap_or(data_max);
         aux.y_axis.suggested_max = Some(data_max.max(prev));
     }
-    // begin_at_zero はパーサーで解決済み（デフォルト false、ユーザー明示時は保持）。
     aux
 }
 
@@ -52,73 +70,123 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let band_w = super::common::band_width(&frame, n);
     let box_w = (band_w * BOX_RATIO / s as f64).max(1.0);
     let cap_w = box_w * CAP_RATIO;
-    let stroke_w = 1.5;
-    let median_w = 2.5;
+    let median_w = 2.5_f64;
 
     for i in 0..spec.categories.len() {
         let band_cx = super::common::category_center(&frame, i, n);
-        // 複数系列の横オフセット基点。sidxを加えて各系列の cx を計算する。
-        // s=1→0, s=2→-0.5+0.0/+0.5, s=3→-1.0/0.0/+1.0
         let group_offset = -(s as f64 - 1.0) / 2.0;
 
         for (sidx, ser) in spec.series.iter().enumerate() {
-            let Some(bp) = ser.box_points.get(i) else { continue };
-            if !bp.min.is_finite() || !bp.q1.is_finite() || !bp.median.is_finite() || !bp.q3.is_finite() || !bp.max.is_finite() { continue }
+            let Some(bp) = ser.box_points.get(i) else {
+                continue;
+            };
+            if !bp.min.is_finite()
+                || !bp.q1.is_finite()
+                || !bp.median.is_finite()
+                || !bp.q3.is_finite()
+                || !bp.max.is_finite()
+            {
+                continue;
+            }
+
+            // borderWidth はパーサーが Series.stroke_width に格納(未指定時はデフォルト値)。
+            let stroke_w = ser.stroke_width;
 
             let cx = band_cx + (group_offset + sidx as f64) * box_w;
             let left = cx - box_w / 2.0;
 
-            let y_q1     = frame.ys.map(bp.q1);
-            let y_q3     = frame.ys.map(bp.q3);
+            let y_q1 = frame.ys.map(bp.q1);
+            let y_q3 = frame.ys.map(bp.q3);
             let y_median = frame.ys.map(bp.median);
-            let y_min    = frame.ys.map(bp.min);
-            let y_max    = frame.ys.map(bp.max);
+            let y_min = frame.ys.map(bp.min);
+            let y_max = frame.ys.map(bp.max);
 
-            // Y軸は上が小さい(screen coords)のでQ3のy座標が小さい(上)
-            let box_top    = y_q3.min(y_q1);
+            let box_top = y_q3.min(y_q1);
             let box_bottom = y_q3.max(y_q1);
-            let fill   = ser.fill_at(i);
+            let fill = ser.fill_at(i);
             let stroke = ser.stroke_at(i);
 
-            // ボックス本体(Q1–Q3)
             items.push(Prim::Rect {
-                x: left, y: box_top, w: box_w, h: (box_bottom - box_top).max(1.0), fill,
+                x: left,
+                y: box_top,
+                w: box_w,
+                h: (box_bottom - box_top).max(1.0),
+                fill,
             });
 
-            // ボックス枠(4本のLine)
             for &(x1, y1, x2, y2) in &[
-                (left,          box_top,    left + box_w, box_top),
-                (left + box_w,  box_top,    left + box_w, box_bottom),
-                (left + box_w,  box_bottom, left,         box_bottom),
-                (left,          box_bottom, left,         box_top),
+                (left, box_top, left + box_w, box_top),
+                (left + box_w, box_top, left + box_w, box_bottom),
+                (left + box_w, box_bottom, left, box_bottom),
+                (left, box_bottom, left, box_top),
             ] {
-                items.push(Prim::Line { x1, y1, x2, y2, stroke, stroke_width: stroke_w });
+                items.push(Prim::Line {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    stroke,
+                    stroke_width: stroke_w,
+                });
             }
 
-            // 中央値線
             items.push(Prim::Line {
-                x1: left, y1: y_median, x2: left + box_w, y2: y_median,
-                stroke, stroke_width: median_w,
+                x1: left,
+                y1: y_median,
+                x2: left + box_w,
+                y2: y_median,
+                stroke,
+                stroke_width: median_w,
             });
 
-            // 上ヒゲ(Q3→max)
-            items.push(Prim::Line { x1: cx, y1: box_top,    x2: cx, y2: y_max, stroke, stroke_width: stroke_w });
-            items.push(Prim::Line { x1: cx - cap_w / 2.0, y1: y_max, x2: cx + cap_w / 2.0, y2: y_max, stroke, stroke_width: stroke_w });
+            items.push(Prim::Line {
+                x1: cx,
+                y1: box_top,
+                x2: cx,
+                y2: y_max,
+                stroke,
+                stroke_width: stroke_w,
+            });
+            items.push(Prim::Line {
+                x1: cx - cap_w / 2.0,
+                y1: y_max,
+                x2: cx + cap_w / 2.0,
+                y2: y_max,
+                stroke,
+                stroke_width: stroke_w,
+            });
 
-            // 下ヒゲ(Q1→min)
-            items.push(Prim::Line { x1: cx, y1: box_bottom, x2: cx, y2: y_min, stroke, stroke_width: stroke_w });
-            items.push(Prim::Line { x1: cx - cap_w / 2.0, y1: y_min, x2: cx + cap_w / 2.0, y2: y_min, stroke, stroke_width: stroke_w });
+            items.push(Prim::Line {
+                x1: cx,
+                y1: box_bottom,
+                x2: cx,
+                y2: y_min,
+                stroke,
+                stroke_width: stroke_w,
+            });
+            items.push(Prim::Line {
+                x1: cx - cap_w / 2.0,
+                y1: y_min,
+                x2: cx + cap_w / 2.0,
+                y2: y_min,
+                stroke,
+                stroke_width: stroke_w,
+            });
         }
     }
 
-    Scene { width: spec.width, height: spec.height, items }
+    Scene {
+        width: spec.width,
+        height: spec.height,
+        items,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frontend::chartjs;
     use crate::font::DEFAULT_FONT;
+    use crate::frontend::chartjs;
 
     fn boxplot_spec() -> ChartSpec {
         let json = r#"{
@@ -142,10 +210,21 @@ mod tests {
         let spec = boxplot_spec();
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = build(&spec, &m);
-        let rects: Vec<_> = scene.items.iter().filter(|p| matches!(p, Prim::Rect { .. })).collect();
+        let rects: Vec<_> = scene
+            .items
+            .iter()
+            .filter(|p| matches!(p, Prim::Rect { .. }))
+            .collect();
         assert!(!rects.is_empty(), "should have at least one Rect (box)");
-        let lines: Vec<_> = scene.items.iter().filter(|p| matches!(p, Prim::Line { .. })).collect();
-        assert!(!lines.is_empty(), "should have at least one Line (whisker/median)");
+        let lines: Vec<_> = scene
+            .items
+            .iter()
+            .filter(|p| matches!(p, Prim::Line { .. }))
+            .collect();
+        assert!(
+            !lines.is_empty(),
+            "should have at least one Line (whisker/median)"
+        );
     }
 
     #[test]
@@ -164,9 +243,17 @@ mod tests {
         let spec = boxplot_spec();
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = build(&spec, &m);
-        let rect = scene.items.iter().find_map(|p| {
-            if let Prim::Rect { y, h, .. } = p { Some((*y, *h)) } else { None }
-        }).expect("should have at least one Rect");
+        let rect = scene
+            .items
+            .iter()
+            .find_map(|p| {
+                if let Prim::Rect { y, h, .. } = p {
+                    Some((*y, *h))
+                } else {
+                    None
+                }
+            })
+            .expect("should have at least one Rect");
         let (box_top, h) = rect;
         assert!(h > 0.0, "box height must be positive (Q1 != Q3)");
         assert!(box_top > 0.0, "box_top should be within the plot area");
