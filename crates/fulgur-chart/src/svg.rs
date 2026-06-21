@@ -126,17 +126,33 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
             )
             .unwrap();
         }
-        Prim::Circle { cx, cy, r, fill } => {
+        Prim::Circle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+            stroke_width,
+        } => {
             let cx = fmt_num(*cx);
             let cy = fmt_num(*cy);
             let r = fmt_num(*r);
-            let hex = color_hex(fill);
-            let op = opacity_attr("fill-opacity", fill.a);
+            let fill_hex = color_hex(fill);
             write!(
                 s,
-                r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="{hex}"{op}/>"#
+                r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="{fill_hex}""#
             )
             .unwrap();
+            if *stroke_width > 0.0 {
+                let stroke_hex = color_hex(stroke);
+                let sw = fmt_num(*stroke_width);
+                write!(s, r#" stroke="{stroke_hex}" stroke-width="{sw}""#).unwrap();
+            }
+            s.push_str(&opacity_attr("fill-opacity", fill.a));
+            if *stroke_width > 0.0 {
+                s.push_str(&opacity_attr("stroke-opacity", stroke.a));
+            }
+            s.push_str("/>");
         }
         Prim::Text {
             x,
@@ -338,6 +354,8 @@ mod tests {
                     cy: 4.0,
                     r: 2.5,
                     fill: blue(),
+                    stroke: black(),
+                    stroke_width: 0.0,
                 },
             ],
         };
@@ -470,6 +488,78 @@ mod tests {
                 r##"<path d="M0 0 L1 1" fill="#010203" stroke="#040506" stroke-width="2" fill-opacity="0.5" stroke-opacity="0.25"/>"##
             ),
             "got: {svg}"
+        );
+    }
+
+    #[test]
+    fn circle_with_stroke_emits_correct_svg() {
+        let scene = Scene {
+            width: 100.0,
+            height: 100.0,
+            items: vec![Prim::Circle {
+                cx: 50.0,
+                cy: 50.0,
+                r: 10.0,
+                fill: Color {
+                    r: 153,
+                    g: 102,
+                    b: 255,
+                    a: 0.5,
+                },
+                stroke: Color {
+                    r: 153,
+                    g: 102,
+                    b: 255,
+                    a: 1.0,
+                },
+                stroke_width: 1.0,
+            }],
+        };
+        let svg = render_svg(&scene, "sans-serif");
+        // stroke に alpha=1.0 のとき stroke-opacity は出ない
+        assert!(
+            svg.contains(r##"stroke="#9966ff" stroke-width="1""##),
+            "stroke attrs missing or wrong: {svg}"
+        );
+        assert!(
+            !svg.contains("stroke-opacity"),
+            "stroke-opacity should be absent when alpha=1.0: {svg}"
+        );
+        // fill-opacity は fill の alpha=0.5 のとき出る
+        assert!(
+            svg.contains(r##"fill-opacity="0.5""##),
+            "fill-opacity missing: {svg}"
+        );
+    }
+
+    #[test]
+    fn circle_with_zero_stroke_width_omits_stroke_attrs() {
+        let scene = Scene {
+            width: 100.0,
+            height: 100.0,
+            items: vec![Prim::Circle {
+                cx: 10.0,
+                cy: 10.0,
+                r: 5.0,
+                fill: Color {
+                    r: 54,
+                    g: 162,
+                    b: 235,
+                    a: 1.0,
+                },
+                stroke: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                stroke_width: 0.0,
+            }],
+        };
+        let svg = render_svg(&scene, "sans-serif");
+        assert!(
+            !svg.contains("stroke="),
+            "stroke= should be absent when stroke_width=0: {svg}"
         );
     }
 
