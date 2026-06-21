@@ -415,15 +415,21 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 fill_alpha,
                 theme.is_custom_palette,
             );
-            let stroke = resolve_colors(
-                ds.border_color,
-                is_pie,
-                i,
-                n,
-                &theme.palette,
-                1.0,
-                theme.is_custom_palette,
-            );
+            let border_color = ds.border_color;
+            let stroke = if is_point_based && border_color.is_none() {
+                // chart.js: scatter/bubble の borderColor 未指定時は backgroundColor と同 RGB、alpha=1.0。
+                fill.iter().map(|c| Color { a: 1.0, ..*c }).collect()
+            } else {
+                resolve_colors(
+                    border_color,
+                    is_pie,
+                    i,
+                    n,
+                    &theme.palette,
+                    1.0,
+                    theme.is_custom_palette,
+                )
+            };
             // 実効描画種別。線の既定線幅(3.0)を chart 基本型でなく系列種別で決めるため、
             // 単一種別(全 Line→3.0 / 全 Bar→1.0)では従来と byte 一致し、混合では line だけ太くなる。
             let series_type = series_types[i];
@@ -1090,5 +1096,63 @@ mod tests {
             "pie の fill alpha は 1.0 であるべき、実際は {}",
             fill_alpha
         );
+    }
+
+    #[test]
+    fn bubble_no_border_color_stroke_derives_from_background_color() {
+        // borderColor 未指定の bubble では stroke が backgroundColor と同 RGB、alpha=1.0 になる。
+        let json = r##"{
+            "type": "bubble",
+            "data": {
+                "datasets": [{"backgroundColor": "#9966ff", "data": [{"x":1,"y":2,"r":5}]}]
+            }
+        }"##;
+        let spec = parse(json, false).expect("parse error");
+        let fill = spec.series[0].fill[0];
+        let stroke = spec.series[0].stroke[0];
+        // stroke RGB は fill と一致する
+        assert_eq!(stroke.r, fill.r, "stroke.r must match fill.r");
+        assert_eq!(stroke.g, fill.g, "stroke.g must match fill.g");
+        assert_eq!(stroke.b, fill.b, "stroke.b must match fill.b");
+        // stroke alpha は 1.0
+        assert!(
+            (stroke.a - 1.0).abs() < 1e-6,
+            "stroke alpha must be 1.0, got {}",
+            stroke.a
+        );
+    }
+
+    #[test]
+    fn scatter_no_border_color_stroke_derives_from_background_color() {
+        // borderColor 未指定の scatter でも同様。
+        let json = r##"{
+            "type": "scatter",
+            "data": {
+                "datasets": [{"backgroundColor": "#36a2eb", "data": [{"x":1,"y":2}]}]
+            }
+        }"##;
+        let spec = parse(json, false).expect("parse error");
+        let fill = spec.series[0].fill[0];
+        let stroke = spec.series[0].stroke[0];
+        assert_eq!(stroke.r, fill.r);
+        assert_eq!(stroke.g, fill.g);
+        assert_eq!(stroke.b, fill.b);
+        assert!((stroke.a - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scatter_explicit_border_color_is_respected() {
+        // borderColor を明示した場合はその色が使われる。
+        let json = r##"{
+            "type": "scatter",
+            "data": {
+                "datasets": [{"backgroundColor": "#ff0000", "borderColor": "#0000ff", "data": [{"x":1,"y":2}]}]
+            }
+        }"##;
+        let spec = parse(json, false).expect("parse error");
+        let stroke = spec.series[0].stroke[0];
+        assert_eq!(stroke.r, 0);
+        assert_eq!(stroke.g, 0);
+        assert_eq!(stroke.b, 255);
     }
 }
