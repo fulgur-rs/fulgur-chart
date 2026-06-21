@@ -10,6 +10,9 @@ use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 use std::f64::consts::PI;
 
+/// 中央値テキストのフォント倍率(ラベル基準フォントに対して大きめに表示)。
+const CENTER_VALUE_FONT_SCALE: f64 = 1.6;
+
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let ink = spec.theme.text_color;
     let mut items: Vec<Prim> = Vec::new();
@@ -162,10 +165,11 @@ fn build_radial(
     }
 
     if display_text {
+        let size = spec.theme.font_size * CENTER_VALUE_FONT_SCALE;
         items.push(Prim::Text {
             x: cx,
-            y: cy + spec.theme.font_size * super::common::TEXT_BASELINE_RATIO,
-            size: spec.theme.font_size * 1.6, // 中央値は大きめ。
+            y: cy + size * super::common::TEXT_BASELINE_RATIO,
+            size,
             anchor: Anchor::Middle,
             fill: spec.theme.text_color,
             content: fmt_num(value.round()),
@@ -173,8 +177,7 @@ fn build_radial(
     }
 }
 
-/// 値弧を描く。rounded のとき両端に半円キャップ(Circle 代用に小さなリング無しの
-/// 半円 path)を足す。簡易には端点に直径=帯幅の円を描く。
+/// 値弧を描く。rounded のとき両端に直径=帯幅の円を置き、線端を丸く見せる。
 #[allow(clippy::too_many_arguments)]
 fn push_value_arc(
     items: &mut Vec<Prim>,
