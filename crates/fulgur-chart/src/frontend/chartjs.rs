@@ -364,6 +364,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
     let is_point_based = matches!(kind, ChartKind::Scatter | ChartKind::Bubble);
     let is_boxplot = matches!(kind, ChartKind::BoxPlot);
+    // sparkline はライン系のスケール慣習に従い begin_at_zero をデフォルト false にする。
+    let is_sparkline = matches!(kind, ChartKind::Sparkline);
 
     // データ形状とチャート種の整合を検査する。点ベース(scatter/bubble)は {x,y(,r)}
     // 配列、カテゴリ系は数値配列を要する。非空の不一致は空チャート化せず明示エラーに。
@@ -481,7 +483,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             ..
         }
     );
-    let value_begin_at_zero = !is_point_based;
+    let value_begin_at_zero = !is_point_based && !is_sparkline;
 
     // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する。
     let scales_val = raw.options.scales.as_ref();

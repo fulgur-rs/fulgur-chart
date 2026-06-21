@@ -560,5 +560,7 @@ pub struct SparklineDataset {
 #[serde(deny_unknown_fields)]
 pub struct SparklineOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub scales: Option<BarScales>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOptions>,
 }

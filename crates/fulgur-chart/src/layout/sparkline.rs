@@ -35,10 +35,15 @@ pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
         if count == 0 {
             continue;
         }
-        // 等間隔でプロット（全系列共通の max_count を基準に x を決める）
+        // エッジ対エッジ配置（最初の点は plot_left、最後は plot_right）。
+        // 系列が 1 点の場合は中央に配置する。
         let pts: Vec<(f64, f64)> = (0..count)
             .map(|i| {
-                let x = plot_left + (i as f64 + 0.5) * (plot_right - plot_left) / max_count as f64;
+                let x = if max_count == 1 {
+                    (plot_left + plot_right) / 2.0
+                } else {
+                    plot_left + i as f64 * (plot_right - plot_left) / (max_count - 1) as f64
+                };
                 let v = ser.values[i];
                 (x, ys.map(v))
             })

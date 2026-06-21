@@ -7,46 +7,49 @@ fn render(json: &str) -> String {
 
 #[test]
 fn sparkline_has_polyline() {
-    let svg = render(
-        r#"{"type":"sparkline","data":{"datasets":[{"data":[3,1,4,1,5,9,2,6]}]}}"#,
+    let svg = render(r#"{"type":"sparkline","data":{"datasets":[{"data":[3,1,4,1,5,9,2,6]}]}}"#);
+    assert!(
+        svg.contains("<polyline") || svg.contains("<path"),
+        "折れ線要素がない"
     );
-    assert!(svg.contains("<polyline") || svg.contains("<path"), "折れ線要素がない");
     assert!(!svg.contains("NaN") && !svg.contains("inf"));
     assert!(svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"));
 }
 
 #[test]
 fn sparkline_has_no_text_elements() {
-    let svg = render(
-        r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3]}]}}"#,
+    let svg = render(r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3]}]}}"#);
+    assert!(
+        !svg.contains("<text"),
+        "軸ラベルや凡例の <text> が存在してはならない"
     );
-    assert!(!svg.contains("<text"), "軸ラベルや凡例の <text> が存在してはならない");
 }
 
 #[test]
 fn sparkline_has_no_markers() {
-    let svg = render(
-        r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3,4,5]}]}}"#,
+    let svg = render(r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3,4,5]}]}}"#);
+    assert!(
+        !svg.contains("<circle"),
+        "マーカー <circle> が存在してはならない"
     );
-    assert!(!svg.contains("<circle"), "マーカー <circle> が存在してはならない");
 }
 
 #[test]
 fn sparkline_area_fill() {
-    let svg = render(
-        r#"{"type":"sparkline","data":{"datasets":[{"data":[1,3,2],"fill":true}]}}"#,
-    );
+    let svg = render(r#"{"type":"sparkline","data":{"datasets":[{"data":[1,3,2],"fill":true}]}}"#);
     assert!(svg.contains("<path"), "fill:true で area パスがない");
     assert!(svg.contains("Z\""), "area パスが閉じていない");
 }
 
 #[test]
 fn sparkline_tension_uses_bezier() {
-    let svg = render(
-        r#"{"type":"sparkline","data":{"datasets":[{"data":[1,3,2],"tension":0.4}]}}"#,
-    );
+    let svg =
+        render(r#"{"type":"sparkline","data":{"datasets":[{"data":[1,3,2],"tension":0.4}]}}"#);
     assert!(svg.contains("<path"), "tension で Bezier パスがない");
-    assert!(svg.contains(" C "), "Catmull-Rom コントロールポイントがない");
+    assert!(
+        svg.contains(" C "),
+        "Catmull-Rom コントロールポイントがない"
+    );
 }
 
 #[test]
