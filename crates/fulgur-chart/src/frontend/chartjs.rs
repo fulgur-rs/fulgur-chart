@@ -356,6 +356,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             // QuickChart の正式名は "progressBar"。互換のため "progress" も受理する。
             "progress" | "progressBar" => ChartKind::Progress,
             "boxplot" => ChartKind::BoxPlot,
+            "polarArea" => ChartKind::PolarArea,
             "sparkline" => ChartKind::Sparkline,
             other => return Err(format!("未対応の type: {other}")),
         }
@@ -372,7 +373,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // テーマ解決(配色に使うため色解決より先に行う)。
     let theme = build_theme(raw.options.theme);
 
-    let is_pie = matches!(kind, ChartKind::Pie { .. });
+    let is_pie = matches!(kind, ChartKind::Pie { .. } | ChartKind::PolarArea);
     // progress も pie 同様に前景をソリッド(alpha=1.0)で塗る。
     let is_progress = matches!(kind, ChartKind::Progress);
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
