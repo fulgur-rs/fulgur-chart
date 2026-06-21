@@ -214,10 +214,7 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         if outlabeled_primitives > limits.max_categorical_primitives {
             return Err(format!(
                 "outlabeledPie: スライス数 {} × {} プリミティブ = {} が上限 {} を超えます",
-                slices,
-                prims_per_slice,
-                outlabeled_primitives,
-                limits.max_categorical_primitives,
+                slices, prims_per_slice, outlabeled_primitives, limits.max_categorical_primitives,
             ));
         }
     }
