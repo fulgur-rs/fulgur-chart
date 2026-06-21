@@ -971,6 +971,9 @@ fn check_unknown_keys_progress(json: &str) -> Result<(), String> {
         check_object(options, &["plugins", "theme"], "options")?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             check_object(plugins, &["title", "datalabels"], "options.plugins")?;
+            if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
+                check_object(dl, &["display"], "options.plugins.datalabels")?;
+            }
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
             check_object(

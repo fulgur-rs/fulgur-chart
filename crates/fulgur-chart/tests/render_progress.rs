@@ -192,3 +192,12 @@ fn progress_strict_rejects_legend() {
     );
     assert!(err.is_err(), "legend should be rejected in strict mode");
 }
+
+#[test]
+fn progress_strict_rejects_unknown_datalabels_key() {
+    let err = chartjs::parse(
+        r##"{"type":"progress","data":{"datasets":[{"data":[70]}]},"options":{"plugins":{"datalabels":{"dispaly":false}}}}"##,
+        true,
+    );
+    assert!(err.is_err(), "typo in datalabels key should be rejected in strict mode");
+}
