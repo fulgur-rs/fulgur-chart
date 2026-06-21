@@ -3,7 +3,10 @@
 # Version is read dynamically from ext/fulgur_chart/Cargo.toml so that
 # `gem build` in CI always picks up the version set by the release workflow.
 ext_toml = File.read(File.join(__dir__, "ext/fulgur_chart/Cargo.toml"))
-crate_version = ext_toml.match(/^\[package\].*?^version\s*=\s*"([^"]+)"/m)[1]
+package_section = ext_toml.match(/^\[package\](.*?)(?=^\[|\z)/m)&.captures&.first || ""
+m = package_section.match(/^version\s*=\s*"([^"]+)"/)
+raise "Could not parse version from ext/fulgur_chart/Cargo.toml" unless m
+crate_version = m[1]
 
 Gem::Specification.new do |spec|
   spec.name = "fulgur_chart"
