@@ -250,6 +250,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 cy: *y,
                 r: MARKER_R,
                 fill: ser.stroke_at(0),
+                stroke: ser.stroke_at(0),
+                stroke_width: 0.0,
             });
         }
     }

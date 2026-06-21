@@ -190,7 +190,14 @@ fn render_prim(
             }
         }
 
-        Prim::Circle { cx, cy, r, fill } => {
+        Prim::Circle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+            stroke_width,
+        } => {
             let Some(path) = PathBuilder::from_circle(*cx as f32, *cy as f32, *r as f32) else {
                 return;
             };
@@ -201,6 +208,15 @@ fn render_prim(
                 transform,
                 None,
             );
+            if *stroke_width > 0.0 {
+                pixmap.stroke_path(
+                    &path,
+                    &solid_paint(*stroke),
+                    &make_stroke(*stroke_width),
+                    transform,
+                    None,
+                );
+            }
         }
 
         Prim::Text {

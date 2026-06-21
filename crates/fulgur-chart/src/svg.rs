@@ -126,15 +126,30 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
             )
             .unwrap();
         }
-        Prim::Circle { cx, cy, r, fill } => {
+        Prim::Circle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+            stroke_width,
+        } => {
             let cx = fmt_num(*cx);
             let cy = fmt_num(*cy);
             let r = fmt_num(*r);
             let hex = color_hex(fill);
             let op = opacity_attr("fill-opacity", fill.a);
+            let tail = if *stroke_width > 0.0 {
+                let shex = color_hex(stroke);
+                let sop = opacity_attr("stroke-opacity", stroke.a);
+                let sw = fmt_num(*stroke_width);
+                format!(r#" stroke="{shex}"{sop} stroke-width="{sw}""#)
+            } else {
+                String::new()
+            };
             write!(
                 s,
-                r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="{hex}"{op}/>"#
+                r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="{hex}"{op}{tail}/>"#
             )
             .unwrap();
         }
@@ -338,6 +353,8 @@ mod tests {
                     cy: 4.0,
                     r: 2.5,
                     fill: blue(),
+                    stroke: black(),
+                    stroke_width: 0.0,
                 },
             ],
         };

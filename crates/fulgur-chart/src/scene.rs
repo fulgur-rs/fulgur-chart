@@ -48,6 +48,8 @@ pub enum Prim {
         cy: f64,
         r: f64,
         fill: Color,
+        stroke: Color,
+        stroke_width: f64,
     },
     Text {
         x: f64,

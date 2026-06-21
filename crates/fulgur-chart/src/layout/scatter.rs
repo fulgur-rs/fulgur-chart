@@ -250,6 +250,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 cy: ys.map(p.y),
                 r: point_radius(&spec.kind, p, ser.point_radius),
                 fill: ser.fill_at(i),
+                stroke: ser.stroke_at(i),
+                stroke_width: ser.stroke_width,
             });
         }
     }
