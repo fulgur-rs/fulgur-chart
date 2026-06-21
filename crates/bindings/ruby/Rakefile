@@ -13,7 +13,7 @@ RbSys::ExtensionTask.new("fulgur_chart", GEMSPEC) do |ext|
     aarch64-linux
     x86_64-darwin
     arm64-darwin
-    x86_64-mingw-ucrt
+    x64-mingw-ucrt
   ]
 end
 
