@@ -406,6 +406,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             } else {
                 0.5_f32
             };
+            let has_explicit_bg = ds.background_color.is_some();
             let fill = resolve_colors(
                 ds.background_color,
                 is_pie,
@@ -416,9 +417,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 theme.is_custom_palette,
             );
             let border_color = ds.border_color;
-            let stroke = if is_point_based && border_color.is_none() {
-                // chart.js: scatter/bubble の borderColor 未指定時は backgroundColor と同 RGB、alpha=1.0。
-                fill.iter().map(|c| Color { a: 1.0, ..*c }).collect()
+            let stroke = if is_point_based && has_explicit_bg && border_color.is_none() {
+                // chart.js v4: backgroundColor 指定・borderColor 未指定の scatter/bubble は
+                // Colors プラグインをスキップし、グローバルデフォルト rgba(0,0,0,0.1) にフォールバック。
+                vec![Color { r: 0, g: 0, b: 0, a: 0.1 }; fill.len()]
             } else {
                 resolve_colors(
                     border_color,
@@ -1099,8 +1101,9 @@ mod tests {
     }
 
     #[test]
-    fn bubble_no_border_color_stroke_derives_from_background_color() {
-        // borderColor 未指定の bubble では stroke が backgroundColor と同 RGB、alpha=1.0 になる。
+    fn bubble_no_border_color_stroke_is_global_default() {
+        // chart.js v4: backgroundColor 指定・borderColor 未指定の bubble は
+        // Colors プラグインをスキップし、グローバルデフォルト rgba(0,0,0,0.1) になる。
         let json = r##"{
             "type": "bubble",
             "data": {
@@ -1108,23 +1111,20 @@ mod tests {
             }
         }"##;
         let spec = parse(json, false).expect("parse error");
-        let fill = spec.series[0].fill[0];
         let stroke = spec.series[0].stroke[0];
-        // stroke RGB は fill と一致する
-        assert_eq!(stroke.r, fill.r, "stroke.r must match fill.r");
-        assert_eq!(stroke.g, fill.g, "stroke.g must match fill.g");
-        assert_eq!(stroke.b, fill.b, "stroke.b must match fill.b");
-        // stroke alpha は 1.0
+        assert_eq!(stroke.r, 0, "stroke.r must be 0 (black)");
+        assert_eq!(stroke.g, 0, "stroke.g must be 0 (black)");
+        assert_eq!(stroke.b, 0, "stroke.b must be 0 (black)");
         assert!(
-            (stroke.a - 1.0).abs() < 1e-6,
-            "stroke alpha must be 1.0, got {}",
+            (stroke.a - 0.1).abs() < 1e-6,
+            "stroke alpha must be 0.1 (global default), got {}",
             stroke.a
         );
     }
 
     #[test]
-    fn scatter_no_border_color_stroke_derives_from_background_color() {
-        // borderColor 未指定の scatter でも同様。
+    fn scatter_no_border_color_stroke_is_global_default() {
+        // chart.js v4: backgroundColor 指定・borderColor 未指定の scatter も同様。
         let json = r##"{
             "type": "scatter",
             "data": {
@@ -1132,12 +1132,15 @@ mod tests {
             }
         }"##;
         let spec = parse(json, false).expect("parse error");
-        let fill = spec.series[0].fill[0];
         let stroke = spec.series[0].stroke[0];
-        assert_eq!(stroke.r, fill.r, "stroke.r must match fill.r");
-        assert_eq!(stroke.g, fill.g, "stroke.g must match fill.g");
-        assert_eq!(stroke.b, fill.b, "stroke.b must match fill.b");
-        assert!((stroke.a - 1.0).abs() < 1e-6);
+        assert_eq!(stroke.r, 0, "stroke.r must be 0 (black)");
+        assert_eq!(stroke.g, 0, "stroke.g must be 0 (black)");
+        assert_eq!(stroke.b, 0, "stroke.b must be 0 (black)");
+        assert!(
+            (stroke.a - 0.1).abs() < 1e-6,
+            "stroke alpha must be 0.1 (global default), got {}",
+            stroke.a
+        );
     }
 
     #[test]
