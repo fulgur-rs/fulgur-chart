@@ -883,7 +883,8 @@ fn check_unknown_keys_gauge(json: &str) -> Result<(), String> {
             "options",
         )?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            check_object(plugins, &["title", "legend"], "options.plugins")?;
+            // 単一ゲージには凡例が描けないため legend は受け付けない(スキーマと一致)。
+            check_object(plugins, &["title"], "options.plugins")?;
         }
         if let Some(ca) = options.get("centerArea").and_then(|v| v.as_object()) {
             check_object(

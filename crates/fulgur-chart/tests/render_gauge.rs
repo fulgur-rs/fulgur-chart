@@ -309,3 +309,17 @@ fn gauge_strict_rejects_border_keys() {
         "gauge borderColor should be rejected in strict: {err:?}"
     );
 }
+
+#[test]
+fn gauge_strict_rejects_legend() {
+    // 単一ゲージには凡例が描けないため plugins.legend は strict で拒否(スキーマと一致)。
+    let err = chartjs::parse(
+        r#"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4]}],
+        "options":{"plugins":{"legend":{"position":"top"}}}}"#,
+        true,
+    );
+    assert!(
+        err.is_err(),
+        "gauge plugins.legend should be rejected in strict: {err:?}"
+    );
+}

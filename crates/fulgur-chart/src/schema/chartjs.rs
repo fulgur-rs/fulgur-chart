@@ -199,14 +199,13 @@ pub struct CommonPlugins {
     pub datalabels: Option<DataLabelsPlugin>,
 }
 
-/// gauge / radialGauge が受け付ける plugins(title / legend のみ; datalabels は非対応)。
+/// gauge / radialGauge が受け付ける plugins(title のみ)。
+/// 単一ゲージには凡例が描けないため legend は非公開(datalabels も非対応)。
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct GaugePlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub legend: Option<LegendPlugin>,
 }
 
 // ────────────────────────────────────────────────

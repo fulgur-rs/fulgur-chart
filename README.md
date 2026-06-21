@@ -122,7 +122,7 @@ Supports a data-only, static subset:
 - For `gauge`, `datasets[0].data` holds cumulative zone thresholds, `value` is the needle value, and `backgroundColor` is the per-zone colors (`minValue` sets the lower bound). Configure with `options.needle` / `options.valueLabel`. The value label falls back to the rounded value (JS `valueLabel.formatter` is not executed).
 - For `radialGauge`, `datasets[0].data` holds a single value drawn as a fill-to-value arc on a track ring. Configure with `options.domain` / `options.trackColor` / `options.centerPercentage` / `options.roundedCorners` / `options.centerArea` (`displayText` / `fontSize`). The center value text falls back to the rounded value (JS `centerArea.text` is not executed).
 - `options.indexAxis`
-- `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right)
+- `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right; `legend` does not apply to `gauge` / `radialGauge`)
 - `options.plugins.datalabels` (`display` — renders a value label at each data point)
 - `options.scales` (`stacked` / `suggestedMin` / `suggestedMax` and a subset of other options)
 - `options.theme` (extension; see below)
