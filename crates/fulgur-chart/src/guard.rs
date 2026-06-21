@@ -182,7 +182,18 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
     // categories/series 上限は箱数を間接的に制限するが、primitive cap を直接チェックする。
     if matches!(spec.kind, crate::ir::ChartKind::BoxPlot) {
         const PRIMS_PER_BOX: usize = 10;
-        let boxes: usize = spec.series.iter().map(|s| s.box_points.len()).sum();
+        let boxes = spec
+            .series
+            .iter()
+            .flat_map(|s| s.box_points.iter())
+            .filter(|p| {
+                p.min.is_finite()
+                    && p.q1.is_finite()
+                    && p.median.is_finite()
+                    && p.q3.is_finite()
+                    && p.max.is_finite()
+            })
+            .count();
         let boxplot_primitives = boxes.saturating_mul(PRIMS_PER_BOX);
         if boxplot_primitives > limits.max_categorical_primitives {
             return Err(format!(
