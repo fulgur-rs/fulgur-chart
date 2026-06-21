@@ -9,7 +9,6 @@ pub mod layout;
 pub mod model;
 pub mod num;
 pub mod palette;
-pub mod raster;
 pub mod raster_direct;
 pub mod render;
 pub mod scale;
