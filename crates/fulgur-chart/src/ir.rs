@@ -328,15 +328,12 @@ mod tests {
     }
 
     #[test]
-    fn outlabeled_pie_kind_is_distinct_from_pie() {
-        let pie = ChartKind::Pie { donut_ratio: 0.0 };
-        let out = ChartKind::OutlabeledPie {
-            donut_ratio: 0.0,
-            outlabel: OutlabelConfig::default(),
-        };
-        assert_ne!(
-            std::mem::discriminant(&pie),
-            std::mem::discriminant(&out)
-        );
+    fn outlabel_config_default_values() {
+        let c = OutlabelConfig::default();
+        assert_eq!(c.text, "%l\n%p%");
+        assert!((c.stretch - 40.0).abs() < 1e-9);
+        assert!(c.background.is_none());
+        assert_eq!(c.color.r, 255);
+        assert_eq!(c.color.a, 1.0);
     }
 }
