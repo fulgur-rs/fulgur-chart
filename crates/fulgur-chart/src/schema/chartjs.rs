@@ -469,10 +469,6 @@ pub struct ProgressDataset {
     pub data: Vec<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub border_color: Option<ScalarOrArray<ColorString>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub border_width: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
