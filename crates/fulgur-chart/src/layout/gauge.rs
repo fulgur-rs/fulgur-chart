@@ -225,6 +225,8 @@ fn push_value_arc(
                 cy: cy + mid_r * a.sin(),
                 r: cap_r.max(0.0),
                 fill,
+                stroke: fill,
+                stroke_width: 0.0,
             });
         }
     }
@@ -335,6 +337,8 @@ fn build_semi(
         cy,
         r: (r_outer * NEEDLE_PIVOT_RATIO).max(2.0), // radiusPercentage 2。
         fill: needle,
+        stroke: needle,
+        stroke_width: 0.0,
     });
 
     if label {

@@ -1302,6 +1302,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         tension: 0.0,
         series_type: SeriesType::Bar,
         point_radius: None,
+        box_points: vec![],
     }];
 
     Ok(ChartSpec {
