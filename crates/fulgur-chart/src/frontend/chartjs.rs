@@ -342,6 +342,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             // QuickChart の正式名は "progressBar"。互換のため "progress" も受理する。
             "progress" | "progressBar" => ChartKind::Progress,
             "boxplot" => ChartKind::BoxPlot,
+            "sparkline" => ChartKind::Sparkline,
             other => return Err(format!("未対応の type: {other}")),
         }
     };
@@ -1205,5 +1206,12 @@ mod tests {
         assert_eq!(stroke.r, 0);
         assert_eq!(stroke.g, 0);
         assert_eq!(stroke.b, 255);
+    }
+
+    #[test]
+    fn sparkline_parses_to_sparkline_kind() {
+        let json = r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        assert!(matches!(spec.kind, crate::ir::ChartKind::Sparkline));
     }
 }
