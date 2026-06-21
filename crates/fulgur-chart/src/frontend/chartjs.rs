@@ -394,7 +394,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // テーマ解決(配色に使うため色解決より先に行う)。
     let theme = build_theme(raw.options.theme);
 
-    let is_pie = matches!(kind, ChartKind::Pie { .. } | ChartKind::PolarArea | ChartKind::OutlabeledPie { .. });
+    let is_pie = matches!(
+        kind,
+        ChartKind::Pie { .. } | ChartKind::PolarArea | ChartKind::OutlabeledPie { .. }
+    );
     // progress も pie 同様に前景をソリッド(alpha=1.0)で塗る。
     let is_progress = matches!(kind, ChartKind::Progress);
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
@@ -1701,9 +1704,13 @@ mod tests {
     #[test]
     fn outlabeled_pie_fill_alpha_is_one() {
         // outlabeledPie も pie 同様に fill alpha = 1.0 であるべき。
-        let json = r#"{"type":"outlabeledPie","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}}"#;
+        let json =
+            r#"{"type":"outlabeledPie","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}}"#;
         let spec = parse(json, false).expect("parse error");
-        assert!((spec.series[0].fill[0].a - 1.0).abs() < 1e-6, "fill alpha must be 1.0");
+        assert!(
+            (spec.series[0].fill[0].a - 1.0).abs() < 1e-6,
+            "fill alpha must be 1.0"
+        );
     }
 
     #[test]
@@ -1715,6 +1722,10 @@ mod tests {
             "options": {"plugins": {"outlabels": {"stretch": 50.0, "text": "%l: %p%"}}}
         }"#;
         let result = parse(json, true);
-        assert!(result.is_ok(), "strict mode should accept outlabels plugin: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "strict mode should accept outlabels plugin: {:?}",
+            result
+        );
     }
 }

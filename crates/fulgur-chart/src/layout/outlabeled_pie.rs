@@ -28,8 +28,17 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let label_font = spec.theme.font_size;
 
     let (donut_ratio, outlabel) = match &spec.kind {
-        ChartKind::OutlabeledPie { donut_ratio, outlabel } => (*donut_ratio, outlabel.clone()),
-        _ => return Scene { width: spec.width, height: spec.height, items },
+        ChartKind::OutlabeledPie {
+            donut_ratio,
+            outlabel,
+        } => (*donut_ratio, outlabel.clone()),
+        _ => {
+            return Scene {
+                width: spec.width,
+                height: spec.height,
+                items,
+            };
+        }
     };
 
     let series = spec.series.first();
@@ -37,7 +46,11 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let values = series.map(|s| &s.values).unwrap_or(&empty);
 
     // 1. タイトル。
-    let title_band = if spec.title.is_some() { common::TITLE_BAND } else { 0.0 };
+    let title_band = if spec.title.is_some() {
+        common::TITLE_BAND
+    } else {
+        0.0
+    };
     if let Some(title) = &spec.title {
         items.push(Prim::Text {
             x: spec.width / 2.0,
@@ -50,19 +63,27 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 
     // 2. 凡例（Top/Bottom のみ対応、Left/Right は省略）。
-    let has_legend = matches!(
-        spec.legend,
-        LegendPos::Top | LegendPos::Bottom
-    ) && spec.categories.iter().any(|c| !c.is_empty());
-    let legend_top = if has_legend && spec.legend == LegendPos::Top { common::LEGEND_BAND } else { 0.0 };
-    let legend_bottom = if has_legend && spec.legend == LegendPos::Bottom { common::LEGEND_BAND } else { 0.0 };
+    let has_legend = matches!(spec.legend, LegendPos::Top | LegendPos::Bottom)
+        && spec.categories.iter().any(|c| !c.is_empty());
+    let legend_top = if has_legend && spec.legend == LegendPos::Top {
+        common::LEGEND_BAND
+    } else {
+        0.0
+    };
+    let legend_bottom = if has_legend && spec.legend == LegendPos::Bottom {
+        common::LEGEND_BAND
+    } else {
+        0.0
+    };
 
     if has_legend {
         let mut total = 0.0_f64;
         let n = spec.categories.len();
         for (k, cat) in spec.categories.iter().enumerate() {
             total += common::legend_entry_width(m, cat, label_font);
-            if k == n - 1 { total -= 16.0; }
+            if k == n - 1 {
+                total -= 16.0;
+            }
         }
         let start_x = (spec.width - total) / 2.0;
         let legend_cy = if spec.legend == LegendPos::Top {
@@ -73,7 +94,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let mut cursor = start_x;
         for (i, cat) in spec.categories.iter().enumerate() {
             let swatch = series.map(|s| s.fill_at(i)).unwrap_or(ink);
-            items.push(Prim::Rect { x: cursor, y: legend_cy - 6.0, w: 12.0, h: 12.0, fill: swatch });
+            items.push(Prim::Rect {
+                x: cursor,
+                y: legend_cy - 6.0,
+                w: 12.0,
+                h: 12.0,
+                fill: swatch,
+            });
             items.push(Prim::Text {
                 x: cursor + 16.0,
                 y: legend_cy + label_font * common::TEXT_BASELINE_RATIO,
@@ -103,13 +130,20 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let mut a0 = -PI / 2.0;
 
         for (i, &v) in values.iter().enumerate() {
-            if !(v.is_finite() && v > 0.0) { continue; }
+            if !(v.is_finite() && v > 0.0) {
+                continue;
+            }
 
             let frac = v / total;
             let a1 = a0 + frac * 2.0 * PI;
             let fill = series.map(|s| s.fill_at(i)).unwrap_or(ink);
 
-            let g = Geom { cx, cy, r_outer: radius, r_inner: inner };
+            let g = Geom {
+                cx,
+                cy,
+                r_outer: radius,
+                r_inner: inner,
+            };
 
             // 単一スライス(100%)は SVG の arc 制約で 2 分割。
             if a1 - a0 >= 2.0 * PI - 1e-9 {
@@ -124,8 +158,14 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             let amid = (a0 + a1) / 2.0;
             draw_outlabel(
                 &mut label_prims,
-                cx, cy, radius, amid, fill,
-                i, v, frac,
+                cx,
+                cy,
+                radius,
+                amid,
+                fill,
+                i,
+                v,
+                frac,
                 &spec.categories,
                 &outlabel,
                 label_font,
@@ -139,7 +179,11 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // ラベルはスライスの上に描く。
     items.extend(label_prims);
 
-    Scene { width: spec.width, height: spec.height, items }
+    Scene {
+        width: spec.width,
+        height: spec.height,
+        items,
+    }
 }
 
 /// 1スライス分の引き出し線とラベルを `out` に追加する。
@@ -166,7 +210,11 @@ fn draw_outlabel(
     let p1 = (cx + stretch_r * amid.cos(), cy + stretch_r * amid.sin());
     // P2: 水平シェルフの端点。
     let on_right = amid.cos() >= 0.0;
-    let p2 = if on_right { (p1.0 + SHELF_LEN, p1.1) } else { (p1.0 - SHELF_LEN, p1.1) };
+    let p2 = if on_right {
+        (p1.0 + SHELF_LEN, p1.1)
+    } else {
+        (p1.0 - SHELF_LEN, p1.1)
+    };
 
     // 引き出し線（P0 → P1 → P2）。
     out.push(Prim::Polyline {
@@ -179,8 +227,18 @@ fn draw_outlabel(
     let label_str = categories.get(idx).map(|s| s.as_str()).unwrap_or("");
     let pct = (frac * 100.0).round() as i64;
     let lines: Vec<&str> = cfg.text.splitn(2, '\n').collect();
-    let line1 = expand_template(lines.first().copied().unwrap_or("%l"), label_str, value, pct);
-    let line2 = expand_template(lines.get(1).copied().unwrap_or("%p%"), label_str, value, pct);
+    let line1 = expand_template(
+        lines.first().copied().unwrap_or("%l"),
+        label_str,
+        value,
+        pct,
+    );
+    let line2 = expand_template(
+        lines.get(1).copied().unwrap_or("%p%"),
+        label_str,
+        value,
+        pct,
+    );
 
     // テキスト位置。
     let (anchor, text_x) = if on_right {
@@ -199,7 +257,13 @@ fn draw_outlabel(
     let box_h = line_h * 2.0 + LABEL_PAD * 2.0;
     let box_x = if on_right { p2.0 } else { p2.0 - box_w };
     let box_y = text_y_top - LABEL_PAD;
-    out.push(Prim::Rect { x: box_x, y: box_y, w: box_w, h: box_h, fill: bg_color });
+    out.push(Prim::Rect {
+        x: box_x,
+        y: box_y,
+        w: box_w,
+        h: box_h,
+        fill: bg_color,
+    });
 
     // 1行目テキスト。
     out.push(Prim::Text {
@@ -231,9 +295,18 @@ fn expand_template(tmpl: &str, label: &str, value: f64, pct: i64) -> String {
     while let Some(c) = chars.next() {
         if c == '%' {
             match chars.peek() {
-                Some(&'l') => { chars.next(); result.push_str(label); }
-                Some(&'v') => { chars.next(); result.push_str(&value_str); }
-                Some(&'p') => { chars.next(); result.push_str(&pct_str); }
+                Some(&'l') => {
+                    chars.next();
+                    result.push_str(label);
+                }
+                Some(&'v') => {
+                    chars.next();
+                    result.push_str(&value_str);
+                }
+                Some(&'p') => {
+                    chars.next();
+                    result.push_str(&pct_str);
+                }
                 _ => result.push('%'),
             }
         } else {
@@ -275,14 +348,21 @@ mod tests {
     #[test]
     fn outlabeled_pie_has_text_primitives() {
         let spec = make_spec("outlabeledPie");
-        let scene = build(&spec, &crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap());
-        let has_text = scene.items.iter().any(|p| matches!(p, crate::scene::Prim::Text { .. }));
+        let scene = build(
+            &spec,
+            &crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+        );
+        let has_text = scene
+            .items
+            .iter()
+            .any(|p| matches!(p, crate::scene::Prim::Text { .. }));
         assert!(has_text, "scene must contain Text primitives for labels");
     }
 
     #[test]
     fn outlabeled_pie_single_slice_renders() {
-        let json = r#"{"type":"outlabeledPie","data":{"labels":["Only"],"datasets":[{"data":[100]}]}}"#;
+        let json =
+            r#"{"type":"outlabeledPie","data":{"labels":["Only"],"datasets":[{"data":[100]}]}}"#;
         let spec = chartjs::parse(json, false).expect("parse error");
         let svg = render_chart_with_font(&spec, DEFAULT_FONT).unwrap();
         assert!(svg.starts_with("<svg"));
@@ -291,7 +371,10 @@ mod tests {
     #[test]
     fn outlabeled_doughnut_inner_radius_nonzero() {
         let spec = make_spec("outlabeledDoughnut");
-        let scene = build(&spec, &crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let scene = build(
+            &spec,
+            &crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+        );
         let has_doughnut_path = scene.items.iter().any(|p| {
             if let crate::scene::Prim::Path { d, .. } = p {
                 // doughnut の path には内弧 (sweep=0) が含まれる: "0 0 " パターン

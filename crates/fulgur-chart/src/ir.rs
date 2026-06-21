@@ -121,7 +121,12 @@ impl Default for OutlabelConfig {
     fn default() -> Self {
         OutlabelConfig {
             text: "%l\n%p%".to_string(),
-            color: Color { r: 255, g: 255, b: 255, a: 1.0 },
+            color: Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 1.0,
+            },
             background: None,
             stretch: 40.0,
         }
