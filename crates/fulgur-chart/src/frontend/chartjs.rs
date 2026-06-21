@@ -235,7 +235,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             return parse_matrix(json);
         }
         if matches!(chart_type.as_deref(), Some("gauge") | Some("radialGauge")) {
-            return parse_gauge(json, chart_type.as_deref() == Some("radialGauge"));
+            let radial = chart_type.as_deref() == Some("radialGauge");
+            if strict {
+                check_unknown_keys_gauge(json, radial)?;
+            }
+            return parse_gauge(json, radial);
         }
     }
 
@@ -832,6 +836,115 @@ fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn check_unknown_keys_gauge(json: &str, _radial: bool) -> Result<(), String> {
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let Some(top) = value.as_object() else {
+        return Ok(());
+    };
+    check_object(top, &["type", "data", "options"], "")?;
+    if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
+        check_object(data, &["datasets"], "data")?;
+        if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
+            for (i, ds) in datasets.iter().enumerate() {
+                if let Some(ds) = ds.as_object() {
+                    check_object(
+                        ds,
+                        &[
+                            "label",
+                            "value",
+                            "minValue",
+                            "data",
+                            "backgroundColor",
+                            "borderColor",
+                            "borderWidth",
+                        ],
+                        &format!("data.datasets[{i}]"),
+                    )?;
+                }
+            }
+        }
+    }
+    if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
+        check_object(
+            options,
+            &[
+                "domain",
+                "trackColor",
+                "centerPercentage",
+                "roundedCorners",
+                "centerArea",
+                "needle",
+                "valueLabel",
+                "plugins",
+                "theme",
+            ],
+            "options",
+        )?;
+        if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
+            check_object(plugins, &["title", "legend"], "options.plugins")?;
+        }
+        if let Some(ca) = options.get("centerArea").and_then(|v| v.as_object()) {
+            check_object(
+                ca,
+                &[
+                    "displayText",
+                    "fontSize",
+                    "fontColor",
+                    "text",
+                    "subText",
+                    "padding",
+                ],
+                "options.centerArea",
+            )?;
+        }
+        if let Some(nd) = options.get("needle").and_then(|v| v.as_object()) {
+            check_object(
+                nd,
+                &[
+                    "color",
+                    "radiusPercentage",
+                    "widthPercentage",
+                    "lengthPercentage",
+                ],
+                "options.needle",
+            )?;
+        }
+        if let Some(vl) = options.get("valueLabel").and_then(|v| v.as_object()) {
+            check_object(
+                vl,
+                &[
+                    "display",
+                    "formatter",
+                    "color",
+                    "backgroundColor",
+                    "borderRadius",
+                    "padding",
+                    "bottomMarginPercentage",
+                    "fontSize",
+                ],
+                "options.valueLabel",
+            )?;
+        }
+        if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
+            check_object(
+                theme,
+                &[
+                    "palette",
+                    "gridColor",
+                    "textColor",
+                    "backgroundColor",
+                    "fontSize",
+                ],
+                "options.theme",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
     #[derive(Deserialize)]
     struct MatrixWrapper {
@@ -1026,7 +1139,10 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
     }
     let ds = raw.data.datasets.into_iter().next().unwrap();
     let opt = &raw.options;
-    let theme = build_theme(None); // theme は Task 8 で options.theme 接続。まずは既定。
+    let raw_theme: Option<RawTheme> = opt
+        .get("theme")
+        .and_then(|t| serde_json::from_value(t.clone()).ok());
+    let theme = build_theme(raw_theme);
 
     // タイトル(options.plugins.title.display/text)。
     let title = opt

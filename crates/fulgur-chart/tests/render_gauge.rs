@@ -209,3 +209,23 @@ fn radial_gauge_rasterizes_value_color_in_png() {
         "radialGauge value arc (#36a2eb) must be rasterized into the PNG"
     );
 }
+
+#[test]
+fn gauge_strict_rejects_unknown_key() {
+    let err = chartjs::parse(
+        r#"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4],"bogus":1}]}}"#,
+        true,
+    );
+    assert!(err.is_err(), "strict should reject unknown dataset key");
+}
+
+#[test]
+fn gauge_strict_accepts_known_keys() {
+    let ok = chartjs::parse(
+        r##"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4],
+        "backgroundColor":["#0f0","#f00"]}]},
+        "options":{"needle":{"color":"#000"},"valueLabel":{"display":true}}}"##,
+        true,
+    );
+    assert!(ok.is_ok(), "known keys should pass strict: {ok:?}");
+}
