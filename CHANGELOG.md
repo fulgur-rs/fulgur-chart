@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+## [0.1.5](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.4...fulgur-chart-cli-v0.1.5) - 2026-06-21
+
+### Fixed
+
+- *(readme)* use absolute URLs for crates.io image links
+
+### Other
+
+- Merge pull request #27 from fulgur-rs/fix/readme-crates-io-image-links
+
+## [0.5.1](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.5.0...fulgur-chart-v0.5.1) - 2026-06-21
+
+### Fixed
+
+- *(readme)* use absolute URLs for crates.io image links
+
+### Other
+
+- Merge pull request #27 from fulgur-rs/fix/readme-crates-io-image-links
+
 ## [0.1.4](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.3...fulgur-chart-cli-v0.1.4) - 2026-06-21
 
 ### Other
