@@ -245,11 +245,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             if strict {
                 check_unknown_keys_progress(json)?;
             }
+            // progress は専用チェック済み、汎用 check_unknown_keys はスキップ
+        } else if strict {
+            check_unknown_keys(json)?;
         }
-    }
-
-    if strict {
-        check_unknown_keys(json)?;
     }
 
     let raw: RawSpec = serde_json::from_str(json).map_err(|e| e.to_string())?;
