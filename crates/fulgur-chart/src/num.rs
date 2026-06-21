@@ -9,6 +9,10 @@ pub fn fmt_num(v: f64) -> String {
         return "0".to_string();
     }
     let rounded = (v * 100.0).round() / 100.0;
+    // 巨大な有限値では v * 100.0 が ±Infinity に溢れるため、丸め後も非有限なら "0" に落とす。
+    if !rounded.is_finite() {
+        return "0".to_string();
+    }
     let rounded = if rounded == 0.0 { 0.0 } else { rounded }; // -0.0 → 0.0
     let mut s = format!("{rounded:.2}");
     if s.contains('.') {
@@ -43,5 +47,11 @@ mod tests {
         assert_eq!(fmt_num(f64::NAN), "0");
         assert_eq!(fmt_num(f64::INFINITY), "0");
         assert_eq!(fmt_num(f64::NEG_INFINITY), "0");
+    }
+
+    #[test]
+    fn fmt_num_huge_finite_does_not_emit_inf() {
+        let s = fmt_num(1e308);
+        assert!(!s.contains("inf") && !s.contains("NaN"), "got {s}");
     }
 }
