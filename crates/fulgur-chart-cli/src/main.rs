@@ -4,7 +4,21 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 /// Render chart.js-compatible JSON specs to deterministic static SVG/PNG.
 #[derive(Parser)]
-#[command(name = "fulgur-chart", version)]
+#[command(
+    name = "fulgur-chart",
+    version,
+    long_about = "Render chart.js-compatible JSON specs to deterministic static SVG/PNG.
+
+Converts JSON chart specifications into SVG or PNG with pixel-identical output across
+runs. Suitable for server-side chart generation, CI pipelines, and AI agent workflows
+that need reproducible chart images.
+
+DSL SUPPORT:
+  chartjs   Chart.js v4 JSON (auto-detected when the spec has a top-level \"type\" key)
+  vegalite  Vega-Lite JSON  (auto-detected when the spec has a top-level \"mark\" key)
+
+Run 'fulgur-chart <COMMAND> --help' for subcommand examples and exit-code details."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -21,6 +35,17 @@ enum Command {
 }
 
 #[derive(Parser)]
+#[command(
+    after_long_help = "EXAMPLES:
+  # Print JSON Schema for chart.js specs (default)
+  fulgur-chart schema                                # print chartjs JSON Schema
+  fulgur-chart schema --dsl vegalite                 # print Vega-Lite JSON Schema
+  fulgur-chart schema | python3 -m json.tool         # pretty-print and validate
+
+EXIT CODES:
+  0  Schema printed successfully
+  1  Unsupported --dsl value"
+)]
 struct SchemaArgs {
     /// DSL whose schema to output (chartjs or vegalite).
     #[arg(long, default_value = "chartjs")]
@@ -28,6 +53,31 @@ struct SchemaArgs {
 }
 
 #[derive(Parser)]
+#[command(
+    after_long_help = "EXAMPLES:
+  # Inspect a chart.js spec and print the semantic model to stdout
+  fulgur-chart inspect spec.json -o -
+
+  # Read spec from stdin, write model JSON to a file
+  cat spec.json | fulgur-chart inspect - -o model.json
+
+  # Override canvas size before inspecting
+  fulgur-chart inspect spec.json -o - --width 800 --height 400
+
+  # Inspect a Vega-Lite spec (DSL auto-detected from top-level \"mark\" key)
+  fulgur-chart inspect vega.json -o model.json
+
+OUTPUT:
+  Structured JSON with these top-level keys:
+    meta    chart type and canvas dimensions
+    series  per-dataset label, color, and data-point list
+    axes    resolved tick values and labels for x/y axes
+
+EXIT CODES:
+  0  Model emitted successfully
+  1  Input error: bad JSON, unsupported DSL, missing spec, or invalid dimensions
+  3  I/O error: write failure"
+)]
 struct InspectArgs {
     /// Input spec file path. Use '-' to read from stdin.
     spec: String,
@@ -49,6 +99,48 @@ struct InspectArgs {
 }
 
 #[derive(Parser)]
+#[command(
+    after_long_help = "EXAMPLES:
+  # Render a chart.js spec from stdin to SVG on stdout
+  echo '{\"type\":\"bar\",\"data\":{\"labels\":[\"A\",\"B\"],\"datasets\":[{\"data\":[1,2]}]}}' \\
+    | fulgur-chart render - -o -
+
+  # Render a spec file to an SVG file
+  fulgur-chart render spec.json -o chart.svg
+
+  # Render to PNG (format inferred from extension)
+  fulgur-chart render spec.json -o chart.png
+
+  # Render to PNG at 2× resolution
+  fulgur-chart render spec.json -o chart.png --scale 2.0
+
+  # Batch: render multiple specs into a directory as SVG files
+  fulgur-chart render a.json b.json c.json --out-dir ./out/
+
+  # Batch: render multiple specs as PNG
+  fulgur-chart render a.json b.json --out-dir ./out/ --format png
+
+  # Strict mode: fail (exit 2) if spec contains unknown keys
+  fulgur-chart render spec.json -o chart.svg --strict
+
+  # Force a specific DSL instead of auto-detecting
+  fulgur-chart render spec.json -o chart.svg --dsl vegalite
+
+  # Override canvas dimensions from the spec
+  fulgur-chart render spec.json -o chart.svg --width 1200 --height 600
+
+DSL AUTO-DETECT:
+  chartjs   detected when the spec has a top-level \"type\" key
+  vegalite  detected when the spec has a top-level \"mark\" key
+  Use --dsl to override when auto-detection fails (exit 1).
+
+EXIT CODES:
+  0  Rendered successfully
+  1  Input error: bad JSON, unsupported DSL, missing/unreadable spec, render failure,
+     or invalid dimensions (max 32768px per axis)
+  2  Strict violation: spec contains unknown or unsupported keys (only with --strict)
+  3  I/O error: output write failure or PNG conversion failure"
+)]
 struct RenderArgs {
     /// Input spec file path(s). Use '-' to read from stdin.
     /// Multiple files require --out-dir ('-' not allowed in batch mode).
