@@ -1,0 +1,16 @@
+{
+  "type": "gauge",
+  "data": {
+    "datasets": [{
+      "value": 58,
+      "minValue": 0,
+      "data": [33, 66, 100],
+      "backgroundColor": ["#4caf50", "#ffc107", "#f44336"]
+    }]
+  },
+  "options": {
+    "needle": { "color": "#333" },
+    "valueLabel": { "display": true },
+    "plugins": { "title": { "display": true, "text": "System Load" } }
+  }
+}

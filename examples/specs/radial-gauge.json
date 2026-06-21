@@ -1,0 +1,9 @@
+{
+  "type": "radialGauge",
+  "data": { "datasets": [{ "data": [63], "backgroundColor": "#36a2eb" }] },
+  "options": {
+    "domain": [0, 100],
+    "centerArea": { "displayText": true },
+    "plugins": { "title": { "display": true, "text": "CPU Usage" } }
+  }
+}
