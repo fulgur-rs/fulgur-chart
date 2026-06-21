@@ -42,6 +42,46 @@ function collapse(arr) {
   return arr.length > 0 && arr.every((x) => x === arr[0]) ? [arr[0]] : arr;
 }
 
+/// 縦棒の BarElement を chartArea 基準 [0,1] へ正規化。横棒(indexAxis:'y')と
+/// 非 bar は undefined(fulgur 側スコープに揃える)。
+function barGeometry(chart, spec, width, height) {
+  const indexAxis = (spec.options && spec.options.indexAxis) || 'x';
+  if (spec.type !== 'bar' || indexAxis === 'y') return undefined;
+  const a = chart.chartArea;
+  const caw = a.right - a.left;
+  const cah = a.bottom - a.top;
+  if (!(caw > 0) || !(cah > 0)) return undefined;
+  const elements = [];
+  for (let s = 0; s < spec.data.datasets.length; s++) {
+    const meta = chart.getDatasetMeta(s);
+    for (let i = 0; i < meta.data.length; i++) {
+      const { x, y, base, width: bw } = meta.data[i].getProps(
+        ['x', 'y', 'base', 'width'],
+        true,
+      );
+      /// 混在 bar/line チャートでは line データセットの要素は PointElement で
+      /// width/base を持たない。bw===undefined ならそれらを除外し、bar 要素のみ出す。
+      if (bw === undefined) continue;
+      const left = x - bw / 2;
+      const top = Math.min(y, base);
+      const h = Math.abs(base - y);
+      elements.push({
+        series: s,
+        index: i,
+        kind: 'bar',
+        nx: (left - a.left) / caw,
+        ny: (top - a.top) / cah,
+        nw: bw / caw,
+        nh: h / cah,
+      });
+    }
+  }
+  return {
+    plot_area: { x: a.left / width, y: a.top / height, w: caw / width, h: cah / height },
+    elements,
+  };
+}
+
 export async function extractChartjsModel(spec, width, height) {
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
@@ -100,6 +140,7 @@ export async function extractChartjsModel(spec, width, height) {
     axes = { x: xAxis, y: yAxis };
   }
 
+  const geometry = barGeometry(chart, spec, width, height);
   const png = canvas.toBuffer('image/png');
   chart.destroy();
 
@@ -113,6 +154,7 @@ export async function extractChartjsModel(spec, width, height) {
       x_ticks: (spec.data.labels || []).length,
       y_ticks: axes ? axes.y.ticks.length : 0,
     },
+    geometry,
     png, // Buffer(レポート用)
   };
 }

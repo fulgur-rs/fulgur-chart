@@ -27,6 +27,52 @@ test('bar: 既定パレット色は canonical rgba に正規化される', async
   assert.ok(Buffer.isBuffer(model.png));
 });
 
+test('bar: chartArea 基準の正規化 geometry を出力', async () => {
+  const spec = { type: 'bar', data: { labels: ['A','B','C'],
+    datasets: [{ data: [10,20,30] }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.ok(model.geometry, 'geometry を持つべき');
+  assert.equal(model.geometry.elements.length, 3);
+  const { plot_area, elements } = model.geometry;
+  // plot_area はキャンバス [0,1]。
+  assert.ok(plot_area.x > 0 && plot_area.x < 1);
+  assert.ok(plot_area.w > 0 && plot_area.w <= 1);
+  for (const e of elements) {
+    assert.equal(e.kind, 'bar');
+    assert.ok(e.nx >= 0 && e.nx <= 1, `nx=${e.nx}`);
+    assert.ok(e.nw > 0 && e.nw <= 1, `nw=${e.nw}`);
+  }
+  // 左→右にカテゴリ、値が大きいほど高い。
+  assert.ok(elements[0].nx < elements[1].nx);
+  assert.ok(elements[2].nh > elements[0].nh);
+});
+
+test('horizontal bar は geometry を出さない(スコープ外)', async () => {
+  const spec = { type: 'bar', data: { labels: ['A','B'], datasets: [{ data: [10,90] }] },
+    options: { indexAxis: 'y' } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.equal(model.geometry, undefined);
+});
+
+test('mixed bar+line: line データセットの要素は bar geometry に含めない', async () => {
+  const spec = { type: 'bar', data: { labels: ['A','B','C'],
+    datasets: [
+      { type: 'bar', data: [10,20,30] },
+      { type: 'line', data: [5,15,25] },
+    ] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  // geometry が出る場合、全要素が有限な bar であること(NaN を含まない)。
+  if (model.geometry) {
+    for (const e of model.geometry.elements) {
+      assert.equal(e.kind, 'bar');
+      assert.ok(Number.isFinite(e.nx) && Number.isFinite(e.nw)
+        && Number.isFinite(e.ny) && Number.isFinite(e.nh), `NaN element: ${JSON.stringify(e)}`);
+    }
+    // bar データセット(series 0)の 3 要素のみ。
+    assert.ok(model.geometry.elements.every((e) => e.series === 0));
+  }
+});
+
 test('toRgba: 空白付き rgba を canonical 形へ正規化', () => {
   assert.equal(toRgba('rgba(54, 162, 235, 0.50)'), 'rgba(54,162,235,0.5)');
   assert.equal(toRgba('rgb(54, 162, 235)'), 'rgba(54,162,235,1)');
