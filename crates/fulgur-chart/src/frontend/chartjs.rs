@@ -47,12 +47,25 @@ struct RawPlugins {
     title: Option<RawTitle>,
     legend: Option<RawLegend>,
     datalabels: Option<RawDataLabels>,
+    outlabels: Option<RawOutlabels>,
 }
 
 #[derive(Deserialize)]
 struct RawDataLabels {
     #[serde(default)]
     display: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct RawOutlabels {
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    color: Option<String>,
+    #[serde(rename = "backgroundColor", default)]
+    background_color: Option<String>,
+    #[serde(default)]
+    stretch: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -358,6 +371,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             "boxplot" => ChartKind::BoxPlot,
             "polarArea" => ChartKind::PolarArea,
             "sparkline" => ChartKind::Sparkline,
+            "outlabeledPie" => ChartKind::OutlabeledPie {
+                donut_ratio: 0.0,
+                outlabel: build_outlabel_config(&raw.options.plugins.outlabels),
+            },
+            "outlabeledDoughnut" => ChartKind::OutlabeledPie {
+                donut_ratio: 0.5,
+                outlabel: build_outlabel_config(&raw.options.plugins.outlabels),
+            },
             other => return Err(format!("未対応の type: {other}")),
         }
     };
@@ -373,7 +394,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // テーマ解決(配色に使うため色解決より先に行う)。
     let theme = build_theme(raw.options.theme);
 
-    let is_pie = matches!(kind, ChartKind::Pie { .. } | ChartKind::PolarArea);
+    let is_pie = matches!(kind, ChartKind::Pie { .. } | ChartKind::PolarArea | ChartKind::OutlabeledPie { .. });
     // progress も pie 同様に前景をソリッド(alpha=1.0)で塗る。
     let is_progress = matches!(kind, ChartKind::Progress);
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
@@ -598,6 +619,27 @@ fn build_theme(raw: Option<RawTheme>) -> Theme {
         }
     }
     theme
+}
+
+fn build_outlabel_config(raw: &Option<RawOutlabels>) -> crate::ir::OutlabelConfig {
+    use crate::ir::OutlabelConfig;
+    let mut cfg = OutlabelConfig::default();
+    let Some(raw) = raw else { return cfg };
+    if let Some(t) = &raw.text {
+        cfg.text = t.clone();
+    }
+    if let Some(c) = raw.color.as_deref().and_then(parse_color) {
+        cfg.color = c;
+    }
+    if let Some(c) = raw.background_color.as_deref().and_then(parse_color) {
+        cfg.background = Some(c);
+    }
+    if let Some(s) = raw.stretch {
+        if s.is_finite() && s >= 0.0 {
+            cfg.stretch = s;
+        }
+    }
+    cfg
 }
 
 /// 系列の既定線幅。line 系列は太く(3.0)、bar 系列は細い(1.0)。
@@ -1611,5 +1653,49 @@ mod tests {
         let json = r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3]}]}}"#;
         let spec = parse(json, false).unwrap();
         assert!(matches!(spec.kind, crate::ir::ChartKind::Sparkline));
+    }
+
+    #[test]
+    fn parse_outlabeled_pie_kind() {
+        let json = r#"{"type":"outlabeledPie","data":{"labels":["A","B","C"],"datasets":[{"data":[10,20,30]}]}}"#;
+        let spec = parse(json, false).expect("parse error");
+        assert!(matches!(
+            spec.kind,
+            crate::ir::ChartKind::OutlabeledPie { donut_ratio, .. } if (donut_ratio - 0.0).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn parse_outlabeled_doughnut_kind() {
+        let json = r#"{"type":"outlabeledDoughnut","data":{"labels":["A","B"],"datasets":[{"data":[40,60]}]}}"#;
+        let spec = parse(json, false).expect("parse error");
+        assert!(matches!(
+            spec.kind,
+            crate::ir::ChartKind::OutlabeledPie { donut_ratio, .. } if (donut_ratio - 0.5).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn parse_outlabeled_pie_outlabels_plugin() {
+        let json = r#"{
+            "type": "outlabeledPie",
+            "data": {"labels": ["X"], "datasets": [{"data": [100]}]},
+            "options": {"plugins": {"outlabels": {"stretch": 60.0, "color": "black"}}}
+        }"#;
+        let spec = parse(json, false).expect("parse error");
+        if let crate::ir::ChartKind::OutlabeledPie { outlabel, .. } = &spec.kind {
+            assert!((outlabel.stretch - 60.0).abs() < 1e-9, "stretch mismatch");
+            assert_eq!(outlabel.color.r, 0, "color should be black");
+        } else {
+            panic!("wrong kind");
+        }
+    }
+
+    #[test]
+    fn outlabeled_pie_fill_alpha_is_one() {
+        // outlabeledPie も pie 同様に fill alpha = 1.0 であるべき。
+        let json = r#"{"type":"outlabeledPie","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}}"#;
+        let spec = parse(json, false).expect("parse error");
+        assert!((spec.series[0].fill[0].a - 1.0).abs() < 1e-6, "fill alpha must be 1.0");
     }
 }
