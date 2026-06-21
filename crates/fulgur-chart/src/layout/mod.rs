@@ -3,6 +3,7 @@
 pub mod bar;
 pub mod boxplot;
 pub mod common;
+pub mod gauge;
 pub mod line;
 pub mod matrix;
 pub mod mixed;
@@ -29,6 +30,7 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::Progress => progress::build(spec, m),
         ChartKind::BoxPlot => boxplot::build(spec, m),
         ChartKind::Sparkline => sparkline::build(spec, m),
+        ChartKind::RadialGauge { .. } | ChartKind::Gauge { .. } => gauge::build(spec, m),
     };
 
     // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。

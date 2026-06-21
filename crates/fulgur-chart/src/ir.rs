@@ -129,6 +129,26 @@ pub enum ChartKind {
     BoxPlot,
     /// QuickChart 互換のスパークライン。軸・ラベル・凡例なしのミニマル折れ線。
     Sparkline,
+    /// QuickChart radialGauge: 全円。値まで塗りつぶす弧 + トラック + 中央値テキスト。
+    /// series[0].values[0]=値、series[0].fill[0]=塗り色。スカラ構造値はここに持つ。
+    RadialGauge {
+        min: f64,
+        max: f64,
+        track: Color,
+        inner_ratio: f64, // centerPercentage/100
+        rounded: bool,
+        display_text: bool,
+    },
+    /// QuickChart gauge: 半円。color zone(series[0].values=累積閾値, series[0].fill=ゾーン色)
+    /// + 針 + 値ラベル。value=針値、min=下端(max は閾値末尾)。
+    Gauge {
+        value: f64,
+        min: f64,
+        needle: Color,
+        label: bool,        // valueLabel.display
+        label_color: Color, // valueLabel.color
+        label_bg: Color,    // valueLabel.backgroundColor
+    },
 }
 
 /// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。

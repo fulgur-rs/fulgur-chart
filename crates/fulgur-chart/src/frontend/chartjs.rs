@@ -234,6 +234,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
             return parse_matrix(json);
         }
+        if matches!(chart_type.as_deref(), Some("gauge") | Some("radialGauge")) {
+            return parse_gauge(json, chart_type.as_deref() == Some("radialGauge"));
+        }
     }
 
     if strict {
@@ -990,6 +993,218 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
     })
+}
+
+fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
+    use crate::ir::ChartKind;
+
+    #[derive(Deserialize)]
+    struct GaugeWrapper {
+        data: GaugeRawData,
+        #[serde(default)]
+        options: serde_json::Value,
+    }
+    #[derive(Deserialize)]
+    struct GaugeRawData {
+        datasets: Vec<GaugeRawDataset>,
+    }
+    #[derive(Deserialize)]
+    struct GaugeRawDataset {
+        #[serde(default)]
+        value: Option<f64>,
+        #[serde(rename = "minValue", default)]
+        min_value: Option<f64>,
+        #[serde(default)]
+        data: Vec<f64>,
+        #[serde(rename = "backgroundColor", default)]
+        background_color: Option<ScalarOrArray<String>>,
+    }
+
+    let raw: GaugeWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if raw.data.datasets.is_empty() {
+        return Err("gauge チャートには dataset が 1 つ必要です".to_string());
+    }
+    let ds = raw.data.datasets.into_iter().next().unwrap();
+    let opt = &raw.options;
+    let theme = build_theme(None); // theme は Task 8 で options.theme 接続。まずは既定。
+
+    // タイトル(options.plugins.title.display/text)。
+    let title = opt
+        .get("plugins")
+        .and_then(|p| p.get("title"))
+        .filter(|t| t.get("display").and_then(|d| d.as_bool()).unwrap_or(false))
+        .and_then(|t| {
+            t.get("text")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+        });
+
+    // 色解決ヘルパ(背景色配列を Color に)。
+    let colors: Vec<crate::ir::Color> = ds
+        .background_color
+        .map(|c| c.into_vec())
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(i, s)| parse_color(s).unwrap_or_else(|| theme.palette[i % theme.palette.len()]))
+        .collect();
+
+    let (kind, values, fill) = if radial {
+        // radialGauge: data[0]=値、color[0]=塗り色、domain/track/centerPercentage/...
+        let value = ds.data.first().copied().unwrap_or(0.0);
+        let domain = opt.get("domain").and_then(|d| d.as_array());
+        let min = domain
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let max = domain
+            .and_then(|a| a.get(1))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(100.0);
+        let track = opt
+            .get("trackColor")
+            .and_then(|v| v.as_str())
+            .and_then(parse_color)
+            .unwrap_or(crate::ir::Color {
+                r: 204,
+                g: 221,
+                b: 238,
+                a: 1.0,
+            });
+        let center_pct = opt
+            .get("centerPercentage")
+            .and_then(|v| v.as_f64())
+            .filter(|p| p.is_finite() && *p >= 0.0 && *p < 100.0)
+            .unwrap_or(80.0);
+        let rounded = opt
+            .get("roundedCorners")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let display_text = opt
+            .get("centerArea")
+            .and_then(|c| c.get("displayText"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let fill = if colors.is_empty() {
+            vec![theme.palette[0]]
+        } else {
+            vec![colors[0]]
+        };
+        (
+            ChartKind::RadialGauge {
+                min,
+                max,
+                track,
+                inner_ratio: center_pct / 100.0,
+                rounded,
+                display_text,
+            },
+            vec![value],
+            fill,
+        )
+    } else {
+        // gauge: data=累積閾値、value=針、min=minValue、backgroundColor=ゾーン色。
+        let value = ds.value.unwrap_or(0.0);
+        let min = ds.min_value.unwrap_or(0.0);
+        let needle = opt
+            .get("needle")
+            .and_then(|n| n.get("color"))
+            .and_then(|v| v.as_str())
+            .and_then(parse_color)
+            .unwrap_or(crate::ir::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            });
+        let vl = opt.get("valueLabel");
+        let label = vl
+            .and_then(|v| v.get("display"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let label_color = vl
+            .and_then(|v| v.get("color"))
+            .and_then(|v| v.as_str())
+            .and_then(parse_color)
+            .unwrap_or(crate::ir::Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 1.0,
+            });
+        let label_bg = vl
+            .and_then(|v| v.get("backgroundColor"))
+            .and_then(|v| v.as_str())
+            .and_then(parse_color)
+            .unwrap_or(crate::ir::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            });
+        // ゾーン色が閾値数に満たなければパレットで補完。
+        let n = ds.data.len();
+        let fill: Vec<crate::ir::Color> = (0..n)
+            .map(|i| {
+                colors
+                    .get(i)
+                    .copied()
+                    .unwrap_or(theme.palette[i % theme.palette.len()])
+            })
+            .collect();
+        (
+            ChartKind::Gauge {
+                value,
+                min,
+                needle,
+                label,
+                label_color,
+                label_bg,
+            },
+            ds.data.clone(),
+            fill,
+        )
+    };
+
+    let series = vec![Series {
+        name: String::new(),
+        values,
+        points: vec![],
+        fill,
+        stroke: vec![],
+        stroke_width: 0.0,
+        area: false,
+        tension: 0.0,
+        series_type: SeriesType::Bar,
+        point_radius: None,
+    }];
+
+    Ok(ChartSpec {
+        kind,
+        series,
+        categories: vec![],
+        x_axis: zero_axis(),
+        y_axis: zero_axis(),
+        legend: LegendPos::None,
+        title,
+        width: 800.0,
+        height: 450.0,
+        data_labels: false,
+        theme,
+    })
+}
+
+/// gauge 用の最小 AxisSpec(軸を使わないチャート向け)。
+fn zero_axis() -> AxisSpec {
+    AxisSpec {
+        title: None,
+        min: None,
+        max: None,
+        suggested_min: None,
+        suggested_max: None,
+        begin_at_zero: false,
+        grid: false,
+    }
 }
 
 /// `obj` のキーを `allowed` に照らし、最初の未知キーを `Err(パス)` で返す。
