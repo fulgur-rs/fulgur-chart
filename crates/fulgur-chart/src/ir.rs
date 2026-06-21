@@ -260,7 +260,13 @@ mod tests {
 
     #[test]
     fn box_point_fields_accessible() {
-        let bp = BoxPoint { min: 1.0, q1: 2.0, median: 3.0, q3: 4.0, max: 5.0 };
+        let bp = BoxPoint {
+            min: 1.0,
+            q1: 2.0,
+            median: 3.0,
+            q3: 4.0,
+            max: 5.0,
+        };
         assert_eq!(bp.median, 3.0);
         assert_eq!(bp.max - bp.min, 4.0);
     }

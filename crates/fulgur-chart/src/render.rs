@@ -104,7 +104,13 @@ mod tests {
         let spec = chartjs::parse(json, false).expect("parse error");
         let svg = render_chart(&spec);
         assert!(svg.starts_with("<svg"), "should produce valid SVG");
-        assert!(svg.contains("rect"), "SVG should contain rect elements for boxes");
-        assert!(svg.contains("line"), "SVG should contain line elements for whiskers");
+        assert!(
+            svg.contains("rect"),
+            "SVG should contain rect elements for boxes"
+        );
+        assert!(
+            svg.contains("line"),
+            "SVG should contain line elements for whiskers"
+        );
     }
 }
