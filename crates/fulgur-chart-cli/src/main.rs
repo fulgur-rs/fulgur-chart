@@ -35,8 +35,7 @@ enum Command {
 }
 
 #[derive(Parser)]
-#[command(
-    after_long_help = "EXAMPLES:
+#[command(after_long_help = "EXAMPLES:
   # Print JSON Schema for chart.js specs (default)
   fulgur-chart schema                                # print chartjs JSON Schema
   fulgur-chart schema --dsl vegalite                 # print Vega-Lite JSON Schema
@@ -44,8 +43,7 @@ enum Command {
 
 EXIT CODES:
   0  Schema printed successfully
-  1  Unsupported --dsl value"
-)]
+  1  Unsupported --dsl value")]
 struct SchemaArgs {
     /// DSL whose schema to output (chartjs or vegalite).
     #[arg(long, default_value = "chartjs")]
@@ -53,8 +51,7 @@ struct SchemaArgs {
 }
 
 #[derive(Parser)]
-#[command(
-    after_long_help = "EXAMPLES:
+#[command(after_long_help = "EXAMPLES:
   # Inspect a chart.js spec and print the semantic model to stdout
   fulgur-chart inspect spec.json -o -
 
@@ -76,8 +73,7 @@ OUTPUT:
 EXIT CODES:
   0  Model emitted successfully
   1  Input error: bad JSON, unsupported DSL, missing spec, or invalid dimensions
-  3  I/O error: write failure"
-)]
+  3  I/O error: write failure")]
 struct InspectArgs {
     /// Input spec file path. Use '-' to read from stdin.
     spec: String,
@@ -99,8 +95,7 @@ struct InspectArgs {
 }
 
 #[derive(Parser)]
-#[command(
-    after_long_help = "EXAMPLES:
+#[command(after_long_help = "EXAMPLES:
   # Render a chart.js spec from stdin to SVG on stdout
   echo '{\"type\":\"bar\",\"data\":{\"labels\":[\"A\",\"B\"],\"datasets\":[{\"data\":[1,2]}]}}' \\
     | fulgur-chart render - -o -
@@ -139,8 +134,7 @@ EXIT CODES:
   1  Input error: bad JSON, unsupported DSL, missing/unreadable spec, render failure,
      or invalid dimensions (max 32768px per axis)
   2  Strict violation: spec contains unknown or unsupported keys (only with --strict)
-  3  I/O error: output write failure or PNG conversion failure"
-)]
+  3  I/O error: output write failure or PNG conversion failure")]
 struct RenderArgs {
     /// Input spec file path(s). Use '-' to read from stdin.
     /// Multiple files require --out-dir ('-' not allowed in batch mode).
