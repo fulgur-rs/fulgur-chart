@@ -24,7 +24,7 @@ Gem::Specification.new do |spec|
     "changelog_uri"   => "#{spec.homepage}/blob/main/crates/fulgur-chart/CHANGELOG.md",
   }
 
-  spec.files = Dir["lib/**/*.rb", "ext/**/*.{rs,toml,rb,lock}", "Cargo.lock", "README.md"]
+  spec.files = Dir["lib/**/*.rb", "ext/**/*.{rs,toml,rb,lock}", "README.md"]
   spec.require_paths = ["lib"]
   spec.extensions = ["ext/fulgur_chart/extconf.rb"]
 
