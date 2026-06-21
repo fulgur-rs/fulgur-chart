@@ -12,6 +12,97 @@ const BAND_PAD_RATIO: f64 = 0.1;
 /// bar 幅の塗り比。
 const BAR_FILL_RATIO: f64 = 0.9;
 
+/// 縦棒1本のデータ矩形(ピクセル空間)。`series`=dataset index, `index`=category index。
+/// `value` はラベル描画用に元値を保持する(geometry には出力しない)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BarBox {
+    pub series: usize,
+    pub index: usize,
+    pub value: f64,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// 縦棒の全データ矩形を build_vertical と同一の式で算出する単一の真実源。
+/// レンダラ(`build_vertical`)とモデル(`model::Geometry`)の両方がこれを呼ぶ。
+/// 非積み上げ: category 外側 × series 内側で全 (i,sidx) を生成(欠損値は `unwrap_or(0.0)`、
+///   present な非有限値は build_vertical と同様 NaN 矩形になる)。
+/// 積み上げ: category 外側 × series 内側で有限値のみ値空間に積む。
+pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec<BarBox> {
+    let n = spec.categories.len().max(1);
+    let band_w = super::common::band_width(frame, n);
+    let s = spec.series.len().max(1);
+    let group_w = band_w * GROUP_RATIO;
+    let bar_w = group_w / s as f64;
+    let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
+    let baseline_y = frame.ys.map(base_v);
+    let stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { stacked: true, .. });
+
+    let mut boxes = Vec::new();
+    if stacked {
+        let stack_w = (group_w * BAR_FILL_RATIO).max(0.0);
+        for i in 0..spec.categories.len() {
+            let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
+            let bx = band_left + band_w * BAND_PAD_RATIO;
+            let mut pos_acc = 0.0_f64;
+            let mut neg_acc = 0.0_f64;
+            for (sidx, ser) in spec.series.iter().enumerate() {
+                let Some(&v) = ser.values.get(i) else {
+                    continue;
+                };
+                if !v.is_finite() {
+                    continue;
+                }
+                let (v0, v1) = if v >= 0.0 {
+                    let lo = pos_acc;
+                    pos_acc += v;
+                    (lo, pos_acc)
+                } else {
+                    let hi = neg_acc;
+                    neg_acc += v;
+                    (neg_acc, hi)
+                };
+                let y0 = frame.ys.map(v0);
+                let y1 = frame.ys.map(v1);
+                let y_top = y0.min(y1);
+                let h = (y1 - y0).abs();
+                boxes.push(BarBox {
+                    series: sidx,
+                    index: i,
+                    value: v,
+                    x: bx,
+                    y: y_top,
+                    w: stack_w,
+                    h,
+                });
+            }
+        }
+    } else {
+        for i in 0..spec.categories.len() {
+            let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
+            for (sidx, ser) in spec.series.iter().enumerate() {
+                let bx = band_left + band_w * BAND_PAD_RATIO + sidx as f64 * bar_w;
+                let v = ser.values.get(i).copied().unwrap_or(0.0);
+                let vy = frame.ys.map(v);
+                let y_top = vy.min(baseline_y);
+                let h = (vy - baseline_y).abs();
+                boxes.push(BarBox {
+                    series: sidx,
+                    index: i,
+                    value: v,
+                    x: bx,
+                    y: y_top,
+                    w: (bar_w * BAR_FILL_RATIO).max(0.0),
+                    h,
+                });
+            }
+        }
+    }
+    boxes
+}
+
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     match spec.kind {
         crate::ir::ChartKind::Bar {
@@ -420,5 +511,71 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         width: spec.width,
         height: spec.height,
         items,
+    }
+}
+
+#[cfg(test)]
+mod geom_tests {
+    use super::*;
+    use crate::font::DEFAULT_FONT;
+    use crate::frontend::chartjs;
+    use crate::text::TextMeasurer;
+
+    fn boxes_for(json: &str) -> Vec<BarBox> {
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        vertical_bar_boxes(&spec, &frame)
+    }
+
+    #[test]
+    fn one_box_per_category_series_grouped() {
+        // 3 カテゴリ × 2 系列 = 6 矩形。
+        let bs = boxes_for(
+            r#"{"type":"bar","data":{"labels":["A","B","C"],
+              "datasets":[{"data":[10,20,30]},{"data":[5,15,25]}]}}"#,
+        );
+        assert_eq!(bs.len(), 6);
+        // (series,index) が全組み合わせ網羅。
+        for s in 0..2 {
+            for i in 0..3 {
+                assert!(bs.iter().any(|b| b.series == s && b.index == i));
+            }
+        }
+    }
+
+    #[test]
+    fn boxes_left_to_right_by_category() {
+        // 単系列: カテゴリ順に x が増加する。
+        let bs = boxes_for(
+            r#"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[{"data":[10,20,30]}]}}"#,
+        );
+        assert!(bs[0].x < bs[1].x && bs[1].x < bs[2].x);
+        // 幅は正。
+        assert!(bs.iter().all(|b| b.w > 0.0));
+    }
+
+    #[test]
+    fn box_height_tracks_value_magnitude() {
+        // 値が大きいほど高い矩形(baseline=0)。
+        let bs = boxes_for(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,100]}]}}"#,
+        );
+        assert!(bs[1].h > bs[0].h);
+    }
+
+    #[test]
+    fn stacked_collapses_to_one_column_per_category() {
+        // 積み上げ: 2 カテゴリ × 2 系列、各カテゴリの 2 矩形は同じ x・同じ幅(縦に積む)。
+        let bs = boxes_for(
+            r#"{"type":"bar","data":{"labels":["A","B"],
+              "datasets":[{"data":[10,20]},{"data":[30,40]}]},
+              "options":{"scales":{"x":{"stacked":true},"y":{"stacked":true}}}}"#,
+        );
+        assert_eq!(bs.len(), 4);
+        let cat0: Vec<&BarBox> = bs.iter().filter(|b| b.index == 0).collect();
+        assert_eq!(cat0.len(), 2);
+        assert_eq!(cat0[0].x, cat0[1].x);
+        assert_eq!(cat0[0].w, cat0[1].w);
     }
 }
