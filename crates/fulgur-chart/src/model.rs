@@ -128,6 +128,8 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::PolarArea => "polarArea",
         ChartKind::RadialGauge { .. } => "radialGauge",
         ChartKind::Gauge { .. } => "gauge",
+        ChartKind::OutlabeledPie { donut_ratio, .. } if *donut_ratio > 0.0 => "outlabeledDoughnut",
+        ChartKind::OutlabeledPie { .. } => "outlabeledPie",
     }
 }
 

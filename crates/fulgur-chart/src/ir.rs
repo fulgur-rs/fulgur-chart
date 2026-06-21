@@ -104,6 +104,30 @@ pub enum LegendPos {
     None,
 }
 
+/// outlabeledPie / outlabeledDoughnut の引き出しラベル設定。
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutlabelConfig {
+    /// ラベルテキストテンプレート。%l=カテゴリ名, %v=値, %p=パーセント。
+    pub text: String,
+    /// ラベル文字色。
+    pub color: Color,
+    /// ラベル背景色。None = スライス色を使用。
+    pub background: Option<Color>,
+    /// 引き出し線の長さ(px)。外周からこの距離だけ外側へ伸びる。
+    pub stretch: f64,
+}
+
+impl Default for OutlabelConfig {
+    fn default() -> Self {
+        OutlabelConfig {
+            text: "%l\n%p%".to_string(),
+            color: Color { r: 255, g: 255, b: 255, a: 1.0 },
+            background: None,
+            stretch: 40.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChartKind {
     Bar {
@@ -152,6 +176,12 @@ pub enum ChartKind {
         label: bool,        // valueLabel.display
         label_color: Color, // valueLabel.color
         label_bg: Color,    // valueLabel.backgroundColor
+    },
+    /// QuickChart 互換の outlabeledPie / outlabeledDoughnut。
+    /// 各スライスから円外側へ引き出し線を描き、ラベルを外に配置する。
+    OutlabeledPie {
+        donut_ratio: f64,
+        outlabel: OutlabelConfig,
     },
 }
 
@@ -295,5 +325,18 @@ mod tests {
         };
         assert_eq!(bp.median, 3.0);
         assert_eq!(bp.max - bp.min, 4.0);
+    }
+
+    #[test]
+    fn outlabeled_pie_kind_is_distinct_from_pie() {
+        let pie = ChartKind::Pie { donut_ratio: 0.0 };
+        let out = ChartKind::OutlabeledPie {
+            donut_ratio: 0.0,
+            outlabel: OutlabelConfig::default(),
+        };
+        assert_ne!(
+            std::mem::discriminant(&pie),
+            std::mem::discriminant(&out)
+        );
     }
 }
