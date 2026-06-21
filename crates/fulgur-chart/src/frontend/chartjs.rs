@@ -241,7 +241,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
             return parse_gauge(json, radial);
         }
-        if matches!(chart_type.as_deref(), Some("progress") | Some("progressBar")) {
+        if matches!(
+            chart_type.as_deref(),
+            Some("progress") | Some("progressBar")
+        ) {
             if strict {
                 check_unknown_keys_progress(json)?;
             }

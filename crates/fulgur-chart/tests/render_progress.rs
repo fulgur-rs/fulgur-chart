@@ -172,7 +172,10 @@ fn progress_strict_rejects_border_color() {
         r##"{"type":"progress","data":{"datasets":[{"data":[70],"borderColor":"#ff0000"}]}}"##,
         true,
     );
-    assert!(err.is_err(), "borderColor should be rejected in strict mode");
+    assert!(
+        err.is_err(),
+        "borderColor should be rejected in strict mode"
+    );
 }
 
 #[test]
@@ -181,7 +184,10 @@ fn progress_strict_rejects_border_width() {
         r##"{"type":"progress","data":{"datasets":[{"data":[70],"borderWidth":2}]}}"##,
         true,
     );
-    assert!(err.is_err(), "borderWidth should be rejected in strict mode");
+    assert!(
+        err.is_err(),
+        "borderWidth should be rejected in strict mode"
+    );
 }
 
 #[test]
@@ -199,5 +205,8 @@ fn progress_strict_rejects_unknown_datalabels_key() {
         r##"{"type":"progress","data":{"datasets":[{"data":[70]}]},"options":{"plugins":{"datalabels":{"dispaly":false}}}}"##,
         true,
     );
-    assert!(err.is_err(), "typo in datalabels key should be rejected in strict mode");
+    assert!(
+        err.is_err(),
+        "typo in datalabels key should be rejected in strict mode"
+    );
 }
