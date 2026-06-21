@@ -74,9 +74,13 @@ export async function extractChartjsModel(spec, width, height) {
     return { label: ds.label ?? '', fill, stroke, values };
   });
 
-  // 軸(線形スケールがあれば)。linear を y、category を x とみなす単純規則。
-  // scatter/bubble は x・y とも linear なので、値軸として y 軸(axis==='y')の
-  // スケールを優先する。無ければ最初の linear にフォールバック。
+  // 軸(線形スケールがあれば)。値(線形)軸→y、カテゴリ→x の正規化規約。
+  // fulgur 側 model.rs の compute_axes も同じ規約で値軸を y に載せるため
+  // apples-to-apples 照合が成立する。
+  // scatter/bubble は x・y とも linear なので axis==='y' を優先して y-linear を選ぶ。
+  // 横棒(indexAxis:'y')は chart.js の linear scale が x 軸に付くため
+  // axis==='y' では見つからず、fallback で x-linear を axes.y に載せる。
+  // counts.y_ticks は diff.mjs では比較されない(axes 次元が担当するため)。
   let axes;
   const scaleIds = Object.keys(chart.scales);
   const linId =
