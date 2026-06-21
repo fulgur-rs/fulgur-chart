@@ -24,10 +24,12 @@ function colorsEqual(a, b) {
   return true;
 }
 
-const gsgn = (d) => (Math.abs(d) < TOLERANCES.geometryNorm ? 0 : Math.sign(d));
-
-// 両モデルの geometry を構造+数値照合する。pass は要素座標(プロット領域基準)と
-// 構造(要素数・左→右順序・系列ごと bar 高さ単調性)のみで判定する。
+// 両モデルの geometry を照合する。pass は要素数(構造)と要素ごとの正規化座標
+// (nx/ny/nw/nh、プロット領域基準)で判定する。後者は各 bar の位置(nx)・幅(nw)・
+// 上端(ny)・高さ(nh)を tolerance 内で検証するため、「左→右順序」「系列ごと高さの
+// 増減傾向」を包含する。以前あった order/monotonicity の構造チェックは、この要素ごと
+// 数値照合と冗長なうえ、tolerance 未満のノイズで誤検出しやすい(例: 高さの符号バケットが
+// 微差でブレる/スタックで nx 同値のタイ順がエンジン間で揺れる)ため削除した。
 // plot_area(キャンバス基準)の差は info として記録するが pass には含めない:
 // 2 つのレイアウトエンジンが余白(OUTER_PAD/軸幅/タイトル帯)を画素一致させる
 // 保証はなく、各要素は「自分のプロット領域」で正規化済みのため plot_area 差に
@@ -50,6 +52,7 @@ function diffGeometry(fg, cg) {
   }
 
   const key = (e) => `${e.series}:${e.index}`;
+  // キーは構造上一意(各 bar = 1 系列 × 1 カテゴリ index)なので last-wins のペアリングで安全。
   const cmap = new Map(cg.elements.map((e) => [key(e), e]));
 
   // 数値: (series,index) で対応付けて nx/ny/nw/nh を比較。
@@ -62,33 +65,6 @@ function diffGeometry(fg, cg) {
     for (const k of ['nx', 'ny', 'nw', 'nh']) {
       if (Math.abs(fe[k] - ce[k]) > tol)
         diffs.push({ field: `elem[${key(fe)}].${k}`, fulgur: fe[k], chartjs: ce[k] });
-    }
-  }
-
-  // 構造: 左→右順序(nx 昇順の (series,index) 列が一致)。
-  const order = (els) => [...els].sort((a, b) => a.nx - b.nx).map(key).join(',');
-  if (order(fg.elements) !== order(cg.elements))
-    diffs.push({ field: 'order', fulgur: order(fg.elements), chartjs: order(cg.elements) });
-
-  // 構造: 系列ごとの bar 高さ(nh)単調性。連続する index の nh 増減符号が一致。
-  const bySeries = (els) => {
-    const m = new Map();
-    for (const e of [...els].sort((a, b) => a.index - b.index)) {
-      if (!m.has(e.series)) m.set(e.series, []);
-      m.get(e.series).push(e.nh);
-    }
-    return m;
-  };
-  const fh = bySeries(fg.elements);
-  const ch = bySeries(cg.elements);
-  for (const [s, hs] of fh) {
-    const cs = ch.get(s);
-    if (!cs || cs.length !== hs.length) continue;
-    for (let i = 1; i < hs.length; i++) {
-      if (gsgn(hs[i] - hs[i - 1]) !== gsgn(cs[i] - cs[i - 1])) {
-        diffs.push({ field: `monotonicity.series[${s}]`, fulgur: hs, chartjs: cs });
-        break;
-      }
     }
   }
 

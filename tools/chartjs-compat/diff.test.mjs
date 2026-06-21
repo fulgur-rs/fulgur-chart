@@ -105,15 +105,13 @@ test('plot_area ズレは pass に影響せず info に記録される', () => {
   assert.ok(r.dimensions.geometry.info.some((d) => d.field === 'plot_area.w'));
 });
 
-test('bar 高さ単調性の崩れは FAIL', () => {
+test('要素数不一致は FAIL', () => {
   const f = { ...base(), geometry: geomBase() };
   const c = { ...base(), geometry: geomBase() };
-  // fulgur: nh 0.30→0.60 (増加)。chartjs を 0.60→0.30 (減少) に。
-  c.geometry.elements[0].nh = 0.60;
-  c.geometry.elements[1].nh = 0.30;
-  c.geometry.elements[1].ny = 0.70;
+  c.geometry.elements.pop(); // 要素数を 2→1 に
   const r = diffModels(f, c);
   assert.equal(r.dimensions.geometry.pass, false);
+  assert.ok(r.dimensions.geometry.diffs.some((d) => d.field === 'element_count'));
 });
 
 test('片方に geometry が無ければ skip', () => {
