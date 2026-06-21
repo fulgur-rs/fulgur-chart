@@ -110,3 +110,45 @@ def test_strict_error_is_subclass_of_parse_error():
 
 def test_parse_error_is_subclass_of_value_error():
     assert issubclass(fulgur_chart.FulgurParseError, ValueError)
+
+
+# ── render_image / render_png ─────────────────────────────────────
+
+PNG_MAGIC = b"\x89PNG"
+
+
+def test_render_image_png_returns_bytes_starting_with_magic():
+    data = fulgur_chart.render_image(CHARTJS_BAR, "png")
+    assert isinstance(data, bytes)
+    assert data[:4] == PNG_MAGIC, f"PNGマジックが期待値と異なる: {data[:4]!r}"
+
+
+def test_render_png_returns_bytes_starting_with_magic():
+    data = fulgur_chart.render_png(CHARTJS_BAR)
+    assert isinstance(data, bytes)
+    assert data[:4] == PNG_MAGIC
+
+
+def test_render_image_is_deterministic():
+    a = fulgur_chart.render_image(CHARTJS_BAR, "png")
+    b = fulgur_chart.render_image(CHARTJS_BAR, "png")
+    assert a == b
+
+
+def test_render_png_equals_render_image_png():
+    """render_png は render_image(spec, 'png') の薄いラッパーであること。"""
+    a = fulgur_chart.render_image(CHARTJS_BAR, "png")
+    b = fulgur_chart.render_png(CHARTJS_BAR)
+    assert a == b
+
+
+def test_render_image_unknown_format_raises_parse_error():
+    try:
+        fulgur_chart.render_image(CHARTJS_BAR, "jpeg")
+        assert False, "例外が送出されなかった"
+    except fulgur_chart.FulgurParseError:
+        pass
+
+
+def test_render_error_is_subclass_of_runtime_error():
+    assert issubclass(fulgur_chart.FulgurRenderError, RuntimeError)

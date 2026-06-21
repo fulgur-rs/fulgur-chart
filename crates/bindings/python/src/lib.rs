@@ -107,6 +107,33 @@ fn render_svg(
 }
 
 #[pyfunction]
+#[pyo3(signature = (spec_json, format, *, width=None, height=None, scale=1.0, strict=false, dsl=None, font=None))]
+fn render_image<'py>(
+    py: Python<'py>,
+    spec_json: &str,
+    format: &str,
+    width: Option<f64>,
+    height: Option<f64>,
+    scale: f64,
+    strict: bool,
+    dsl: Option<&str>,
+    font: Option<&[u8]>,
+) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+    if format != "png" {
+        return Err(parse_error(format!(
+            "サポートされていないフォーマット: '{format}'"
+        )));
+    }
+    let spec = build_ir(spec_json, width, height, strict, dsl)?;
+    let font_bytes = font.unwrap_or(fulgur_core::font::DEFAULT_FONT);
+    // PNG パスの全エラー（フォントエラー含む）→ RenderError（binding-api-contract の非対称規約）
+    let png_data =
+        fulgur_core::raster_direct::render_chart_to_png(&spec, scale as f32, font_bytes)
+            .map_err(render_error)?;
+    Ok(pyo3::types::PyBytes::new(py, &png_data))
+}
+
+#[pyfunction]
 fn version() -> &'static str {
     fulgur_core::version()
 }
@@ -133,6 +160,7 @@ fn fulgur_chart(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("FulgurStrictError", m.py().get_type::<FulgurStrictError>())?;
     m.add("FulgurRenderError", m.py().get_type::<FulgurRenderError>())?;
     m.add_function(wrap_pyfunction!(render_svg, m)?)?;
+    m.add_function(wrap_pyfunction!(render_image, m)?)?;
     m.add_function(wrap_pyfunction!(version, m)?)?;
     m.add_function(wrap_pyfunction!(schema, m)?)?;
     Ok(())
