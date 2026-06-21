@@ -855,17 +855,11 @@ fn check_unknown_keys_gauge(json: &str) -> Result<(), String> {
         if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
             for (i, ds) in datasets.iter().enumerate() {
                 if let Some(ds) = ds.as_object() {
+                    // gauge/radialGauge はゾーン/弧の境界線を描かないため borderColor/
+                    // borderWidth は受け付けない(スキーマ・パーサと一致)。
                     check_object(
                         ds,
-                        &[
-                            "label",
-                            "value",
-                            "minValue",
-                            "data",
-                            "backgroundColor",
-                            "borderColor",
-                            "borderWidth",
-                        ],
+                        &["label", "value", "minValue", "data", "backgroundColor"],
                         &format!("data.datasets[{i}]"),
                     )?;
                 }
@@ -1267,16 +1261,17 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
                 b: 0,
                 a: 1.0,
             });
-        // ゾーン色が閾値数に満たなければパレットで補完。
+        // ゾーン色: 未指定はパレットをゾーンごとに割り当て、指定があれば fill_at の
+        // ブロードキャスト/巡回規則に委ねる(スカラ "#f00" は全ゾーンへブロードキャスト、
+        // 配列はゾーンごと、足りなければ巡回)。
         let n = ds.data.len();
-        let fill: Vec<crate::ir::Color> = (0..n)
-            .map(|i| {
-                colors
-                    .get(i)
-                    .copied()
-                    .unwrap_or(theme.palette[i % theme.palette.len()])
-            })
-            .collect();
+        let fill: Vec<crate::ir::Color> = if colors.is_empty() {
+            (0..n)
+                .map(|i| theme.palette[i % theme.palette.len()])
+                .collect()
+        } else {
+            colors
+        };
         (
             ChartKind::Gauge {
                 value,

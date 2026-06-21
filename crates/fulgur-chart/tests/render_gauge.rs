@@ -280,3 +280,32 @@ fn radial_gauge_center_font_size_override() {
     );
     assert!(svg.contains(">42<"), "center value present: {svg}");
 }
+
+#[test]
+fn gauge_scalar_background_broadcasts_to_all_zones() {
+    // スカラ backgroundColor は全ゾーンへブロードキャストされる(zone 0 だけにならない)。
+    let svg = render(
+        r##"{"type":"gauge","data":{"datasets":[{"value":50,"data":[33,66,100],
+        "backgroundColor":"#ff0000"}]}}"##,
+    );
+    // 3 ゾーンすべてが赤。
+    assert_eq!(
+        count(&svg, "fill=\"#ff0000\""),
+        3,
+        "scalar color should fill all 3 zones: {svg}"
+    );
+}
+
+#[test]
+fn gauge_strict_rejects_border_keys() {
+    // gauge は境界線を描かないため borderColor/borderWidth は strict で拒否。
+    let err = chartjs::parse(
+        r##"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4],
+        "borderColor":"#000"}]}}"##,
+        true,
+    );
+    assert!(
+        err.is_err(),
+        "gauge borderColor should be rejected in strict: {err:?}"
+    );
+}
