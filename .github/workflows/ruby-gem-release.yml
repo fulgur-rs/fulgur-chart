@@ -1,0 +1,115 @@
+# Ruby gem の cross-gem プリビルドと RubyGems.org への自動配布。
+# release-plz が fulgur-chart-v* タグを含む GitHub Release を publish したときに起動する。
+# 認証は Trusted Publishing (OIDC) を使用するため API key は不要。
+#
+# 手動セットアップ (一度だけ):
+#   RubyGems.org で fulgur_chart gem に Trusted Publisher を登録する。
+#   Owner: fulgur-rs, Repo: fulgur-chart, Workflow: ruby-gem-release.yml
+
+name: Ruby Gem Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  cross-gem:
+    name: Build ${{ matrix.platform }}
+    if: startsWith(github.ref_name, 'fulgur-chart-v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - x86_64-linux
+          - aarch64-linux
+          - x86_64-darwin
+          - arm64-darwin
+          - x64-mingw-ucrt
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set gem version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#fulgur-chart-v}"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" \
+            crates/bindings/ruby/ext/fulgur_chart/Cargo.toml
+          sed -i "s/^fulgur-chart = .*/fulgur-chart = \"$VERSION\"/" \
+            crates/bindings/ruby/ext/fulgur_chart/Cargo.toml
+
+      - uses: oxidize-rb/actions/setup-ruby-and-rust@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          cargo-cache: true
+          working-directory: crates/bindings/ruby
+
+      - uses: oxidize-rb/actions/cross-gem@v1
+        id: cross-gem
+        with:
+          platform: ${{ matrix.platform }}
+          ruby-versions: "3.1,3.2,3.3,3.4"
+          working-directory: crates/bindings/ruby
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-gem-${{ matrix.platform }}
+          path: ${{ steps.cross-gem.outputs.gem-path }}
+
+  source-gem:
+    name: Build source gem
+    if: startsWith(github.ref_name, 'fulgur-chart-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set gem version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#fulgur-chart-v}"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" \
+            crates/bindings/ruby/ext/fulgur_chart/Cargo.toml
+          sed -i "s/^fulgur-chart = .*/fulgur-chart = \"$VERSION\"/" \
+            crates/bindings/ruby/ext/fulgur_chart/Cargo.toml
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: crates/bindings/ruby
+
+      - name: Build source gem
+        working-directory: crates/bindings/ruby
+        run: gem build fulgur_chart.gemspec
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-gem
+          path: crates/bindings/ruby/fulgur_chart-*.gem
+
+  push-gem:
+    name: Push to RubyGems.org
+    needs: [cross-gem, source-gem]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: rubygems.org
+      url: https://rubygems.org/gems/fulgur_chart
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "*-gem*"
+          merge-multiple: true
+          path: gems/
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Configure RubyGems credentials (Trusted Publishing)
+        uses: rubygems/configure-rubygems-credentials@v1.0.0
+
+      - name: Push all gems
+        run: for gem in gems/*.gem; do gem push "$gem"; done
