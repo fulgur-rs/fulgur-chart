@@ -34,6 +34,9 @@ pub enum ChartJsSpec {
     Boxplot(BoxplotSpec),
     /// QuickChart-compatible sparkline: minimal line chart with no axes, labels, or legend.
     Sparkline(SparklineSpec),
+    Gauge(GaugeSpec),
+    #[serde(rename = "radialGauge")]
+    RadialGauge(RadialGaugeSpec),
 }
 
 // ────────────────────────────────────────────────
@@ -194,6 +197,15 @@ pub struct CommonPlugins {
     pub legend: Option<LegendPlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datalabels: Option<DataLabelsPlugin>,
+}
+
+/// gauge / radialGauge が受け付ける plugins(title のみ)。
+/// 単一ゲージには凡例が描けないため legend は非公開(datalabels も非対応)。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct GaugePlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<TitlePlugin>,
 }
 
 // ────────────────────────────────────────────────
@@ -563,4 +575,130 @@ pub struct SparklineOptions {
     pub scales: Option<BarScales>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOptions>,
+}
+
+// ────────────────────────────────────────────────
+// Gauge chart (QuickChart chartjs-gauge: semicircle, zones + needle)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GaugeSpec {
+    pub data: GaugeData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<GaugeOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GaugeData {
+    pub datasets: Vec<GaugeDataset>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GaugeDataset {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Needle value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+    /// Domain minimum (default 0; max = last threshold).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_value: Option<f64>,
+    /// Cumulative zone thresholds.
+    pub data: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<ScalarOrArray<ColorString>>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GaugeOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needle: Option<NeedleOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_label: Option<ValueLabelOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<GaugePlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+/// 針のスタイル。針の形状(長さ・太さ)は QuickChart 実物に合わせた内部定数で固定して
+/// おり、サイズ系オプション(*Percentage)はスキーマには公開しない。色のみ上書き可能。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NeedleOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ValueLabelOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<ColorString>,
+}
+
+// ────────────────────────────────────────────────
+// Radial gauge chart (QuickChart radial-gauge: full circle, fill-to-value)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RadialGaugeSpec {
+    pub data: RadialGaugeData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<RadialGaugeOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RadialGaugeData {
+    pub datasets: Vec<RadialGaugeDataset>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RadialGaugeDataset {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Single value [value].
+    pub data: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<ScalarOrArray<ColorString>>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RadialGaugeOptions {
+    /// [min, max] domain (default [0, 100]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_color: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub center_percentage: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rounded_corners: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub center_area: Option<CenterAreaOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<GaugePlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CenterAreaOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_text: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f64>,
 }

@@ -234,6 +234,13 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
             return parse_matrix(json);
         }
+        if matches!(chart_type.as_deref(), Some("gauge") | Some("radialGauge")) {
+            let radial = chart_type.as_deref() == Some("radialGauge");
+            if strict {
+                check_unknown_keys_gauge(json)?;
+            }
+            return parse_gauge(json, radial);
+        }
     }
 
     if strict {
@@ -829,6 +836,107 @@ fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// gauge と radialGauge の許可キーの**和集合**（緩い上位集合）に対して検証する。
+/// 型ごとの厳密な契約は JSON Schema（`schema/chartjs.rs`）が担い、そちらは型別に
+/// 厳密。ランタイムの strict 検証は真に未知のキー（タイポ）だけを安全側で弾く目的で
+/// あり、スキーマ妥当な入力は必ずパースできる（緩いのは安全な方向のみ）。
+/// このため gauge / radialGauge を区別する必要はなく、引数を取らない。
+fn check_unknown_keys_gauge(json: &str) -> Result<(), String> {
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let Some(top) = value.as_object() else {
+        return Ok(());
+    };
+    check_object(top, &["type", "data", "options"], "")?;
+    if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
+        check_object(data, &["datasets"], "data")?;
+        if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
+            for (i, ds) in datasets.iter().enumerate() {
+                if let Some(ds) = ds.as_object() {
+                    // gauge/radialGauge はゾーン/弧の境界線を描かないため borderColor/
+                    // borderWidth は受け付けない(スキーマ・パーサと一致)。
+                    check_object(
+                        ds,
+                        &["label", "value", "minValue", "data", "backgroundColor"],
+                        &format!("data.datasets[{i}]"),
+                    )?;
+                }
+            }
+        }
+    }
+    if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
+        check_object(
+            options,
+            &[
+                "domain",
+                "trackColor",
+                "centerPercentage",
+                "roundedCorners",
+                "centerArea",
+                "needle",
+                "valueLabel",
+                "plugins",
+                "theme",
+            ],
+            "options",
+        )?;
+        if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
+            // 単一ゲージには凡例が描けないため legend は受け付けない(スキーマと一致)。
+            check_object(plugins, &["title"], "options.plugins")?;
+        }
+        if let Some(ca) = options.get("centerArea").and_then(|v| v.as_object()) {
+            check_object(
+                ca,
+                &[
+                    "displayText",
+                    "fontSize",
+                    "fontColor",
+                    "text",
+                    "subText",
+                    "padding",
+                ],
+                "options.centerArea",
+            )?;
+        }
+        if let Some(nd) = options.get("needle").and_then(|v| v.as_object()) {
+            // 針サイズ系(*Percentage)はスキーマ非公開・内部固定のため許可しない(color のみ)。
+            check_object(nd, &["color"], "options.needle")?;
+        }
+        if let Some(vl) = options.get("valueLabel").and_then(|v| v.as_object()) {
+            check_object(
+                vl,
+                &[
+                    "display",
+                    "formatter",
+                    "color",
+                    "backgroundColor",
+                    "borderRadius",
+                    "padding",
+                    "bottomMarginPercentage",
+                    "fontSize",
+                ],
+                "options.valueLabel",
+            )?;
+        }
+        if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
+            check_object(
+                theme,
+                &[
+                    "palette",
+                    "gridColor",
+                    "textColor",
+                    "backgroundColor",
+                    "fontSize",
+                ],
+                "options.theme",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
     #[derive(Deserialize)]
     struct MatrixWrapper {
@@ -990,6 +1098,235 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
     })
+}
+
+fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
+    use crate::ir::ChartKind;
+
+    #[derive(Deserialize)]
+    struct GaugeWrapper {
+        data: GaugeRawData,
+        #[serde(default)]
+        options: serde_json::Value,
+    }
+    #[derive(Deserialize)]
+    struct GaugeRawData {
+        datasets: Vec<GaugeRawDataset>,
+    }
+    #[derive(Deserialize)]
+    struct GaugeRawDataset {
+        #[serde(default)]
+        value: Option<f64>,
+        #[serde(rename = "minValue", default)]
+        min_value: Option<f64>,
+        #[serde(default)]
+        data: Vec<f64>,
+        #[serde(rename = "backgroundColor", default)]
+        background_color: Option<ScalarOrArray<String>>,
+    }
+
+    let raw: GaugeWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    // gauge/radialGauge は 1 dataset = 1 ゲージ。余剰 dataset を無言で捨てない(matrix と同様)。
+    if raw.data.datasets.len() != 1 {
+        return Err("gauge/radialGauge チャートには dataset が 1 つ必要です".to_string());
+    }
+    let ds = raw.data.datasets.into_iter().next().unwrap();
+    let opt = &raw.options;
+    let raw_theme: Option<RawTheme> = opt
+        .get("theme")
+        .and_then(|t| serde_json::from_value(t.clone()).ok());
+    let theme = build_theme(raw_theme);
+
+    // タイトル(options.plugins.title.display/text)。
+    let title = opt
+        .get("plugins")
+        .and_then(|p| p.get("title"))
+        .filter(|t| t.get("display").and_then(|d| d.as_bool()).unwrap_or(false))
+        .and_then(|t| {
+            t.get("text")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+        });
+
+    // 色解決ヘルパ(背景色配列を Color に)。
+    let colors: Vec<crate::ir::Color> = ds
+        .background_color
+        .map(|c| c.into_vec())
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(i, s)| parse_color(s).unwrap_or_else(|| theme.palette[i % theme.palette.len()]))
+        .collect();
+
+    let (kind, values, fill) = if radial {
+        // radialGauge: data[0]=値、color[0]=塗り色、domain/track/centerPercentage/...
+        // 値は単一。余剰要素を無言で捨てない。
+        if ds.data.len() != 1 {
+            return Err("radialGauge の datasets[0].data は単一値のみ対応です".to_string());
+        }
+        let value = ds.data.first().copied().unwrap_or(0.0);
+        let domain = opt.get("domain").and_then(|d| d.as_array());
+        let min = domain
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let max = domain
+            .and_then(|a| a.get(1))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(100.0);
+        let track = opt
+            .get("trackColor")
+            .and_then(|v| v.as_str())
+            .and_then(parse_color)
+            .unwrap_or(crate::ir::Color {
+                r: 204,
+                g: 221,
+                b: 238,
+                a: 1.0,
+            });
+        let center_pct = opt
+            .get("centerPercentage")
+            .and_then(|v| v.as_f64())
+            .filter(|p| p.is_finite() && *p >= 0.0 && *p < 100.0)
+            .unwrap_or(80.0);
+        let rounded = opt
+            .get("roundedCorners")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let display_text = opt
+            .get("centerArea")
+            .and_then(|c| c.get("displayText"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        // centerArea.fontSize: 指定時は中央値テキストのサイズを上書き(未指定は内径比で自動)。
+        let center_font_size = opt
+            .get("centerArea")
+            .and_then(|c| c.get("fontSize"))
+            .and_then(|v| v.as_f64())
+            .filter(|s| s.is_finite() && *s > 0.0);
+        let fill = if colors.is_empty() {
+            vec![theme.palette[0]]
+        } else {
+            vec![colors[0]]
+        };
+        (
+            ChartKind::RadialGauge {
+                min,
+                max,
+                track,
+                inner_ratio: center_pct / 100.0,
+                rounded,
+                display_text,
+                center_font_size,
+            },
+            vec![value],
+            fill,
+        )
+    } else {
+        // gauge: data=累積閾値、value=針、min=minValue、backgroundColor=ゾーン色。
+        let value = ds.value.unwrap_or(0.0);
+        let min = ds.min_value.unwrap_or(0.0);
+        let needle = opt
+            .get("needle")
+            .and_then(|n| n.get("color"))
+            .and_then(|v| v.as_str())
+            .and_then(parse_color)
+            .unwrap_or(crate::ir::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            });
+        let vl = opt.get("valueLabel");
+        let label = vl
+            .and_then(|v| v.get("display"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let label_color = vl
+            .and_then(|v| v.get("color"))
+            .and_then(|v| v.as_str())
+            .and_then(parse_color)
+            .unwrap_or(crate::ir::Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 1.0,
+            });
+        let label_bg = vl
+            .and_then(|v| v.get("backgroundColor"))
+            .and_then(|v| v.as_str())
+            .and_then(parse_color)
+            .unwrap_or(crate::ir::Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            });
+        // ゾーン色: 未指定はパレットをゾーンごとに割り当て、指定があれば fill_at の
+        // ブロードキャスト/巡回規則に委ねる(スカラ "#f00" は全ゾーンへブロードキャスト、
+        // 配列はゾーンごと、足りなければ巡回)。
+        let n = ds.data.len();
+        let fill: Vec<crate::ir::Color> = if colors.is_empty() {
+            (0..n)
+                .map(|i| theme.palette[i % theme.palette.len()])
+                .collect()
+        } else {
+            colors
+        };
+        (
+            ChartKind::Gauge {
+                value,
+                min,
+                needle,
+                label,
+                label_color,
+                label_bg,
+            },
+            ds.data.clone(),
+            fill,
+        )
+    };
+
+    let series = vec![Series {
+        name: String::new(),
+        values,
+        points: vec![],
+        fill,
+        stroke: vec![],
+        stroke_width: 0.0,
+        area: false,
+        tension: 0.0,
+        series_type: SeriesType::Bar,
+        point_radius: None,
+        box_points: vec![],
+    }];
+
+    Ok(ChartSpec {
+        kind,
+        series,
+        categories: vec![],
+        x_axis: zero_axis(),
+        y_axis: zero_axis(),
+        legend: LegendPos::None,
+        title,
+        width: 800.0,
+        height: 450.0,
+        data_labels: false,
+        theme,
+    })
+}
+
+/// gauge 用の最小 AxisSpec(軸を使わないチャート向け)。
+fn zero_axis() -> AxisSpec {
+    AxisSpec {
+        title: None,
+        min: None,
+        max: None,
+        suggested_min: None,
+        suggested_max: None,
+        begin_at_zero: false,
+        grid: false,
+    }
 }
 
 /// `obj` のキーを `allowed` に照らし、最初の未知キーを `Err(パス)` で返す。

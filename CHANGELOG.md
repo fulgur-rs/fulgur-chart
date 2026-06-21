@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- `gauge` チャートタイプ（QuickChart 互換の chartjs-gauge）に対応。累積閾値から成る
+  半円の色帯ゾーン + value を指す針 + 値ラベルを描画。`options.needle` /
+  `options.valueLabel` で設定でき、JS の `valueLabel.formatter` は丸めた数値で代替。
+- `radialGauge` チャートタイプ（QuickChart 互換の radial-gauge）に対応。トラックリング上に
+  value まで塗りつぶす全円の弧 + 中央の値テキストを描画。`options.domain` / `trackColor` /
+  `centerPercentage` / `roundedCorners` で設定でき、JS の `centerArea.text` は丸めた数値で代替。
+
 ## [0.1.2](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.1...fulgur-chart-cli-v0.1.2) - 2026-06-21
 
 ### Other

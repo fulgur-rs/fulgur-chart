@@ -473,6 +473,22 @@ fn schema_chartjs_includes_progress() {
 }
 
 #[test]
+fn schema_chartjs_includes_gauge() {
+    let out = Command::cargo_bin("fulgur-chart")
+        .unwrap()
+        .args(["schema"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "schema command should exit 0");
+    let s = String::from_utf8(out.stdout).unwrap();
+    assert!(s.contains("gauge"), "schema should mention gauge");
+    assert!(
+        s.contains("radialGauge"),
+        "schema should mention radialGauge"
+    );
+}
+
+#[test]
 fn schema_vegalite_is_valid_json() {
     let output = Command::cargo_bin("fulgur-chart")
         .unwrap()

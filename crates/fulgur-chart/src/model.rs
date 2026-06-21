@@ -125,6 +125,8 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Progress => "progress",
         ChartKind::BoxPlot => "boxplot",
         ChartKind::Sparkline => "sparkline",
+        ChartKind::RadialGauge { .. } => "radialGauge",
+        ChartKind::Gauge { .. } => "gauge",
     }
 }
 

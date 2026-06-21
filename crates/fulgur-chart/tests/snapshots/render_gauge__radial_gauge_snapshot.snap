@@ -1,0 +1,5 @@
+---
+source: crates/fulgur-chart/tests/render_gauge.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450"><text x="400" y="24" font-family="Noto Sans JP, sans-serif" font-size="16" text-anchor="middle" fill="#666666">CPU</text><path d="M 400 56.3 A 182.7 182.7 0 0 1 400 421.7 L 400 385.16 A 146.16 146.16 0 0 0 400 92.84 Z" fill="#ccddee" stroke="none"/><path d="M 400 421.7 A 182.7 182.7 0 0 1 400 56.3 L 400 92.84 A 146.16 146.16 0 0 0 400 385.16 Z" fill="#ccddee" stroke="none"/><path d="M 400 56.3 A 182.7 182.7 0 1 1 266.82 364.07 L 293.45 339.05 A 146.16 146.16 0 1 0 400 92.84 Z" fill="#36a2eb" stroke="none"/><circle cx="400" cy="74.57" r="18.27" fill="#36a2eb"/><circle cx="280.14" cy="351.56" r="18.27" fill="#36a2eb"/><text x="400" y="262.02" font-family="Noto Sans JP, sans-serif" font-size="65.77" text-anchor="middle" fill="#666666">63</text></svg>

@@ -114,17 +114,21 @@ fulgur-chart inspect chart.json
 - Progress bar chart (QuickChart-style; horizontal fill bar with centered percentage)
 - Matrix chart / heatmap (`{x, y, v}` point data; cells shaded by interpolating between two colors)
 - Box plot chart (5-number summary: `type: "boxplot"`, `data` as nested arrays `[min, q1, median, q3, max]`)
+- Gauge chart (QuickChart-style; semicircle with colored zones, needle, value label)
+- Radial gauge chart (QuickChart-style; full circle fill-to-value with center value text)
 
 ## Supported chart.js subset
 
 Supports a data-only, static subset:
 
-- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `boxplot` / `progress` (QuickChart's `progressBar` is also accepted as an alias)
+- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `boxplot` / `progress` / `gauge` / `radialGauge` (QuickChart's `progressBar` is also accepted as an alias)
 - `data.labels`
 - `data.datasets[]` — `label` / `data` (numeric array; `{x,y}` / `{x,y,r}` for scatter/bubble; `{x,y,v}` for matrix; nested `[min,q1,median,q3,max]` arrays for boxplot) / `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts)
 - For `progress` (alias `progressBar`), `datasets[0].data` holds each bar's value; an optional second dataset's `data` overrides the per-bar max (default 100). The percentage label is shown by default and can be hidden with `options.plugins.datalabels.display: false`.
+- For `gauge`, `datasets[0].data` holds cumulative zone thresholds, `value` is the needle value, and `backgroundColor` is the per-zone colors (`minValue` sets the lower bound). Configure with `options.needle` / `options.valueLabel`. The value label falls back to the rounded value (JS `valueLabel.formatter` is not executed).
+- For `radialGauge`, `datasets[0].data` holds a single value drawn as a fill-to-value arc on a track ring. Configure with `options.domain` / `options.trackColor` / `options.centerPercentage` / `options.roundedCorners` / `options.centerArea` (`displayText` / `fontSize`). The center value text falls back to the rounded value (JS `centerArea.text` is not executed).
 - `options.indexAxis`
-- `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right)
+- `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right; `legend` does not apply to `gauge` / `radialGauge`)
 - `options.plugins.datalabels` (`display` — renders a value label at each data point)
 - `options.scales` (`stacked` / `suggestedMin` / `suggestedMax` and a subset of other options)
 - `options.theme` (extension; see below)
