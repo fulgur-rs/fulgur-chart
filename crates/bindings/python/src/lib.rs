@@ -19,6 +19,72 @@ fn render_error(msg: impl Into<String>) -> PyErr {
     FulgurRenderError::new_err(msg.into())
 }
 
+#[allow(dead_code)]
+fn detect_dsl(json: &str) -> Option<&'static str> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    if v.get("mark").is_some() {
+        Some("vegalite")
+    } else if v.get("type").is_some() {
+        Some("chartjs")
+    } else {
+        None
+    }
+}
+
+#[allow(dead_code)]
+fn parse_spec(
+    json: &str,
+    strict: bool,
+    dsl: &str,
+) -> PyResult<fulgur_core::ir::ChartSpec> {
+    // 非 strict でパース（JSON / DSL 構文エラー → ParseError）
+    let spec = match dsl {
+        "chartjs" => fulgur_core::frontend::chartjs::parse(json, false),
+        "vegalite" => fulgur_core::frontend::vegalite::parse(json, false),
+        other => return Err(parse_error(format!("未知のDSL: {other}"))),
+    }
+    .map_err(parse_error)?;
+
+    // strict モードなら strict=true で再パース（未知キー → StrictError）
+    if strict {
+        let _ = match dsl {
+            "chartjs" => fulgur_core::frontend::chartjs::parse(json, true),
+            "vegalite" => fulgur_core::frontend::vegalite::parse(json, true),
+            _ => unreachable!(),
+        }
+        .map_err(strict_error)?;
+    }
+
+    Ok(spec)
+}
+
+#[allow(dead_code)]
+fn build_ir(
+    spec_json: &str,
+    width: Option<f64>,
+    height: Option<f64>,
+    strict: bool,
+    dsl: Option<&str>,
+) -> PyResult<fulgur_core::ir::ChartSpec> {
+    let dsl_name = match dsl {
+        Some(d) => d,
+        None => detect_dsl(spec_json)
+            .ok_or_else(|| parse_error("DSL自動判定失敗: 'mark'または'type'キーが必要"))?,
+    };
+    let mut spec = parse_spec(spec_json, strict, dsl_name)?;
+    // ChartSpec.width / .height は f64 フィールド
+    if let Some(w) = width {
+        spec.width = w;
+    }
+    if let Some(h) = height {
+        spec.height = h;
+    }
+    // 寸法制限チェック（1–32768 px）
+    fulgur_core::guard::validate_spec(&spec, &fulgur_core::guard::InputLimits::default())
+        .map_err(parse_error)?;
+    Ok(spec)
+}
+
 #[pyfunction]
 fn version() -> &'static str {
     fulgur_core::version()
