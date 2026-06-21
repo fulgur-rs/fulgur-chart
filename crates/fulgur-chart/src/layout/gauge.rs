@@ -13,6 +13,15 @@ use std::f64::consts::PI;
 /// 中央値テキストのフォント倍率(ラベル基準フォントに対して大きめに表示)。
 const CENTER_VALUE_FONT_SCALE: f64 = 1.6;
 
+/// 半円 gauge の内径比(cutoutPercentage 50)。
+const SEMI_CUTOUT_RATIO: f64 = 0.5;
+/// 針の長さ(半径比, lengthPercentage 80)。
+const NEEDLE_LEN_RATIO: f64 = 0.8;
+/// 針の支点での半幅(半径比, widthPercentage 3.2)。
+const NEEDLE_HALF_WIDTH_RATIO: f64 = 0.032;
+/// 針支点の円の半径(半径比, radiusPercentage 2 は直径基準なので 0.04)。
+const NEEDLE_PIVOT_RATIO: f64 = 0.04;
+
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let ink = spec.theme.text_color;
     let mut items: Vec<Prim> = Vec::new();
@@ -233,7 +242,7 @@ fn build_semi(
     let cx = (area_left + area_right) / 2.0;
     // 支点 cy は半円の底辺。中央やや下に置く。
     let cy = (area_top + area_bottom) / 2.0 + r_outer / 2.0;
-    let r_inner = r_outer * 0.5; // cutout 50%。
+    let r_inner = r_outer * SEMI_CUTOUT_RATIO; // cutout 50%。
     if r_outer <= 0.0 {
         return;
     }
@@ -278,12 +287,15 @@ fn build_semi(
         lo = hi;
     }
 
+    // 針の値も非有限なら min に倒す(ゾーンループの is_finite スキップと対称)。
+    let value = if value.is_finite() { value } else { min };
+
     // 針: 支点から value 角へ向かう三角形 + 支点の小円。
     let va = angle((value - min) / range);
-    let needle_len = r_outer * 0.8;
+    let needle_len = r_outer * NEEDLE_LEN_RATIO;
     let tip = (cx + needle_len * va.cos(), cy + needle_len * va.sin());
     // 支点で針幅を取るための直交方向。
-    let half_w = (r_outer * 0.032).max(1.5); // widthPercentage 3.2。
+    let half_w = (r_outer * NEEDLE_HALF_WIDTH_RATIO).max(1.5); // widthPercentage 3.2。
     let perp = va + PI / 2.0;
     let base1 = (cx + half_w * perp.cos(), cy + half_w * perp.sin());
     let base2 = (cx - half_w * perp.cos(), cy - half_w * perp.sin());
@@ -304,7 +316,7 @@ fn build_semi(
     items.push(Prim::Circle {
         cx,
         cy,
-        r: (r_outer * 0.04).max(2.0), // radiusPercentage 2。
+        r: (r_outer * NEEDLE_PIVOT_RATIO).max(2.0), // radiusPercentage 2。
         fill: needle,
     });
 
