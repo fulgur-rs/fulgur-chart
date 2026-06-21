@@ -21,6 +21,8 @@ const NEEDLE_LEN_RATIO: f64 = 0.8;
 const NEEDLE_HALF_WIDTH_RATIO: f64 = 0.032;
 /// 針支点の円の半径(半径比, radiusPercentage 2 は直径基準なので 0.04)。
 const NEEDLE_PIVOT_RATIO: f64 = 0.04;
+/// 値ラベルの内側パディング(px)。
+const LABEL_PAD: f64 = 5.0;
 
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let ink = spec.theme.text_color;
@@ -232,16 +234,22 @@ fn build_semi(
     label_color: Color,
     label_bg: Color,
 ) {
-    // 半円は縦に半分しか使わないため、領域の下端を支点に取り直す。
+    let font = spec.theme.font_size;
+    // 値ラベル帯(底部に確保)。label が無効なら 0。
+    let label_band = if label {
+        font + LABEL_PAD * 2.0 + 4.0
+    } else {
+        0.0
+    };
+
     let area_top = OUTER_PAD + title_band;
     let area_bottom = spec.height - OUTER_PAD;
     let area_left = OUTER_PAD;
     let area_right = spec.width - OUTER_PAD;
-    // 半円の幅基準半径(横幅の半分)と高さ基準で小さい方。
-    let r_outer = (((area_right - area_left) / 2.0).min(area_bottom - area_top) * 0.9).max(0.0);
     let cx = (area_left + area_right) / 2.0;
-    // 支点 cy は半円の底辺。中央やや下に置く。
-    let cy = (area_top + area_bottom) / 2.0 + r_outer / 2.0;
+    // 半円の支点(底辺)は値ラベル帯の上に置く。
+    let cy = area_bottom - label_band;
+    let r_outer = (((area_right - area_left) / 2.0).min(cy - area_top) * 0.9).max(0.0);
     let r_inner = r_outer * SEMI_CUTOUT_RATIO; // cutout 50%。
     if r_outer <= 0.0 {
         return;
@@ -322,15 +330,11 @@ fn build_semi(
 
     if label {
         let text = fmt_num(value.round());
-        let font = spec.theme.font_size;
-        // 概算ラベル幅(等幅近似)。TextMeasurer を使わず決定的に: 1 文字 ≈ font*0.6。
-        let text_w = text.chars().count() as f64 * font * 0.6;
-        let pad = 5.0;
-        let box_w = text_w + pad * 2.0;
-        let box_h = font + pad * 2.0;
-        // 支点直下に配置。
+        let text_w = text.chars().count() as f64 * font * 0.6; // 決定的な幅近似
+        let box_w = text_w + LABEL_PAD * 2.0;
+        let box_h = font + LABEL_PAD * 2.0;
         let box_x = cx - box_w / 2.0;
-        let box_y = cy + r_outer * 0.12;
+        let box_y = cy + (label_band - box_h) / 2.0; // 予約帯の中央(支点の直下、画面内)
         items.push(Prim::Path {
             d: crate::layout::progress::rounded_rect_path(box_x, box_y, box_w, box_h, 5.0),
             fill: Some(label_bg),
