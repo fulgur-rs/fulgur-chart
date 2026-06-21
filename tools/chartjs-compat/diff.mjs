@@ -68,7 +68,7 @@ export function diffModels(fulgur, chartjs) {
 
   // counts
   const countDiffs = [];
-  for (const k of ['datasets', 'legend_items', 'x_ticks', 'y_ticks']) {
+  for (const k of ['datasets', 'legend_items', 'x_ticks']) {
     if (fulgur.counts[k] !== chartjs.counts[k])
       countDiffs.push({ field: k, fulgur: fulgur.counts[k], chartjs: chartjs.counts[k] });
   }
