@@ -32,6 +32,8 @@ pub enum ChartJsSpec {
     #[serde(alias = "progressBar")]
     Progress(ProgressSpec),
     Boxplot(BoxplotSpec),
+    /// QuickChart-compatible sparkline: minimal line chart with no axes, labels, or legend.
+    Sparkline(SparklineSpec),
 }
 
 // ────────────────────────────────────────────────
@@ -510,6 +512,53 @@ pub struct BoxplotDataset {
 pub struct BoxplotOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins: Option<CommonPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scales: Option<BarScales>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+// ────────────────────────────────────────────────
+// Sparkline chart (QuickChart-compatible)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SparklineSpec {
+    pub data: SparklineData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<SparklineOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SparklineData {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    pub datasets: Vec<SparklineDataset>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SparklineDataset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub data: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<ScalarOrArray<ColorString>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<ScalarOrArray<ColorString>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tension: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<FillSpec>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SparklineOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scales: Option<BarScales>,
     #[serde(skip_serializing_if = "Option::is_none")]

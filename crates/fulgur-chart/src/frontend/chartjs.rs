@@ -262,7 +262,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // chart 基本型。bar/line のときだけ dataset 別 type による混合が起こりうる。
     // 基本型は SeriesType のフォールバックにも使う(bar→Bar, line→Line, それ以外→Bar(未使用))。
     let base_series_type = match raw.chart_type.as_str() {
-        "line" => SeriesType::Line,
+        "line" | "sparkline" => SeriesType::Line,
         _ => SeriesType::Bar,
     };
 
@@ -342,6 +342,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             // QuickChart の正式名は "progressBar"。互換のため "progress" も受理する。
             "progress" | "progressBar" => ChartKind::Progress,
             "boxplot" => ChartKind::BoxPlot,
+            "sparkline" => ChartKind::Sparkline,
             other => return Err(format!("未対応の type: {other}")),
         }
     };
@@ -363,6 +364,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
     let is_point_based = matches!(kind, ChartKind::Scatter | ChartKind::Bubble);
     let is_boxplot = matches!(kind, ChartKind::BoxPlot);
+    // sparkline はライン系のスケール慣習に従い begin_at_zero をデフォルト false にする。
+    let is_sparkline = matches!(kind, ChartKind::Sparkline);
 
     // データ形状とチャート種の整合を検査する。点ベース(scatter/bubble)は {x,y(,r)}
     // 配列、カテゴリ系は数値配列を要する。非空の不一致は空チャート化せず明示エラーに。
@@ -480,7 +483,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             ..
         }
     );
-    let value_begin_at_zero = !is_point_based;
+    let value_begin_at_zero = !is_point_based && !is_sparkline;
 
     // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する。
     let scales_val = raw.options.scales.as_ref();
@@ -1205,5 +1208,12 @@ mod tests {
         assert_eq!(stroke.r, 0);
         assert_eq!(stroke.g, 0);
         assert_eq!(stroke.b, 255);
+    }
+
+    #[test]
+    fn sparkline_parses_to_sparkline_kind() {
+        let json = r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        assert!(matches!(spec.kind, crate::ir::ChartKind::Sparkline));
     }
 }
