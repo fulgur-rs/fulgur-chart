@@ -7,6 +7,12 @@
 A CLI that generates static SVG / PNG charts from a chart.js v4–compatible JSON spec
 (a side project of [Fulgur](https://github.com/fulgur-rs)).
 
+<p align="center">
+  <img src="docs/images/bar.svg" width="32%" alt="Bar chart">
+  <img src="docs/images/line.svg" width="32%" alt="Line chart">
+  <img src="docs/images/pie.svg" width="32%" alt="Pie chart">
+</p>
+
 ## Why
 
 Generates deterministic charts — byte-identical output for the same input — without
