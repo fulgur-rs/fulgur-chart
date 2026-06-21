@@ -241,6 +241,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
             return parse_gauge(json, radial);
         }
+        if matches!(chart_type.as_deref(), Some("progress") | Some("progressBar")) {
+            if strict {
+                check_unknown_keys_progress(json)?;
+            }
+        }
     }
 
     if strict {
@@ -919,6 +924,54 @@ fn check_unknown_keys_gauge(json: &str) -> Result<(), String> {
                 ],
                 "options.valueLabel",
             )?;
+        }
+        if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
+            check_object(
+                theme,
+                &[
+                    "palette",
+                    "gridColor",
+                    "textColor",
+                    "backgroundColor",
+                    "fontSize",
+                ],
+                "options.theme",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// progress / progressBar の許可キーに対して検証する。
+/// stroke を描かないため borderColor/borderWidth は受け付けない。
+/// legend は描画しないため受け付けない（datalabels は % 表示制御に使用するため許可）。
+fn check_unknown_keys_progress(json: &str) -> Result<(), String> {
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let Some(top) = value.as_object() else {
+        return Ok(());
+    };
+    check_object(top, &["type", "data", "options"], "")?;
+    if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
+        check_object(data, &["labels", "datasets"], "data")?;
+        if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
+            for (i, ds) in datasets.iter().enumerate() {
+                if let Some(ds) = ds.as_object() {
+                    check_object(
+                        ds,
+                        &["label", "data", "backgroundColor"],
+                        &format!("data.datasets[{i}]"),
+                    )?;
+                }
+            }
+        }
+    }
+    if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
+        check_object(options, &["plugins", "theme"], "options")?;
+        if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
+            check_object(plugins, &["title", "datalabels"], "options.plugins")?;
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
             check_object(

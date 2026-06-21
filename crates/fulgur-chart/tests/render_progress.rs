@@ -165,3 +165,30 @@ fn progress_strict_accepts_datalabels() {
     );
     assert!(ok.is_ok(), "datalabels should be accepted: {:?}", ok);
 }
+
+#[test]
+fn progress_strict_rejects_border_color() {
+    let err = chartjs::parse(
+        r##"{"type":"progress","data":{"datasets":[{"data":[70],"borderColor":"#ff0000"}]}}"##,
+        true,
+    );
+    assert!(err.is_err(), "borderColor should be rejected in strict mode");
+}
+
+#[test]
+fn progress_strict_rejects_border_width() {
+    let err = chartjs::parse(
+        r##"{"type":"progress","data":{"datasets":[{"data":[70],"borderWidth":2}]}}"##,
+        true,
+    );
+    assert!(err.is_err(), "borderWidth should be rejected in strict mode");
+}
+
+#[test]
+fn progress_strict_rejects_legend() {
+    let err = chartjs::parse(
+        r##"{"type":"progress","data":{"datasets":[{"data":[70]}]},"options":{"plugins":{"legend":{"display":true}}}}"##,
+        true,
+    );
+    assert!(err.is_err(), "legend should be rejected in strict mode");
+}
