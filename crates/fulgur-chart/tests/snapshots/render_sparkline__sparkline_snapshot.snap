@@ -1,0 +1,5 @@
+---
+source: crates/fulgur-chart/tests/render_sparkline.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450"><polyline points="57,297.33 155,393.78 253,249.11 351,393.78 449,200.89 547,8 645,345.56 743,152.67" fill="none" stroke="#4c8cff" stroke-width="1"/></svg>
