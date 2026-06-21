@@ -420,7 +420,15 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             let stroke = if is_point_based && has_explicit_bg && border_color.is_none() {
                 // chart.js v4: backgroundColor 指定・borderColor 未指定の scatter/bubble は
                 // Colors プラグインをスキップし、グローバルデフォルト rgba(0,0,0,0.1) にフォールバック。
-                vec![Color { r: 0, g: 0, b: 0, a: 0.1 }; fill.len()]
+                vec![
+                    Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 0.1
+                    };
+                    fill.len()
+                ]
             } else {
                 resolve_colors(
                     border_color,
@@ -1157,9 +1165,18 @@ mod tests {
         let fill = spec.series[0].fill[0];
         let stroke = spec.series[0].stroke[0];
         // stroke RGB は fill (パレット由来) と一致する
-        assert_eq!(stroke.r, fill.r, "stroke.r must match fill.r (palette color)");
-        assert_eq!(stroke.g, fill.g, "stroke.g must match fill.g (palette color)");
-        assert_eq!(stroke.b, fill.b, "stroke.b must match fill.b (palette color)");
+        assert_eq!(
+            stroke.r, fill.r,
+            "stroke.r must match fill.r (palette color)"
+        );
+        assert_eq!(
+            stroke.g, fill.g,
+            "stroke.g must match fill.g (palette color)"
+        );
+        assert_eq!(
+            stroke.b, fill.b,
+            "stroke.b must match fill.b (palette color)"
+        );
         // stroke alpha は 1.0
         assert!(
             (stroke.a - 1.0).abs() < 1e-6,

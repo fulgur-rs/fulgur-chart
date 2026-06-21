@@ -500,8 +500,18 @@ mod tests {
                 cx: 50.0,
                 cy: 50.0,
                 r: 10.0,
-                fill: Color { r: 153, g: 102, b: 255, a: 0.5 },
-                stroke: Color { r: 153, g: 102, b: 255, a: 1.0 },
+                fill: Color {
+                    r: 153,
+                    g: 102,
+                    b: 255,
+                    a: 0.5,
+                },
+                stroke: Color {
+                    r: 153,
+                    g: 102,
+                    b: 255,
+                    a: 1.0,
+                },
                 stroke_width: 1.0,
             }],
         };
@@ -531,8 +541,18 @@ mod tests {
                 cx: 10.0,
                 cy: 10.0,
                 r: 5.0,
-                fill: Color { r: 54, g: 162, b: 235, a: 1.0 },
-                stroke: Color { r: 0, g: 0, b: 0, a: 1.0 },
+                fill: Color {
+                    r: 54,
+                    g: 162,
+                    b: 235,
+                    a: 1.0,
+                },
+                stroke: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
                 stroke_width: 0.0,
             }],
         };
