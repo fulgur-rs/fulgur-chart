@@ -4,16 +4,21 @@
 //! (raster_direct::parse_path_data 不変条件。pie.rs / progress.rs と同様)。
 
 use super::common::{OUTER_PAD, TITLE_FONT};
-use crate::ir::ChartSpec;
+use crate::ir::{ChartKind, ChartSpec, Color};
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 use std::f64::consts::PI;
 
-pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
+pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let ink = spec.theme.text_color;
     let mut items: Vec<Prim> = Vec::new();
 
+    let title_band = if spec.title.is_some() {
+        super::common::TITLE_BAND
+    } else {
+        0.0
+    };
     if let Some(title) = &spec.title {
         items.push(Prim::Text {
             x: spec.width / 2.0,
@@ -25,6 +30,47 @@ pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
         });
     }
 
+    match &spec.kind {
+        ChartKind::RadialGauge {
+            min,
+            max,
+            track,
+            inner_ratio,
+            rounded,
+            display_text,
+        } => build_radial(
+            &mut items,
+            spec,
+            title_band,
+            *min,
+            *max,
+            *track,
+            *inner_ratio,
+            *rounded,
+            *display_text,
+        ),
+        ChartKind::Gauge {
+            value,
+            min,
+            needle,
+            label,
+            label_color,
+            label_bg,
+        } => build_semi(
+            &mut items,
+            spec,
+            m,
+            title_band,
+            *value,
+            *min,
+            *needle,
+            *label,
+            *label_color,
+            *label_bg,
+        ),
+        _ => {}
+    }
+
     Scene {
         width: spec.width,
         height: spec.height,
@@ -32,12 +78,115 @@ pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
     }
 }
 
+/// プロット領域の中心と半径(タイトル帯を除いた領域に内接)。
+fn area_geom(spec: &ChartSpec, title_band: f64) -> (f64, f64, f64) {
+    let area_top = OUTER_PAD + title_band;
+    let area_bottom = spec.height - OUTER_PAD;
+    let area_left = OUTER_PAD;
+    let area_right = spec.width - OUTER_PAD;
+    let cx = (area_left + area_right) / 2.0;
+    let cy = (area_top + area_bottom) / 2.0;
+    let r = ((area_right - area_left).min(area_bottom - area_top) / 2.0 * 0.9).max(0.0);
+    (cx, cy, r)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_radial(
+    items: &mut Vec<Prim>,
+    spec: &ChartSpec,
+    title_band: f64,
+    min: f64,
+    max: f64,
+    track: Color,
+    inner_ratio: f64,
+    _rounded: bool,      // Task 4 で使用
+    _display_text: bool, // Task 4 で使用
+) {
+    let (cx, cy, r_outer) = area_geom(spec, title_band);
+    let r_inner = (r_outer * inner_ratio).clamp(0.0, r_outer);
+    if r_outer <= 0.0 {
+        return;
+    }
+    let fill = spec.series.first().map(|s| s.fill_at(0)).unwrap_or(track);
+    let value = spec
+        .series
+        .first()
+        .and_then(|s| s.values.first().copied())
+        .unwrap_or(min);
+
+    // 値の割合(domain でスケール・クランプ)。range が 0 のとき 0。
+    let frac = if (max - min).abs() > f64::EPSILON {
+        ((value - min) / (max - min)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let start = -PI / 2.0; // 12 時。
+    // トラック: 全周リング。全周は単一 A で描けないため中点で 2 分割。
+    let mid = start + PI;
+    items.push(Prim::Path {
+        d: ring_segment_path(cx, cy, r_outer, r_inner, start, mid),
+        fill: Some(track),
+        stroke: None,
+        stroke_width: 0.0,
+    });
+    items.push(Prim::Path {
+        d: ring_segment_path(cx, cy, r_outer, r_inner, mid, start + 2.0 * PI),
+        fill: Some(track),
+        stroke: None,
+        stroke_width: 0.0,
+    });
+
+    // 値弧: start から時計回りに frac×360°。frac>0 のみ。
+    if frac > 0.0 {
+        let end = start + frac * 2.0 * PI;
+        // 半周超は単一 A で描けるが large-arc-flag は ring_segment_path が処理する。
+        // 全周(frac==1)は 2 分割。
+        if frac >= 1.0 - 1e-9 {
+            let amid = start + PI;
+            items.push(Prim::Path {
+                d: ring_segment_path(cx, cy, r_outer, r_inner, start, amid),
+                fill: Some(fill),
+                stroke: None,
+                stroke_width: 0.0,
+            });
+            items.push(Prim::Path {
+                d: ring_segment_path(cx, cy, r_outer, r_inner, amid, start + 2.0 * PI),
+                fill: Some(fill),
+                stroke: None,
+                stroke_width: 0.0,
+            });
+        } else {
+            items.push(Prim::Path {
+                d: ring_segment_path(cx, cy, r_outer, r_inner, start, end),
+                fill: Some(fill),
+                stroke: None,
+                stroke_width: 0.0,
+            });
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
+fn build_semi(
+    _items: &mut Vec<Prim>,
+    _spec: &ChartSpec,
+    _m: &TextMeasurer,
+    _title_band: f64,
+    _value: f64,
+    _min: f64,
+    _needle: Color,
+    _label: bool,
+    _label_color: Color,
+    _label_bg: Color,
+) {
+    // Task 5/6 で実装。
+}
+
 /// 内外半径ありの円弧帯(リングセグメント)の SVG path data。
 /// a0→a1 を外弧(sweep 1)、a1→a0 を内弧(sweep 0)で閉じる。pie の doughnut と同形。
 /// `a1 > a0` かつ `a1-a0 <= 2π` を前提(呼び出し側で保証)。
 /// すべて fmt_num 整形 + 空白区切り(raster_direct 不変条件)。
-// Task 3+ の build_radial/build_semi から使用する(本タスクでは tests のみが使用)。
-#[allow(dead_code)]
 fn ring_segment_path(cx: f64, cy: f64, r_outer: f64, r_inner: f64, a0: f64, a1: f64) -> String {
     let laf = if (a1 - a0) > PI { 1 } else { 0 };
     let o0 = (cx + r_outer * a0.cos(), cy + r_outer * a0.sin());
