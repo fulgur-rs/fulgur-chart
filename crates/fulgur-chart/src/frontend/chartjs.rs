@@ -237,7 +237,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         if matches!(chart_type.as_deref(), Some("gauge") | Some("radialGauge")) {
             let radial = chart_type.as_deref() == Some("radialGauge");
             if strict {
-                check_unknown_keys_gauge(json, radial)?;
+                check_unknown_keys_gauge(json)?;
             }
             return parse_gauge(json, radial);
         }
@@ -836,7 +836,12 @@ fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_unknown_keys_gauge(json: &str, _radial: bool) -> Result<(), String> {
+/// gauge と radialGauge の許可キーの**和集合**（緩い上位集合）に対して検証する。
+/// 型ごとの厳密な契約は JSON Schema（`schema/chartjs.rs`）が担い、そちらは型別に
+/// 厳密。ランタイムの strict 検証は真に未知のキー（タイポ）だけを安全側で弾く目的で
+/// あり、スキーマ妥当な入力は必ずパースできる（緩いのは安全な方向のみ）。
+/// このため gauge / radialGauge を区別する必要はなく、引数を取らない。
+fn check_unknown_keys_gauge(json: &str) -> Result<(), String> {
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return Ok(()),
