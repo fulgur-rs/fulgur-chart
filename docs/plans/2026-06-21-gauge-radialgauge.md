@@ -1648,7 +1648,7 @@ cargo run -p fulgur-chart-cli -- render examples/specs/gauge.json -o /tmp/gauge.
 
 (b) QuickChart.io 実物(本物のプラグイン出力)と比較する。同一 config を URL エンコードして:
 
-```
+```text
 https://quickchart.io/chart?c=<同じJSON>
 ```
 

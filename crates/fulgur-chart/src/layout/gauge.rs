@@ -54,6 +54,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             inner_ratio,
             rounded,
             display_text,
+            center_font_size,
         } => build_radial(
             &mut items,
             spec,
@@ -64,6 +65,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             *inner_ratio,
             *rounded,
             *display_text,
+            *center_font_size,
         ),
         ChartKind::Gauge {
             value,
@@ -117,6 +119,7 @@ fn build_radial(
     inner_ratio: f64,
     rounded: bool,
     display_text: bool,
+    center_font_size: Option<f64>,
 ) {
     let (cx, cy, r_outer) = area_geom(spec, title_band);
     let r_inner = (r_outer * inner_ratio).clamp(0.0, r_outer);
@@ -178,8 +181,11 @@ fn build_radial(
     }
 
     if display_text {
-        let size = (r_inner * CENTER_VALUE_RADIUS_RATIO)
-            .max(spec.theme.font_size * CENTER_VALUE_FONT_SCALE);
+        // centerArea.fontSize 指定時はそれを優先、未指定は内径比で自動算出。
+        let size = center_font_size.unwrap_or_else(|| {
+            (r_inner * CENTER_VALUE_RADIUS_RATIO)
+                .max(spec.theme.font_size * CENTER_VALUE_FONT_SCALE)
+        });
         items.push(Prim::Text {
             x: cx,
             y: cy + size * super::common::TEXT_BASELINE_RATIO,
@@ -228,7 +234,7 @@ fn push_value_arc(
 fn build_semi(
     items: &mut Vec<Prim>,
     spec: &ChartSpec,
-    _m: &TextMeasurer,
+    m: &TextMeasurer,
     title_band: f64,
     value: f64,
     min: f64,
@@ -333,10 +339,13 @@ fn build_semi(
 
     if label {
         let text = fmt_num(value.round());
-        let text_w = text.chars().count() as f64 * font * 0.6; // 決定的な幅近似
-        let box_w = text_w + LABEL_PAD * 2.0;
+        // ラベル幅は実測し、描画領域を超えないようにクランプ(狭い chart / 長い桁数で
+        // box が viewBox 外に出ないようにする)。
+        let text_w = m.width(&text, font as f32) as f64;
+        let max_box_w = (area_right - area_left).max(0.0);
+        let box_w = (text_w + LABEL_PAD * 2.0).min(max_box_w);
         let box_h = font + LABEL_PAD * 2.0;
-        let box_x = cx - box_w / 2.0;
+        let box_x = (cx - box_w / 2.0).clamp(area_left, (area_right - box_w).max(area_left));
         let box_y = cy + (label_band - box_h) / 2.0; // 予約帯の中央(支点の直下、画面内)
         items.push(Prim::Path {
             d: crate::layout::progress::rounded_rect_path(box_x, box_y, box_w, box_h, 5.0),
@@ -345,7 +354,7 @@ fn build_semi(
             stroke_width: 0.0,
         });
         items.push(Prim::Text {
-            x: cx,
+            x: box_x + box_w / 2.0,
             y: box_y + box_h / 2.0 + font * super::common::TEXT_BASELINE_RATIO,
             size: font,
             anchor: Anchor::Middle,

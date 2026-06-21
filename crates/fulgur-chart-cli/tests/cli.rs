@@ -479,6 +479,7 @@ fn schema_chartjs_includes_gauge() {
         .args(["schema"])
         .output()
         .unwrap();
+    assert!(out.status.success(), "schema command should exit 0");
     let s = String::from_utf8(out.stdout).unwrap();
     assert!(s.contains("gauge"), "schema should mention gauge");
     assert!(

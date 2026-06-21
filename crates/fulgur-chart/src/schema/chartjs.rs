@@ -614,7 +614,7 @@ pub struct GaugeDataset {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GaugeOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needle: Option<NeedleOptions>,
@@ -626,17 +626,13 @@ pub struct GaugeOptions {
     pub theme: Option<ThemeOptions>,
 }
 
+/// 針のスタイル。針の形状(長さ・太さ)は QuickChart 実物に合わせた内部定数で固定して
+/// おり、サイズ系オプション(*Percentage)はスキーマには公開しない。色のみ上書き可能。
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NeedleOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<ColorString>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub radius_percentage: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub width_percentage: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub length_percentage: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

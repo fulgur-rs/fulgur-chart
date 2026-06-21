@@ -906,16 +906,8 @@ fn check_unknown_keys_gauge(json: &str) -> Result<(), String> {
             )?;
         }
         if let Some(nd) = options.get("needle").and_then(|v| v.as_object()) {
-            check_object(
-                nd,
-                &[
-                    "color",
-                    "radiusPercentage",
-                    "widthPercentage",
-                    "lengthPercentage",
-                ],
-                "options.needle",
-            )?;
+            // 針サイズ系(*Percentage)はスキーマ非公開・内部固定のため許可しない(color のみ)。
+            check_object(nd, &["color"], "options.needle")?;
         }
         if let Some(vl) = options.get("valueLabel").and_then(|v| v.as_object()) {
             check_object(
@@ -1139,8 +1131,9 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
     }
 
     let raw: GaugeWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if raw.data.datasets.is_empty() {
-        return Err("gauge チャートには dataset が 1 つ必要です".to_string());
+    // gauge/radialGauge は 1 dataset = 1 ゲージ。余剰 dataset を無言で捨てない(matrix と同様)。
+    if raw.data.datasets.len() != 1 {
+        return Err("gauge/radialGauge チャートには dataset が 1 つ必要です".to_string());
     }
     let ds = raw.data.datasets.into_iter().next().unwrap();
     let opt = &raw.options;
@@ -1172,6 +1165,10 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
 
     let (kind, values, fill) = if radial {
         // radialGauge: data[0]=値、color[0]=塗り色、domain/track/centerPercentage/...
+        // 値は単一。余剰要素を無言で捨てない。
+        if ds.data.len() != 1 {
+            return Err("radialGauge の datasets[0].data は単一値のみ対応です".to_string());
+        }
         let value = ds.data.first().copied().unwrap_or(0.0);
         let domain = opt.get("domain").and_then(|d| d.as_array());
         let min = domain
@@ -1206,6 +1203,12 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
             .and_then(|c| c.get("displayText"))
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
+        // centerArea.fontSize: 指定時は中央値テキストのサイズを上書き(未指定は内径比で自動)。
+        let center_font_size = opt
+            .get("centerArea")
+            .and_then(|c| c.get("fontSize"))
+            .and_then(|v| v.as_f64())
+            .filter(|s| s.is_finite() && *s > 0.0);
         let fill = if colors.is_empty() {
             vec![theme.palette[0]]
         } else {
@@ -1219,6 +1222,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
                 inner_ratio: center_pct / 100.0,
                 rounded,
                 display_text,
+                center_font_size,
             },
             vec![value],
             fill,

@@ -229,3 +229,54 @@ fn gauge_strict_accepts_known_keys() {
     );
     assert!(ok.is_ok(), "known keys should pass strict: {ok:?}");
 }
+
+#[test]
+fn gauge_rejects_extra_datasets() {
+    // 1 dataset = 1 ゲージ。余剰 dataset は無言で捨てずエラーにする。
+    let err = chartjs::parse(
+        r#"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4]},{"value":1,"data":[5]}]}}"#,
+        false,
+    );
+    assert!(err.is_err(), "extra dataset should be rejected: {err:?}");
+}
+
+#[test]
+fn radial_gauge_rejects_multi_value() {
+    // radialGauge の data は単一値のみ。余剰値はエラー。
+    let err = chartjs::parse(
+        r#"{"type":"radialGauge","data":{"datasets":[{"data":[50,60]}]}}"#,
+        false,
+    );
+    assert!(
+        err.is_err(),
+        "multi-value radialGauge data should be rejected: {err:?}"
+    );
+}
+
+#[test]
+fn gauge_strict_needle_size_is_unknown_key() {
+    // needle のサイズ系はスキーマ非公開・内部固定。strict では未知キー扱い。
+    let err = chartjs::parse(
+        r#"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4]}],
+        "options":{"needle":{"widthPercentage":5}}}"#,
+        true,
+    );
+    assert!(
+        err.is_err(),
+        "needle.widthPercentage should be unknown in strict: {err:?}"
+    );
+}
+
+#[test]
+fn radial_gauge_center_font_size_override() {
+    // centerArea.fontSize 指定時は中央値テキストのサイズに反映される。
+    let svg = render(
+        r##"{"type":"radialGauge","data":{"datasets":[{"data":[42]}]},
+        "options":{"centerArea":{"fontSize":40}}}"##,
+    );
+    assert!(
+        svg.contains("font-size=\"40\""),
+        "center font size override should apply: {svg}"
+    );
+    assert!(svg.contains(">42<"), "center value present: {svg}");
+}

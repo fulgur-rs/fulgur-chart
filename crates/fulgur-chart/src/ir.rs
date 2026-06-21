@@ -138,6 +138,8 @@ pub enum ChartKind {
         inner_ratio: f64, // centerPercentage/100
         rounded: bool,
         display_text: bool,
+        /// centerArea.fontSize の上書き(px)。None なら内径比で自動算出。
+        center_font_size: Option<f64>,
     },
     /// QuickChart gauge: 半円。color zone(series[0].values=累積閾値, series[0].fill=ゾーン色)
     /// + 針 + 値ラベル。value=針値、min=下端(max は閾値末尾)。
