@@ -1,0 +1,15 @@
+{
+  "type": "outlabeledDoughnut",
+  "data": {
+    "labels": ["Chrome", "Safari", "Edge", "Firefox", "Other"],
+    "datasets": [
+      { "data": [63, 19, 8, 6, 4] }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "Browser Share (outlabeled doughnut)" },
+      "outlabels": { "stretch": 50.0 }
+    }
+  }
+}
