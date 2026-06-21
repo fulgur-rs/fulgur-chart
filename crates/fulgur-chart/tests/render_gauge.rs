@@ -150,3 +150,62 @@ fn gauge_value_label_hidden_when_disabled() {
     );
     assert!(!svg.contains(">3<"), "value label should be hidden: {svg}");
 }
+
+#[test]
+fn gauge_deterministic() {
+    let j = r##"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4,6],
+        "backgroundColor":["#00ff00","#ffff00","#ff0000"]}]}}"##;
+    assert_eq!(render(j), render(j));
+}
+
+#[test]
+fn radial_gauge_deterministic() {
+    let j = r##"{"type":"radialGauge","data":{"datasets":[{"data":[63],"backgroundColor":"#36a2eb"}]}}"##;
+    assert_eq!(render(j), render(j));
+}
+
+#[test]
+fn radial_gauge_snapshot() {
+    let svg = render(
+        r##"{"type":"radialGauge","data":{"datasets":[{"data":[63],"backgroundColor":"#36a2eb"}]},
+        "options":{"plugins":{"title":{"display":true,"text":"CPU"}}}}"##,
+    );
+    insta::assert_snapshot!(svg);
+}
+
+#[test]
+fn gauge_snapshot() {
+    let svg = render(
+        r##"{"type":"gauge","data":{"datasets":[{"value":58,"minValue":0,"data":[33,66,100],
+        "backgroundColor":["#4caf50","#ffc107","#f44336"]}]},
+        "options":{"plugins":{"title":{"display":true,"text":"Load"}}}}"##,
+    );
+    insta::assert_snapshot!(svg);
+}
+
+#[test]
+fn radial_gauge_rasterizes_value_color_in_png() {
+    // 回帰: 弧パスが PNG 直接ラスタライザで描画される。前景色ピクセルが PNG に現れる。
+    use resvg::tiny_skia::Pixmap;
+    let spec = chartjs::parse(
+        r##"{"type":"radialGauge","data":{"datasets":[{"data":[100],"backgroundColor":"#36a2eb"}]},
+        "options":{"roundedCorners":false}}"##,
+        false,
+    )
+    .unwrap();
+    let png = fulgur_chart::raster_direct::render_chart_to_png(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .unwrap();
+    let pixmap = Pixmap::decode_png(&png).unwrap();
+    let found = pixmap
+        .pixels()
+        .iter()
+        .any(|p| p.red() == 54 && p.green() == 162 && p.blue() == 235);
+    assert!(
+        found,
+        "radialGauge value arc (#36a2eb) must be rasterized into the PNG"
+    );
+}
