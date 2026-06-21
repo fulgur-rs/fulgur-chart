@@ -12,6 +12,8 @@ use std::f64::consts::PI;
 
 /// 中央値テキストのフォント倍率(ラベル基準フォントに対して大きめに表示)。
 const CENTER_VALUE_FONT_SCALE: f64 = 1.6;
+/// 中央値テキストのフォントサイズ(内径に対する比)。QuickChart 風に大きく見せる。
+const CENTER_VALUE_RADIUS_RATIO: f64 = 0.45;
 
 /// 半円 gauge の内径比(cutoutPercentage 50)。
 const SEMI_CUTOUT_RATIO: f64 = 0.5;
@@ -176,7 +178,8 @@ fn build_radial(
     }
 
     if display_text {
-        let size = spec.theme.font_size * CENTER_VALUE_FONT_SCALE;
+        let size = (r_inner * CENTER_VALUE_RADIUS_RATIO)
+            .max(spec.theme.font_size * CENTER_VALUE_FONT_SCALE);
         items.push(Prim::Text {
             x: cx,
             y: cy + size * super::common::TEXT_BASELINE_RATIO,
