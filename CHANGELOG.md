@@ -10,6 +10,20 @@
 
 ### Other
 
+- release
+
+## [0.6.0](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.5.1...fulgur-chart-v0.6.0) - 2026-06-21
+
+### Other
+
+- release
+- Merge pull request #29 from fulgur-rs/refactor/remove-svg-to-png
+- remove svg_to_png in favour of raster_direct
+
+## [0.1.6](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.5...fulgur-chart-cli-v0.1.6) - 2026-06-21
+
+### Other
+
 - updated the following local packages: fulgur-chart
 
 ## [0.1.5](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.4...fulgur-chart-cli-v0.1.5) - 2026-06-21
