@@ -168,7 +168,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 /// (`raster_direct::parse_path_data`)は `split_ascii_whitespace()` でトークン化し
 /// **スタンドアロンの** M/L/A/Z しか解釈しないため、`M104.28` のように連結すると
 /// パースに失敗し PNG でパスが描画されない。pie.rs と同じ空白区切り形式に揃える。
-fn rounded_rect_path(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
+pub(crate) fn rounded_rect_path(x: f64, y: f64, w: f64, h: f64, r: f64) -> String {
     let r = r.max(0.0).min(w / 2.0).min(h / 2.0);
     let x1 = x + w;
     let y1 = y + h;

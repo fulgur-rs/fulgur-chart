@@ -320,8 +320,32 @@ fn build_semi(
         fill: needle,
     });
 
-    // 値ラベルは Task 6。
-    let _ = (label, label_color, label_bg);
+    if label {
+        let text = fmt_num(value.round());
+        let font = spec.theme.font_size;
+        // 概算ラベル幅(等幅近似)。TextMeasurer を使わず決定的に: 1 文字 ≈ font*0.6。
+        let text_w = text.chars().count() as f64 * font * 0.6;
+        let pad = 5.0;
+        let box_w = text_w + pad * 2.0;
+        let box_h = font + pad * 2.0;
+        // 支点直下に配置。
+        let box_x = cx - box_w / 2.0;
+        let box_y = cy + r_outer * 0.12;
+        items.push(Prim::Path {
+            d: crate::layout::progress::rounded_rect_path(box_x, box_y, box_w, box_h, 5.0),
+            fill: Some(label_bg),
+            stroke: None,
+            stroke_width: 0.0,
+        });
+        items.push(Prim::Text {
+            x: cx,
+            y: box_y + box_h / 2.0 + font * super::common::TEXT_BASELINE_RATIO,
+            size: font,
+            anchor: Anchor::Middle,
+            fill: label_color,
+            content: text,
+        });
+    }
 }
 
 /// 内外半径ありの円弧帯(リングセグメント)の SVG path data。

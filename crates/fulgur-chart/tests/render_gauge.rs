@@ -132,3 +132,21 @@ fn gauge_no_panic_on_empty_zones() {
     let svg = render(r#"{"type":"gauge","data":{"datasets":[{"value":0,"data":[]}]}}"#);
     assert!(svg.starts_with("<svg") && !svg.contains("NaN"), "{svg}");
 }
+
+#[test]
+fn gauge_shows_value_label_by_default() {
+    let svg = render(
+        r##"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4,6],
+        "backgroundColor":["#00ff00","#ffff00","#ff0000"]}]}}"##,
+    );
+    assert!(svg.contains(">3<"), "value label missing: {svg}");
+}
+
+#[test]
+fn gauge_value_label_hidden_when_disabled() {
+    let svg = render(
+        r#"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4,6]}]},
+        "options":{"valueLabel":{"display":false}}}"#,
+    );
+    assert!(!svg.contains(">3<"), "value label should be hidden: {svg}");
+}
