@@ -142,6 +142,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 }
 
 /// 1スライス分の引き出し線とラベルを `out` に追加する。
+#[allow(clippy::too_many_arguments)]
 fn draw_outlabel(
     out: &mut Vec<Prim>,
     cx: f64,
