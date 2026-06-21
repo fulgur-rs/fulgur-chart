@@ -47,7 +47,10 @@ fn polar_area_radius_proportional_to_value() {
         .collect();
     assert!(radii.len() >= 2, "arc半径を2つ以上抽出できませんでした");
     let ratio = radii[1] / radii[0];
-    assert!((ratio - 0.5).abs() < 0.1, "期待比率 0.5 に対して実測は {ratio}");
+    assert!(
+        (ratio - 0.5).abs() < 0.1,
+        "期待比率 0.5 に対して実測は {ratio}"
+    );
 }
 
 #[test]
