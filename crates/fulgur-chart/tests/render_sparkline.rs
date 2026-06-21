@@ -38,7 +38,9 @@ fn sparkline_has_no_markers() {
 fn sparkline_area_fill() {
     let svg = render(r#"{"type":"sparkline","data":{"datasets":[{"data":[1,3,2],"fill":true}]}}"#);
     assert!(svg.contains("<path"), "fill:true で area パスがない");
-    assert!(svg.contains("Z\""), "area パスが閉じていない");
+    let has_closed_path =
+        svg.contains(" Z\"") || svg.contains(" z\"") || svg.contains(" Z ") || svg.contains(" z ");
+    assert!(has_closed_path, "area パスが閉じていない");
 }
 
 #[test]
@@ -47,7 +49,7 @@ fn sparkline_tension_uses_bezier() {
         render(r#"{"type":"sparkline","data":{"datasets":[{"data":[1,3,2],"tension":0.4}]}}"#);
     assert!(svg.contains("<path"), "tension で Bezier パスがない");
     assert!(
-        svg.contains(" C "),
+        svg.contains(" C ") || svg.contains(" c "),
         "Catmull-Rom コントロールポイントがない"
     );
 }
