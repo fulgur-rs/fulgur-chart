@@ -1,6 +1,6 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
-use crate::ir::{AxisSpec, ChartSpec, Color, LegendPos};
+use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos};
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, nice_ticks};
 use crate::scene::{Anchor, Prim};
@@ -203,8 +203,41 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     } else {
         0.0
     };
-    let plot_left = OUTER_PAD + y_axis_w + legend_left;
-    let plot_right = spec.width - OUTER_PAD - legend_right;
+    // line(edge-to-edge)では先頭/末尾の点が plot_left/plot_right に乗り、中央寄せの
+    // x ラベルが点の外側へ半幅はみ出してキャンバス端でクリップされる。chart.js が
+    // chartArea を edge ラベル半幅ぶん内側へ取るのと同様に edge 余白を確保する。
+    // 末尾は常に内側化し、先頭は y 軸ラベル幅で足りなければ拡張する。
+    let (edge_pad_left, edge_pad_right) =
+        if matches!(spec.kind, ChartKind::Line) && spec.categories.len() > 1 {
+            let lf = spec.theme.font_size as f32;
+            let half = |c: &String| (m.width(c, lf) as f64) / 2.0;
+            let first = spec
+                .categories
+                .first()
+                .filter(|c| !c.is_empty())
+                .map_or(0.0, half);
+            let last = spec
+                .categories
+                .last()
+                .filter(|c| !c.is_empty())
+                .map_or(0.0, half);
+            (first, last)
+        } else {
+            (0.0, 0.0)
+        };
+    // 狭い幅 + 長い端ラベルで edge 余白が利用可能幅を超えると plot_right <= plot_left に
+    // 反転し line_x が壊れる。余白合計を利用可能幅で比例縮小し、最後に plot_right >= plot_left
+    // を保証する。
+    let base_left = OUTER_PAD + y_axis_w + legend_left;
+    let base_right = spec.width - OUTER_PAD - legend_right;
+    let edge_total = edge_pad_left + edge_pad_right;
+    let scale = if edge_total > 0.0 {
+        ((base_right - base_left).max(0.0) / edge_total).min(1.0)
+    } else {
+        1.0
+    };
+    let plot_left = base_left.max(OUTER_PAD + legend_left + edge_pad_left * scale);
+    let plot_right = (base_right - edge_pad_right * scale).max(plot_left);
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
 
@@ -225,6 +258,17 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
 pub fn category_center(frame: &Frame, i: usize, n: usize) -> f64 {
     let band_w = (frame.plot_right - frame.plot_left) / n.max(1) as f64;
     frame.plot_left + (i as f64 + 0.5) * band_w
+}
+
+/// line/area の x 座標。chart.js の category スケール offset:false(edge-to-edge)に合わせ、
+/// n 個のカテゴリを [plot_left, plot_right] へ i/(n-1) で等間隔配置する(先頭=左端・末尾=右端)。
+/// bar の band 中心(category_center)とは異なる。n<=1 は (n-1)=0 で NaN になるため
+/// プロット中央へフォールバックする(縮退ケース; 単一カテゴリの line fixture は存在しない)。
+pub fn line_x(frame: &Frame, i: usize, n: usize) -> f64 {
+    if n <= 1 {
+        return frame.plot_left + (frame.plot_right - frame.plot_left) / 2.0;
+    }
+    frame.plot_left + i as f64 * (frame.plot_right - frame.plot_left) / (n - 1) as f64
 }
 
 pub fn band_width(frame: &Frame, n: usize) -> f64 {
@@ -305,8 +349,15 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         .unwrap_or(1);
     for (i, cat) in spec.categories.iter().enumerate() {
         if !cat.is_empty() && i % step == 0 {
+            // line は点と同じ edge-to-edge 配置(offset:false)でラベルを点の真下に置く。
+            // bar/その他はバンド中心。mixed は bar を含むため band 中心のまま。
+            let label_x = if matches!(spec.kind, ChartKind::Line) {
+                line_x(frame, i, n)
+            } else {
+                category_center(frame, i, n)
+            };
             items.push(Prim::Text {
-                x: category_center(frame, i, n),
+                x: label_x,
                 y: frame.plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
                 size: label_font,
                 anchor: Anchor::Middle,
