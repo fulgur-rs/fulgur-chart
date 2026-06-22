@@ -66,6 +66,24 @@ test('mixed bar+line: geometry を出さない(fulgur Mixed=None に揃える)',
   assert.equal(model.geometry, undefined);
 });
 
+test('base line + 全 dataset bar override: fulgur は Bar 扱い → geometry を出す', async () => {
+  // fulgur frontend は解決後種別が全 bar なら基本 type=line でも ChartKind::Bar。
+  // トップレベル type だけ見て undefined にすると片側 skip=pass の見せかけ緑になる。
+  const spec = { type: 'line', data: { labels: ['A','B','C'],
+    datasets: [
+      { type: 'bar', data: [10,20,30] },
+      { type: 'bar', data: [5,15,25] },
+    ] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.ok(model.geometry, '全 bar override は縦棒なので geometry を持つべき');
+  assert.equal(model.geometry.elements.length, 6); // 2 系列 × 3 カテゴリ
+  for (const e of model.geometry.elements) {
+    assert.equal(e.kind, 'bar');
+    assert.ok(Number.isFinite(e.nx) && Number.isFinite(e.nw)
+      && Number.isFinite(e.ny) && Number.isFinite(e.nh));
+  }
+});
+
 test('toRgba: 空白付き rgba を canonical 形へ正規化', () => {
   assert.equal(toRgba('rgba(54, 162, 235, 0.50)'), 'rgba(54,162,235,0.5)');
   assert.equal(toRgba('rgb(54, 162, 235)'), 'rgba(54,162,235,1)');

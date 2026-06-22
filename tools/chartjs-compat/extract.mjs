@@ -42,20 +42,36 @@ function collapse(arr) {
   return arr.length > 0 && arr.every((x) => x === arr[0]) ? [arr[0]] : arr;
 }
 
-/// 縦棒の BarElement を chartArea 基準 [0,1] へ正規化。横棒(indexAxis:'y')、
-/// 非 bar、混在(bar+line 等)は undefined。fulgur 側 compute_geometry は
-/// `ChartKind::Bar { horizontal: false }` のみ Some を返し Mixed は None なので、
-/// 混在で chart.js だけ bar geometry を出すと diff が片側 skip=pass で緑になり
-/// 実際に描く棒を一切照合しなくなる。両側 None に揃えて「両者とも未対応」を顕在化する。
-function barGeometry(chart, spec, width, height) {
+/// 解決後 dataset 種別が全て縦棒のときだけ geometry を出すか判定する。
+/// fulgur の frontend/chartjs.rs と同じ規約: 基本 type が bar/line のときのみ
+/// dataset 別 type override(bar/line)が有効で、解決後種別が
+///   全 bar → Bar / 全 line → Line / 混在 → Mixed。
+/// fulgur の compute_geometry は `ChartKind::Bar { horizontal: false }` のみ
+/// geometry を出すため、ここも「縦・全 bar」のときだけ true を返す。
+/// これにより `{type:'line', datasets:[{type:'bar'},…]}`(fulgur は Bar 扱い)を
+/// 取りこぼさず、混在/全 line/横棒では両側 None に揃えて片側 skip=pass の
+/// 見せかけ緑(実際の棒を照合しない)を防ぐ。
+function isVerticalBarChart(spec) {
   const indexAxis = (spec.options && spec.options.indexAxis) || 'x';
-  if (spec.type !== 'bar' || indexAxis === 'y') return undefined;
-  // データセット単位 type を解決し(未指定はトップレベル type を継承)、bar 以外を
-  // 1 つでも含めば混在チャート → fulgur のスコープ外なので geometry を出さない。
-  const isMixed = spec.data.datasets.some(
-    (ds) => (ds.type ?? spec.type) !== 'bar',
-  );
-  if (isMixed) return undefined;
+  if (indexAxis === 'y') return false; // 横棒は fulgur 側も geometry を出さない
+  const base = spec.type;
+  const isMixableBase = base === 'bar' || base === 'line';
+  // 実効種別: mixable 基本型のときのみ dataset の bar/line override を尊重。
+  const effective = (ds) =>
+    isMixableBase && (ds.type === 'bar' || ds.type === 'line') ? ds.type : base;
+  const types = spec.data.datasets.map(effective);
+  const hasBar = types.includes('bar');
+  const hasLine = types.includes('line');
+  if (isMixableBase && hasBar && hasLine) return false; // Mixed
+  if (isMixableBase && hasLine && !hasBar) return false; // Line
+  if (isMixableBase && hasBar && !hasLine) return true; // Bar
+  return base === 'bar'; // dataset 空 / 非 mixable 基本型は基本 type で決める
+}
+
+/// 縦棒の BarElement を chartArea 基準 [0,1] へ正規化。縦・全 bar 以外
+/// (横棒・非 bar・混在・全 line)は undefined を返し fulgur の geometry 有無に揃える。
+function barGeometry(chart, spec, width, height) {
+  if (!isVerticalBarChart(spec)) return undefined;
   const a = chart.chartArea;
   const caw = a.right - a.left;
   const cah = a.bottom - a.top;
