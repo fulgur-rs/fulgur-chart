@@ -31,19 +31,16 @@ We use [lefthook](https://lefthook.dev) to manage git hooks. A `pre-commit` hook
 runs `rustfmt` on the staged Rust files and re-stages the result, so your commits are
 always formatted (and the CI `cargo fmt --check` gate stays green).
 
-Install the `lefthook` binary once — any of:
+The `lefthook` binary is pinned via [mise](https://mise.jdx.dev) in
+[`mise.toml`](mise.toml), so everyone uses the same version. With mise installed:
 
 ```sh
-brew install lefthook            # macOS / Linuxbrew
-go install github.com/evilmartians/lefthook@latest
-npm install -g lefthook          # or: npx lefthook ...
+mise install        # provisions the pinned lefthook binary
+mise run setup      # wires the git hooks into this clone (runs `lefthook install`)
 ```
 
-Then wire the hooks into this clone:
-
-```sh
-lefthook install
-```
+(Not using mise? Install lefthook yourself — `brew install lefthook`,
+`go install github.com/evilmartians/lefthook@latest`, … — then run `lefthook install`.)
 
 The hook config lives in [`lefthook.yml`](lefthook.yml). It's optional but recommended;
 CI enforces formatting regardless. Note that because the hook reformats and re-stages
