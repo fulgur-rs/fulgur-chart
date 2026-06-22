@@ -38,8 +38,20 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     let bar_w = group_w / s as f64;
     let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
     let baseline_y = frame.ys.map(base_v);
-    let placement_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { placement_stacked: true, .. });
-    let value_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { value_stacked: true, .. });
+    let placement_stacked = matches!(
+        spec.kind,
+        crate::ir::ChartKind::Bar {
+            placement_stacked: true,
+            ..
+        }
+    );
+    let value_stacked = matches!(
+        spec.kind,
+        crate::ir::ChartKind::Bar {
+            value_stacked: true,
+            ..
+        }
+    );
 
     let mut boxes = Vec::new();
     if placement_stacked && value_stacked {
@@ -158,8 +170,20 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     // bar 本体: 矩形は共有 vertical_bar_boxes(単一真実源)から、値ラベルは box から導出。
     let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
-    let placement_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { placement_stacked: true, .. });
-    let value_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { value_stacked: true, .. });
+    let placement_stacked = matches!(
+        spec.kind,
+        crate::ir::ChartKind::Bar {
+            placement_stacked: true,
+            ..
+        }
+    );
+    let value_stacked = matches!(
+        spec.kind,
+        crate::ir::ChartKind::Bar {
+            value_stacked: true,
+            ..
+        }
+    );
     let stacked = placement_stacked && value_stacked;
     for b in vertical_bar_boxes(spec, &frame) {
         let ser = &spec.series[b.series];
@@ -338,8 +362,20 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let base_v = 0.0_f64.clamp(ticks.min, ticks.max);
     let baseline_x = xs.map(base_v);
 
-    let placement_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { placement_stacked: true, .. });
-    let value_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { value_stacked: true, .. });
+    let placement_stacked = matches!(
+        spec.kind,
+        crate::ir::ChartKind::Bar {
+            placement_stacked: true,
+            ..
+        }
+    );
+    let value_stacked = matches!(
+        spec.kind,
+        crate::ir::ChartKind::Bar {
+            value_stacked: true,
+            ..
+        }
+    );
 
     for i in 0..spec.categories.len() {
         let band_top = plot_top + i as f64 * band_h;
