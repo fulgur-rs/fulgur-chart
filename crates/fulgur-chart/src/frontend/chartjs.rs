@@ -457,7 +457,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             // chart.js v4 の Colors プラグインは backgroundColor か borderColor の
             // どちらかが明示されている場合スキップし、未設定側は rgba(0,0,0,0.1) になる。
             // pie/progress は独自パレット割り当てのため除外。
-            let colors_plugin_skips = !is_pie && (has_explicit_bg || has_explicit_border);
+            let colors_plugin_skips =
+                !is_pie && !is_progress && (has_explicit_bg || has_explicit_border);
             let global_default = |count: usize| {
                 vec![
                     Color {
