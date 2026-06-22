@@ -99,3 +99,56 @@ test('fmtAlpha: 正規化規約', () => {
   assert.equal(fmtAlpha(0.25), '0.25');
   assert.equal(fmtAlpha(0.3333333), '0.333');
 });
+
+test('scatter: chartArea 基準の正規化 geometry を出力', async () => {
+  const spec = {
+    type: 'scatter',
+    data: { datasets: [{ data: [{ x: 1, y: 2 }, { x: 3, y: 4 }, { x: 5, y: 6 }] }] },
+  };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.ok(model.geometry, 'scatter は geometry を持つべき');
+  assert.equal(model.geometry.elements.length, 3);
+  for (const e of model.geometry.elements) {
+    assert.equal(e.kind, 'scatter');
+    assert.equal(e.nw, 0);
+    assert.equal(e.nh, 0);
+    assert.ok(e.nx >= 0 && e.nx <= 1, `nx=${e.nx}`);
+    assert.ok(e.ny >= 0 && e.ny <= 1, `ny=${e.ny}`);
+  }
+  assert.ok(model.geometry.elements[0].nx < model.geometry.elements[1].nx,
+    'x 増加 → nx 増加');
+});
+
+test('bubble: chartArea 基準 geometry (nw=正規化半径)', async () => {
+  const spec = {
+    type: 'bubble',
+    data: { datasets: [{ data: [{ x: 1, y: 2, r: 10 }, { x: 3, y: 4, r: 20 }] }] },
+  };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.ok(model.geometry, 'bubble は geometry を持つべき');
+  assert.equal(model.geometry.elements.length, 2);
+  for (const e of model.geometry.elements) {
+    assert.equal(e.kind, 'bubble');
+    assert.ok(e.nw > 0, `bubble の nw は正: ${e.nw}`);
+    assert.equal(e.nh, 0);
+  }
+  assert.ok(model.geometry.elements[1].nw > model.geometry.elements[0].nw,
+    '大きい半径ほど大きい nw');
+});
+
+test('line: chartArea 基準の正規化 geometry を出力', async () => {
+  const spec = {
+    type: 'line',
+    data: { labels: ['a', 'b', 'c'], datasets: [{ data: [10, 20, 30] }] },
+  };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.ok(model.geometry, 'line は geometry を持つべき');
+  assert.equal(model.geometry.elements.length, 3);
+  for (const e of model.geometry.elements) {
+    assert.equal(e.kind, 'line');
+    assert.equal(e.nw, 0);
+    assert.equal(e.nh, 0);
+  }
+  assert.ok(model.geometry.elements[0].nx < model.geometry.elements[1].nx,
+    'カテゴリ順に nx 増加');
+});

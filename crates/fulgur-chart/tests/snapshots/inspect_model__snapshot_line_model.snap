@@ -64,3 +64,108 @@ counts:
   legend_items: 2
   x_ticks: 7
   y_ticks: 9
+geometry:
+  plot_area:
+    x: 0.03914999961853027
+    y: 0.13777777777777778
+    w: 0.9508500003814697
+    h: 0.7955555555555556
+  elements:
+    - series: 0
+      index: 0
+      kind: line
+      nx: 0.07142857142857142
+      ny: 1
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 1
+      kind: line
+      nx: 0.21428571428571427
+      ny: 0.8125
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 2
+      kind: line
+      nx: 0.35714285714285715
+      ny: 0.875
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 3
+      kind: line
+      nx: 0.5
+      ny: 0.625
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 4
+      kind: line
+      nx: 0.6428571428571429
+      ny: 0.375
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 5
+      kind: line
+      nx: 0.7857142857142857
+      ny: 0.1875
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 6
+      kind: line
+      nx: 0.9285714285714286
+      ny: 0.4375
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 0
+      kind: line
+      nx: 0.07142857142857142
+      ny: 0.875
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 1
+      kind: line
+      nx: 0.21428571428571427
+      ny: 0.75
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 2
+      kind: line
+      nx: 0.35714285714285715
+      ny: 0.6875
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 3
+      kind: line
+      nx: 0.5
+      ny: 0.5625
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 4
+      kind: line
+      nx: 0.6428571428571429
+      ny: 0.25
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 5
+      kind: line
+      nx: 0.7857142857142857
+      ny: 0.0625
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 6
+      kind: line
+      nx: 0.9285714285714286
+      ny: 0.3125
+      nw: 0
+      nh: 0

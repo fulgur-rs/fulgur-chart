@@ -55,3 +55,94 @@ counts:
   legend_items: 2
   x_ticks: 0
   y_ticks: 11
+geometry:
+  plot_area:
+    x: 0.03914999961853027
+    y: 0.13777777777777778
+    w: 0.9508500003814697
+    h: 0.7955555555555556
+  elements:
+    - series: 0
+      index: 0
+      kind: scatter
+      nx: 0.06666666666666665
+      ny: 1
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 1
+      kind: scatter
+      nx: 0.26666666666666666
+      ny: 0.85
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 2
+      kind: scatter
+      nx: 0.5
+      ny: 0.75
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 3
+      kind: scatter
+      nx: 0.6666666666666665
+      ny: 0.5
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 4
+      kind: scatter
+      nx: 0.7666666666666668
+      ny: 0.5499999999999999
+      nw: 0
+      nh: 0
+    - series: 0
+      index: 5
+      kind: scatter
+      nx: 0.9333333333333333
+      ny: 0.25
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 0
+      kind: scatter
+      nx: 0
+      ny: 0.75
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 1
+      kind: scatter
+      nx: 0.2
+      ny: 0.5999999999999999
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 2
+      kind: scatter
+      nx: 0.4
+      ny: 0.65
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 3
+      kind: scatter
+      nx: 0.6
+      ny: 0.35
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 4
+      kind: scatter
+      nx: 0.8333333333333335
+      ny: 0.10000000000000003
+      nw: 0
+      nh: 0
+    - series: 1
+      index: 5
+      kind: scatter
+      nx: 1
+      ny: 0
+      nw: 0
+      nh: 0

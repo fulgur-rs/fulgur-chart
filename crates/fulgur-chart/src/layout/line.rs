@@ -10,6 +10,31 @@ use std::fmt::Write;
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
 
+/// line チャートの全マーカー点（renderer とモデルの単一の真実源）。
+/// カテゴリごとに `category_center + ys.map` で計算し、欠損値は 0.0 扱い。
+pub fn line_points(
+    spec: &crate::ir::ChartSpec,
+    frame: &common::Frame,
+) -> Vec<crate::layout::scatter::PointBox> {
+    let n = spec.categories.len().max(1);
+    let mut pts = Vec::new();
+    for (sidx, ser) in spec.series.iter().enumerate() {
+        for i in 0..spec.categories.len() {
+            let x = common::category_center(frame, i, n);
+            let v = ser.values.get(i).copied().unwrap_or(0.0);
+            pts.push(crate::layout::scatter::PointBox {
+                series: sidx,
+                index: i,
+                kind: "line",
+                cx: x,
+                cy: frame.ys.map(v),
+                r: MARKER_R,
+            });
+        }
+    }
+    pts
+}
+
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let frame = common::compute(spec, m);
 
@@ -169,4 +194,57 @@ fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
         .unwrap();
     }
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::font::DEFAULT_FONT;
+    use crate::frontend::chartjs;
+    use crate::layout::common;
+    use crate::text::TextMeasurer;
+
+    fn pts_for(json: &str) -> Vec<crate::layout::scatter::PointBox> {
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        line_points(&spec, &frame)
+    }
+
+    #[test]
+    fn line_points_count_is_series_times_categories() {
+        let ps = pts_for(
+            r#"{"type":"line","data":{"labels":["a","b","c","d","e","f","g"],
+               "datasets":[{"data":[1,2,3,4,5,6,7]},{"data":[7,6,5,4,3,2,1]}]}}"#,
+        );
+        assert_eq!(ps.len(), 14);
+        for p in &ps {
+            assert_eq!(p.kind, "line");
+        }
+    }
+
+    #[test]
+    fn line_points_cx_monotone_with_category_order() {
+        let ps = pts_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10,20,30]}]}}"#,
+        );
+        let ser0: Vec<_> = ps.iter().filter(|p| p.series == 0).collect();
+        assert!(ser0[0].cx < ser0[1].cx && ser0[1].cx < ser0[2].cx);
+    }
+
+    #[test]
+    fn line_points_cy_tracks_value() {
+        let ps = pts_for(
+            r#"{"type":"line","data":{"labels":["a","b"],
+               "datasets":[{"data":[10,100]}]}}"#,
+        );
+        let ser0: Vec<_> = ps.iter().filter(|p| p.series == 0).collect();
+        assert!(
+            ser0[1].cy < ser0[0].cy,
+            "大きい値は小さい cy(上方向): ser0[0].cy={}, ser0[1].cy={}",
+            ser0[0].cy,
+            ser0[1].cy
+        );
+    }
 }
