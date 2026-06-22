@@ -106,6 +106,54 @@ function barGeometry(chart, spec, width, height) {
   };
 }
 
+/// scatter/line/bubble の PointElement を chartArea 基準 [0,1] へ正規化。
+/// scatter/bubble は data.datasets の points を getDatasetMeta で取得。
+/// line は PointElement の x/y（カテゴリ中心 × y スケール）を取得。
+/// bar は barGeometry() が担当するため除外。
+function pointGeometry(chart, spec, width, height) {
+  const typ = spec.type;
+  if (typ !== 'scatter' && typ !== 'bubble' && typ !== 'line') return undefined;
+  if (typ === 'line') {
+    const indexAxis = (spec.options && spec.options.indexAxis) || 'x';
+    if (indexAxis === 'y') return undefined;
+  }
+  const a = chart.chartArea;
+  const caw = a.right - a.left;
+  const cah = a.bottom - a.top;
+  if (!(caw > 0) || !(cah > 0)) return undefined;
+  const elements = [];
+  for (let s = 0; s < spec.data.datasets.length; s++) {
+    const meta = chart.getDatasetMeta(s);
+    for (let i = 0; i < meta.data.length; i++) {
+      if (typ === 'bubble') {
+        const { x, y } = meta.data[i].getProps(['x', 'y'], true);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const radius = meta.data[i].options?.radius ?? 0;
+        elements.push({
+          series: s, index: i, kind: 'bubble',
+          nx: (x - a.left) / caw,
+          ny: (y - a.top) / cah,
+          nw: Number.isFinite(radius) && radius > 0 ? radius / caw : 0,
+          nh: 0,
+        });
+      } else {
+        const { x, y } = meta.data[i].getProps(['x', 'y'], true);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        elements.push({
+          series: s, index: i, kind: typ,
+          nx: (x - a.left) / caw,
+          ny: (y - a.top) / cah,
+          nw: 0, nh: 0,
+        });
+      }
+    }
+  }
+  return {
+    plot_area: { x: a.left / width, y: a.top / height, w: caw / width, h: cah / height },
+    elements,
+  };
+}
+
 export async function extractChartjsModel(spec, width, height) {
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
@@ -164,7 +212,7 @@ export async function extractChartjsModel(spec, width, height) {
     axes = { x: xAxis, y: yAxis };
   }
 
-  const geometry = barGeometry(chart, spec, width, height);
+  const geometry = barGeometry(chart, spec, width, height) ?? pointGeometry(chart, spec, width, height);
   const png = canvas.toBuffer('image/png');
   chart.destroy();
 
