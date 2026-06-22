@@ -322,3 +322,105 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         items,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::{AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType};
+
+    fn make_scatter_spec(points: &[(f64, f64)]) -> ChartSpec {
+        let palette = crate::palette::PALETTE.to_vec();
+        ChartSpec {
+            kind: ChartKind::Scatter,
+            categories: vec![],
+            series: vec![Series {
+                name: String::new(),
+                values: vec![],
+                points: points
+                    .iter()
+                    .map(|&(x, y)| Point { x, y, r: None })
+                    .collect(),
+                fill: vec![palette[0]],
+                stroke: vec![],
+                stroke_width: 1.0,
+                area: false,
+                tension: 0.0,
+                series_type: SeriesType::Bar,
+                point_radius: None,
+                box_points: vec![],
+            }],
+            x_axis: AxisSpec {
+                title: None,
+                min: None,
+                max: None,
+                suggested_min: None,
+                suggested_max: None,
+                begin_at_zero: false,
+                grid: true,
+            },
+            y_axis: AxisSpec {
+                title: None,
+                min: None,
+                max: None,
+                suggested_min: None,
+                suggested_max: None,
+                begin_at_zero: false,
+                grid: true,
+            },
+            legend: LegendPos::None,
+            title: None,
+            width: 600.0,
+            height: 400.0,
+            data_labels: false,
+            theme: crate::ir::Theme::default(),
+        }
+    }
+
+    #[test]
+    fn axis_domain_suggested_min_expands_below_data() {
+        // x データが [1.0, 10.0]、suggested_min=-5.0 → ドメインが -5.0 まで広がる。
+        let mut spec = make_scatter_spec(&[(1.0, 0.0), (10.0, 0.0)]);
+        spec.x_axis.suggested_min = Some(-5.0);
+        let (lo, _hi) = axis_domain(&spec, &spec.x_axis, |p| p.x);
+        assert_eq!(
+            lo, -5.0,
+            "suggested_min=-5 はドメインを正確に -5.0 に設定すべき: 実際 lo={lo}"
+        );
+    }
+
+    #[test]
+    fn axis_domain_suggested_min_noop_when_data_lower() {
+        // x データが [1.0, 10.0]、suggested_min=5.0 → データ(1.0)が優先されるので no-op。
+        let mut spec = make_scatter_spec(&[(1.0, 0.0), (10.0, 0.0)]);
+        spec.x_axis.suggested_min = Some(5.0);
+        let (lo, _hi) = axis_domain(&spec, &spec.x_axis, |p| p.x);
+        assert_eq!(
+            lo, 1.0,
+            "suggested_min=5 はデータの下端(1.0)を維持すべき: 実際 lo={lo}"
+        );
+    }
+
+    #[test]
+    fn axis_domain_suggested_max_expands_above_data() {
+        // x データが [1.0, 10.0]、suggested_max=15.0 → ドメインが 15.0 まで広がる。
+        let mut spec = make_scatter_spec(&[(1.0, 0.0), (10.0, 0.0)]);
+        spec.x_axis.suggested_max = Some(15.0);
+        let (_lo, hi) = axis_domain(&spec, &spec.x_axis, |p| p.x);
+        assert_eq!(
+            hi, 15.0,
+            "suggested_max=15 はドメインを正確に 15.0 に設定すべき: 実際 hi={hi}"
+        );
+    }
+
+    #[test]
+    fn axis_domain_suggested_max_noop_when_data_higher() {
+        // x データが [1.0, 10.0]、suggested_max=5.0 → データ(10.0)が優先されるので no-op。
+        let mut spec = make_scatter_spec(&[(1.0, 0.0), (10.0, 0.0)]);
+        spec.x_axis.suggested_max = Some(5.0);
+        let (_lo, hi) = axis_domain(&spec, &spec.x_axis, |p| p.x);
+        assert_eq!(
+            hi, 10.0,
+            "suggested_max=5 はデータの上端(10.0)を縮小してはいけない: 実際 hi={hi}"
+        );
+    }
+}
