@@ -1,0 +1,24 @@
+# Standalone workspace: this crate is excluded from the repo-root workspace
+# (root Cargo.toml `exclude = ["crates/bindings"]`), mirroring the Python binding.
+[workspace]
+
+[package]
+name = "fulgur_chart_node"
+version = "0.7.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "3", default-features = false, features = ["napi9"] }
+napi-derive = "3"
+# Path dependency on the core crate (mirrors the Python binding).
+fulgur-chart = { path = "../../fulgur-chart" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.2", features = ["preserve_order"] }
+
+[build-dependencies]
+napi-build = "2"
