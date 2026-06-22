@@ -321,15 +321,36 @@ criterion_group!(benches, bench_e2e);
 criterion_main!(benches);
 ```
 
-**Step 2: Register the bench target**
+**Step 2: Register the bench target + disable bench auto-discovery**
 
-Edit `crates/fulgur-chart/Cargo.toml`, append:
+cargo auto-discovers every `benches/*.rs` as a bench target. Our helper files
+(`cases.rs`, later `membench_check.rs`) are `#[path]`-included modules, NOT
+standalone benches — but auto-discovery turns them into phantom empty bench
+targets. Disable auto-discovery and rely solely on explicit `[[bench]]` entries.
+
+Edit `crates/fulgur-chart/Cargo.toml`. In the `[package]` section, add:
+
+```toml
+autobenches = false
+```
+
+Then append the explicit bench target:
 
 ```toml
 [[bench]]
 name = "render"
 harness = false
 ```
+
+After this, `cargo metadata` should list exactly ONE bench target so far (`render`),
+not `cases`. Verify:
+
+```bash
+cargo metadata --no-deps --format-version 1 | \
+  python3 -c "import json,sys; d=json.load(sys.stdin); print(sorted(t['name'] for p in d['packages'] if p['name']=='fulgur-chart' for t in p['targets'] if 'bench' in t['kind']))"
+```
+
+Expected: `['render']`.
 
 **Step 3: Smoke-run the bench (runs each case once)**
 
