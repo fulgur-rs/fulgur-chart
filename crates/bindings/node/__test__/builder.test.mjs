@@ -185,6 +185,13 @@ test('schema unknown dsl raises ParseError', () => {
   assert.throws(() => schema('zzz'), FulgurParseError)
 })
 
+test('schema with a non-string dsl raises ParseError (never a raw napi error)', () => {
+  // null/false are coerced to a string at the boundary and rejected as an unsupported DSL,
+  // not surfaced as a raw napi conversion error.
+  assert.throws(() => schema(null), FulgurParseError)
+  assert.throws(() => schema(false), FulgurParseError)
+})
+
 // --- public surface lock ---
 
 test('public surface is exactly the documented exports', () => {

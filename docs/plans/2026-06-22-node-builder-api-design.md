@@ -48,7 +48,7 @@ b.render()             // => svg（既定）
 - メタ情報: `schema(dsl)` / `version()`（モジュール関数）
 
 公開サーフェス（厳密ロック）:
-```
+```js
 module.exports === { build, render, schema, version,
                      FulgurParseError, FulgurStrictError, FulgurRenderError }
 ```
@@ -58,7 +58,7 @@ module.exports === { build, render, schema, version,
 
 builder + エラークラスは純 JS、描画の重い処理は native の単一プリミティブ `render` に委譲（Ruby 踏襲）。
 
-```
+```text
 crates/bindings/node/
   Cargo.toml                 # 独立 [workspace]、fulgur-chart は path 依存
   src/lib.rs                 # native: render / schema / version（public）
@@ -144,7 +144,7 @@ module.exports = { build, render, schema, version,
 
 ## エラーモデル
 
-```
+```text
 FulgurParseError  extends Error
 FulgurStrictError extends FulgurParseError   // StrictError instanceof FulgurParseError === true
 FulgurRenderError extends Error

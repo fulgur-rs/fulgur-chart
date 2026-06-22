@@ -115,7 +115,10 @@ function build(specJson) {
 }
 
 function schema(dsl) {
-  const r = binding.schema(dsl)
+  // Coerce to a string before the native boundary (like render): non-string values become
+  // e.g. "null" and are rejected as an unsupported DSL (FulgurParseError) instead of throwing
+  // a raw napi conversion error — preserving the native layer's never-throw contract.
+  const r = binding.schema(String(dsl))
   if (!r.ok) {
     throw makeError(r.code, r.message)
   }
