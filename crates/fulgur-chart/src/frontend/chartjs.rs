@@ -22,7 +22,7 @@ struct RawOptions {
     plugins: RawPlugins,
     #[serde(default)]
     theme: Option<RawTheme>,
-    // scales.{x,y}.stacked のみ navigate する(積み上げ判定)。それ以外は未マップ。
+    // scales.<index 軸>.stacked のみ navigate する(積み上げ判定)。それ以外は未マップ。
     #[serde(default)]
     scales: Option<serde_json::Value>,
 }
@@ -273,20 +273,20 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
 
     let raw: RawSpec = serde_json::from_str(json).map_err(|e| e.to_string())?;
 
-    // 積み上げ判定: options.scales.x.stacked または options.scales.y.stacked が true。
-    // scales は緩く型付けされた serde_json::Value のまま navigate する(深い検証はしない)。
+    // 積み上げ判定: chart.js は棒の dodge/積み上げを index 軸(縦棒=x, 横棒=y)の
+    // stacked のみで決める。値軸の stacked は値域計算には効くが棒の配置は変えないため、
+    // index 軸の stacked だけを見る。scales は緩く型付けされた serde_json::Value のまま
+    // navigate する(深い検証はしない)。
+    // 既知の制約: per-dataset の stack プロパティによる積み上げは未対応(scales 経由のみ)。
+    let index_axis = raw.options.index_axis.as_deref().unwrap_or("x");
     let stacked = raw
         .options
         .scales
         .as_ref()
-        .map(|s| {
-            let f = |axis: &str| {
-                s.get(axis)
-                    .and_then(|a| a.get("stacked"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-            };
-            f("x") || f("y")
+        .and_then(|s| {
+            s.get(index_axis)
+                .and_then(|a| a.get("stacked"))
+                .and_then(|v| v.as_bool())
         })
         .unwrap_or(false);
 
