@@ -25,6 +25,31 @@ cd fulgur-chart
 cargo build --workspace
 ```
 
+### Git hooks (recommended)
+
+We use [lefthook](https://lefthook.dev) to manage git hooks. A `pre-commit` hook
+runs `rustfmt` on the staged Rust files and re-stages the result, so your commits are
+always formatted (and the CI `cargo fmt --check` gate stays green).
+
+Install the `lefthook` binary once — any of:
+
+```sh
+brew install lefthook            # macOS / Linuxbrew
+go install github.com/evilmartians/lefthook@latest
+npm install -g lefthook          # or: npx lefthook ...
+```
+
+Then wire the hooks into this clone:
+
+```sh
+lefthook install
+```
+
+The hook config lives in [`lefthook.yml`](lefthook.yml). It's optional but recommended;
+CI enforces formatting regardless. Note that because the hook reformats and re-stages
+the whole file, a partially-staged file (`git add -p`) will have its unstaged hunks
+pulled into the commit too — stage the whole file when you rely on the hook.
+
 ## Before you open a pull request
 
 Run the same checks CI runs:
