@@ -161,3 +161,12 @@ test('paint-state: null を含まない通常の不一致は従来どおり FAIL
   const r = diffModels(f, c);
   assert.equal(r.dimensions.colors.pass, false);
 });
+
+test('paint-state: 長さ1 [null] は長い色配列の全スロットへブロードキャストして skip', () => {
+  // collapse で [null,null]→[null] に畳まれたケース: at() で全スロットへ展開され全 skip。
+  const f = base(); const c = base();
+  f.series[0].fill = ['rgba(1,1,1,1)', 'rgba(2,2,2,1)', 'rgba(3,3,3,1)'];
+  c.series[0].fill = [null]; // 全スロット未描画
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, true);
+});

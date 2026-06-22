@@ -119,16 +119,24 @@ export async function extractChartjsModel(spec, width, height) {
   const series = spec.data.datasets.map((ds, i) => {
     const meta = chart.getDatasetMeta(i);
     const n = meta.data.length || (ds.data ? ds.data.length : 0);
+    // dataset の area 塗りが無効(line の fill:false 等)なら fill は未描画。
+    // bar/scatter 等は dataset 要素を持たず undefined のため塗り扱い(null にしない)。
+    const fillUnpainted = meta.dataset?.options?.fill === false;
     // 描画後の解決済み element options を使う(生 dataset プロパティではない)。
+    // paint-state: 未描画スロットは解決済み既定色ではなく null を出し、diff で照合除外する。
     const fill = collapse(
       Array.from({ length: n }, (_, j) =>
-        toRgba(meta.data[j]?.options?.backgroundColor ?? '#000'),
+        fillUnpainted
+          ? null
+          : toRgba(meta.data[j]?.options?.backgroundColor ?? '#000'),
       ),
     );
     const stroke = collapse(
-      Array.from({ length: n }, (_, j) =>
-        toRgba(meta.data[j]?.options?.borderColor ?? '#000'),
-      ),
+      Array.from({ length: n }, (_, j) => {
+        // borderWidth:0 は枠線未描画(bar の既定等)→ stroke は null。
+        if (meta.data[j]?.options?.borderWidth === 0) return null;
+        return toRgba(meta.data[j]?.options?.borderColor ?? '#000');
+      }),
     );
     const values = Array.isArray(ds.data)
       ? ds.data.map((d) =>

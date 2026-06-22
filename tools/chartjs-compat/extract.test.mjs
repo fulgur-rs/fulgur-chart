@@ -20,9 +20,10 @@ test('bar: 既定パレット色は canonical rgba に正規化される', async
   const spec = { type: 'bar', data: { labels: ['a','b','c'],
     datasets: [{ label: 's', data: [0,100,50] }] } };
   const model = await extractChartjsModel(spec, 800, 600);
-  // 既定パレット先頭 #36A2EB、fill alpha=0.5 / stroke alpha=1.0(chart.js v4)
+  // 既定パレット先頭 #36A2EB、fill alpha=0.5(塗りは常に描画)。
   assert.deepEqual(model.series[0].fill, ['rgba(54,162,235,0.5)']);
-  assert.deepEqual(model.series[0].stroke, ['rgba(54,162,235,1)']);
+  // 既定 bar は borderWidth:0(枠線未描画)→ paint-state で stroke は null。
+  assert.deepEqual(model.series[0].stroke, [null]);
   // PNG バッファも返る
   assert.ok(Buffer.isBuffer(model.png));
 });
@@ -98,4 +99,31 @@ test('fmtAlpha: 正規化規約', () => {
   assert.equal(fmtAlpha(0.5), '0.5');
   assert.equal(fmtAlpha(0.25), '0.25');
   assert.equal(fmtAlpha(0.3333333), '0.333');
+});
+
+test('paint-state: 既定 bar の stroke は未描画(borderWidth:0)で null', async () => {
+  const spec = { type: 'bar', data: { labels: ['a','b'],
+    datasets: [{ data: [10,90] }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.deepEqual(model.series[0].stroke, [null]);
+  // 塗りは描画されるので色を保持。
+  assert.notEqual(model.series[0].fill[0], null);
+});
+
+test('paint-state: line(fill:false)の fill は未描画(area 未塗り)で null', async () => {
+  const spec = { type: 'line', data: { labels: ['a','b','c'],
+    datasets: [{ data: [1,2,3], borderColor: '#ff6384', fill: false }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.deepEqual(model.series[0].fill, [null]);
+  // 線は描画されるので stroke は色を保持。
+  assert.notEqual(model.series[0].stroke[0], null);
+});
+
+test('paint-state: area(fill:true)の fill は描画されるので色を保持(回帰防止)', async () => {
+  const spec = { type: 'line', data: { labels: ['a','b','c'],
+    datasets: [{ data: [1,2,3], borderColor: '#4bc0c0',
+      backgroundColor: '#4bc0c0', fill: true }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.notEqual(model.series[0].fill[0], null);
+  assert.notEqual(model.series[0].stroke[0], null);
 });
