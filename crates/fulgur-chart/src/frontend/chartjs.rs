@@ -458,7 +458,17 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             // どちらかが明示されている場合スキップし、未設定側は rgba(0,0,0,0.1) になる。
             // pie/progress は独自パレット割り当てのため除外。
             let colors_plugin_skips = !is_pie && (has_explicit_bg || has_explicit_border);
-            let global_default = |count: usize| vec![Color { r: 0, g: 0, b: 0, a: 0.1 }; count];
+            let global_default = |count: usize| {
+                vec![
+                    Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 0.1,
+                    };
+                    count
+                ]
+            };
             let fill = if colors_plugin_skips && !has_explicit_bg {
                 global_default(n.max(1))
             } else {
@@ -527,7 +537,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             ..
         }
     );
-    let is_line = matches!(kind, ChartKind::Line { .. });
+    let is_line = matches!(kind, ChartKind::Line);
     let value_begin_at_zero = !is_point_based && !is_sparkline && !is_line;
 
     // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する。

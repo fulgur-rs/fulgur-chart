@@ -329,7 +329,11 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         };
         let mut cursor = start_x;
         for ser in &spec.series {
-            let swatch = if ser.series_type == SeriesType::Line { ser.stroke_at(0) } else { ser.fill_at(0) };
+            let swatch = if ser.series_type == SeriesType::Line {
+                ser.stroke_at(0)
+            } else {
+                ser.fill_at(0)
+            };
             items.push(Prim::Rect {
                 x: cursor,
                 y: legend_cy - 6.0,
@@ -356,7 +360,11 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             .series
             .iter()
             .map(|s| {
-                let color = if s.series_type == SeriesType::Line { s.stroke_at(0) } else { s.fill_at(0) };
+                let color = if s.series_type == SeriesType::Line {
+                    s.stroke_at(0)
+                } else {
+                    s.fill_at(0)
+                };
                 (s.name.clone(), color)
             })
             .collect();
