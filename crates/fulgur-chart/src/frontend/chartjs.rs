@@ -22,7 +22,7 @@ struct RawOptions {
     plugins: RawPlugins,
     #[serde(default)]
     theme: Option<RawTheme>,
-    // scales.{x,y}.stacked のみ navigate する(積み上げ判定)。それ以外は未マップ。
+    // scales.<index 軸>.stacked のみ navigate する(積み上げ判定)。それ以外は未マップ。
     #[serde(default)]
     scales: Option<serde_json::Value>,
 }
@@ -273,20 +273,26 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
 
     let raw: RawSpec = serde_json::from_str(json).map_err(|e| e.to_string())?;
 
-    // 積み上げ判定: options.scales.x.stacked または options.scales.y.stacked が true。
-    // scales は緩く型付けされた serde_json::Value のまま navigate する(深い検証はしない)。
+    // 積み上げ判定: chart.js は棒の dodge/積み上げを index 軸(縦棒=x, 横棒=y)の
+    // stacked のみで決める。値軸の stacked は値域計算には効くが棒の配置は変えないため、
+    // index 軸の stacked だけを見る。scales は緩く型付けされた serde_json::Value のまま
+    // navigate する(深い検証はしない)。
+    // 既知の制約: per-dataset の stack プロパティによる積み上げは未対応(scales 経由のみ)。
+    // indexAxis は chart.js では "x"/"y" のみ。想定外の値は orientation 判定と同様に
+    // 縦棒(index 軸=x)として扱うため、"y" 以外は "x" に正規化する。
+    let index_axis = if raw.options.index_axis.as_deref() == Some("y") {
+        "y"
+    } else {
+        "x"
+    };
     let stacked = raw
         .options
         .scales
         .as_ref()
-        .map(|s| {
-            let f = |axis: &str| {
-                s.get(axis)
-                    .and_then(|a| a.get("stacked"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-            };
-            f("x") || f("y")
+        .and_then(|s| {
+            s.get(index_axis)
+                .and_then(|a| a.get("stacked"))
+                .and_then(|v| v.as_bool())
         })
         .unwrap_or(false);
 
@@ -338,14 +344,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let has_bar = series_types.contains(&SeriesType::Bar);
     let has_line = series_types.contains(&SeriesType::Line);
     let bar_kind = || ChartKind::Bar {
-        horizontal: raw.options.index_axis.as_deref() == Some("y"),
+        horizontal: index_axis == "y",
         stacked,
     };
 
     // 混合(bar+line)は縦・非積み上げのみ対応。横棒(indexAxis:y)や積み上げと併用すると
     // それらが黙って失われるため、受理せず明示エラーにする(mixed.rs は縦・非積み上げ前提)。
     if is_mixable_base && has_bar && has_line {
-        let horizontal = raw.options.index_axis.as_deref() == Some("y");
+        let horizontal = index_axis == "y";
         if horizontal || stacked {
             return Err(
                 "混合チャート(bar+line)は横棒(indexAxis:y)・積み上げ(stacked)と併用できません"

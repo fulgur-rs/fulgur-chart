@@ -10,7 +10,7 @@ features.
   - Chart types:
     - `bar.json` … bar chart (vertical, monthly revenue)
     - `bar-horizontal.json` … horizontal bar (`indexAxis: "y"`)
-    - `stacked-bar.json` … stacked bar (`scales.y.stacked`)
+    - `stacked-bar.json` … stacked bar (`scales.x.stacked`; stacking follows the index axis)
     - `line.json` … line chart (two series, smoothed with `tension`)
     - `area.json` … area chart (line with `"fill": true`)
     - `pie.json` … pie chart (auto-colored per slice)
