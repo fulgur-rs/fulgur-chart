@@ -420,7 +420,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::font::DEFAULT_FONT;
     use crate::ir::{AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType};
+    use crate::text::TextMeasurer;
 
     fn make_scatter_spec(points: &[(f64, f64)]) -> ChartSpec {
         let palette = crate::palette::PALETTE.to_vec();
@@ -521,8 +523,6 @@ mod tests {
     #[test]
     fn scatter_points_covers_all_series_and_indices() {
         let spec = make_scatter_spec(&[(1.0, 2.0), (3.0, 4.0), (5.0, 6.0)]);
-        use crate::font::DEFAULT_FONT;
-        use crate::text::TextMeasurer;
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let layout = compute_scatter_layout(&spec, &m);
         let pts = scatter_points(&spec, &layout);
@@ -537,8 +537,6 @@ mod tests {
     #[test]
     fn scatter_points_cx_monotone_with_x_values() {
         let spec = make_scatter_spec(&[(1.0, 0.0), (5.0, 0.0), (10.0, 0.0)]);
-        use crate::font::DEFAULT_FONT;
-        use crate::text::TextMeasurer;
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let layout = compute_scatter_layout(&spec, &m);
         let pts = scatter_points(&spec, &layout);
@@ -547,9 +545,7 @@ mod tests {
 
     #[test]
     fn scatter_points_skips_non_finite() {
-        let mut spec = make_scatter_spec(&[(1.0, 2.0), (f64::NAN, 3.0), (5.0, 6.0)]);
-        use crate::font::DEFAULT_FONT;
-        use crate::text::TextMeasurer;
+        let spec = make_scatter_spec(&[(1.0, 2.0), (f64::NAN, 3.0), (5.0, 6.0)]);
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let layout = compute_scatter_layout(&spec, &m);
         let pts = scatter_points(&spec, &layout);
