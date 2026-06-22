@@ -62,6 +62,9 @@ function diffGeometry(fg, cg) {
       diffs.push({ field: `elem[${key(fe)}]`, fulgur: 'present', chartjs: 'missing' });
       continue;
     }
+    // kind は要素の契約値(現状は両側 'bar')。不一致は座標が偶然合っても FAIL。
+    if (fe.kind !== ce.kind)
+      diffs.push({ field: `elem[${key(fe)}].kind`, fulgur: fe.kind, chartjs: ce.kind });
     for (const k of ['nx', 'ny', 'nw', 'nh']) {
       const d = Math.abs(fe[k] - ce[k]);
       // NaN/undefined 座標は Math.abs が NaN になり `NaN > tol` は false なので

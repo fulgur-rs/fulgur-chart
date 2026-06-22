@@ -95,6 +95,15 @@ test('geometry 座標ズレ(>0.02)は FAIL', () => {
   assert.equal(r.dimensions.geometry.pass, false);
 });
 
+test('要素 kind 不一致は座標が合っていても FAIL', () => {
+  const f = { ...base(), geometry: geomBase() };
+  const c = { ...base(), geometry: geomBase() };
+  c.geometry.elements[0].kind = 'point'; // 座標は同一だが kind が違う
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.geometry.pass, false);
+  assert.ok(r.dimensions.geometry.diffs.some((d) => d.field === 'elem[0:0].kind'));
+});
+
 test('plot_area ズレは pass に影響せず info に記録される', () => {
   // 2 エンジンの余白差は要素正規化で吸収されるため pass を落とさない(診断のみ)。
   const f = { ...base(), geometry: geomBase() };

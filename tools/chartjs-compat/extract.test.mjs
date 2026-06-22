@@ -61,16 +61,16 @@ test('mixed bar+line: line データセットの要素は bar geometry に含め
       { type: 'line', data: [5,15,25] },
     ] } };
   const model = await extractChartjsModel(spec, 800, 600);
-  // geometry が出る場合、全要素が有限な bar であること(NaN を含まない)。
-  if (model.geometry) {
-    for (const e of model.geometry.elements) {
-      assert.equal(e.kind, 'bar');
-      assert.ok(Number.isFinite(e.nx) && Number.isFinite(e.nw)
-        && Number.isFinite(e.ny) && Number.isFinite(e.nh), `NaN element: ${JSON.stringify(e)}`);
-    }
-    // bar データセット(series 0)の 3 要素のみ。
-    assert.ok(model.geometry.elements.every((e) => e.series === 0));
+  // bar を含む混在チャートでは geometry を必ず持つ(undefined への退行を検出)。
+  assert.ok(model.geometry, 'bar を含む混在チャートでは geometry を持つべき');
+  // 全要素が有限な bar であること(NaN を含まない)。
+  for (const e of model.geometry.elements) {
+    assert.equal(e.kind, 'bar');
+    assert.ok(Number.isFinite(e.nx) && Number.isFinite(e.nw)
+      && Number.isFinite(e.ny) && Number.isFinite(e.nh), `NaN element: ${JSON.stringify(e)}`);
   }
+  // bar データセット(series 0)の 3 要素のみ。
+  assert.ok(model.geometry.elements.every((e) => e.series === 0));
 });
 
 test('toRgba: 空白付き rgba を canonical 形へ正規化', () => {
