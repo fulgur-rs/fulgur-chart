@@ -167,6 +167,112 @@ fn build_ir(
     Ok(ir)
 }
 
+// --- GVL release ---
+
+/// Run `func` with the GVL released, returning `Some(value)` — or `None` if a pending
+/// interrupt prevented `func` from running at all (see below).
+///
+/// Uses `rb_thread_call_without_gvl2`, NOT `rb_thread_call_without_gvl`. The v2 variant does
+/// NOT process interrupts on GVL re-acquisition, so control ALWAYS returns to this Rust frame
+/// after `func` runs: it never raises / longjmps across the `extern "C"` boundary. The v1
+/// variant checks (and handles) pending interrupts right after `func` returns — that handling
+/// can raise, longjmp-ing past this frame and the caller's, skipping our box reclamation and
+/// the owned Rust data's Drop glue (a leak on every interrupted render, and an unsound
+/// longjmp across Rust frames). v2 avoids that: the render runs uninterrupted and a pending
+/// interrupt is honored by Ruby at its next checkpoint, after this call returns.
+///
+/// `func` MUST NOT call any Ruby C API — it executes while this thread does not hold the GVL,
+/// so building VALUEs / raising / allocating Ruby objects would be unsound. (If a global
+/// allocator that calls back into Ruby's GC — e.g. rb-sys's tracking allocator — were ever
+/// installed, even plain Rust heap allocation here would become unsound. None is today.)
+///
+/// `None`: v2 checks for a pending interrupt BEFORE releasing the GVL and, if one is set,
+/// returns without ever calling `func`. Callers fall back to running the work under the GVL,
+/// leaving the still-pending interrupt for Ruby to raise once control returns to it.
+///
+/// A panic inside `func` is caught and re-raised here so it never crosses `extern "C"` (UB).
+fn nogvl<F, R>(func: F) -> Option<R>
+where
+    F: FnOnce() -> R,
+{
+    use std::ffi::c_void;
+
+    unsafe extern "C" fn call<F, R>(arg: *mut c_void) -> *mut c_void
+    where
+        F: FnOnce() -> R,
+    {
+        // `arg` is the Box<F> leaked below; reconstitute and consume it exactly once.
+        let func = *unsafe { Box::from_raw(arg as *mut F) };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(func));
+        Box::into_raw(Box::new(result)) as *mut c_void
+    }
+
+    let arg = Box::into_raw(Box::new(func)) as *mut c_void;
+    // SAFETY: `call::<F, R>` has the rb_thread_call_without_gvl2 callback signature; `arg` is
+    // a valid Box<F>. NULL ubf → the render itself is never interrupted mid-flight.
+    let ret = unsafe {
+        rb_sys::rb_thread_call_without_gvl2(Some(call::<F, R>), arg, None, std::ptr::null_mut())
+    };
+    if ret.is_null() {
+        // v2 declined to run `func` (interrupt pending at entry), so `call` never ran and the
+        // closure box was not consumed — reclaim it here to avoid leaking it. (`func` always
+        // returns a non-null box pointer, so a null return unambiguously means "did not run".)
+        drop(unsafe { Box::from_raw(arg as *mut F) });
+        return None;
+    }
+    // `ret` is the Box<thread::Result<R>> leaked at the end of `call`.
+    match *unsafe { Box::from_raw(ret as *mut std::thread::Result<R>) } {
+        Ok(value) => Some(value),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+/// Output of the GVL-free render region. Carries only plain data (no Ruby VALUEs) so it
+/// can cross back into the VM once the GVL is re-acquired.
+enum Rendered {
+    Svg(String),
+    Png(Vec<u8>),
+}
+
+/// How a render failure is classified once back under the GVL. Mirrors the original
+/// call-site classification: SVG font/render failures → ParseError, raster failures →
+/// RenderError, unknown format → ParseError.
+enum RenderFail {
+    Parse(String),
+    Render(String),
+    UnsupportedFormat(String),
+}
+
+/// The heavy, Ruby-free rendering. Called inside `nogvl`, so it must touch ONLY the
+/// owned/borrowed plain Rust inputs (`ir`, `font`, `scale`) and never the Ruby C API.
+fn render_pure(
+    ir: &fulgur_chart::ir::ChartSpec,
+    format: &str,
+    font: Option<&[u8]>,
+    scale: f32,
+) -> Result<Rendered, RenderFail> {
+    match format {
+        "svg" => {
+            // Font present → render_chart_with_font (Err → ParseError on the SVG path);
+            // else the bundled-font render.
+            let svg = match font {
+                Some(bytes) => fulgur_chart::render::render_chart_with_font(ir, bytes)
+                    .map_err(RenderFail::Parse)?,
+                None => fulgur_chart::render::render_chart(ir),
+            };
+            Ok(Rendered::Svg(svg))
+        }
+        "png" => {
+            let fb = font.unwrap_or(fulgur_chart::font::DEFAULT_FONT);
+            // Invalid font on the image path → RenderError (the SVG path maps this to ParseError).
+            let png = fulgur_chart::raster_direct::render_chart_to_png(ir, scale, fb)
+                .map_err(RenderFail::Render)?;
+            Ok(Rendered::Png(png))
+        }
+        other => Err(RenderFail::UnsupportedFormat(other.to_string())),
+    }
+}
+
 // --- public API: render (low-level primitive; the FulgurChart::Builder is the intended API) ---
 
 /// `FulgurChart.render(spec_json, format, **opts)` → String.
@@ -182,28 +288,25 @@ fn render(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
     let opts = parse_opts(ruby, scanned.keywords)?;
     let ir = build_ir(ruby, &spec_json, &opts)?;
 
-    match format.as_str() {
-        "svg" => {
-            // Font present → render_chart_with_font (Err → ParseError on the SVG path);
-            // else the bundled-font render.
-            let svg = match &opts.font {
-                Some(bytes) => fulgur_chart::render::render_chart_with_font(&ir, bytes)
-                    .map_err(|e| parse_err(ruby, e))?,
-                None => fulgur_chart::render::render_chart(&ir),
-            };
-            Ok(ruby.str_new(&svg)) // UTF-8 String
-        }
-        "png" => {
-            let fb: &[u8] = opts
-                .font
-                .as_deref()
-                .unwrap_or(fulgur_chart::font::DEFAULT_FONT);
-            // Invalid font on the image path → RenderError (the SVG path maps this to ParseError).
-            let png = fulgur_chart::raster_direct::render_chart_to_png(&ir, opts.scale, fb)
-                .map_err(|e| render_err(ruby, e))?;
-            Ok(ruby.str_from_slice(&png)) // ASCII-8BIT (BINARY) String
-        }
-        other => Err(parse_err(
+    // The heavy rendering touches no Ruby objects (ir/font are owned plain data; font was
+    // already copied out of the VM in parse_opts), so run it with the GVL released. Other
+    // Ruby threads — including other renders — then run truly in parallel. Ruby strings and
+    // exceptions are built BELOW, after the GVL is re-acquired; the closure must not touch
+    // the Ruby C API.
+    let font = opts.font; // Option<Vec<u8>>, owned
+    let scale = opts.scale;
+    // Release the GVL for the heavy render. If an interrupt is already pending, nogvl returns
+    // None without running the closure; fall back to rendering under the GVL and let Ruby
+    // raise the still-pending interrupt when control returns from this method.
+    let result = nogvl(|| render_pure(&ir, format.as_str(), font.as_deref(), scale))
+        .unwrap_or_else(|| render_pure(&ir, format.as_str(), font.as_deref(), scale));
+
+    match result {
+        Ok(Rendered::Svg(svg)) => Ok(ruby.str_new(&svg)), // UTF-8 String
+        Ok(Rendered::Png(png)) => Ok(ruby.str_from_slice(&png)), // ASCII-8BIT (BINARY) String
+        Err(RenderFail::Parse(m)) => Err(parse_err(ruby, m)),
+        Err(RenderFail::Render(m)) => Err(render_err(ruby, m)),
+        Err(RenderFail::UnsupportedFormat(other)) => Err(parse_err(
             ruby,
             format!("unsupported format '{other}' (supported: svg, png)"),
         )),
