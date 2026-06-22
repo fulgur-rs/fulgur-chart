@@ -11,7 +11,7 @@ use std::fmt::Write;
 const MARKER_R: f64 = 3.0;
 
 /// line チャートの全マーカー点（renderer とモデルの単一の真実源）。
-/// カテゴリごとに `line_x + ys.map` で計算し、欠損値は 0.0 扱い。
+/// カテゴリごとに `line_category_x + ys.map` で計算し、欠損値は 0.0 扱い。
 pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
@@ -20,7 +20,7 @@ pub fn line_points(
     let mut pts = Vec::new();
     for (sidx, ser) in spec.series.iter().enumerate() {
         for i in 0..spec.categories.len() {
-            let x = common::line_x(frame, i, n);
+            let x = common::line_category_x(spec, frame, i, n);
             let v = ser.values.get(i).copied().unwrap_or(0.0);
             pts.push(crate::layout::scatter::PointBox {
                 series: sidx,
@@ -52,7 +52,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if !v.is_finite() {
                     return None;
                 }
-                let x = common::line_x(&frame, i, n);
+                let x = common::line_category_x(spec, &frame, i, n);
                 Some((x, frame.ys.map(v), i))
             })
             .collect();
@@ -290,5 +290,97 @@ mod tests {
             ser0[0].cy,
             ser0[1].cy
         );
+    }
+
+    #[test]
+    fn line_points_x_is_band_centered_when_offset() {
+        // chart.js offset:true: 点は category_center(band 中心)に並ぶ。
+        // n=3 なら plot_left+0.5*band_w / +1.5*band_w / +2.5*band_w。
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10,20,30]}]},
+               "options":{"scales":{"x":{"offset":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let ps = line_points(&spec, &frame);
+        let s0: Vec<_> = ps.iter().filter(|p| p.series == 0).collect();
+        let band_w = (frame.plot_right - frame.plot_left) / 3.0;
+        for (i, p) in s0.iter().enumerate() {
+            let expect = frame.plot_left + (i as f64 + 0.5) * band_w;
+            assert!(
+                (p.cx - expect).abs() < 1e-9,
+                "offset:true の点は band 中心: i={i} cx={} expect={expect}",
+                p.cx
+            );
+        }
+        // edge-to-edge と区別: 先頭は plot_left より内側、末尾は plot_right より内側。
+        assert!(s0[0].cx > frame.plot_left);
+        assert!(s0[2].cx < frame.plot_right);
+    }
+
+    #[test]
+    fn offset_line_skips_edge_padding() {
+        // offset:true は bar 同様に端ラベル半幅の余白を取らない。
+        // edge-to-edge(既定)では末尾ラベル半幅ぶん plot_right を内側化するため、
+        // offset 版の plot_right はそれより外側(広い)になる。
+        let parse = |opts: &str| {
+            chartjs::parse(
+                &format!(
+                    r#"{{"type":"line","data":{{"labels":["Jan","Feb","Mar"],
+                       "datasets":[{{"data":[10,20,30]}}]}}{opts}}}"#
+                ),
+                false,
+            )
+            .unwrap()
+        };
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let edge = common::compute(&parse(""), &m);
+        let off = common::compute(&parse(r#","options":{"scales":{"x":{"offset":true}}}"#), &m);
+        assert!(
+            off.plot_right > edge.plot_right,
+            "offset:true は端余白を取らないため plot_right がより外側: off={} edge={}",
+            off.plot_right,
+            edge.plot_right
+        );
+    }
+
+    #[test]
+    fn offset_line_labels_align_to_band_centers() {
+        // draw_frame の x ラベルも offset:true では band 中心(line_x ではなく category_center)。
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10,20,30]}]},
+               "options":{"scales":{"x":{"offset":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let scene = build(&spec, &m);
+        // title/legend なし → anchor=Middle の Text は x カテゴリラベルのみ。
+        let label_xs: Vec<f64> = scene
+            .items
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Text {
+                    x,
+                    anchor: Anchor::Middle,
+                    ..
+                } => Some(*x),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(label_xs.len(), 3, "x ラベルは 3 個");
+        let band_w = (frame.plot_right - frame.plot_left) / 3.0;
+        for (i, &x) in label_xs.iter().enumerate() {
+            let expect = frame.plot_left + (i as f64 + 0.5) * band_w;
+            assert!(
+                (x - expect).abs() < 1e-9,
+                "offset ラベルは band 中心: i={i} x={x} expect={expect}"
+            );
+        }
     }
 }

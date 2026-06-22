@@ -279,6 +279,14 @@ fn strict_accepts_scales_stacked() {
 }
 
 #[test]
+fn strict_accepts_scales_offset() {
+    // chart.js category スケールの offset は認識済みキー。strict でも通る。
+    let json = r#"{ "type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+      "options":{"scales":{"x":{"offset":true}}} }"#;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
 fn both_axes_stacked_sets_both_flags() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"x":{"stacked":true},"y":{"stacked":true}}} }"#;

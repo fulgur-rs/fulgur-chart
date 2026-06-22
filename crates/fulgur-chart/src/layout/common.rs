@@ -207,8 +207,11 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // x ラベルが点の外側へ半幅はみ出してキャンバス端でクリップされる。chart.js が
     // chartArea を edge ラベル半幅ぶん内側へ取るのと同様に edge 余白を確保する。
     // 末尾は常に内側化し、先頭は y 軸ラベル幅で足りなければ拡張する。
+    // offset:true の line は bar 同様 band 中心配置でラベルがプロット内に収まるため、
+    // 端余白は取らない(bar と同じ chartArea を使う)。
     let (edge_pad_left, edge_pad_right) =
-        if matches!(spec.kind, ChartKind::Line) && spec.categories.len() > 1 {
+        if matches!(spec.kind, ChartKind::Line) && spec.categories.len() > 1 && !spec.x_axis.offset
+        {
             let lf = spec.theme.font_size as f32;
             let half = |c: &String| (m.width(c, lf) as f64) / 2.0;
             let first = spec
@@ -269,6 +272,17 @@ pub fn line_x(frame: &Frame, i: usize, n: usize) -> f64 {
         return frame.plot_left + (frame.plot_right - frame.plot_left) / 2.0;
     }
     frame.plot_left + i as f64 * (frame.plot_right - frame.plot_left) / (n - 1) as f64
+}
+
+/// line/area の category x 座標を x 軸の offset 設定に応じて選ぶ単一窓口。
+/// offset:true → category_center(bar 同様の band 中心)、false → line_x(edge-to-edge)。
+/// line.rs の点計算と draw_frame の x ラベルがこの関数を共有し、offset 判定の分岐を一元化する。
+pub fn line_category_x(spec: &ChartSpec, frame: &Frame, i: usize, n: usize) -> f64 {
+    if spec.x_axis.offset {
+        category_center(frame, i, n)
+    } else {
+        line_x(frame, i, n)
+    }
 }
 
 pub fn band_width(frame: &Frame, n: usize) -> f64 {
@@ -349,10 +363,10 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         .unwrap_or(1);
     for (i, cat) in spec.categories.iter().enumerate() {
         if !cat.is_empty() && i % step == 0 {
-            // line は点と同じ edge-to-edge 配置(offset:false)でラベルを点の真下に置く。
-            // bar/その他はバンド中心。mixed は bar を含むため band 中心のまま。
+            // line は点と同じ配置(offset:false=edge-to-edge / offset:true=band 中心)で
+            // ラベルを点の真下に置く。bar/その他はバンド中心。mixed は bar を含むため band 中心のまま。
             let label_x = if matches!(spec.kind, ChartKind::Line) {
-                line_x(frame, i, n)
+                line_category_x(spec, frame, i, n)
             } else {
                 category_center(frame, i, n)
             };
@@ -537,6 +551,7 @@ mod tests {
                 suggested_min: None,
                 suggested_max: None,
                 begin_at_zero: true,
+                offset: false,
                 grid: true,
             },
             y_axis: AxisSpec {
@@ -546,6 +561,7 @@ mod tests {
                 suggested_min: None,
                 suggested_max: None,
                 begin_at_zero: true,
+                offset: false,
                 grid: true,
             },
             legend: LegendPos::None,

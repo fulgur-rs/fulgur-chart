@@ -63,3 +63,13 @@ fn tension_snapshot() {
     );
     insta::assert_snapshot!(svg);
 }
+
+#[test]
+fn offset_snapshot() {
+    // chart.js options.scales.x.offset:true: 点・ラベルを band 中心へ寄せ、bar と同じ
+    // chartArea(端余白なし)で描く。既定の edge-to-edge とは別の出力。
+    let svg = render(
+        r#"{"type":"line","data":{"labels":["1月","2月","3月"],"datasets":[{"label":"売上","data":[120,200,150]}]},"options":{"scales":{"x":{"offset":true}}}}"#,
+    );
+    insta::assert_snapshot!(svg);
+}
