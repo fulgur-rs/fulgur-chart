@@ -42,19 +42,19 @@ class ChartBuilder:
     def __init__(self):
         self._opts = {}
 
-    def width(self, value: float) -> "ChartBuilder":
+    def width(self, value: "float | None") -> "ChartBuilder":
         return self._set("width", value)
 
-    def height(self, value: float) -> "ChartBuilder":
+    def height(self, value: "float | None") -> "ChartBuilder":
         return self._set("height", value)
 
     def scale(self, value: float) -> "ChartBuilder":
         return self._set("scale", value)
 
-    def dsl(self, value: str) -> "ChartBuilder":
+    def dsl(self, value: "str | None") -> "ChartBuilder":
         return self._set("dsl", value)
 
-    def font(self, value: bytes) -> "ChartBuilder":
+    def font(self, value: "bytes | None") -> "ChartBuilder":
         return self._set("font", value)
 
     def strict(self, value: bool = True) -> "ChartBuilder":
@@ -89,12 +89,12 @@ class Chart:
     def __init__(
         self,
         *,
-        width=None,
-        height=None,
+        width: "float | None" = None,
+        height: "float | None" = None,
         scale: float = 1.0,
         strict: bool = False,
-        dsl=None,
-        font=None,
+        dsl: "str | None" = None,
+        font: "bytes | None" = None,
     ):
         self._opts = {
             "scale": scale,
@@ -114,7 +114,7 @@ class Chart:
         """ChartBuilder を返す。Engine.builder() に相当。"""
         return ChartBuilder()
 
-    def render(self, spec_json: str, fmt: str = "svg"):
+    def render(self, spec_json: str, fmt: str = "svg") -> "str | bytes":
         """spec_json を指定フォーマットでレンダリングする。
 
         fmt="svg" → str、fmt="png" → bytes。
