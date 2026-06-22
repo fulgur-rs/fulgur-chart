@@ -225,9 +225,19 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         } else {
             (0.0, 0.0)
         };
-    let plot_left =
-        (OUTER_PAD + y_axis_w + legend_left).max(OUTER_PAD + legend_left + edge_pad_left);
-    let plot_right = spec.width - OUTER_PAD - legend_right - edge_pad_right;
+    // 狭い幅 + 長い端ラベルで edge 余白が利用可能幅を超えると plot_right <= plot_left に
+    // 反転し line_x が壊れる。余白合計を利用可能幅で比例縮小し、最後に plot_right >= plot_left
+    // を保証する。
+    let base_left = OUTER_PAD + y_axis_w + legend_left;
+    let base_right = spec.width - OUTER_PAD - legend_right;
+    let edge_total = edge_pad_left + edge_pad_right;
+    let scale = if edge_total > 0.0 {
+        ((base_right - base_left).max(0.0) / edge_total).min(1.0)
+    } else {
+        1.0
+    };
+    let plot_left = base_left.max(OUTER_PAD + legend_left + edge_pad_left * scale);
+    let plot_right = (base_right - edge_pad_right * scale).max(plot_left);
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
 

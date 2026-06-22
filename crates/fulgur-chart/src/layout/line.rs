@@ -242,6 +242,32 @@ mod tests {
     }
 
     #[test]
+    fn line_frame_stays_valid_when_edge_labels_exceed_width() {
+        // 狭い幅 + 長い端ラベルでも edge 余白で描画領域が反転しない(plot_right >= plot_left)。
+        let mut spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["VeryLongCategoryLabelLeft","VeryLongCategoryLabelRight"],
+               "datasets":[{"data":[1,2]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.width = 60.0; // edge ラベル半幅合計が利用可能幅を超える狭い幅。
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        assert!(
+            frame.plot_right >= frame.plot_left,
+            "plot area inverted: left={} right={}",
+            frame.plot_left,
+            frame.plot_right
+        );
+        // line_x は有限かつ先頭<=末尾(NaN や順序反転を生まない)。
+        let n = spec.categories.len();
+        let x0 = common::line_x(&frame, 0, n);
+        let x_last = common::line_x(&frame, n - 1, n);
+        assert!(x0.is_finite() && x_last.is_finite());
+        assert!(x_last >= x0);
+    }
+
+    #[test]
     fn line_points_cx_monotone_with_category_order() {
         let ps = pts_for(
             r#"{"type":"line","data":{"labels":["a","b","c"],
