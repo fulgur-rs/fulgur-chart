@@ -418,12 +418,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     h: stack_h,
                     fill: ser.fill_at(i),
                 });
-                if spec.data_labels && v.is_finite() {
+                if spec.data_labels {
                     let cy = by + stack_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
-                    let (cx, anchor) = if v >= 0.0 {
-                        (x + w + 4.0, Anchor::Start)
+                    let (cx, anchor) = if v >= base_v {
+                        (vx + LABEL_GAP, Anchor::Start)
                     } else {
-                        (x - 4.0, Anchor::End)
+                        (vx - LABEL_GAP, Anchor::End)
                     };
                     items.push(value_label(cx, cy, label_font, anchor, ink, v));
                 }

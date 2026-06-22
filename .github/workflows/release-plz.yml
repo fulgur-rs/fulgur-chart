@@ -15,14 +15,14 @@ on:
     branches:
       - main
   # リリース PR が通らなかった場合の手動 escape hatch。
-  # workflow_dispatch では approve なしで即 publish できる。
+  # workflow_dispatch でも crates-io environment の承認後に publish する。
   workflow_dispatch:
 
 jobs:
-  # release-plz PR のマージかどうかを判定する (approve 不要)。
+  # release-plz PR のマージかどうかを判定する。
   # - merge commit message に "release-plz-YYYY-MM-DD" が含まれる → リリース PR マージ
   # - merge commit message に "chore: release" が含まれる → squash-merge 時のフォールバック
-  # - workflow_dispatch → 手動実行なので常に publish
+  # - workflow_dispatch on main → 手動実行なので publish
   #
   # NOTE: このチェックはマージコミット方式に依存している。
   # リリース PR を squash-merge に変更する場合は "chore: release" フォールバックが機能するか確認すること。
@@ -37,12 +37,16 @@ jobs:
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF: ${{ github.ref }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+          COMMIT_SUBJECT="${COMMIT_MSG%%$'\n'*}"
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "has_releases=false" >> "$GITHUB_OUTPUT"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "has_releases=true" >> "$GITHUB_OUTPUT"
-          elif echo "$COMMIT_MSG" | grep -qE "release-plz-[0-9]{4}-[0-9]{2}"; then
+          elif printf '%s\n' "$COMMIT_SUBJECT" | grep -qE "release-plz-[0-9]{4}-[0-9]{2}-[0-9]{2}([^0-9]|$)"; then
             echo "has_releases=true" >> "$GITHUB_OUTPUT"
-          elif echo "$COMMIT_MSG" | grep -q "chore: release"; then
+          elif printf '%s\n' "$COMMIT_SUBJECT" | grep -qE "^chore: release([[:space:]]|$)"; then
             echo "has_releases=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_releases=false" >> "$GITHUB_OUTPUT"

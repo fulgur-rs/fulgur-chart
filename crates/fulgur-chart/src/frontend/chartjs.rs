@@ -354,11 +354,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
 
     // 混合(bar+line)は縦・非積み上げのみ対応。横棒(indexAxis:y)や積み上げと併用すると
     // それらが黙って失われるため、受理せず明示エラーにする(mixed.rs は縦・非積み上げ前提)。
+    // value_stacked も拒否: ChartKind::Mixed にフラグが伝わらず黙って消えるため。
     if is_mixable_base && has_bar && has_line {
         let horizontal = index_axis == "y";
-        if horizontal || placement_stacked {
+        if horizontal || placement_stacked || value_stacked {
             return Err(
-                "混合チャート(bar+line)は横棒(indexAxis:y)・積み上げ(stacked)と併用できません"
+                "混合チャート(bar+line)は横棒(indexAxis:y)・index/value軸の積み上げ(stacked)と併用できません"
                     .to_string(),
             );
         }

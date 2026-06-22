@@ -406,11 +406,16 @@ fn mixed_with_horizontal_or_stacked_errors() {
     // 横棒×混合 → エラー(mixed は縦・非積み上げのみ)。
     let horiz = format!(r#"{{"type":"bar",{base_datasets},"options":{{"indexAxis":"y"}}}}"#);
     assert!(chartjs::parse(&horiz, false).is_err());
-    // 積み上げ×混合 → エラー。
+    // placement_stacked×混合 → エラー。
     let stk = format!(
         r#"{{"type":"bar",{base_datasets},"options":{{"scales":{{"x":{{"stacked":true}}}}}}}}"#
     );
     assert!(chartjs::parse(&stk, false).is_err());
+    // value_stacked×混合 → エラー(ChartKind::Mixed にフラグが伝わらず消えるため)。
+    let vstk = format!(
+        r#"{{"type":"bar",{base_datasets},"options":{{"scales":{{"y":{{"stacked":true}}}}}}}}"#
+    );
+    assert!(chartjs::parse(&vstk, false).is_err());
     // 通常の混合は従来どおり Mixed。
     let ok = format!(r#"{{"type":"bar",{base_datasets}}}"#);
     assert!(matches!(
