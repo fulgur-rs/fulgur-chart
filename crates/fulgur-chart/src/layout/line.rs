@@ -11,7 +11,7 @@ use std::fmt::Write;
 const MARKER_R: f64 = 3.0;
 
 /// line チャートの全マーカー点（renderer とモデルの単一の真実源）。
-/// カテゴリごとに `category_center + ys.map` で計算し、欠損値は 0.0 扱い。
+/// カテゴリごとに `line_x + ys.map` で計算し、欠損値は 0.0 扱い。
 pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
@@ -20,7 +20,7 @@ pub fn line_points(
     let mut pts = Vec::new();
     for (sidx, ser) in spec.series.iter().enumerate() {
         for i in 0..spec.categories.len() {
-            let x = common::category_center(frame, i, n);
+            let x = common::line_x(frame, i, n);
             let v = ser.values.get(i).copied().unwrap_or(0.0);
             pts.push(crate::layout::scatter::PointBox {
                 series: sidx,
@@ -52,7 +52,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if !v.is_finite() {
                     return None;
                 }
-                let x = common::category_center(&frame, i, n);
+                let x = common::line_x(&frame, i, n);
                 Some((x, frame.ys.map(v), i))
             })
             .collect();
@@ -221,6 +221,24 @@ mod tests {
         for p in &ps {
             assert_eq!(p.kind, "line");
         }
+    }
+
+    #[test]
+    fn line_points_x_is_edge_to_edge() {
+        // chart.js offset:false: n=3 の点は plot_left / 中点 / plot_right に並ぶ。
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10,20,30]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let ps = line_points(&spec, &frame);
+        let s0: Vec<_> = ps.iter().filter(|p| p.series == 0).collect();
+        assert!((s0[0].cx - frame.plot_left).abs() < 1e-9);
+        assert!((s0[2].cx - frame.plot_right).abs() < 1e-9);
+        assert!((s0[1].cx - (frame.plot_left + frame.plot_right) / 2.0).abs() < 1e-9);
     }
 
     #[test]

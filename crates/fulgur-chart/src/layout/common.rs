@@ -1,6 +1,6 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
-use crate::ir::{AxisSpec, ChartSpec, Color, LegendPos};
+use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos};
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, nice_ticks};
 use crate::scene::{Anchor, Prim};
@@ -227,6 +227,17 @@ pub fn category_center(frame: &Frame, i: usize, n: usize) -> f64 {
     frame.plot_left + (i as f64 + 0.5) * band_w
 }
 
+/// line/area の x 座標。chart.js の category スケール offset:false(edge-to-edge)に合わせ、
+/// n 個のカテゴリを [plot_left, plot_right] へ i/(n-1) で等間隔配置する(先頭=左端・末尾=右端)。
+/// bar の band 中心(category_center)とは異なる。n<=1 は (n-1)=0 で NaN になるため
+/// プロット中央へフォールバックする(縮退ケース; 単一カテゴリの line fixture は存在しない)。
+pub fn line_x(frame: &Frame, i: usize, n: usize) -> f64 {
+    if n <= 1 {
+        return frame.plot_left + (frame.plot_right - frame.plot_left) / 2.0;
+    }
+    frame.plot_left + i as f64 * (frame.plot_right - frame.plot_left) / (n - 1) as f64
+}
+
 pub fn band_width(frame: &Frame, n: usize) -> f64 {
     (frame.plot_right - frame.plot_left) / n.max(1) as f64
 }
@@ -305,8 +316,15 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         .unwrap_or(1);
     for (i, cat) in spec.categories.iter().enumerate() {
         if !cat.is_empty() && i % step == 0 {
+            // line は点と同じ edge-to-edge 配置(offset:false)でラベルを点の真下に置く。
+            // bar/その他はバンド中心。mixed は bar を含むため band 中心のまま。
+            let label_x = if matches!(spec.kind, ChartKind::Line) {
+                line_x(frame, i, n)
+            } else {
+                category_center(frame, i, n)
+            };
             items.push(Prim::Text {
-                x: category_center(frame, i, n),
+                x: label_x,
                 y: frame.plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
                 size: label_font,
                 anchor: Anchor::Middle,
