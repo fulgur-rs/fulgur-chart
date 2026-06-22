@@ -17,8 +17,14 @@ serde_json = { workspace = true }
 tiny-skia = { workspace = true }
 schemars = { workspace = true }
 ttf-parser = { workspace = true }
+dhat = { version = "0.3.3", optional = true }
+
+[features]
+# Enables the dhat global allocator for the `membench` bench target only.
+dhat-heap = ["dep:dhat"]
 
 [dev-dependencies]
+criterion = "0.7.0"
 insta = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
