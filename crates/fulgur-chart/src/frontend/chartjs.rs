@@ -263,7 +263,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
             // progress は専用チェック済み、汎用 check_unknown_keys はスキップ
         } else if strict {
-            check_unknown_keys(json)?;
+            let allow_outlabels = matches!(
+                chart_type.as_deref(),
+                Some("outlabeledPie") | Some("outlabeledDoughnut")
+            );
+            check_unknown_keys(json, allow_outlabels)?;
         }
     }
 
@@ -634,10 +638,11 @@ fn build_outlabel_config(raw: &Option<RawOutlabels>) -> crate::ir::OutlabelConfi
         if t.len() <= MAX_TEMPLATE_BYTES {
             cfg.text = t.clone();
         } else {
-            cfg.text = t
-                .chars()
-                .take(MAX_TEMPLATE_BYTES / 4) // 1文字最大4バイトなので安全
-                .collect();
+            let mut end = MAX_TEMPLATE_BYTES;
+            while !t.is_char_boundary(end) {
+                end -= 1;
+            }
+            cfg.text = t[..end].to_string();
         }
     }
     if let Some(c) = raw.color.as_deref().and_then(parse_color) {
@@ -729,7 +734,7 @@ fn legend_pos(l: &Option<RawLegend>) -> LegendPos {
 // IR へ未マップでも、設計で v1 サポート対象に挙げたキーは strict でも受理する
 // （strict が弾くのは未知キーであり、認識済み・未完成キーではない）:
 //   datalabels=Task16(最小データラベル) / scales=Task9 / pointRadius=Task13。
-fn check_unknown_keys(json: &str) -> Result<(), String> {
+fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return Ok(()), // 不正 JSON は後段パースに委ねる
@@ -785,20 +790,23 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
             "options",
         )?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            check_object(
-                plugins,
-                &["title", "legend", "datalabels", "outlabels"],
-                "options.plugins",
-            )?;
+            let allowed_plugins: &[&str] = if allow_outlabels {
+                &["title", "legend", "datalabels", "outlabels"]
+            } else {
+                &["title", "legend", "datalabels"]
+            };
+            check_object(plugins, allowed_plugins, "options.plugins")?;
             if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
                 check_object(dl, &["display"], "options.plugins.datalabels")?;
             }
-            if let Some(ol) = plugins.get("outlabels").and_then(|v| v.as_object()) {
-                check_object(
-                    ol,
-                    &["text", "color", "backgroundColor", "stretch"],
-                    "options.plugins.outlabels",
-                )?;
+            if allow_outlabels {
+                if let Some(ol) = plugins.get("outlabels").and_then(|v| v.as_object()) {
+                    check_object(
+                        ol,
+                        &["text", "color", "backgroundColor", "stretch"],
+                        "options.plugins.outlabels",
+                    )?;
+                }
             }
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {

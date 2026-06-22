@@ -203,13 +203,39 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         }
     }
 
-    // --- outlabeledPie プリミティブ数 ---
-    // スライスごとに Path + Polyline + Rect + Text×N を生成する（N = テンプレート行数）。
-    // テンプレートに改行が多いほど Text が増えるため、行数を動的にカウントする。
+    // --- outlabeledPie バリデーション ---
     if let crate::ir::ChartKind::OutlabeledPie { ref outlabel, .. } = spec.kind {
+        // Left/Right 凡例は未サポート（pie.rs と挙動を揃えるため明示エラー）。
+        if matches!(
+            spec.legend,
+            crate::ir::LegendPos::Left | crate::ir::LegendPos::Right
+        ) {
+            return Err("outlabeledPie では Left/Right 凡例はサポートされていません".to_string());
+        }
+
+        // テンプレート文字列長の上限チェック。
+        if outlabel.text.len() > limits.max_label_bytes {
+            return Err(format!(
+                "outlabel.text の長さ {} バイトが上限 {} を超えています",
+                outlabel.text.len(),
+                limits.max_label_bytes,
+            ));
+        }
+
+        // プリミティブ数上限: スライスごとに Path + Polyline + Rect + Text×N。
+        // ゼロ/非有限値は描画でスキップされるため、有効スライスのみカウントする。
         let n_lines = outlabel.text.split('\n').count().max(1);
-        let prims_per_slice = 3 + n_lines; // path + polyline + rect + text×n_lines
-        let slices = spec.series.first().map(|s| s.values.len()).unwrap_or(0);
+        let prims_per_slice = 3 + n_lines;
+        let slices = spec
+            .series
+            .first()
+            .map(|s| {
+                s.values
+                    .iter()
+                    .filter(|v| v.is_finite() && **v > 0.0)
+                    .count()
+            })
+            .unwrap_or(0);
         let outlabeled_primitives = slices.saturating_mul(prims_per_slice);
         if outlabeled_primitives > limits.max_categorical_primitives {
             return Err(format!(

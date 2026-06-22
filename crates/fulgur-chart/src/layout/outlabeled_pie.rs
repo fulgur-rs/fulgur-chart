@@ -223,13 +223,25 @@ fn draw_outlabel(
         stroke_width: 1.5,
     });
 
-    // テキスト生成（N行対応）。
+    // テキスト生成（N行対応）。展開後も DoS 防止のため上限でキャップする。
     let label_str = categories.get(idx).map(|s| s.as_str()).unwrap_or("");
     let pct = (frac * 100.0).round() as i64;
+    const MAX_EXPANDED_BYTES: usize = crate::guard::DEFAULT_MAX_LABEL_BYTES;
     let lines: Vec<String> = cfg
         .text
         .split('\n')
-        .map(|tmpl| expand_template(tmpl, label_str, value, pct))
+        .map(|tmpl| {
+            let s = expand_template(tmpl, label_str, value, pct);
+            if s.len() <= MAX_EXPANDED_BYTES {
+                s
+            } else {
+                let mut end = MAX_EXPANDED_BYTES;
+                while !s.is_char_boundary(end) {
+                    end -= 1;
+                }
+                s[..end].to_string()
+            }
+        })
         .collect();
 
     // テキスト位置。
