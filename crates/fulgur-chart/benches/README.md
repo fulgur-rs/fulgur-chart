@@ -40,5 +40,11 @@ cargo bench -p fulgur-chart --bench membench --features dhat-heap -- --update
 git add crates/fulgur-chart/benches/membench_baseline.json
 ```
 
+The numbers are deterministic for a fixed compiler, but `std`'s allocation
+patterns can shift across Rust releases, and CI runs on a floating `stable`
+toolchain. The default +25% threshold absorbs normal drift; if a toolchain bump
+ever pushes a case over it without a real regression, regenerate the baseline
+with `--update` and commit.
+
 The `dhat-heap` feature is required for `membench` (it installs the dhat global
 allocator); `required-features` keeps dhat out of normal builds and tests.

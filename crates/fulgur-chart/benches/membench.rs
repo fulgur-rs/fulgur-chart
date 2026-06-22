@@ -40,6 +40,10 @@ fn baseline_path() -> PathBuf {
 fn measure() -> Baseline {
     let _profiler = dhat::Profiler::builder().testing().build();
     let mut out: Baseline = BTreeMap::new();
+    // No warmup: this assumes the library has no process-level lazy init (e.g. a
+    // cached font measurer or a `OnceLock`) whose one-time cost would otherwise be
+    // charged to whichever case runs first. If such caching is ever added, give it
+    // an explicit warmup here so per-case numbers stay order-independent.
     for case in cases::all() {
         let before = dhat::HeapStats::get();
         let spec = chartjs::parse(&case.json, false).expect("case parses");
@@ -84,22 +88,38 @@ fn print_table(current: &Baseline, baseline: Option<&Baseline>) {
     }
 }
 
-fn parse_threshold(args: &[String]) -> f64 {
-    if let Some(i) = args.iter().position(|a| a == "--threshold") {
-        if let Some(v) = args.get(i + 1) {
-            if let Ok(n) = v.parse::<f64>() {
-                return n;
-            }
-        }
+/// Parse `--threshold N` (percent). A typo'd value must NOT silently relax the
+/// gate, so an unparsable/negative/missing value is a hard error rather than a
+/// fallback to the default.
+fn parse_threshold(args: &[String]) -> Result<f64, String> {
+    let Some(i) = args.iter().position(|a| a == "--threshold") else {
+        return Ok(DEFAULT_THRESHOLD_PCT);
+    };
+    let v = args
+        .get(i + 1)
+        .ok_or_else(|| "--threshold requires a value".to_string())?;
+    let n: f64 = v
+        .parse()
+        .map_err(|_| format!("invalid --threshold value: {v}"))?;
+    if !n.is_finite() || n < 0.0 {
+        return Err(format!(
+            "--threshold must be a non-negative number, got {v}"
+        ));
     }
-    DEFAULT_THRESHOLD_PCT
+    Ok(n)
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let do_update = args.iter().any(|a| a == "--update");
     let do_check = args.iter().any(|a| a == "--check");
-    let threshold = parse_threshold(&args);
+    let threshold = match parse_threshold(&args) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let path = baseline_path();
 
     let current = measure();
@@ -121,6 +141,10 @@ fn main() -> ExitCode {
         };
         print_table(&current, Some(&baseline));
 
+        // Only flags cases present now but absent from the baseline (a new case
+        // needs a baseline entry). The reverse — a stale baseline entry whose case
+        // was removed from `cases.rs` — is intentionally tolerated; it's cleaned up
+        // on the next `--update`.
         let missing: Vec<&String> = current
             .keys()
             .filter(|k| !baseline.contains_key(*k))
