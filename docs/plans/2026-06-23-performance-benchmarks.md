@@ -839,11 +839,16 @@ git commit -m "ci: add perf job (dhat memory gate + report-only criterion speed)
 
 ---
 
-## Task 7: Docs (benches README + CHANGELOG)
+## Task 7: Docs (benches README)
+
+> **Note:** Do NOT hand-edit `CHANGELOG.md`. `release-plz.toml` manages it and
+> auto-generates the `[Unreleased]` section from the conventional-commit messages
+> in this branch (`perf(bench): ...`, `docs(bench): ...`, etc.). A manual edit
+> would be duplicated/overwritten on the next release. CHANGELOG is not in the
+> acceptance criteria.
 
 **Files:**
 - Create: `crates/fulgur-chart/benches/README.md`
-- Modify: `CHANGELOG.md`
 
 **Step 1: Write the benches README**
 
@@ -896,34 +901,10 @@ The `dhat-heap` feature is required for `membench` (it installs the dhat global
 allocator); `required-features` keeps dhat out of normal builds and tests.
 ```
 
-**Step 2: Add a CHANGELOG entry**
-
-Open `CHANGELOG.md`, find the top `[Unreleased]` section (or the current top entry — match the existing format), and add under it:
-
-```markdown
-### Added
-
-- Performance benchmarks: criterion E2E render-speed bench (`render`, report-only)
-  and a deterministic dhat memory-allocation gate (`membench`) with a committed
-  baseline. CI fails on extreme memory regressions; speed numbers are archived as
-  an artifact. (fulgur-chart-g0g)
-```
-
-Match the surrounding heading style/placement; if there is no `[Unreleased]` section, mirror the format of the newest entry.
-
-**Step 3: Verify**
+**Step 2: Commit**
 
 ```bash
-python3 -c "print('changelog edited')"
-sed -n '1,30p' CHANGELOG.md
-```
-
-Expected: the new entry appears near the top.
-
-**Step 4: Commit**
-
-```bash
-git add crates/fulgur-chart/benches/README.md CHANGELOG.md
+git add crates/fulgur-chart/benches/README.md
 git commit -m "docs(bench): document speed/memory benchmarks and baseline workflow"
 ```
 
