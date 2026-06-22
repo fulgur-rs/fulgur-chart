@@ -191,3 +191,31 @@ test('line: chartArea 基準の正規化 geometry を出力', async () => {
   assert.ok(model.geometry.elements[0].nx < model.geometry.elements[1].nx,
     'カテゴリ順に nx 増加');
 });
+
+test('paint-state: line は dataset の borderWidth で線描画を判定(pointBorderWidth:0 でも線色を残す)', async () => {
+  // 線(line)の線幅は point 要素ではなく dataset の borderWidth が持つ。
+  // pointBorderWidth:0 でも線は borderWidth:3 で描かれるため stroke 色を残すべき。
+  const spec = { type: 'line', data: { labels: ['a','b','c'],
+    datasets: [{ data: [1,2,3], borderColor: '#ff6384', borderWidth: 3,
+      pointBorderWidth: 0, fill: false }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.notEqual(model.series[0].stroke[0], null);
+});
+
+test('paint-state: line の dataset borderWidth:0 は線未描画で stroke は null', async () => {
+  const spec = { type: 'line', data: { labels: ['a','b'],
+    datasets: [{ data: [1,2], borderColor: '#ff6384', borderWidth: 0, fill: false }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.deepEqual(model.series[0].stroke, [null]);
+});
+
+test('paint-state: pie/doughnut の borderWidth:0 でも stroke は null にしない(fulgur が白区切り線を常時描く)', async () => {
+  // fulgur は弧の区切り線(白)を borderWidth に関係なく常に描く。null 化すると
+  // fulgur の over-paint(case-3)を隠すため、弧系は stroke を比較対象に残す。
+  for (const type of ['pie', 'doughnut']) {
+    const spec = { type, data: { labels: ['a','b','c'],
+      datasets: [{ data: [1,2,3], borderWidth: 0 }] } };
+    const model = await extractChartjsModel(spec, 800, 600);
+    assert.notEqual(model.series[0].stroke[0], null, `${type} の stroke は色を保持すべき`);
+  }
+});

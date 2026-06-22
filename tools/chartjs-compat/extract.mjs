@@ -193,15 +193,26 @@ export async function extractChartjsModel(spec, width, height) {
           : toRgba(meta.data[j]?.options?.backgroundColor ?? '#000'),
       ),
     );
+    // 弧系(pie/doughnut/polarArea)は fulgur が固定の白いスライス区切り線を常に描く
+    // (layout/pie.rs SLICE_STROKE)。chart.js が borderWidth:0 で区切り線を描かなくても、
+    // ここで null 化すると fulgur の over-paint(case-3)を colors 次元で隠してしまうため
+    // 未描画扱いにしない(stroke を必ず比較対象に残す)。
+    const isArc =
+      meta.type === 'pie' || meta.type === 'doughnut' || meta.type === 'polarArea';
     const stroke = collapse(
       Array.from({ length: n }, (_, j) => {
-        // borderWidth:0 は枠線未描画(bar の既定等)→ stroke は null。
+        // borderWidth:0 は枠線/線の未描画(bar の既定等)→ stroke は null。
+        // 線(line)の線幅は point 要素ではなく dataset 側の borderWidth が持つため、
+        // line は dataset を参照する(pointBorderWidth:0 でも線が描かれていれば色を残す)。
         // 注意: null は chart.js 側にしか出ない片側センチネル。diff の skip は
-        // 「chart.js が描かないスロットは fulgur も描かない」不変条件に依存する。
-        // 現状は成立(fulgur の Prim::Rect は stroke を持たず棒枠を描かない / 非エリア
-        // 線は area:false で塗らない)。将来 fulgur がこれらを描き始めたら、本 skip は
-        // 実差分を隠すため見直すこと(geometry 次元は枠線を照合しない)。
-        if (meta.data[j]?.options?.borderWidth === 0) return null;
+        // 「chart.js が描かないスロットは fulgur も描かない」不変条件に依存する。bar は
+        // Prim::Rect が stroke を持たず棒枠を描かず、非エリア線は area:false で塗らない
+        // ため成立する。弧系は fulgur が区切り線を常時描くので上で除外済み。
+        const borderWidth =
+          meta.type === 'line'
+            ? meta.dataset?.options?.borderWidth
+            : meta.data[j]?.options?.borderWidth;
+        if (!isArc && borderWidth === 0) return null;
         return toRgba(meta.data[j]?.options?.borderColor ?? '#000');
       }),
     );
