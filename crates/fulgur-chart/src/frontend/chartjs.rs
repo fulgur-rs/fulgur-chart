@@ -432,6 +432,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         }
     }
 
+    // chart.js v4 の Colors プラグインはデータセットのいずれかに backgroundColor か
+    // borderColor が指定されていれば chart 全体をスキップする(per-dataset ではない)。
+    let chart_has_explicit_colors = raw
+        .data
+        .datasets
+        .iter()
+        .any(|ds| ds.background_color.is_some() || ds.border_color.is_some());
+
     let series: Vec<Series> = raw
         .data
         .datasets
@@ -459,28 +467,38 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 0.5_f32
             };
             let has_explicit_bg = ds.background_color.is_some();
-            let fill = resolve_colors(
-                ds.background_color,
-                is_pie,
-                i,
-                n,
-                &theme.palette,
-                fill_alpha,
-                theme.is_custom_palette,
-            );
-            let border_color = ds.border_color;
-            let stroke = if is_point_based && has_explicit_bg && border_color.is_none() {
-                // chart.js v4: backgroundColor 指定・borderColor 未指定の scatter/bubble は
-                // Colors プラグインをスキップし、グローバルデフォルト rgba(0,0,0,0.1) にフォールバック。
+            let has_explicit_border = ds.border_color.is_some();
+            // chart.js v4 の Colors プラグインは chart 内のいずれかのデータセットに
+            // backgroundColor か borderColor が指定されていれば chart 全体をスキップし、
+            // 未設定側は rgba(0,0,0,0.1) になる。pie/progress は独自パレットのため除外。
+            let colors_plugin_skips = !is_pie && !is_progress && chart_has_explicit_colors;
+            let global_default = |count: usize| {
                 vec![
                     Color {
                         r: 0,
                         g: 0,
                         b: 0,
-                        a: 0.1
+                        a: 0.1,
                     };
-                    fill.len()
+                    count
                 ]
+            };
+            let fill = if colors_plugin_skips && !has_explicit_bg {
+                global_default(n.max(1))
+            } else {
+                resolve_colors(
+                    ds.background_color,
+                    is_pie,
+                    i,
+                    n,
+                    &theme.palette,
+                    fill_alpha,
+                    theme.is_custom_palette,
+                )
+            };
+            let border_color = ds.border_color;
+            let stroke = if colors_plugin_skips && !has_explicit_border {
+                global_default(fill.len())
             } else {
                 resolve_colors(
                     border_color,
@@ -522,9 +540,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     }
 
     // scatter/bubble は線形×線形軸でゼロ起点を強制しない(データ由来のドメインを使う)。
-    // 縦棒/ライン: 値軸が Y → y_axis.begin_at_zero=true（デフォルト）。
+    // 縦棒: 値軸が Y → y_axis.begin_at_zero=true（デフォルト）。
     // 横棒: 値軸が X → x_axis.begin_at_zero=true（デフォルト）。
-    // ユーザーが options.scales.{x,y}.beginAtZero を明示した場合はそちらを優先する。
+    // ライン: chart.js デフォルトは beginAtZero=false（データ密着レンジ）。Mixed は bar データセットを
+    // 含むため除外せず true のまま。ユーザーが options.scales.{x,y}.beginAtZero を明示した場合は優先する。
     let is_horizontal = matches!(
         kind,
         ChartKind::Bar {
@@ -532,7 +551,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             ..
         }
     );
-    let value_begin_at_zero = !is_point_based && !is_sparkline;
+    let is_line = matches!(kind, ChartKind::Line);
+    let value_begin_at_zero = !is_point_based && !is_sparkline && !is_line;
 
     // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する。
     let scales_val = raw.options.scales.as_ref();

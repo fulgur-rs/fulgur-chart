@@ -19,27 +19,50 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let n = spec.categories.len().max(1);
 
     for ser in &spec.series {
-        // 点列: カテゴリ位置 → (x, y)。
-        let pts: Vec<(f64, f64)> = (0..spec.categories.len())
-            .map(|i| {
+        // 有効点列: (x, y, 元カテゴリインデックス)。欠損・非有限値を除外。
+        // 元インデックスはラベル lookup と gap 検出に使う。
+        let valid: Vec<(f64, f64, usize)> = (0..spec.categories.len())
+            .filter_map(|i| {
+                let v = ser.values.get(i).copied()?;
+                if !v.is_finite() {
+                    return None;
+                }
                 let x = common::category_center(&frame, i, n);
-                let v = ser.values.get(i).copied().unwrap_or(0.0);
-                (x, frame.ys.map(v))
+                Some((x, frame.ys.map(v), i))
             })
             .collect();
 
-        // area（背面）。
-        if ser.area && !pts.is_empty() {
+        // 元インデックスが連続しない箇所でセグメントを分割する。
+        // chart.js の spanGaps=false デフォルトと同じ「欠損で線が途切れる」挙動。
+        let segments: Vec<Vec<(f64, f64)>> = {
+            let mut segs: Vec<Vec<(f64, f64)>> = Vec::new();
+            let mut cur: Vec<(f64, f64)> = Vec::new();
+            let mut prev_cat: Option<usize> = None;
+            for &(x, y, cat) in &valid {
+                if prev_cat.is_some_and(|pc| cat != pc + 1) && !cur.is_empty() {
+                    segs.push(std::mem::take(&mut cur));
+                }
+                cur.push((x, y));
+                prev_cat = Some(cat);
+            }
+            if !cur.is_empty() {
+                segs.push(cur);
+            }
+            segs
+        };
+
+        // area（背面）: 有効点全体でひとつの閉多角形を描く。
+        if ser.area && !valid.is_empty() {
             let baseline_y = frame
                 .ys
                 .map(0.0_f64.clamp(frame.ticks.min, frame.ticks.max));
             let mut d = String::new();
-            for (k, (x, y)) in pts.iter().enumerate() {
+            for (k, &(x, y, _)) in valid.iter().enumerate() {
                 let cmd = if k == 0 { 'M' } else { 'L' };
-                write!(d, "{} {} {} ", cmd, fmt_num(*x), fmt_num(*y)).unwrap();
+                write!(d, "{} {} {} ", cmd, fmt_num(x), fmt_num(y)).unwrap();
             }
-            let (last_x, _) = pts[pts.len() - 1];
-            let (first_x, _) = pts[0];
+            let (last_x, _, _) = valid[valid.len() - 1];
+            let (first_x, _, _) = valid[0];
             write!(
                 d,
                 "L {} {} L {} {} Z",
@@ -57,16 +80,19 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             });
         }
 
-        // 線。
-        if pts.len() >= 2 {
+        // 線: セグメントごとに描く(gap で線が途切れる)。
+        for seg in &segments {
+            if seg.len() < 2 {
+                continue;
+            }
             if ser.tension <= 0.0 {
                 items.push(Prim::Polyline {
-                    points: pts.clone(),
+                    points: seg.clone(),
                     stroke: ser.stroke_at(0),
                     stroke_width: ser.stroke_width,
                 });
             } else {
-                let d = catmull_rom_path(&pts, ser.tension);
+                let d = catmull_rom_path(seg, ser.tension);
                 items.push(Prim::Path {
                     d,
                     fill: None,
@@ -77,10 +103,10 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
 
         // マーカー。
-        for (cx, cy) in &pts {
+        for &(cx, cy, _) in &valid {
             items.push(Prim::Circle {
-                cx: *cx,
-                cy: *cy,
+                cx,
+                cy,
                 r: MARKER_R,
                 fill: ser.stroke_at(0),
                 stroke: ser.stroke_at(0),
@@ -89,20 +115,17 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
 
         // データラベル(点の上、マーカー半径ぶん+余白だけ上)。
+        // 元カテゴリインデックスで ser.values を引くことで filter 後のずれを防ぐ。
         if spec.data_labels {
-            for (i, (x, y)) in pts.iter().enumerate() {
-                if let Some(&v) = ser.values.get(i) {
-                    if v.is_finite() {
-                        items.push(common::value_label(
-                            *x,
-                            *y - MARKER_R - common::LABEL_GAP,
-                            spec.theme.font_size,
-                            Anchor::Middle,
-                            spec.theme.text_color,
-                            v,
-                        ));
-                    }
-                }
+            for &(x, y, cat) in &valid {
+                items.push(common::value_label(
+                    x,
+                    y - MARKER_R - common::LABEL_GAP,
+                    spec.theme.font_size,
+                    Anchor::Middle,
+                    spec.theme.text_color,
+                    ser.values[cat],
+                ));
             }
         }
     }
