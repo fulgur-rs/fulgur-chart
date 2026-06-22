@@ -11,6 +11,14 @@
 > 決定性・フォント非対称性）は本仕様に準拠する。** 詳細は
 > `docs/plans/2026-06-20-ruby-builder-api-design.md`。
 
+> **Python の API 形態:** Python バインディングは **pyfulgur (PDF) と同じメンタルモデル**で公開する。
+> `Chart(**opts)` コンストラクタ（`Engine()` 相当）と `Chart.builder().xxx().build()` ビルダー
+> （`Engine.builder().build()` 相当）の2形式を提供し、レンダリングは
+> `chart.render(spec_json, fmt)` / `chart.render_svg(spec)` / `chart.render_png(spec)` で行う
+> (`engine.render_html(html)` 相当 — 設定はオブジェクトに、コンテンツは呼び出し時に渡す)。
+> 既存のモジュールレベル関数 (`render_svg` / `render_image` / `render_png`) は後方互換で維持する。
+> builder は純 Python dict を保持するため消費されず、`build()` は何度でも呼べる。
+
 ---
 
 ## 1. 公開API（4関数）
