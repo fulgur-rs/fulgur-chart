@@ -19,12 +19,16 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let n = spec.categories.len().max(1);
 
     for ser in &spec.series {
-        // 点列: カテゴリ位置 → (x, y)。
+        // 点列: カテゴリ位置 → (x, y)。値が欠損(インデックス外)または非有限(null/NaN)
+        // の場合はその点を除外し、前後の有効点を結ぶ(chart.js と同じ挙動)。
         let pts: Vec<(f64, f64)> = (0..spec.categories.len())
-            .map(|i| {
+            .filter_map(|i| {
+                let v = ser.values.get(i).copied()?;
+                if !v.is_finite() {
+                    return None;
+                }
                 let x = common::category_center(&frame, i, n);
-                let v = ser.values.get(i).copied().unwrap_or(0.0);
-                (x, frame.ys.map(v))
+                Some((x, frame.ys.map(v)))
             })
             .collect();
 

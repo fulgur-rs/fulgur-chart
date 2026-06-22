@@ -426,6 +426,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         }
     }
 
+    // chart.js v4 の Colors プラグインはデータセットのいずれかに backgroundColor か
+    // borderColor が指定されていれば chart 全体をスキップする(per-dataset ではない)。
+    let chart_has_explicit_colors = raw
+        .data
+        .datasets
+        .iter()
+        .any(|ds| ds.background_color.is_some() || ds.border_color.is_some());
+
     let series: Vec<Series> = raw
         .data
         .datasets
@@ -454,11 +462,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             };
             let has_explicit_bg = ds.background_color.is_some();
             let has_explicit_border = ds.border_color.is_some();
-            // chart.js v4 の Colors プラグインは backgroundColor か borderColor の
-            // どちらかが明示されている場合スキップし、未設定側は rgba(0,0,0,0.1) になる。
-            // pie/progress は独自パレット割り当てのため除外。
-            let colors_plugin_skips =
-                !is_pie && !is_progress && (has_explicit_bg || has_explicit_border);
+            // chart.js v4 の Colors プラグインは chart 内のいずれかのデータセットに
+            // backgroundColor か borderColor が指定されていれば chart 全体をスキップし、
+            // 未設定側は rgba(0,0,0,0.1) になる。pie/progress は独自パレットのため除外。
+            let colors_plugin_skips = !is_pie && !is_progress && chart_has_explicit_colors;
             let global_default = |count: usize| {
                 vec![
                     Color {

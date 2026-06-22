@@ -1,6 +1,6 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
-use crate::ir::{AxisSpec, ChartSpec, Color, LegendPos, SeriesType};
+use crate::ir::{AxisSpec, ChartSpec, Color, LegendPos};
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, nice_ticks};
 use crate::scene::{Anchor, Prim};
@@ -329,17 +329,12 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         };
         let mut cursor = start_x;
         for ser in &spec.series {
-            let swatch = if ser.series_type == SeriesType::Line {
-                ser.stroke_at(0)
-            } else {
-                ser.fill_at(0)
-            };
             items.push(Prim::Rect {
                 x: cursor,
                 y: legend_cy - 6.0,
                 w: 12.0,
                 h: 12.0,
-                fill: swatch,
+                fill: ser.fill_at(0),
             });
             items.push(Prim::Text {
                 x: cursor + 16.0,
@@ -359,14 +354,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         let entries: Vec<(String, Color)> = spec
             .series
             .iter()
-            .map(|s| {
-                let color = if s.series_type == SeriesType::Line {
-                    s.stroke_at(0)
-                } else {
-                    s.fill_at(0)
-                };
-                (s.name.clone(), color)
-            })
+            .map(|s| (s.name.clone(), s.fill_at(0)))
             .collect();
         let names: Vec<String> = entries.iter().map(|(n, _)| n.clone()).collect();
         let band_w = legend_band_width_vertical(m, &names, label_font);
