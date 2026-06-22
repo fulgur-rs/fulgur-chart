@@ -137,7 +137,10 @@ impl Default for OutlabelConfig {
 pub enum ChartKind {
     Bar {
         horizontal: bool,
-        stacked: bool,
+        /// index 軸 stacked: 配置(同スロット vs dodge)
+        placement_stacked: bool,
+        /// 値軸 stacked: 値累積・値域計算
+        value_stacked: bool,
     },
     Line, // area/tension は Series 側
     Pie {

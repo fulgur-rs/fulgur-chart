@@ -198,7 +198,8 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
     match name {
         "bar" => Ok(ChartKind::Bar {
             horizontal: false,
-            stacked: false,
+            placement_stacked: false,
+            value_stacked: false,
         }),
         "line" => Ok(ChartKind::Line),
         "point" => Ok(ChartKind::Scatter),

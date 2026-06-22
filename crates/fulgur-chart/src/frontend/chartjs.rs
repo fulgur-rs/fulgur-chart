@@ -22,7 +22,7 @@ struct RawOptions {
     plugins: RawPlugins,
     #[serde(default)]
     theme: Option<RawTheme>,
-    // scales.<index 軸>.stacked のみ navigate する(積み上げ判定)。それ以外は未マップ。
+    // scales.<index 軸>.stacked → placement_stacked(配置)、<値軸>.stacked → value_stacked(値域・累積)。
     #[serde(default)]
     scales: Option<serde_json::Value>,
 }
@@ -273,10 +273,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
 
     let raw: RawSpec = serde_json::from_str(json).map_err(|e| e.to_string())?;
 
-    // 積み上げ判定: chart.js は棒の dodge/積み上げを index 軸(縦棒=x, 横棒=y)の
-    // stacked のみで決める。値軸の stacked は値域計算には効くが棒の配置は変えないため、
-    // index 軸の stacked だけを見る。scales は緩く型付けされた serde_json::Value のまま
-    // navigate する(深い検証はしない)。
+    // 積み上げ判定: chart.js は配置(dodge/同スロット)と値累積を独立した軸で制御する。
+    // index 軸の stacked → placement_stacked(棒の配置)
+    // 値軸の stacked  → value_stacked(値累積・値域計算)
     // 既知の制約: per-dataset の stack プロパティによる積み上げは未対応(scales 経由のみ)。
     // indexAxis は chart.js では "x"/"y" のみ。想定外の値は orientation 判定と同様に
     // 縦棒(index 軸=x)として扱うため、"y" 以外は "x" に正規化する。
@@ -285,16 +284,20 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     } else {
         "x"
     };
-    let stacked = raw
-        .options
-        .scales
-        .as_ref()
-        .and_then(|s| {
-            s.get(index_axis)
-                .and_then(|a| a.get("stacked"))
-                .and_then(|v| v.as_bool())
-        })
-        .unwrap_or(false);
+    let value_axis = if index_axis == "y" { "x" } else { "y" };
+    let get_axis_stacked = |axis: &str| -> bool {
+        raw.options
+            .scales
+            .as_ref()
+            .and_then(|s| {
+                s.get(axis)
+                    .and_then(|a| a.get("stacked"))
+                    .and_then(|v| v.as_bool())
+            })
+            .unwrap_or(false)
+    };
+    let placement_stacked = get_axis_stacked(index_axis);
+    let value_stacked = get_axis_stacked(value_axis);
 
     // chart 基本型。bar/line のときだけ dataset 別 type による混合が起こりうる。
     // 基本型は SeriesType のフォールバックにも使う(bar→Bar, line→Line, それ以外→Bar(未使用))。
@@ -345,16 +348,18 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let has_line = series_types.contains(&SeriesType::Line);
     let bar_kind = || ChartKind::Bar {
         horizontal: index_axis == "y",
-        stacked,
+        placement_stacked,
+        value_stacked,
     };
 
     // 混合(bar+line)は縦・非積み上げのみ対応。横棒(indexAxis:y)や積み上げと併用すると
     // それらが黙って失われるため、受理せず明示エラーにする(mixed.rs は縦・非積み上げ前提)。
+    // value_stacked も拒否: ChartKind::Mixed にフラグが伝わらず黙って消えるため。
     if is_mixable_base && has_bar && has_line {
         let horizontal = index_axis == "y";
-        if horizontal || stacked {
+        if horizontal || placement_stacked || value_stacked {
             return Err(
-                "混合チャート(bar+line)は横棒(indexAxis:y)・積み上げ(stacked)と併用できません"
+                "混合チャート(bar+line)は横棒(indexAxis:y)・index/value軸の積み上げ(stacked)と併用できません"
                     .to_string(),
             );
         }
