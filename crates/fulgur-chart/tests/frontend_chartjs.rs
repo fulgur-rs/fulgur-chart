@@ -202,7 +202,10 @@ fn horizontal_y_stacked_marks_bar_stacked() {
     let spec = chartjs::parse(json, false).unwrap();
     assert!(matches!(
         spec.kind,
-        ChartKind::Bar { stacked: true, horizontal: true }
+        ChartKind::Bar {
+            stacked: true,
+            horizontal: true
+        }
     ));
 }
 
@@ -214,7 +217,10 @@ fn horizontal_x_stacked_only_is_not_stacked() {
     let spec = chartjs::parse(json, false).unwrap();
     assert!(matches!(
         spec.kind,
-        ChartKind::Bar { stacked: false, horizontal: true }
+        ChartKind::Bar {
+            stacked: false,
+            horizontal: true
+        }
     ));
 }
 
