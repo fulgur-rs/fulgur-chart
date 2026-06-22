@@ -350,7 +350,7 @@ fn mixed_with_horizontal_or_stacked_errors() {
     assert!(chartjs::parse(&horiz, false).is_err());
     // 積み上げ×混合 → エラー。
     let stk = format!(
-        r#"{{"type":"bar",{base_datasets},"options":{{"scales":{{"y":{{"stacked":true}}}}}}}}"#
+        r#"{{"type":"bar",{base_datasets},"options":{{"scales":{{"x":{{"stacked":true}}}}}}}}"#
     );
     assert!(chartjs::parse(&stk, false).is_err());
     // 通常の混合は従来どおり Mixed。
