@@ -161,7 +161,14 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             } else {
                 b.y + b.h + label_font
             };
-            items.push(value_label(cx, label_y, label_font, Anchor::Middle, ink, b.value));
+            items.push(value_label(
+                cx,
+                label_y,
+                label_font,
+                Anchor::Middle,
+                ink,
+                b.value,
+            ));
         }
     }
 

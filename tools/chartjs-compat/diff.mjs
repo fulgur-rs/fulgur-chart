@@ -63,7 +63,10 @@ function diffGeometry(fg, cg) {
       continue;
     }
     for (const k of ['nx', 'ny', 'nw', 'nh']) {
-      if (Math.abs(fe[k] - ce[k]) > tol)
+      const d = Math.abs(fe[k] - ce[k]);
+      // NaN/undefined 座標は Math.abs が NaN になり `NaN > tol` は false なので
+      // 差分として検出されない。Number.isFinite で異常値も FAIL 扱いにする。
+      if (!Number.isFinite(d) || d > tol)
         diffs.push({ field: `elem[${key(fe)}].${k}`, fulgur: fe[k], chartjs: ce[k] });
     }
   }
