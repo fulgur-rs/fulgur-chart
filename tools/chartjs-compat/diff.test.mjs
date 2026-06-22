@@ -130,3 +130,63 @@ test('片方に geometry が無ければ skip', () => {
   assert.equal(r.dimensions.geometry.skipped, true);
   assert.equal(r.dimensions.geometry.pass, true);
 });
+
+test('paint-state: 片側 null スロットは colors 照合から除外され PASS', () => {
+  // chart.js 側が未描画(null)、fulgur 側は色 → 照合対象外で PASS。
+  const f = base(); const c = base();
+  c.series[0].stroke = [null]; // borderWidth:0 で未描画
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, true);
+});
+
+test('paint-state: 混在 null/色は非 null スロットのみ照合', () => {
+  const f = base(); const c = base();
+  f.series[0].fill = ['rgba(1,1,1,1)', 'rgba(2,2,2,1)'];
+  c.series[0].fill = [null, 'rgba(2,2,2,1)']; // 0番は未描画、1番は一致
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, true);
+});
+
+test('paint-state: 混在で非 null スロットが不一致なら FAIL', () => {
+  const f = base(); const c = base();
+  f.series[0].fill = ['rgba(1,1,1,1)', 'rgba(2,2,2,1)'];
+  c.series[0].fill = [null, 'rgba(9,9,9,1)']; // 1番が不一致
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, false);
+});
+
+test('paint-state: null を含まない通常の不一致は従来どおり FAIL', () => {
+  const f = base(); const c = base();
+  c.series[0].fill = ['rgba(99,99,99,0.5)'];
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, false);
+});
+
+test('paint-state: 長さ1 [null] は長い色配列の全スロットへブロードキャストして skip', () => {
+  // collapse で [null,null]→[null] に畳まれたケース: at() で全スロットへ展開され全 skip。
+  const f = base(); const c = base();
+  f.series[0].fill = ['rgba(1,1,1,1)', 'rgba(2,2,2,1)', 'rgba(3,3,3,1)'];
+  c.series[0].fill = [null]; // 全スロット未描画
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, true);
+});
+
+test('paint-state: 空配列 vs 色配列は FAIL(null skip が全 skip に退化しない保証)', () => {
+  // 系列色が丸ごと欠落(空配列)した場合は照合対象が残り FAIL になるべき。
+  // null skip が「何も照合しない」へ退化していないことの安全弁。
+  const f = base(); const c = base();
+  f.series[0].fill = ['rgba(1,1,1,1)'];
+  c.series[0].fill = []; // 片側だけ色が完全欠落
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, false);
+});
+
+test('paint-state: 空配列 vs 全 null 畳み([null])は構造差として FAIL', () => {
+  // 空配列(描画マーク 0)と [null](未描画スロット)を取り違えない。前者は構造的な
+  // 差異(系列まるごと欠落)なので null skip に退化させず FAIL にする(gemini 指摘)。
+  const f = base(); const c = base();
+  f.series[0].fill = []; // 描画マークが 0 個
+  c.series[0].fill = [null]; // 1 個だが未描画
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, false);
+});

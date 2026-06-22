@@ -16,11 +16,21 @@ function arrNum(a, b) {
 }
 
 // fulgur/chart.js の fill 表現(長さ1 畳み or 要素配列)を要素数 n に展開して比較。
+// paint-state: どちらかのスロットが null(= そのエンジンで未描画)なら、そのスロットは
+// 「可視描画差」ではないため照合対象外にする(false-positive 抑止)。
 function colorsEqual(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  // 片方だけ空配列(= 描画マーク 0 個)は構造的な差異。null skip が「全要素 skip」へ
+  // 退化して空 vs 全 null を取り違えないよう、ここで即 false にする。
+  if ((a.length === 0) !== (b.length === 0)) return false;
   const n = Math.max(a.length, b.length);
   const at = (arr, i) => (arr.length === 1 ? arr[0] : arr[i]);
-  for (let i = 0; i < n; i++) if (at(a, i) !== at(b, i)) return false;
+  for (let i = 0; i < n; i++) {
+    const av = at(a, i);
+    const bv = at(b, i);
+    if (av === null || bv === null) continue; // 未描画スロットは照合しない
+    if (av !== bv) return false;
+  }
   return true;
 }
 

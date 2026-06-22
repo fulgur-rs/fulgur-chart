@@ -20,9 +20,10 @@ test('bar: 既定パレット色は canonical rgba に正規化される', async
   const spec = { type: 'bar', data: { labels: ['a','b','c'],
     datasets: [{ label: 's', data: [0,100,50] }] } };
   const model = await extractChartjsModel(spec, 800, 600);
-  // 既定パレット先頭 #36A2EB、fill alpha=0.5 / stroke alpha=1.0(chart.js v4)
+  // 既定パレット先頭 #36A2EB、fill alpha=0.5(塗りは常に描画)。
   assert.deepEqual(model.series[0].fill, ['rgba(54,162,235,0.5)']);
-  assert.deepEqual(model.series[0].stroke, ['rgba(54,162,235,1)']);
+  // 既定 bar は borderWidth:0(枠線未描画)→ paint-state で stroke は null。
+  assert.deepEqual(model.series[0].stroke, [null]);
   // PNG バッファも返る
   assert.ok(Buffer.isBuffer(model.png));
 });
@@ -100,6 +101,44 @@ test('fmtAlpha: 正規化規約', () => {
   assert.equal(fmtAlpha(0.3333333), '0.333');
 });
 
+test('paint-state: 既定 bar の stroke は未描画(borderWidth:0)で null', async () => {
+  const spec = { type: 'bar', data: { labels: ['a','b'],
+    datasets: [{ data: [10,90] }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.deepEqual(model.series[0].stroke, [null]);
+  // 塗りは描画されるので色を保持。
+  assert.notEqual(model.series[0].fill[0], null);
+});
+
+test('paint-state: line(fill:false)の fill は未描画(area 未塗り)で null', async () => {
+  const spec = { type: 'line', data: { labels: ['a','b','c'],
+    datasets: [{ data: [1,2,3], borderColor: '#ff6384', fill: false }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.deepEqual(model.series[0].fill, [null]);
+  // 線は描画されるので stroke は色を保持。
+  assert.notEqual(model.series[0].stroke[0], null);
+});
+
+test('paint-state: area(fill:true)の fill は描画されるので色を保持(回帰防止)', async () => {
+  const spec = { type: 'line', data: { labels: ['a','b','c'],
+    datasets: [{ data: [1,2,3], borderColor: '#4bc0c0',
+      backgroundColor: '#4bc0c0', fill: true }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.notEqual(model.series[0].fill[0], null);
+  assert.notEqual(model.series[0].stroke[0], null);
+});
+
+test('paint-state: 既定 line(fill キー無し)も area 未塗りで fill は null', async () => {
+  // line.json fixture は fill キーを持たず、chart.js v4 が既定で fill:false に解決する。
+  // 既定 line の area も未塗りなので fill スロットは null になる(回帰防止)。
+  const spec = { type: 'line', data: { labels: ['a','b','c'],
+    datasets: [{ data: [1,2,3], borderColor: '#ff6384' }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.deepEqual(model.series[0].fill, [null]);
+  // 線は描画されるので stroke は色を保持。
+  assert.notEqual(model.series[0].stroke[0], null);
+});
+
 test('scatter: chartArea 基準の正規化 geometry を出力', async () => {
   const spec = {
     type: 'scatter',
@@ -151,4 +190,32 @@ test('line: chartArea 基準の正規化 geometry を出力', async () => {
   }
   assert.ok(model.geometry.elements[0].nx < model.geometry.elements[1].nx,
     'カテゴリ順に nx 増加');
+});
+
+test('paint-state: line は dataset の borderWidth で線描画を判定(pointBorderWidth:0 でも線色を残す)', async () => {
+  // 線(line)の線幅は point 要素ではなく dataset の borderWidth が持つ。
+  // pointBorderWidth:0 でも線は borderWidth:3 で描かれるため stroke 色を残すべき。
+  const spec = { type: 'line', data: { labels: ['a','b','c'],
+    datasets: [{ data: [1,2,3], borderColor: '#ff6384', borderWidth: 3,
+      pointBorderWidth: 0, fill: false }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.notEqual(model.series[0].stroke[0], null);
+});
+
+test('paint-state: line の dataset borderWidth:0 は線未描画で stroke は null', async () => {
+  const spec = { type: 'line', data: { labels: ['a','b'],
+    datasets: [{ data: [1,2], borderColor: '#ff6384', borderWidth: 0, fill: false }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.deepEqual(model.series[0].stroke, [null]);
+});
+
+test('paint-state: pie/doughnut の borderWidth:0 でも stroke は null にしない(fulgur が白区切り線を常時描く)', async () => {
+  // fulgur は弧の区切り線(白)を borderWidth に関係なく常に描く。null 化すると
+  // fulgur の over-paint(case-3)を隠すため、弧系は stroke を比較対象に残す。
+  for (const type of ['pie', 'doughnut']) {
+    const spec = { type, data: { labels: ['a','b','c'],
+      datasets: [{ data: [1,2,3], borderWidth: 0 }] } };
+    const model = await extractChartjsModel(spec, 800, 600);
+    assert.notEqual(model.series[0].stroke[0], null, `${type} の stroke は色を保持すべき`);
+  }
 });
