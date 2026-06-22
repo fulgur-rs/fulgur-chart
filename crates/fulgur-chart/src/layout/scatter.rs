@@ -205,59 +205,29 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let ink = spec.theme.text_color;
     let label_font = spec.theme.font_size;
 
-    // x/y ドメイン → nice ticks。
+    let layout = compute_scatter_layout(spec, m);
+    let xs = layout.xs.clone();
+    let ys = layout.ys.clone();
+    let plot_left = layout.plot_left;
+    let plot_right = layout.plot_right;
+    let plot_top = layout.plot_top;
+    let plot_bottom = layout.plot_bottom;
+
+    // グリッド描画用 ticks(フレーム計算ではなく表示用)。
     let (xmin, xmax) = axis_domain(spec, &spec.x_axis, |p| p.x);
     let (ymin, ymax) = axis_domain(spec, &spec.y_axis, |p| p.y);
     let x_ticks = nice_ticks(xmin, xmax, 10);
     let y_ticks = nice_ticks(ymin, ymax, 10);
 
-    // y 軸ラベル幅(目盛りラベルの最大幅 + 余白)。
-    let mut max_y_w = 0.0_f32;
-    for &t in &y_ticks.ticks {
-        let w = m.width(&fmt_num(t), label_font as f32);
-        if w > max_y_w {
-            max_y_w = w;
-        }
-    }
-    let y_axis_w = max_y_w as f64 + 10.0;
-
-    // 凡例帯(カテゴリ系 common と同じロジック)。
+    // 凡例描画用フラグ(フレーム計算ではなく表示用)。
     let legend = has_legend(spec);
-    let title_band = if spec.title.is_some() {
-        TITLE_BAND
-    } else {
-        0.0
-    };
-    let legend_top = if legend && spec.legend == LegendPos::Top {
-        LEGEND_BAND
-    } else {
-        0.0
-    };
-    let legend_bottom = if legend && spec.legend == LegendPos::Bottom {
-        LEGEND_BAND
-    } else {
-        0.0
-    };
+    let title_band = if spec.title.is_some() { TITLE_BAND } else { 0.0 };
     let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
-    let legend_left = if legend && spec.legend == LegendPos::Left {
-        legend_band_width_vertical(m, &series_names, label_font)
-    } else {
-        0.0
-    };
     let legend_right = if legend && spec.legend == LegendPos::Right {
         legend_band_width_vertical(m, &series_names, label_font)
     } else {
         0.0
     };
-
-    let plot_left = OUTER_PAD + y_axis_w + legend_left;
-    let plot_right = spec.width - OUTER_PAD - legend_right;
-    let plot_top = OUTER_PAD + title_band + legend_top;
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
-
-    // 線形スケール: x は左→右(非反転)、y は下→上(反転)。
-    let xs = LinearScale::new(x_ticks.min, x_ticks.max, plot_left, plot_right);
-    let ys = LinearScale::new(y_ticks.min, y_ticks.max, plot_bottom, plot_top);
 
     let mut items: Vec<Prim> = Vec::new();
 
@@ -333,21 +303,17 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         stroke_width: 1.0,
     });
 
-    // 5. 点(円)。系列・点とも入力順。非有限座標はスキップ。
-    for ser in &spec.series {
-        for (i, p) in ser.points.iter().enumerate() {
-            if !p.x.is_finite() || !p.y.is_finite() {
-                continue;
-            }
-            items.push(Prim::Circle {
-                cx: xs.map(p.x),
-                cy: ys.map(p.y),
-                r: point_radius(&spec.kind, p, ser.point_radius),
-                fill: ser.fill_at(i),
-                stroke: ser.stroke_at(i),
-                stroke_width: ser.stroke_width,
-            });
-        }
+    // 5. 点(円)。共有 scatter_points(単一真実源)から描画。
+    for b in scatter_points(spec, &layout) {
+        let ser = &spec.series[b.series];
+        items.push(Prim::Circle {
+            cx: b.cx,
+            cy: b.cy,
+            r: b.r,
+            fill: ser.fill_at(b.index),
+            stroke: ser.stroke_at(b.index),
+            stroke_width: ser.stroke_width,
+        });
     }
 
     // 6. 凡例(Top/Bottom: 横並び。draw_frame と同じ配置)。
