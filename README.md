@@ -102,7 +102,7 @@ fulgur-chart inspect chart.json
 ## Supported chart types
 
 - Bar chart (vertical / horizontal; horizontal via `options.indexAxis: "y"`)
-- Stacked bar chart (`options.scales.{x,y}.stacked: true`)
+- Stacked bar chart (`stacked: true` on the index axis: `scales.x` for vertical, `scales.y` for horizontal)
 - Line chart
 - Area chart (`datasets[].fill: true` on a line dataset)
 - Pie chart
@@ -130,7 +130,7 @@ Supports a data-only, static subset:
 - `options.indexAxis`
 - `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right; `legend` does not apply to `gauge` / `radialGauge`)
 - `options.plugins.datalabels` (`display` — renders a value label at each data point)
-- `options.scales` (`stacked` / `suggestedMin` / `suggestedMax` and a subset of other options)
+- `options.scales` (`stacked` — read from the index axis, matching chart.js; `suggestedMin` / `suggestedMax` and a subset of other options)
 - `options.theme` (extension; see below)
 
 Dynamic JavaScript features (`callback` / `animation` / `interaction` / plugin scripts)
