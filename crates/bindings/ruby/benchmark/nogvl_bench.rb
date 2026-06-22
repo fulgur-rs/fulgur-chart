@@ -10,6 +10,7 @@
 require "fulgur_chart"
 require "benchmark"
 require "json"
+require "etc" # Etc.nprocessors — portable core count (no `nproc` shell dependency)
 
 # A heavier render (many points → more layout + rasterization) so per-call cost
 # dominates thread/scheduling overhead and parallelism is visible.
@@ -38,7 +39,7 @@ threaded = Benchmark.realtime do
   ts.each(&:join)
 end
 
-puts "cores=#{`nproc`.to_i} threads=#{THREADS} per_thread=#{PER_THREAD} total=#{TOTAL} renders"
+puts "cores=#{Etc.nprocessors} threads=#{THREADS} per_thread=#{PER_THREAD} total=#{TOTAL} renders"
 puts format("serial   : %.3f s", serial)
 puts format("threaded : %.3f s", threaded)
 puts format("speedup  : %.2fx", serial / threaded)

@@ -169,21 +169,29 @@ fn build_ir(
 
 // --- GVL release ---
 
-/// Run `func` with the GVL released, returning its value.
+/// Run `func` with the GVL released, returning `Some(value)` — or `None` if a pending
+/// interrupt prevented `func` from running at all (see below).
 ///
-/// `func` MUST NOT call any Ruby C API — it executes while this thread does not hold
-/// the GVL, so building VALUEs / raising / allocating Ruby objects would be unsound.
-/// (If a global allocator that calls back into Ruby's GC — e.g. rb-sys's tracking
-/// allocator — were ever installed, even plain Rust heap allocation here would become
-/// unsound. None is installed today.)
+/// Uses `rb_thread_call_without_gvl2`, NOT `rb_thread_call_without_gvl`. The v2 variant does
+/// NOT process interrupts on GVL re-acquisition, so control ALWAYS returns to this Rust frame
+/// after `func` runs: it never raises / longjmps across the `extern "C"` boundary. The v1
+/// variant checks (and handles) pending interrupts right after `func` returns — that handling
+/// can raise, longjmp-ing past this frame and the caller's, skipping our box reclamation and
+/// the owned Rust data's Drop glue (a leak on every interrupted render, and an unsound
+/// longjmp across Rust frames). v2 avoids that: the render runs uninterrupted and a pending
+/// interrupt is honored by Ruby at its next checkpoint, after this call returns.
 ///
-/// A panic inside `func` is caught and re-raised here, after the GVL is re-acquired, so
-/// it never unwinds across the `extern "C"` boundary (which is undefined behavior).
+/// `func` MUST NOT call any Ruby C API — it executes while this thread does not hold the GVL,
+/// so building VALUEs / raising / allocating Ruby objects would be unsound. (If a global
+/// allocator that calls back into Ruby's GC — e.g. rb-sys's tracking allocator — were ever
+/// installed, even plain Rust heap allocation here would become unsound. None is today.)
 ///
-/// The unblocking function is NULL: the region is NOT interruptible by `Thread#kill`,
-/// signals (Ctrl-C), or `Timeout`. That is acceptable for the bounded render here; an
-/// interruptible region would instead pass a real ubf or use `rb_nogvl` with flags.
-fn nogvl<F, R>(func: F) -> R
+/// `None`: v2 checks for a pending interrupt BEFORE releasing the GVL and, if one is set,
+/// returns without ever calling `func`. Callers fall back to running the work under the GVL,
+/// leaving the still-pending interrupt for Ruby to raise once control returns to it.
+///
+/// A panic inside `func` is caught and re-raised here so it never crosses `extern "C"` (UB).
+fn nogvl<F, R>(func: F) -> Option<R>
 where
     F: FnOnce() -> R,
 {
@@ -200,14 +208,21 @@ where
     }
 
     let arg = Box::into_raw(Box::new(func)) as *mut c_void;
-    // SAFETY: `call::<F, R>` has the rb_thread_call_without_gvl callback signature; `arg`
-    // is a valid Box<F> consumed exactly once inside `call`. NULL ubf → non-interruptible.
+    // SAFETY: `call::<F, R>` has the rb_thread_call_without_gvl2 callback signature; `arg` is
+    // a valid Box<F>. NULL ubf → the render itself is never interrupted mid-flight.
     let ret = unsafe {
-        rb_sys::rb_thread_call_without_gvl(Some(call::<F, R>), arg, None, std::ptr::null_mut())
+        rb_sys::rb_thread_call_without_gvl2(Some(call::<F, R>), arg, None, std::ptr::null_mut())
     };
+    if ret.is_null() {
+        // v2 declined to run `func` (interrupt pending at entry), so `call` never ran and the
+        // closure box was not consumed — reclaim it here to avoid leaking it. (`func` always
+        // returns a non-null box pointer, so a null return unambiguously means "did not run".)
+        drop(unsafe { Box::from_raw(arg as *mut F) });
+        return None;
+    }
     // `ret` is the Box<thread::Result<R>> leaked at the end of `call`.
     match *unsafe { Box::from_raw(ret as *mut std::thread::Result<R>) } {
-        Ok(value) => value,
+        Ok(value) => Some(value),
         Err(payload) => std::panic::resume_unwind(payload),
     }
 }
@@ -280,7 +295,11 @@ fn render(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
     // the Ruby C API.
     let font = opts.font; // Option<Vec<u8>>, owned
     let scale = opts.scale;
-    let result = nogvl(|| render_pure(&ir, format.as_str(), font.as_deref(), scale));
+    // Release the GVL for the heavy render. If an interrupt is already pending, nogvl returns
+    // None without running the closure; fall back to rendering under the GVL and let Ruby
+    // raise the still-pending interrupt when control returns from this method.
+    let result = nogvl(|| render_pure(&ir, format.as_str(), font.as_deref(), scale))
+        .unwrap_or_else(|| render_pure(&ir, format.as_str(), font.as_deref(), scale));
 
     match result {
         Ok(Rendered::Svg(svg)) => Ok(ruby.str_new(&svg)), // UTF-8 String
