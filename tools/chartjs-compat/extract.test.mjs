@@ -127,3 +127,14 @@ test('paint-state: area(fill:true)の fill は描画されるので色を保持(
   assert.notEqual(model.series[0].fill[0], null);
   assert.notEqual(model.series[0].stroke[0], null);
 });
+
+test('paint-state: 既定 line(fill キー無し)も area 未塗りで fill は null', async () => {
+  // line.json fixture は fill キーを持たず、chart.js v4 が既定で fill:false に解決する。
+  // 既定 line の area も未塗りなので fill スロットは null になる(回帰防止)。
+  const spec = { type: 'line', data: { labels: ['a','b','c'],
+    datasets: [{ data: [1,2,3], borderColor: '#ff6384' }] } };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.deepEqual(model.series[0].fill, [null]);
+  // 線は描画されるので stroke は色を保持。
+  assert.notEqual(model.series[0].stroke[0], null);
+});
