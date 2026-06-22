@@ -2,7 +2,8 @@
 
 [![CI](https://github.com/fulgur-rs/fulgur-chart/actions/workflows/ci.yml/badge.svg)](https://github.com/fulgur-rs/fulgur-chart/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/fulgur-rs/fulgur-chart/graph/badge.svg)](https://codecov.io/gh/fulgur-rs/fulgur-chart)
-[![crates.io](https://img.shields.io/crates/v/fulgur-chart-cli.svg)](https://crates.io/crates/fulgur-chart-cli)
+[![crates.io: fulgur-chart](https://img.shields.io/crates/v/fulgur-chart.svg?label=fulgur-chart)](https://crates.io/crates/fulgur-chart)
+[![crates.io: fulgur-chart-cli](https://img.shields.io/crates/v/fulgur-chart-cli.svg?label=fulgur-chart-cli)](https://crates.io/crates/fulgur-chart-cli)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 A CLI that generates static SVG / PNG charts from a chart.js v4–compatible JSON spec
