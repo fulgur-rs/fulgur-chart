@@ -10,6 +10,32 @@
 
 ### Other
 
+- release
+- clarify stacked detection follows the index axis
+
+## [0.8.0](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.7.0...fulgur-chart-v0.8.0) - 2026-06-22
+
+### Fixed
+
+- *(line)* fix label index mismatch and gap handling after filter_map
+- *(compat)* address review P2 issues (chart-wide colors, legend, missing pts)
+- exclude is_progress from colors_plugin_skips (review)
+- *(compat)* align color and axis defaults with chart.js v4 behavior
+- *(scatter)* fmt, assert_eq upgrades, add suggested_max tests
+
+### Other
+
+- release
+- Merge pull request #41 from fulgur-rs/feat/compat-colors-axes-fix
+- fix rustfmt and clippy lint in compat color/axis fix
+- Merge pull request #37 from fulgur-rs/feat/geometry-compat
+- Merge pull request #38 from fulgur-rs/feat/scatter-axis-domain-tests
+- *(scatter)* axis_domain の suggestedMin/Max 単体テストを追加
+
+## [0.1.8](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.7...fulgur-chart-cli-v0.1.8) - 2026-06-22
+
+### Other
+
 - clarify stacked detection follows the index axis
 
 ## [0.8.0](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.7.0...fulgur-chart-v0.8.0) - 2026-06-22
