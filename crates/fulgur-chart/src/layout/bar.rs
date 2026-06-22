@@ -38,10 +38,12 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     let bar_w = group_w / s as f64;
     let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
     let baseline_y = frame.ys.map(base_v);
-    let stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { stacked: true, .. });
+    let placement_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { placement_stacked: true, .. });
+    let value_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { value_stacked: true, .. });
 
     let mut boxes = Vec::new();
-    if stacked {
+    if placement_stacked && value_stacked {
+        // 同スロット + 値累積(従来の stacked=true の挙動)
         let stack_w = (group_w * BAR_FILL_RATIO).max(0.0);
         for i in 0..spec.categories.len() {
             let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
@@ -79,7 +81,37 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                 });
             }
         }
+    } else if placement_stacked {
+        // 同スロット + 各系列を baseline から描画(chart.js の index-only stacked 挙動)
+        // 系列は重なる。値域は dodge と同じ個別値(value_stacked=false)。
+        let stack_w = (group_w * BAR_FILL_RATIO).max(0.0);
+        for i in 0..spec.categories.len() {
+            let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
+            let bx = band_left + band_w * BAND_PAD_RATIO;
+            for (sidx, ser) in spec.series.iter().enumerate() {
+                let Some(&v) = ser.values.get(i) else {
+                    continue;
+                };
+                if !v.is_finite() {
+                    continue;
+                }
+                let vy = frame.ys.map(v);
+                let y_top = vy.min(baseline_y);
+                let h = (vy - baseline_y).abs();
+                boxes.push(BarBox {
+                    series: sidx,
+                    index: i,
+                    value: v,
+                    x: bx,
+                    y: y_top,
+                    w: stack_w,
+                    h,
+                });
+            }
+        }
     } else {
+        // dodge 配置(従来の stacked=false の挙動)
+        // value_stacked=true のとき値域は value_domain が担当するため geometry は変わらない。
         for i in 0..spec.categories.len() {
             let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
             for (sidx, ser) in spec.series.iter().enumerate() {
@@ -126,7 +158,9 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     // bar 本体: 矩形は共有 vertical_bar_boxes(単一真実源)から、値ラベルは box から導出。
     let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
-    let stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { stacked: true, .. });
+    let placement_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { placement_stacked: true, .. });
+    let value_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { value_stacked: true, .. });
+    let stacked = placement_stacked && value_stacked;
     for b in vertical_bar_boxes(spec, &frame) {
         let ser = &spec.series[b.series];
         items.push(Prim::Rect {
@@ -304,7 +338,8 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let base_v = 0.0_f64.clamp(ticks.min, ticks.max);
     let baseline_x = xs.map(base_v);
 
-    let stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { stacked: true, .. });
+    let placement_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { placement_stacked: true, .. });
+    let value_stacked = matches!(spec.kind, crate::ir::ChartKind::Bar { value_stacked: true, .. });
 
     for i in 0..spec.categories.len() {
         let band_top = plot_top + i as f64 * band_h;
@@ -322,8 +357,8 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             });
         }
 
-        if stacked {
-            // 積み上げ: 1 カテゴリにつき group 高 1 本に系列を値空間で積む。
+        if placement_stacked && value_stacked {
+            // 同スロット + 値累積(従来の横棒 stacked 挙動)
             let stack_h = (group_h * BAR_FILL_RATIO).max(0.0);
             let by = band_top + band_h * BAND_PAD_RATIO;
             let cy = by + stack_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
@@ -362,7 +397,39 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     items.push(value_label(mid_x, cy, label_font, Anchor::Middle, ink, v));
                 }
             }
+        } else if placement_stacked {
+            // 同スロット + 各 baseline から描画(横棒 index-only stacked)
+            let stack_h = (group_h * BAR_FILL_RATIO).max(0.0);
+            let by = band_top + band_h * BAND_PAD_RATIO;
+            for ser in &spec.series {
+                let Some(&v) = ser.values.get(i) else {
+                    continue;
+                };
+                if !v.is_finite() {
+                    continue;
+                }
+                let vx = xs.map(v);
+                let x = vx.min(baseline_x);
+                let w = (vx - baseline_x).abs();
+                items.push(Prim::Rect {
+                    x,
+                    y: by,
+                    w,
+                    h: stack_h,
+                    fill: ser.fill_at(i),
+                });
+                if spec.data_labels && v.is_finite() {
+                    let cy = by + stack_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
+                    let (cx, anchor) = if v >= 0.0 {
+                        (x + w + 4.0, Anchor::Start)
+                    } else {
+                        (x - 4.0, Anchor::End)
+                    };
+                    items.push(value_label(cx, cy, label_font, anchor, ink, v));
+                }
+            }
         } else {
+            // dodge 配置(従来の stacked=false 挙動)
             for (sidx, ser) in spec.series.iter().enumerate() {
                 let by = band_top + band_h * BAND_PAD_RATIO + sidx as f64 * bar_h;
                 let v = ser.values.get(i).copied().unwrap_or(0.0);

@@ -183,7 +183,10 @@ fn scales_y_only_on_vertical_is_not_stacked() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"y":{"stacked":true}}} }"#;
     let spec = chartjs::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Bar { stacked: false, .. }));
+    assert!(matches!(
+        spec.kind,
+        ChartKind::Bar { placement_stacked: false, value_stacked: true, .. }
+    ));
 }
 
 #[test]
@@ -191,7 +194,10 @@ fn scales_x_stacked_true_marks_bar_stacked() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"x":{"stacked":true}}} }"#;
     let spec = chartjs::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Bar { stacked: true, .. }));
+    assert!(matches!(
+        spec.kind,
+        ChartKind::Bar { placement_stacked: true, value_stacked: false, .. }
+    ));
 }
 
 #[test]
@@ -203,8 +209,10 @@ fn horizontal_y_stacked_marks_bar_stacked() {
     assert!(matches!(
         spec.kind,
         ChartKind::Bar {
-            stacked: true,
-            horizontal: true
+            placement_stacked: true,
+            value_stacked: false,
+            horizontal: true,
+            ..
         }
     ));
 }
@@ -218,8 +226,10 @@ fn horizontal_x_stacked_only_is_not_stacked() {
     assert!(matches!(
         spec.kind,
         ChartKind::Bar {
-            stacked: false,
-            horizontal: true
+            placement_stacked: false,
+            value_stacked: true,
+            horizontal: true,
+            ..
         }
     ));
 }
@@ -228,7 +238,10 @@ fn horizontal_x_stacked_only_is_not_stacked() {
 fn scales_absent_is_not_stacked() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]} }"#;
     let spec = chartjs::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Bar { stacked: false, .. }));
+    assert!(matches!(
+        spec.kind,
+        ChartKind::Bar { placement_stacked: false, value_stacked: false, .. }
+    ));
 }
 
 #[test]
@@ -236,7 +249,10 @@ fn scales_stacked_false_is_not_stacked() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"x":{"stacked":false}}} }"#;
     let spec = chartjs::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Bar { stacked: false, .. }));
+    assert!(matches!(
+        spec.kind,
+        ChartKind::Bar { placement_stacked: false, value_stacked: false, .. }
+    ));
 }
 
 #[test]
@@ -244,6 +260,17 @@ fn strict_accepts_scales_stacked() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"y":{"stacked":true}}} }"#;
     assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn both_axes_stacked_sets_both_flags() {
+    let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"x":{"stacked":true},"y":{"stacked":true}}} }"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(
+        spec.kind,
+        ChartKind::Bar { placement_stacked: true, value_stacked: true, .. }
+    ));
 }
 
 #[test]

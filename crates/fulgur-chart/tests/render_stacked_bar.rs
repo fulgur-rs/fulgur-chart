@@ -46,7 +46,7 @@ fn vertical_stacked_with_datalabels_snapshot() {
 #[test]
 fn horizontal_stacked_snapshot() {
     let svg = render(
-        r#"{"type":"bar","data":{"labels":["東","西","南"],"datasets":[{"label":"製品A","data":[10,20,15]},{"label":"製品B","data":[5,15,25]}]},"options":{"indexAxis":"y","scales":{"y":{"stacked":true}},"plugins":{"title":{"display":true,"text":"地域別積み上げ"}}}}"#,
+        r#"{"type":"bar","data":{"labels":["東","西","南"],"datasets":[{"label":"製品A","data":[10,20,15]},{"label":"製品B","data":[5,15,25]}]},"options":{"indexAxis":"y","scales":{"y":{"stacked":true},"x":{"stacked":true}},"plugins":{"title":{"display":true,"text":"地域別積み上げ"}}}}"#,
     );
     insta::assert_snapshot!(svg);
 }
@@ -67,4 +67,36 @@ fn stacked_uses_per_category_color() {
     // カテゴリ A は #112233、カテゴリ B は #445566 で塗られる(系列 index 0 の色固定ではない)。
     assert!(svg.contains("#112233"), "カテゴリ0の色: {svg}");
     assert!(svg.contains("#445566"), "カテゴリ1の色: {svg}");
+}
+
+/// value_stacked=true のみ(y.stacked): 値域は累積合計を反映する。
+/// s1=[10,20], s2=[5,15] → カテゴリ B の累積合計 = 35。
+/// 軸目盛りに ">35</text>" が現れる(グループ最大 20 ではなく累積 35)。
+#[test]
+fn value_only_stacked_domain_is_cumulative() {
+    let svg = render(
+        r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"label":"s1","data":[10,20]},{"label":"s2","data":[5,15]}]},"options":{"scales":{"y":{"stacked":true}}}}"#,
+    );
+    // 累積ドメインなので y 軸上限は 35 → tick ラベルに ">35</text>" が現れる。
+    assert!(
+        svg.contains(">35</text>"),
+        "value-only stacked (y.stacked) は累積目盛り 35 を持つべき: {svg}"
+    );
+    assert!(!svg.contains("NaN") && !svg.contains("inf"));
+}
+
+/// placement_stacked=true のみ(x.stacked): 値域は累積しない。
+/// s1=[10,20], s2=[5,15] → 個別最大 = 20。
+/// y 軸目盛りに ">35</text>" は現れてはならない。
+#[test]
+fn index_only_stacked_domain_is_individual() {
+    let svg = render(
+        r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"label":"s1","data":[10,20]},{"label":"s2","data":[5,15]}]},"options":{"scales":{"x":{"stacked":true}}}}"#,
+    );
+    // 非累積ドメインなので y 軸上限は 20 → tick ラベルに ">35</text>" は現れない。
+    assert!(
+        !svg.contains(">35</text>"),
+        "index-only stacked (x.stacked) は累積目盛り 35 を持つべきでない: {svg}"
+    );
+    assert!(!svg.contains("NaN") && !svg.contains("inf"));
 }
