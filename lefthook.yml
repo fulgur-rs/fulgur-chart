@@ -1,0 +1,23 @@
+# Git hooks, managed by lefthook (https://lefthook.dev).
+#
+# One-time setup after cloning — installs the hooks into .git/hooks:
+#
+#     lefthook install
+#
+# Requires the `lefthook` binary on PATH (see CONTRIBUTING.md for install options).
+#
+# pre-commit reformats the staged Rust files with rustfmt and re-stages the result,
+# so every commit is already formatted and the CI `cargo fmt --check` gate stays green.
+# Every crate in the repo (core, CLI, and the node/python/ruby bindings) is edition
+# 2024, so a single `--edition 2024` covers all staged files. rustfmt is invoked
+# directly (not `cargo fmt`) so only the staged files are touched, not the whole tree.
+pre-commit:
+  commands:
+    rustfmt:
+      glob: "*.rs"
+      run: rustfmt --edition 2024 {staged_files}
+      stage_fixed: true
+      # Don't reformat during merge/rebase replays — those files aren't ours to rewrite.
+      skip:
+        - merge
+        - rebase

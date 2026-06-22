@@ -1,0 +1,9 @@
+[tools]
+lefthook = "2"
+
+# `mise run setup` wires lefthook's git hooks into this clone (writes .git/hooks/*).
+# (mise's postinstall hook could automate this on `mise install`, but it is still
+# experimental, so we expose it as an explicit task instead.)
+[tasks.setup]
+description = "Install lefthook git hooks into this clone"
+run = "lefthook install"

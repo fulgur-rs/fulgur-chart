@@ -5,7 +5,7 @@
 [package]
 name = "fulgur_chart_node"
 version = "0.7.0"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [lib]
