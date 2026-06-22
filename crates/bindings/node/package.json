@@ -5,6 +5,9 @@
   "main": "index.js",
   "types": "index.d.ts",
   "license": "MIT OR Apache-2.0",
+  "engines": {
+    "node": ">=18.17"
+  },
   "files": [
     "index.js",
     "index.d.ts",

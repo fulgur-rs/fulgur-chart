@@ -152,6 +152,15 @@ test('invalid font on the image path raises RenderError', () => {
   assert.throws(() => build(BAR).font(Buffer.from('not a font')).render('png'), FulgurRenderError)
 })
 
+// font accepts a plain Uint8Array (not only Buffer): the napi boundary converts it, so the
+// bytes reach the Rust font parser and an invalid font surfaces as FulgurParseError (svg path)
+// rather than a raw napi conversion error. Locks the `font: Buffer | Uint8Array` type claim.
+test('font accepts a plain Uint8Array at the native boundary', () => {
+  const bad = new Uint8Array([1, 2, 3, 4])
+  assert.equal(Buffer.isBuffer(bad), false)
+  assert.throws(() => build(BAR).font(bad).render('svg'), FulgurParseError)
+})
+
 // --- low-level render primitive (the builder calls it) ---
 
 test('direct render primitive', () => {

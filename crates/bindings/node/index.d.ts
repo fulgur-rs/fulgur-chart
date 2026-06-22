@@ -32,8 +32,11 @@ export declare class FulgurRenderError extends Error {}
 /**
  * Fluent, reusable builder. Setters mutate and return `this`; `render` may be called
  * multiple times and the builder may be reconfigured between calls.
+ *
+ * This is a type-only interface (the runtime value is constructed via {@link build}, never
+ * exported). Reference it as a type; it is not importable as a value.
  */
-export declare class Builder {
+export interface Builder {
   width(value: number): this
   height(value: number): this
   scale(value: number): this
@@ -43,9 +46,10 @@ export declare class Builder {
   format(value: Format): this
   /**
    * Render to the given format. Precedence: explicit argument > `.format()` setter >
-   * default `'svg'`. Returns a string for svg, a Buffer for png.
+   * default `'svg'`. An explicit `'svg'` returns a string and `'png'` a Buffer; a
+   * no-argument call depends on the `.format()` state, so it is typed `string | Buffer`.
    */
-  render(format?: 'svg'): string
+  render(format: 'svg'): string
   render(format: 'png'): Buffer
   render(format?: Format): string | Buffer
 }

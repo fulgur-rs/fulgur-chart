@@ -8,7 +8,7 @@ chart.js v4 / Vega-Lite JSON specs to deterministic SVG/PNG via a Rust native ad
 
 ## Requirements
 
-- Node.js >= 18 (N-API v9)
+- Node.js >= 18.17 (the addon targets Node-API v9, available from Node 18.17 / 20.3)
 - A Rust toolchain (`cargo`) — building from source compiles the native addon.
 
 ## Build / test from source

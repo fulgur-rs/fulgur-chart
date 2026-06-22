@@ -52,8 +52,9 @@ function render(specJson, format, options) {
   if (!r.ok) {
     throw makeError(r.code, r.message)
   }
-  // Exactly one of svg/png is set on success; png is a Buffer.
-  return r.svg !== null && r.svg !== undefined ? r.svg : r.png
+  // Exactly one of svg/png is set on success; png is a Buffer. `!= null` covers both
+  // null and undefined.
+  return r.svg != null ? r.svg : r.png
 }
 
 // --- fluent, reusable builder (setters mutate and return `this`) ---
