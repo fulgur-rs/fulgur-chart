@@ -45,6 +45,9 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC auth for the Codecov upload (no static token)
     steps:
       - uses: actions/checkout@v5
 
@@ -63,11 +66,14 @@ jobs:
       - name: Generate coverage (lcov)
         run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
 
-      # Tokenless upload (public repo). fail_ci_if_error stays false so a Codecov
-      # rate-limit/upload hiccup doesn't fail the build.
+      # No static CODECOV_TOKEN: authenticate the upload via GitHub OIDC instead
+      # (codecov-action auto-skips OIDC on fork PRs, which can't mint id-tokens).
+      # fail_ci_if_error stays false so a Codecov rate-limit/upload hiccup doesn't
+      # fail the build.
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
         with:
+          use_oidc: true
           files: lcov.info
           fail_ci_if_error: false
 
