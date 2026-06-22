@@ -60,20 +60,34 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     }
     let y_axis_w = max_y_w as f64 + 10.0;
     let legend = has_legend(spec);
-    let title_band = if spec.title.is_some() { TITLE_BAND } else { 0.0 };
-    let legend_top = if legend && spec.legend == LegendPos::Top { LEGEND_BAND } else { 0.0 };
-    let legend_bottom = if legend && spec.legend == LegendPos::Bottom { LEGEND_BAND } else { 0.0 };
-    let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
-    let legend_left = if legend && spec.legend == LegendPos::Left {
-        legend_band_width_vertical(m, &series_names, label_font)
+    let title_band = if spec.title.is_some() {
+        TITLE_BAND
     } else {
         0.0
     };
-    let legend_right_w = if legend && spec.legend == LegendPos::Right {
-        legend_band_width_vertical(m, &series_names, label_font)
+    let legend_top = if legend && spec.legend == LegendPos::Top {
+        LEGEND_BAND
     } else {
         0.0
     };
+    let legend_bottom = if legend && spec.legend == LegendPos::Bottom {
+        LEGEND_BAND
+    } else {
+        0.0
+    };
+    // series_names の割り当ては凡例が左右にあるときだけ必要なため遅延評価する。
+    let (legend_left, legend_right_w) =
+        if legend && (spec.legend == LegendPos::Left || spec.legend == LegendPos::Right) {
+            let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+            let w = legend_band_width_vertical(m, &series_names, label_font);
+            if spec.legend == LegendPos::Left {
+                (w, 0.0)
+            } else {
+                (0.0, w)
+            }
+        } else {
+            (0.0, 0.0)
+        };
     let plot_left = OUTER_PAD + y_axis_w + legend_left;
     let plot_right = spec.width - OUTER_PAD - legend_right_w;
     let plot_top = OUTER_PAD + title_band + legend_top;
@@ -223,9 +237,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     // 凡例描画用フラグ(フレーム計算ではなく表示用)。
     let legend = has_legend(spec);
-    let title_band = if spec.title.is_some() { TITLE_BAND } else { 0.0 };
-    let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+    let title_band = if spec.title.is_some() {
+        TITLE_BAND
+    } else {
+        0.0
+    };
     let legend_right = if legend && spec.legend == LegendPos::Right {
+        let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
         legend_band_width_vertical(m, &series_names, label_font)
     } else {
         0.0

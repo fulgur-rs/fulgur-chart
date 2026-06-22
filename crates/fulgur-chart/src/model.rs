@@ -149,7 +149,7 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
             let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
             let pw = layout.plot_right - layout.plot_left;
             let ph = layout.plot_bottom - layout.plot_top;
-            if pw <= 0.0 || ph <= 0.0 {
+            if pw <= 0.0 || ph <= 0.0 || spec.width <= 0.0 || spec.height <= 0.0 {
                 return None;
             }
             let plot_area = RectN {
@@ -170,13 +170,16 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
                     nh: 0.0,
                 })
                 .collect();
-            Some(Geometry { plot_area, elements })
+            Some(Geometry {
+                plot_area,
+                elements,
+            })
         }
         ChartKind::Line => {
             let frame = crate::layout::common::compute(spec, m);
             let pw = frame.plot_right - frame.plot_left;
             let ph = frame.plot_bottom - frame.plot_top;
-            if pw <= 0.0 || ph <= 0.0 {
+            if pw <= 0.0 || ph <= 0.0 || spec.width <= 0.0 || spec.height <= 0.0 {
                 return None;
             }
             let plot_area = RectN {
@@ -197,7 +200,10 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
                     nh: 0.0,
                 })
                 .collect();
-            Some(Geometry { plot_area, elements })
+            Some(Geometry {
+                plot_area,
+                elements,
+            })
         }
         _ => None,
     }
@@ -658,7 +664,10 @@ mod tests {
             assert_eq!(e.nh, 0.0);
         }
         assert!(g.elements[0].nx < g.elements[1].nx);
-        assert!(g.elements[2].ny < g.elements[0].ny, "大きい値は小さい ny(上方向)");
+        assert!(
+            g.elements[2].ny < g.elements[0].ny,
+            "大きい値は小さい ny(上方向)"
+        );
     }
 
     /// クロス言語フィクスチャ: ここの行は

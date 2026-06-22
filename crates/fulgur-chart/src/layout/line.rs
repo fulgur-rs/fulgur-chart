@@ -162,6 +162,40 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 }
 
+/// Catmull-Rom スプラインを 3 次ベジエの SVG path data へ変換する。
+/// 端点は自身を複製して扱う。`pts.len() >= 2` を前提とする。
+fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
+    let k = pts.len();
+    let mut d = String::new();
+    write!(d, "M {} {} ", fmt_num(pts[0].0), fmt_num(pts[0].1)).unwrap();
+    for i in 0..k - 1 {
+        let p0 = pts[i.saturating_sub(1)];
+        let p1 = pts[i];
+        let p2 = pts[i + 1];
+        let p3 = pts[(i + 2).min(k - 1)];
+        let cp1 = (
+            p1.0 + (p2.0 - p0.0) / 6.0 * tension,
+            p1.1 + (p2.1 - p0.1) / 6.0 * tension,
+        );
+        let cp2 = (
+            p2.0 - (p3.0 - p1.0) / 6.0 * tension,
+            p2.1 - (p3.1 - p1.1) / 6.0 * tension,
+        );
+        write!(
+            d,
+            "C {} {} {} {} {} {} ",
+            fmt_num(cp1.0),
+            fmt_num(cp1.1),
+            fmt_num(cp2.0),
+            fmt_num(cp2.1),
+            fmt_num(p2.0),
+            fmt_num(p2.1)
+        )
+        .unwrap();
+    }
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,40 +240,11 @@ mod tests {
                "datasets":[{"data":[10,100]}]}}"#,
         );
         let ser0: Vec<_> = ps.iter().filter(|p| p.series == 0).collect();
-        assert!(ser0[1].cy < ser0[0].cy, "大きい値は小さい cy(上方向): ser0[0].cy={}, ser0[1].cy={}", ser0[0].cy, ser0[1].cy);
-    }
-}
-
-/// Catmull-Rom スプラインを 3 次ベジエの SVG path data へ変換する。
-/// 端点は自身を複製して扱う。`pts.len() >= 2` を前提とする。
-fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
-    let k = pts.len();
-    let mut d = String::new();
-    write!(d, "M {} {} ", fmt_num(pts[0].0), fmt_num(pts[0].1)).unwrap();
-    for i in 0..k - 1 {
-        let p0 = pts[i.saturating_sub(1)];
-        let p1 = pts[i];
-        let p2 = pts[i + 1];
-        let p3 = pts[(i + 2).min(k - 1)];
-        let cp1 = (
-            p1.0 + (p2.0 - p0.0) / 6.0 * tension,
-            p1.1 + (p2.1 - p0.1) / 6.0 * tension,
+        assert!(
+            ser0[1].cy < ser0[0].cy,
+            "大きい値は小さい cy(上方向): ser0[0].cy={}, ser0[1].cy={}",
+            ser0[0].cy,
+            ser0[1].cy
         );
-        let cp2 = (
-            p2.0 - (p3.0 - p1.0) / 6.0 * tension,
-            p2.1 - (p3.1 - p1.1) / 6.0 * tension,
-        );
-        write!(
-            d,
-            "C {} {} {} {} {} {} ",
-            fmt_num(cp1.0),
-            fmt_num(cp1.1),
-            fmt_num(cp2.0),
-            fmt_num(cp2.1),
-            fmt_num(p2.0),
-            fmt_num(p2.1)
-        )
-        .unwrap();
     }
-    d
 }
