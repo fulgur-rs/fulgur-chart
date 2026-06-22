@@ -1,6 +1,7 @@
 # fulgur-chart
 
 [![CI](https://github.com/fulgur-rs/fulgur-chart/actions/workflows/ci.yml/badge.svg)](https://github.com/fulgur-rs/fulgur-chart/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/fulgur-rs/fulgur-chart/graph/badge.svg)](https://codecov.io/gh/fulgur-rs/fulgur-chart)
 [![crates.io](https://img.shields.io/crates/v/fulgur-chart-cli.svg)](https://crates.io/crates/fulgur-chart-cli)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
