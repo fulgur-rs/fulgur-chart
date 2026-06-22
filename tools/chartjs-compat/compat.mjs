@@ -128,6 +128,10 @@ for (const name of specs) {
     pass: diff.pass && cross.pass,
     diff,
     cross,
+    geometry: {
+      fulgur: fulgurModel.geometry ?? null,
+      chartjs: chartjs.geometry ?? null,
+    },
   };
 
   // --- レポート ---

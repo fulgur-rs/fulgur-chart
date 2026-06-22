@@ -42,6 +42,70 @@ function collapse(arr) {
   return arr.length > 0 && arr.every((x) => x === arr[0]) ? [arr[0]] : arr;
 }
 
+/// 解決後 dataset 種別が全て縦棒のときだけ geometry を出すか判定する。
+/// fulgur の frontend/chartjs.rs と同じ規約: 基本 type が bar/line のときのみ
+/// dataset 別 type override(bar/line)が有効で、解決後種別が
+///   全 bar → Bar / 全 line → Line / 混在 → Mixed。
+/// fulgur の compute_geometry は `ChartKind::Bar { horizontal: false }` のみ
+/// geometry を出すため、ここも「縦・全 bar」のときだけ true を返す。
+/// これにより `{type:'line', datasets:[{type:'bar'},…]}`(fulgur は Bar 扱い)を
+/// 取りこぼさず、混在/全 line/横棒では両側 None に揃えて片側 skip=pass の
+/// 見せかけ緑(実際の棒を照合しない)を防ぐ。
+function isVerticalBarChart(spec) {
+  const indexAxis = (spec.options && spec.options.indexAxis) || 'x';
+  if (indexAxis === 'y') return false; // 横棒は fulgur 側も geometry を出さない
+  const base = spec.type;
+  const isMixableBase = base === 'bar' || base === 'line';
+  // 実効種別: mixable 基本型のときのみ dataset の bar/line override を尊重。
+  const effective = (ds) =>
+    isMixableBase && (ds.type === 'bar' || ds.type === 'line') ? ds.type : base;
+  const types = spec.data.datasets.map(effective);
+  const hasBar = types.includes('bar');
+  const hasLine = types.includes('line');
+  if (isMixableBase && hasBar && hasLine) return false; // Mixed
+  if (isMixableBase && hasLine && !hasBar) return false; // Line
+  if (isMixableBase && hasBar && !hasLine) return true; // Bar
+  return base === 'bar'; // dataset 空 / 非 mixable 基本型は基本 type で決める
+}
+
+/// 縦棒の BarElement を chartArea 基準 [0,1] へ正規化。縦・全 bar 以外
+/// (横棒・非 bar・混在・全 line)は undefined を返し fulgur の geometry 有無に揃える。
+function barGeometry(chart, spec, width, height) {
+  if (!isVerticalBarChart(spec)) return undefined;
+  const a = chart.chartArea;
+  const caw = a.right - a.left;
+  const cah = a.bottom - a.top;
+  if (!(caw > 0) || !(cah > 0)) return undefined;
+  const elements = [];
+  for (let s = 0; s < spec.data.datasets.length; s++) {
+    const meta = chart.getDatasetMeta(s);
+    for (let i = 0; i < meta.data.length; i++) {
+      const { x, y, base, width: bw } = meta.data[i].getProps(
+        ['x', 'y', 'base', 'width'],
+        true,
+      );
+      /// 純 bar チャートでも防御的に非 bar 要素(width/base 無し)は除外する。
+      if (bw === undefined) continue;
+      const left = x - bw / 2;
+      const top = Math.min(y, base);
+      const h = Math.abs(base - y);
+      elements.push({
+        series: s,
+        index: i,
+        kind: 'bar',
+        nx: (left - a.left) / caw,
+        ny: (top - a.top) / cah,
+        nw: bw / caw,
+        nh: h / cah,
+      });
+    }
+  }
+  return {
+    plot_area: { x: a.left / width, y: a.top / height, w: caw / width, h: cah / height },
+    elements,
+  };
+}
+
 export async function extractChartjsModel(spec, width, height) {
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
@@ -100,6 +164,7 @@ export async function extractChartjsModel(spec, width, height) {
     axes = { x: xAxis, y: yAxis };
   }
 
+  const geometry = barGeometry(chart, spec, width, height);
   const png = canvas.toBuffer('image/png');
   chart.destroy();
 
@@ -113,6 +178,7 @@ export async function extractChartjsModel(spec, width, height) {
       x_ticks: (spec.data.labels || []).length,
       y_ticks: axes ? axes.y.ticks.length : 0,
     },
+    geometry,
     png, // Buffer(レポート用)
   };
 }

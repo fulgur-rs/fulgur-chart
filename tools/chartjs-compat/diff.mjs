@@ -1,7 +1,7 @@
 //! fulgur 意味モデル ⟷ chart.js 意味モデルの次元別(色 / 軸 / counts)数値照合。
 //! 各次元ごとに pass と差分リストを返し、全次元 pass で総合 pass。
 
-export const TOLERANCES = { geometryNorm: 0.02 }; // Phase 2: geometry 次元用(現状未使用)
+export const TOLERANCES = { geometryNorm: 0.02 }; // Phase 2: geometry 次元の正規化座標許容差
 
 function num(a, b) {
   return a === b || (a != null && b != null && Math.abs(a - b) < 1e-9);
@@ -22,6 +22,59 @@ function colorsEqual(a, b) {
   const at = (arr, i) => (arr.length === 1 ? arr[0] : arr[i]);
   for (let i = 0; i < n; i++) if (at(a, i) !== at(b, i)) return false;
   return true;
+}
+
+// 両モデルの geometry を照合する。pass は要素数(構造)と要素ごとの正規化座標
+// (nx/ny/nw/nh、プロット領域基準)で判定する。後者は各 bar の位置(nx)・幅(nw)・
+// 上端(ny)・高さ(nh)を tolerance 内で検証するため、「左→右順序」「系列ごと高さの
+// 増減傾向」を包含する。以前あった order/monotonicity の構造チェックは、この要素ごと
+// 数値照合と冗長なうえ、tolerance 未満のノイズで誤検出しやすい(例: 高さの符号バケットが
+// 微差でブレる/スタックで nx 同値のタイ順がエンジン間で揺れる)ため削除した。
+// plot_area(キャンバス基準)の差は info として記録するが pass には含めない:
+// 2 つのレイアウトエンジンが余白(OUTER_PAD/軸幅/タイトル帯)を画素一致させる
+// 保証はなく、各要素は「自分のプロット領域」で正規化済みのため plot_area 差に
+// 頑健だから。要素が tolerance 内で一致する = 分母が意味的に整合していた、の証左。
+function diffGeometry(fg, cg) {
+  const tol = TOLERANCES.geometryNorm;
+  const diffs = [];
+  const info = [];
+
+  // plot_area: 診断情報のみ(pass 不参加)。内側領域の取り方の目安。
+  for (const k of ['x', 'y', 'w', 'h']) {
+    if (Math.abs(fg.plot_area[k] - cg.plot_area[k]) > tol)
+      info.push({ field: `plot_area.${k}`, fulgur: fg.plot_area[k], chartjs: cg.plot_area[k] });
+  }
+
+  // 構造: 要素数。
+  if (fg.elements.length !== cg.elements.length) {
+    diffs.push({ field: 'element_count', fulgur: fg.elements.length, chartjs: cg.elements.length });
+    return { pass: false, diffs, info }; // ペアリング不能なので以降は省略。
+  }
+
+  const key = (e) => `${e.series}:${e.index}`;
+  // キーは構造上一意(各 bar = 1 系列 × 1 カテゴリ index)なので last-wins のペアリングで安全。
+  const cmap = new Map(cg.elements.map((e) => [key(e), e]));
+
+  // 数値: (series,index) で対応付けて nx/ny/nw/nh を比較。
+  for (const fe of fg.elements) {
+    const ce = cmap.get(key(fe));
+    if (!ce) {
+      diffs.push({ field: `elem[${key(fe)}]`, fulgur: 'present', chartjs: 'missing' });
+      continue;
+    }
+    // kind は要素の契約値(現状は両側 'bar')。不一致は座標が偶然合っても FAIL。
+    if (fe.kind !== ce.kind)
+      diffs.push({ field: `elem[${key(fe)}].kind`, fulgur: fe.kind, chartjs: ce.kind });
+    for (const k of ['nx', 'ny', 'nw', 'nh']) {
+      const d = Math.abs(fe[k] - ce[k]);
+      // NaN/undefined 座標は Math.abs が NaN になり `NaN > tol` は false なので
+      // 差分として検出されない。Number.isFinite で異常値も FAIL 扱いにする。
+      if (!Number.isFinite(d) || d > tol)
+        diffs.push({ field: `elem[${key(fe)}].${k}`, fulgur: fe[k], chartjs: ce[k] });
+    }
+  }
+
+  return { pass: diffs.length === 0, diffs, info };
 }
 
 export function diffModels(fulgur, chartjs) {
@@ -79,6 +132,13 @@ export function diffModels(fulgur, chartjs) {
       countDiffs.push({ field: k, fulgur: fulgur.counts[k], chartjs: chartjs.counts[k] });
   }
   dims.counts = { pass: countDiffs.length === 0, diffs: countDiffs };
+
+  // geometry(両方にある場合のみ照合)。
+  if (fulgur.geometry && chartjs.geometry) {
+    dims.geometry = diffGeometry(fulgur.geometry, chartjs.geometry);
+  } else {
+    dims.geometry = { pass: true, skipped: true };
+  }
 
   const pass = Object.values(dims).every((d) => d.pass);
   return { pass, dimensions: dims };

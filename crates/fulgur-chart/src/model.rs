@@ -31,6 +31,8 @@ pub struct ChartModel {
     pub axes: Option<Axes>,
     pub series: Vec<SeriesModel>,
     pub counts: Counts,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<Geometry>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -77,6 +79,74 @@ pub struct Counts {
     pub legend_items: usize,
     pub x_ticks: usize,
     pub y_ticks: usize,
+}
+
+/// 矩形/プロット領域の正規化座標(チャート間ジオメトリ照合用)。
+#[derive(Debug, Serialize, PartialEq)]
+pub struct RectN {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// 単一データ要素の正規化ジオメトリ。n* はプロット領域基準 [0,1]。
+#[derive(Debug, Serialize, PartialEq)]
+pub struct ElemN {
+    pub series: usize,
+    pub index: usize,
+    pub kind: String,
+    pub nx: f64,
+    pub ny: f64,
+    pub nw: f64,
+    pub nh: f64,
+}
+
+/// チャートのジオメトリ。plot_area はキャンバス基準 [0,1]、elements はプロット領域基準。
+#[derive(Debug, Serialize, PartialEq)]
+pub struct Geometry {
+    pub plot_area: RectN,
+    pub elements: Vec<ElemN>,
+}
+
+/// 縦棒のジオメトリを共有 `vertical_bar_boxes` から構築する(描画と単一真実源)。
+/// 縦棒以外、または退化プロット領域(幅/高さ<=0)は None。
+fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
+    match &spec.kind {
+        ChartKind::Bar {
+            horizontal: false, ..
+        } => {
+            let frame = crate::layout::common::compute(spec, m);
+            let pw = frame.plot_right - frame.plot_left;
+            let ph = frame.plot_bottom - frame.plot_top;
+            if pw <= 0.0 || ph <= 0.0 {
+                return None;
+            }
+            let plot_area = RectN {
+                x: frame.plot_left / spec.width,
+                y: frame.plot_top / spec.height,
+                w: pw / spec.width,
+                h: ph / spec.height,
+            };
+            let elements = crate::layout::bar::vertical_bar_boxes(spec, &frame)
+                .iter()
+                .map(|b| ElemN {
+                    series: b.series,
+                    index: b.index,
+                    kind: "bar".to_string(),
+                    nx: (b.x - frame.plot_left) / pw,
+                    ny: (b.y - frame.plot_top) / ph,
+                    nw: b.w / pw,
+                    nh: b.h / ph,
+                })
+                .collect();
+            Some(Geometry {
+                plot_area,
+                elements,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// 描画要素数(scatter/bubble は points、boxplot は box_points、その他は values)。
@@ -176,6 +246,7 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
             x_ticks: spec.categories.len(),
             y_ticks: 0,
         },
+        geometry: None,
     }
 }
 
@@ -266,6 +337,7 @@ pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
         model.counts.y_ticks = y_ticks;
         model.axes = Some(Axes { x, y });
     }
+    model.geometry = compute_geometry(spec, m);
     model
 }
 
@@ -434,6 +506,51 @@ mod tests {
         let model = build_model_core(&spec);
         assert!(model.series[0].fill.is_empty());
         assert!(model.series[0].stroke.is_empty());
+    }
+
+    #[test]
+    fn bar_has_normalized_geometry() {
+        let json = r#"{"type":"bar","data":{"labels":["A","B","C"],
+          "datasets":[{"data":[10,20,30]}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        let g = model.geometry.expect("縦棒には geometry があるべき");
+        // plot_area はキャンバス [0,1] 内、要素はプロット領域 [0,1] 内。
+        assert!(g.plot_area.x > 0.0 && g.plot_area.x < 1.0);
+        assert!(g.plot_area.w > 0.0 && g.plot_area.w <= 1.0);
+        assert_eq!(g.elements.len(), 3);
+        for e in &g.elements {
+            assert_eq!(e.kind, "bar");
+            assert!(e.nx >= 0.0 && e.nx <= 1.0, "nx={}", e.nx);
+            assert!(e.nw > 0.0 && e.nw <= 1.0, "nw={}", e.nw);
+            assert!(e.nh >= 0.0 && e.nh <= 1.0, "nh={}", e.nh);
+        }
+        // 左→右にカテゴリが並ぶ。
+        assert!(g.elements[0].nx < g.elements[1].nx);
+        assert!(g.elements[1].nx < g.elements[2].nx);
+        // 値が大きいほど高い。
+        assert!(g.elements[2].nh > g.elements[0].nh);
+    }
+
+    #[test]
+    fn pie_has_no_geometry() {
+        let json = r#"{"type":"pie","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        assert!(model.geometry.is_none());
+    }
+
+    #[test]
+    fn horizontal_bar_has_no_geometry_yet() {
+        // 横棒は今回スコープ外: geometry=None。
+        let json = r#"{"type":"bar","data":{"labels":["a","b"],
+          "datasets":[{"data":[10,90]}]},"options":{"indexAxis":"y"}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        assert!(model.geometry.is_none());
     }
 
     /// クロス言語フィクスチャ: ここの行は

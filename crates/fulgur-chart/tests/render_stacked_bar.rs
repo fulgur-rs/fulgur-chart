@@ -31,6 +31,18 @@ fn vertical_stacked_snapshot() {
     insta::assert_snapshot!(svg);
 }
 
+/// 縦積み上げ + データラベル: セグメント中央(box 中心)へのラベル y 座標を
+/// フル SVG スナップショットで固定する。各カテゴリで 2 系列が積み上がるため、
+/// 同一カテゴリ内の上下セグメントは異なる中点 y を持つ(box 中心式の回帰防止)。
+/// 値は 123/87 等の非丸値で nice_ticks 目盛りと衝突させない。
+#[test]
+fn vertical_stacked_with_datalabels_snapshot() {
+    let svg = render(
+        r#"{"type":"bar","data":{"labels":["Q1","Q2","Q3"],"datasets":[{"label":"製品A","data":[123,87,64]},{"label":"製品B","data":[41,93,72]}]},"options":{"scales":{"y":{"stacked":true}},"plugins":{"datalabels":{"display":true}}}}"#,
+    );
+    insta::assert_snapshot!(svg);
+}
+
 #[test]
 fn horizontal_stacked_snapshot() {
     let svg = render(
