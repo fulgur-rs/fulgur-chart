@@ -8,7 +8,7 @@ use super::common::{
 };
 use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos, Point};
 use crate::num::fmt_num;
-use crate::scale::{LinearScale, nice_ticks};
+use crate::scale::{LinearScale, NiceTicks, nice_ticks};
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 
@@ -17,6 +17,118 @@ const DEFAULT_POINT_R: f64 = 3.0;
 
 /// bubble で `point.r` が無い場合の既定半径。bubble は通常 r を持つが保険。
 const DEFAULT_BUBBLE_R: f64 = 5.0;
+
+/// 単一データ点の画素空間情報（scatter/line/bubble 共用）。
+/// モデル geometry とレンダラが共有する単一の真実源。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PointBox {
+    pub series: usize,
+    pub index: usize,
+    pub kind: &'static str, // "scatter" | "line" | "bubble"
+    pub cx: f64,
+    pub cy: f64,
+    pub r: f64,
+}
+
+/// scatter/bubble の自前フレーム（`common::compute` を使わない線形軸系）。
+#[derive(Debug, Clone)]
+pub struct ScatterLayout {
+    pub xs: LinearScale,
+    pub ys: LinearScale,
+    pub x_ticks: NiceTicks,
+    pub y_ticks: NiceTicks,
+    pub plot_left: f64,
+    pub plot_right: f64,
+    pub plot_top: f64,
+    pub plot_bottom: f64,
+}
+
+/// scatter/bubble チャートのフレームを計算して返す。
+/// `build` のインライン計算と同一の式（単一の真実源）。
+pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayout {
+    let label_font = spec.theme.font_size;
+    let (xmin, xmax) = axis_domain(spec, &spec.x_axis, |p| p.x);
+    let (ymin, ymax) = axis_domain(spec, &spec.y_axis, |p| p.y);
+    let x_ticks = nice_ticks(xmin, xmax, 10);
+    let y_ticks = nice_ticks(ymin, ymax, 10);
+    let mut max_y_w = 0.0_f32;
+    for &t in &y_ticks.ticks {
+        let w = m.width(&crate::num::fmt_num(t), label_font as f32);
+        if w > max_y_w {
+            max_y_w = w;
+        }
+    }
+    let y_axis_w = max_y_w as f64 + 10.0;
+    let legend = has_legend(spec);
+    let title_band = if spec.title.is_some() {
+        TITLE_BAND
+    } else {
+        0.0
+    };
+    let legend_top = if legend && spec.legend == LegendPos::Top {
+        LEGEND_BAND
+    } else {
+        0.0
+    };
+    let legend_bottom = if legend && spec.legend == LegendPos::Bottom {
+        LEGEND_BAND
+    } else {
+        0.0
+    };
+    // series_names の割り当ては凡例が左右にあるときだけ必要なため遅延評価する。
+    let (legend_left, legend_right_w) =
+        if legend && (spec.legend == LegendPos::Left || spec.legend == LegendPos::Right) {
+            let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+            let w = legend_band_width_vertical(m, &series_names, label_font);
+            if spec.legend == LegendPos::Left {
+                (w, 0.0)
+            } else {
+                (0.0, w)
+            }
+        } else {
+            (0.0, 0.0)
+        };
+    let plot_left = OUTER_PAD + y_axis_w + legend_left;
+    let plot_right = spec.width - OUTER_PAD - legend_right_w;
+    let plot_top = OUTER_PAD + title_band + legend_top;
+    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
+    ScatterLayout {
+        xs: LinearScale::new(x_ticks.min, x_ticks.max, plot_left, plot_right),
+        ys: LinearScale::new(y_ticks.min, y_ticks.max, plot_bottom, plot_top),
+        x_ticks,
+        y_ticks,
+        plot_left,
+        plot_right,
+        plot_top,
+        plot_bottom,
+    }
+}
+
+/// scatter/bubble の全点を返す（renderer とモデルの単一の真実源）。
+/// 非有限座標はスキップ。bubble は `PointBox.r` に実ピクセル半径を格納。
+pub fn scatter_points(spec: &ChartSpec, layout: &ScatterLayout) -> Vec<PointBox> {
+    let kind = match &spec.kind {
+        ChartKind::Bubble => "bubble",
+        _ => "scatter",
+    };
+    let mut pts = Vec::new();
+    for (sidx, ser) in spec.series.iter().enumerate() {
+        for (i, p) in ser.points.iter().enumerate() {
+            if !p.x.is_finite() || !p.y.is_finite() {
+                continue;
+            }
+            pts.push(PointBox {
+                series: sidx,
+                index: i,
+                kind,
+                cx: layout.xs.map(p.x),
+                cy: layout.ys.map(p.y),
+                r: point_radius(&spec.kind, p, ser.point_radius),
+            });
+        }
+    }
+    pts
+}
 
 /// 1 点の半径を返す。bubble はデータの第3次元 `point.r` を優先し、無ければ
 /// dataset の `pointRadius`、それも無ければ既定値。scatter は dataset の `pointRadius`
@@ -111,59 +223,31 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let ink = spec.theme.text_color;
     let label_font = spec.theme.font_size;
 
-    // x/y ドメイン → nice ticks。
-    let (xmin, xmax) = axis_domain(spec, &spec.x_axis, |p| p.x);
-    let (ymin, ymax) = axis_domain(spec, &spec.y_axis, |p| p.y);
-    let x_ticks = nice_ticks(xmin, xmax, 10);
-    let y_ticks = nice_ticks(ymin, ymax, 10);
+    let layout = compute_scatter_layout(spec, m);
+    let xs = layout.xs.clone();
+    let ys = layout.ys.clone();
+    let plot_left = layout.plot_left;
+    let plot_right = layout.plot_right;
+    let plot_top = layout.plot_top;
+    let plot_bottom = layout.plot_bottom;
 
-    // y 軸ラベル幅(目盛りラベルの最大幅 + 余白)。
-    let mut max_y_w = 0.0_f32;
-    for &t in &y_ticks.ticks {
-        let w = m.width(&fmt_num(t), label_font as f32);
-        if w > max_y_w {
-            max_y_w = w;
-        }
-    }
-    let y_axis_w = max_y_w as f64 + 10.0;
+    // グリッド描画用 ticks は compute_scatter_layout で計算済み。
+    let x_ticks = &layout.x_ticks;
+    let y_ticks = &layout.y_ticks;
 
-    // 凡例帯(カテゴリ系 common と同じロジック)。
+    // 凡例描画用フラグ(フレーム計算ではなく表示用)。
     let legend = has_legend(spec);
     let title_band = if spec.title.is_some() {
         TITLE_BAND
     } else {
         0.0
     };
-    let legend_top = if legend && spec.legend == LegendPos::Top {
-        LEGEND_BAND
-    } else {
-        0.0
-    };
-    let legend_bottom = if legend && spec.legend == LegendPos::Bottom {
-        LEGEND_BAND
-    } else {
-        0.0
-    };
-    let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
-    let legend_left = if legend && spec.legend == LegendPos::Left {
-        legend_band_width_vertical(m, &series_names, label_font)
-    } else {
-        0.0
-    };
     let legend_right = if legend && spec.legend == LegendPos::Right {
+        let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
         legend_band_width_vertical(m, &series_names, label_font)
     } else {
         0.0
     };
-
-    let plot_left = OUTER_PAD + y_axis_w + legend_left;
-    let plot_right = spec.width - OUTER_PAD - legend_right;
-    let plot_top = OUTER_PAD + title_band + legend_top;
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
-
-    // 線形スケール: x は左→右(非反転)、y は下→上(反転)。
-    let xs = LinearScale::new(x_ticks.min, x_ticks.max, plot_left, plot_right);
-    let ys = LinearScale::new(y_ticks.min, y_ticks.max, plot_bottom, plot_top);
 
     let mut items: Vec<Prim> = Vec::new();
 
@@ -239,21 +323,17 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         stroke_width: 1.0,
     });
 
-    // 5. 点(円)。系列・点とも入力順。非有限座標はスキップ。
-    for ser in &spec.series {
-        for (i, p) in ser.points.iter().enumerate() {
-            if !p.x.is_finite() || !p.y.is_finite() {
-                continue;
-            }
-            items.push(Prim::Circle {
-                cx: xs.map(p.x),
-                cy: ys.map(p.y),
-                r: point_radius(&spec.kind, p, ser.point_radius),
-                fill: ser.fill_at(i),
-                stroke: ser.stroke_at(i),
-                stroke_width: ser.stroke_width,
-            });
-        }
+    // 5. 点(円)。共有 scatter_points(単一真実源)から描画。
+    for b in scatter_points(spec, &layout) {
+        let ser = &spec.series[b.series];
+        items.push(Prim::Circle {
+            cx: b.cx,
+            cy: b.cy,
+            r: b.r,
+            fill: ser.fill_at(b.index),
+            stroke: ser.stroke_at(b.index),
+            stroke_width: ser.stroke_width,
+        });
     }
 
     // 6. 凡例(Top/Bottom: 横並び。draw_frame と同じ配置)。
@@ -326,7 +406,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::font::DEFAULT_FONT;
     use crate::ir::{AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType};
+    use crate::text::TextMeasurer;
 
     fn make_scatter_spec(points: &[(f64, f64)]) -> ChartSpec {
         let palette = crate::palette::PALETTE.to_vec();
@@ -422,5 +504,37 @@ mod tests {
             hi, 10.0,
             "suggested_max=5 はデータの上端(10.0)を縮小してはいけない: 実際 hi={hi}"
         );
+    }
+
+    #[test]
+    fn scatter_points_covers_all_series_and_indices() {
+        let spec = make_scatter_spec(&[(1.0, 2.0), (3.0, 4.0), (5.0, 6.0)]);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let layout = compute_scatter_layout(&spec, &m);
+        let pts = scatter_points(&spec, &layout);
+        assert_eq!(pts.len(), 3);
+        for (i, p) in pts.iter().enumerate() {
+            assert_eq!(p.series, 0);
+            assert_eq!(p.index, i);
+            assert_eq!(p.kind, "scatter");
+        }
+    }
+
+    #[test]
+    fn scatter_points_cx_monotone_with_x_values() {
+        let spec = make_scatter_spec(&[(1.0, 0.0), (5.0, 0.0), (10.0, 0.0)]);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let layout = compute_scatter_layout(&spec, &m);
+        let pts = scatter_points(&spec, &layout);
+        assert!(pts[0].cx < pts[1].cx && pts[1].cx < pts[2].cx);
+    }
+
+    #[test]
+    fn scatter_points_skips_non_finite() {
+        let spec = make_scatter_spec(&[(1.0, 2.0), (f64::NAN, 3.0), (5.0, 6.0)]);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let layout = compute_scatter_layout(&spec, &m);
+        let pts = scatter_points(&spec, &layout);
+        assert_eq!(pts.len(), 2);
     }
 }

@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+## [0.1.9](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.8...fulgur-chart-cli-v0.1.9) - 2026-06-22
+
+### Other
+
+- add crates.io badge for the fulgur-chart library crate
+- add Codecov coverage reporting for the Rust core
+
+## [0.9.0](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.8.0...fulgur-chart-v0.9.0) - 2026-06-22
+
+### Added
+
+- split Bar.stacked into placement_stacked + value_stacked
+- *(wasm)* drop usvg/resvg, depend on tiny-skia directly
+
+### Fixed
+
+- address AI review feedback
+
+### Other
+
+- add crates.io badge for the fulgur-chart library crate
+- add Codecov coverage reporting for the Rust core
+- cargo fmt common.rs (matches! macro wrap)
+- cargo fmt (matches! macro line-length wrap)
+
 ## [0.1.8](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.7...fulgur-chart-cli-v0.1.8) - 2026-06-22
 
 ### Other

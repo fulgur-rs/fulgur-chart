@@ -1,6 +1,7 @@
 //! 線形スケールと nice ticks（1-2-5 ステップ）。すべて決定的な純関数。
 
 /// 値→ピクセルの線形写像。px_min>px_max（y軸の上下反転）も許容。
+#[derive(Debug, Clone)]
 pub struct LinearScale {
     d0: f64,
     d1: f64,

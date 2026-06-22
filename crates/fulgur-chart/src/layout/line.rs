@@ -10,6 +10,31 @@ use std::fmt::Write;
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
 
+/// line チャートの全マーカー点（renderer とモデルの単一の真実源）。
+/// カテゴリごとに `line_x + ys.map` で計算し、欠損値は 0.0 扱い。
+pub fn line_points(
+    spec: &crate::ir::ChartSpec,
+    frame: &common::Frame,
+) -> Vec<crate::layout::scatter::PointBox> {
+    let n = spec.categories.len().max(1);
+    let mut pts = Vec::new();
+    for (sidx, ser) in spec.series.iter().enumerate() {
+        for i in 0..spec.categories.len() {
+            let x = common::line_x(frame, i, n);
+            let v = ser.values.get(i).copied().unwrap_or(0.0);
+            pts.push(crate::layout::scatter::PointBox {
+                series: sidx,
+                index: i,
+                kind: "line",
+                cx: x,
+                cy: frame.ys.map(v),
+                r: MARKER_R,
+            });
+        }
+    }
+    pts
+}
+
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let frame = common::compute(spec, m);
 
@@ -27,7 +52,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if !v.is_finite() {
                     return None;
                 }
-                let x = common::category_center(&frame, i, n);
+                let x = common::line_x(&frame, i, n);
                 Some((x, frame.ys.map(v), i))
             })
             .collect();
@@ -169,4 +194,101 @@ fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
         .unwrap();
     }
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::font::DEFAULT_FONT;
+    use crate::frontend::chartjs;
+    use crate::layout::common;
+    use crate::text::TextMeasurer;
+
+    fn pts_for(json: &str) -> Vec<crate::layout::scatter::PointBox> {
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        line_points(&spec, &frame)
+    }
+
+    #[test]
+    fn line_points_count_is_series_times_categories() {
+        let ps = pts_for(
+            r#"{"type":"line","data":{"labels":["a","b","c","d","e","f","g"],
+               "datasets":[{"data":[1,2,3,4,5,6,7]},{"data":[7,6,5,4,3,2,1]}]}}"#,
+        );
+        assert_eq!(ps.len(), 14);
+        for p in &ps {
+            assert_eq!(p.kind, "line");
+        }
+    }
+
+    #[test]
+    fn line_points_x_is_edge_to_edge() {
+        // chart.js offset:false: n=3 の点は plot_left / 中点 / plot_right に並ぶ。
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10,20,30]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let ps = line_points(&spec, &frame);
+        let s0: Vec<_> = ps.iter().filter(|p| p.series == 0).collect();
+        assert!((s0[0].cx - frame.plot_left).abs() < 1e-9);
+        assert!((s0[2].cx - frame.plot_right).abs() < 1e-9);
+        assert!((s0[1].cx - (frame.plot_left + frame.plot_right) / 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn line_frame_stays_valid_when_edge_labels_exceed_width() {
+        // 狭い幅 + 長い端ラベルでも edge 余白で描画領域が反転しない(plot_right >= plot_left)。
+        let mut spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["VeryLongCategoryLabelLeft","VeryLongCategoryLabelRight"],
+               "datasets":[{"data":[1,2]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.width = 60.0; // edge ラベル半幅合計が利用可能幅を超える狭い幅。
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        assert!(
+            frame.plot_right >= frame.plot_left,
+            "plot area inverted: left={} right={}",
+            frame.plot_left,
+            frame.plot_right
+        );
+        // line_x は有限かつ先頭<=末尾(NaN や順序反転を生まない)。
+        let n = spec.categories.len();
+        let x0 = common::line_x(&frame, 0, n);
+        let x_last = common::line_x(&frame, n - 1, n);
+        assert!(x0.is_finite() && x_last.is_finite());
+        assert!(x_last >= x0);
+    }
+
+    #[test]
+    fn line_points_cx_monotone_with_category_order() {
+        let ps = pts_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10,20,30]}]}}"#,
+        );
+        let ser0: Vec<_> = ps.iter().filter(|p| p.series == 0).collect();
+        assert!(ser0[0].cx < ser0[1].cx && ser0[1].cx < ser0[2].cx);
+    }
+
+    #[test]
+    fn line_points_cy_tracks_value() {
+        let ps = pts_for(
+            r#"{"type":"line","data":{"labels":["a","b"],
+               "datasets":[{"data":[10,100]}]}}"#,
+        );
+        let ser0: Vec<_> = ps.iter().filter(|p| p.series == 0).collect();
+        assert!(
+            ser0[1].cy < ser0[0].cy,
+            "大きい値は小さい cy(上方向): ser0[0].cy={}, ser0[1].cy={}",
+            ser0[0].cy,
+            ser0[1].cy
+        );
+    }
 }

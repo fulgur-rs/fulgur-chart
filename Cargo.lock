@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "fulgur-chart"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "insta",
  "schemars",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "fulgur-chart-cli"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "assert_cmd",
  "clap",

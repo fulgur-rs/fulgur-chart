@@ -51,21 +51,28 @@ function collapse(arr) {
 /// これにより `{type:'line', datasets:[{type:'bar'},…]}`(fulgur は Bar 扱い)を
 /// 取りこぼさず、混在/全 line/横棒では両側 None に揃えて片側 skip=pass の
 /// 見せかけ緑(実際の棒を照合しない)を防ぐ。
-function isVerticalBarChart(spec) {
-  const indexAxis = (spec.options && spec.options.indexAxis) || 'x';
-  if (indexAxis === 'y') return false; // 横棒は fulgur 側も geometry を出さない
+/// 解決後のチャート種別を fulgur の frontend/chartjs.rs と同じ規約で求める。
+/// 基本型が bar/line のときのみ dataset 別 type override(bar/line)が有効で、
+/// 全 bar → 'bar' / 全 line → 'line' / 混在 → 'mixed'。dataset 空・非 mixable
+/// 基本型は基本 type をそのまま返す(scatter/bubble など)。
+function effectiveChartType(spec) {
   const base = spec.type;
   const isMixableBase = base === 'bar' || base === 'line';
-  // 実効種別: mixable 基本型のときのみ dataset の bar/line override を尊重。
-  const effective = (ds) =>
-    isMixableBase && (ds.type === 'bar' || ds.type === 'line') ? ds.type : base;
+  if (!isMixableBase) return base;
+  const effective = (ds) => (ds.type === 'bar' || ds.type === 'line' ? ds.type : base);
   const types = spec.data.datasets.map(effective);
   const hasBar = types.includes('bar');
   const hasLine = types.includes('line');
-  if (isMixableBase && hasBar && hasLine) return false; // Mixed
-  if (isMixableBase && hasLine && !hasBar) return false; // Line
-  if (isMixableBase && hasBar && !hasLine) return true; // Bar
-  return base === 'bar'; // dataset 空 / 非 mixable 基本型は基本 type で決める
+  if (hasBar && hasLine) return 'mixed';
+  if (hasLine && !hasBar) return 'line';
+  if (hasBar && !hasLine) return 'bar';
+  return base; // dataset 空: 基本 type で決める
+}
+
+function isVerticalBarChart(spec) {
+  const indexAxis = (spec.options && spec.options.indexAxis) || 'x';
+  if (indexAxis === 'y') return false; // 横棒は fulgur 側も geometry を出さない
+  return effectiveChartType(spec) === 'bar';
 }
 
 /// 縦棒の BarElement を chartArea 基準 [0,1] へ正規化。縦・全 bar 以外
@@ -98,6 +105,61 @@ function barGeometry(chart, spec, width, height) {
         nw: bw / caw,
         nh: h / cah,
       });
+    }
+  }
+  return {
+    plot_area: { x: a.left / width, y: a.top / height, w: caw / width, h: cah / height },
+    elements,
+  };
+}
+
+/// scatter/line/bubble の PointElement を chartArea 基準 [0,1] へ正規化。
+/// scatter/bubble は data.datasets の points を getDatasetMeta で取得。
+/// line は PointElement の x/y（カテゴリ中心 × y スケール）を取得。
+/// bar は barGeometry() が担当するため除外。
+function pointGeometry(chart, spec, width, height) {
+  // 実効種別で判定する。{type:'bar', datasets:[{type:'line'}]} は fulgur 側で
+  // ChartKind::Line に解決され line geometry を出すため、ここも 'line' 扱いにして
+  // 片側 None による見せかけ緑(実際の点を照合しない)を防ぐ。bar/mixed は
+  // barGeometry() が担当するので除外する。
+  const eff = effectiveChartType(spec);
+  const typ = eff === 'scatter' || eff === 'bubble' || eff === 'line' ? eff : undefined;
+  if (typ === undefined) return undefined;
+  if (typ === 'line') {
+    const indexAxis = (spec.options && spec.options.indexAxis) || 'x';
+    if (indexAxis === 'y') return undefined;
+  }
+  const a = chart.chartArea;
+  const caw = a.right - a.left;
+  const cah = a.bottom - a.top;
+  if (!(caw > 0) || !(cah > 0)) return undefined;
+  const elements = [];
+  for (let s = 0; s < spec.data.datasets.length; s++) {
+    const meta = chart.getDatasetMeta(s);
+    for (let i = 0; i < meta.data.length; i++) {
+      const el = meta.data[i];
+      if (!el) continue; // 疎配列・初期化途中の要素を防御的にスキップ
+      if (typ === 'bubble') {
+        const { x, y } = el.getProps(['x', 'y'], true);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const radius = el.options?.radius ?? 0;
+        elements.push({
+          series: s, index: i, kind: 'bubble',
+          nx: (x - a.left) / caw,
+          ny: (y - a.top) / cah,
+          nw: Number.isFinite(radius) && radius > 0 ? radius / caw : 0,
+          nh: 0,
+        });
+      } else {
+        const { x, y } = el.getProps(['x', 'y'], true);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        elements.push({
+          series: s, index: i, kind: typ,
+          nx: (x - a.left) / caw,
+          ny: (y - a.top) / cah,
+          nw: 0, nh: 0,
+        });
+      }
     }
   }
   return {
@@ -177,7 +239,7 @@ export async function extractChartjsModel(spec, width, height) {
     axes = { x: xAxis, y: yAxis };
   }
 
-  const geometry = barGeometry(chart, spec, width, height);
+  const geometry = barGeometry(chart, spec, width, height) ?? pointGeometry(chart, spec, width, height);
   const png = canvas.toBuffer('image/png');
   chart.destroy();
 

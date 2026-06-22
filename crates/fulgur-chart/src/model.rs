@@ -145,6 +145,66 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
                 elements,
             })
         }
+        ChartKind::Scatter | ChartKind::Bubble => {
+            let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
+            let pw = layout.plot_right - layout.plot_left;
+            let ph = layout.plot_bottom - layout.plot_top;
+            if pw <= 0.0 || ph <= 0.0 || spec.width <= 0.0 || spec.height <= 0.0 {
+                return None;
+            }
+            let plot_area = RectN {
+                x: layout.plot_left / spec.width,
+                y: layout.plot_top / spec.height,
+                w: pw / spec.width,
+                h: ph / spec.height,
+            };
+            let elements = crate::layout::scatter::scatter_points(spec, &layout)
+                .iter()
+                .map(|b| ElemN {
+                    series: b.series,
+                    index: b.index,
+                    kind: b.kind.to_string(),
+                    nx: (b.cx - layout.plot_left) / pw,
+                    ny: (b.cy - layout.plot_top) / ph,
+                    nw: if b.kind == "bubble" { b.r / pw } else { 0.0 },
+                    nh: 0.0,
+                })
+                .collect();
+            Some(Geometry {
+                plot_area,
+                elements,
+            })
+        }
+        ChartKind::Line => {
+            let frame = crate::layout::common::compute(spec, m);
+            let pw = frame.plot_right - frame.plot_left;
+            let ph = frame.plot_bottom - frame.plot_top;
+            if pw <= 0.0 || ph <= 0.0 || spec.width <= 0.0 || spec.height <= 0.0 {
+                return None;
+            }
+            let plot_area = RectN {
+                x: frame.plot_left / spec.width,
+                y: frame.plot_top / spec.height,
+                w: pw / spec.width,
+                h: ph / spec.height,
+            };
+            let elements = crate::layout::line::line_points(spec, &frame)
+                .iter()
+                .map(|b| ElemN {
+                    series: b.series,
+                    index: b.index,
+                    kind: b.kind.to_string(),
+                    nx: (b.cx - frame.plot_left) / pw,
+                    ny: (b.cy - frame.plot_top) / ph,
+                    nw: 0.0,
+                    nh: 0.0,
+                })
+                .collect();
+            Some(Geometry {
+                plot_area,
+                elements,
+            })
+        }
         _ => None,
     }
 }
@@ -551,6 +611,63 @@ mod tests {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let model = build_model(&spec, &m);
         assert!(model.geometry.is_none());
+    }
+
+    #[test]
+    fn scatter_has_normalized_geometry() {
+        let json = r#"{"type":"scatter","data":{"datasets":[
+          {"data":[{"x":1,"y":2},{"x":3,"y":4},{"x":5,"y":6}]}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        let g = model.geometry.expect("scatter には geometry があるべき");
+        assert_eq!(g.elements.len(), 3);
+        for e in &g.elements {
+            assert_eq!(e.kind, "scatter");
+            assert_eq!(e.nw, 0.0);
+            assert_eq!(e.nh, 0.0);
+            assert!(e.nx >= 0.0 && e.nx <= 1.0, "nx={}", e.nx);
+            assert!(e.ny >= 0.0 && e.ny <= 1.0, "ny={}", e.ny);
+        }
+        assert!(g.elements[0].nx < g.elements[1].nx);
+        assert!(g.elements[1].nx < g.elements[2].nx);
+    }
+
+    #[test]
+    fn bubble_has_normalized_geometry_with_radius() {
+        let json = r#"{"type":"bubble","data":{"datasets":[
+          {"data":[{"x":1,"y":2,"r":10},{"x":3,"y":4,"r":20}]}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        let g = model.geometry.expect("bubble には geometry があるべき");
+        assert_eq!(g.elements.len(), 2);
+        for e in &g.elements {
+            assert_eq!(e.kind, "bubble");
+            assert!(e.nw > 0.0, "bubble の nw(正規化半径)は正: nw={}", e.nw);
+        }
+        assert!(g.elements[1].nw > g.elements[0].nw, "大きい r は大きい nw");
+    }
+
+    #[test]
+    fn line_has_normalized_geometry() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+          "datasets":[{"data":[10,20,30]}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        let g = model.geometry.expect("line には geometry があるべき");
+        assert_eq!(g.elements.len(), 3);
+        for e in &g.elements {
+            assert_eq!(e.kind, "line");
+            assert_eq!(e.nw, 0.0);
+            assert_eq!(e.nh, 0.0);
+        }
+        assert!(g.elements[0].nx < g.elements[1].nx);
+        assert!(
+            g.elements[2].ny < g.elements[0].ny,
+            "大きい値は小さい ny(上方向)"
+        );
     }
 
     /// クロス言語フィクスチャ: ここの行は
