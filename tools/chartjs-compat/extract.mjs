@@ -134,6 +134,11 @@ export async function extractChartjsModel(spec, width, height) {
     const stroke = collapse(
       Array.from({ length: n }, (_, j) => {
         // borderWidth:0 は枠線未描画(bar の既定等)→ stroke は null。
+        // 注意: null は chart.js 側にしか出ない片側センチネル。diff の skip は
+        // 「chart.js が描かないスロットは fulgur も描かない」不変条件に依存する。
+        // 現状は成立(fulgur の Prim::Rect は stroke を持たず棒枠を描かない / 非エリア
+        // 線は area:false で塗らない)。将来 fulgur がこれらを描き始めたら、本 skip は
+        // 実差分を隠すため見直すこと(geometry 次元は枠線を照合しない)。
         if (meta.data[j]?.options?.borderWidth === 0) return null;
         return toRgba(meta.data[j]?.options?.borderColor ?? '#000');
       }),
