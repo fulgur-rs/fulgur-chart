@@ -145,6 +145,7 @@ fn horizontal_bar_datalabels_render_negative_value() {
 #[test]
 fn line_datalabels_skip_missing_values() {
     // categories(3) > values(1): 欠損カテゴリに spurious な "0" ラベルを描かない。
+    // line は begin_at_zero=false のため Y 軸に 0 目盛りも現れない。
     let json = r#"{
       "type":"line",
       "data":{"labels":["a","b","c"],"datasets":[{"data":[123]}]},
@@ -153,8 +154,8 @@ fn line_datalabels_skip_missing_values() {
     let svg = render(json);
     let zero_labels = svg.matches(">0</text>").count();
     assert_eq!(
-        zero_labels, 1,
-        "欠損カテゴリにラベルを描かない(0目盛りのみ)"
+        zero_labels, 0,
+        "欠損カテゴリにラベルを描かない(spurious 0 ラベル不在)"
     );
     assert!(svg.contains(">123</text>"));
 }

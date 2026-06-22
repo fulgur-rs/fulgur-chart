@@ -36,7 +36,7 @@ series:
     fill:
       - "rgba(54,162,235,1)"
     stroke:
-      - "rgba(54,162,235,1)"
+      - "rgba(0,0,0,0.1)"
     values:
       - 87
       - 73
