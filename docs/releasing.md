@@ -45,7 +45,7 @@ crates.io の各クレートページ → Settings → Trusted Publishing → Gi
 | Repository owner | `fulgur-rs` |
 | Repository name | `fulgur-chart` |
 | Workflow filename | `release-plz.yml` |
-| Environment | (空欄) |
+| Environment | `crates-io` |
 
 - https://crates.io/crates/fulgur-chart/settings
 - https://crates.io/crates/fulgur-chart-cli/settings
@@ -53,7 +53,20 @@ crates.io の各クレートページ → Settings → Trusted Publishing → Gi
 > 初回 publish は不要 (既に `0.1.0` を手動公開済み)。Trusted Publishing は初回 publish
 > 後にのみ設定できる仕様だが、本プロジェクトは既に公開済みなので今すぐ登録できる。
 
-### 2. GitHub App を作成して Secrets を登録
+### 2. GitHub Environment `crates-io` を作成
+
+`release-plz-release` ジョブは `environment: crates-io` を参照するため、
+リポジトリに同名の Environment が必要。
+
+リポジトリ Settings → Environments → **New environment**:
+
+1. 名前: `crates-io`
+2. **Required reviewers** にリリース承認者を追加
+3. Save protection rules
+
+これにより、`release-plz-release` は Required reviewers の承認後にのみ実行される。
+
+### 3. GitHub App を作成して Secrets を登録
 
 `GITHUB_TOKEN` で作成した PR は CI / release イベントをトリガーしないため、App トークンを使う。
 
