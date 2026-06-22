@@ -336,7 +336,10 @@ mod tests {
             series: vec![Series {
                 name: String::new(),
                 values: vec![],
-                points: points.iter().map(|&(x, y)| Point { x, y, r: None }).collect(),
+                points: points
+                    .iter()
+                    .map(|&(x, y)| Point { x, y, r: None })
+                    .collect(),
                 fill: vec![palette[0]],
                 stroke: vec![],
                 stroke_width: 1.0,
@@ -379,9 +382,9 @@ mod tests {
         let mut spec = make_scatter_spec(&[(1.0, 0.0), (10.0, 0.0)]);
         spec.x_axis.suggested_min = Some(-5.0);
         let (lo, _hi) = axis_domain(&spec, &spec.x_axis, |p| p.x);
-        assert!(
-            lo <= -5.0,
-            "suggested_min=-5 はドメインを下方向に広げるべき: 実際 lo={lo}"
+        assert_eq!(
+            lo, -5.0,
+            "suggested_min=-5 はドメインを正確に -5.0 に設定すべき: 実際 lo={lo}"
         );
     }
 
@@ -391,9 +394,33 @@ mod tests {
         let mut spec = make_scatter_spec(&[(1.0, 0.0), (10.0, 0.0)]);
         spec.x_axis.suggested_min = Some(5.0);
         let (lo, _hi) = axis_domain(&spec, &spec.x_axis, |p| p.x);
-        assert!(
-            lo <= 1.0,
-            "suggested_min=5 はデータの下端(1.0)を縮小してはいけない: 実際 lo={lo}"
+        assert_eq!(
+            lo, 1.0,
+            "suggested_min=5 はデータの下端(1.0)を維持すべき: 実際 lo={lo}"
+        );
+    }
+
+    #[test]
+    fn axis_domain_suggested_max_expands_above_data() {
+        // x データが [1.0, 10.0]、suggested_max=15.0 → ドメインが 15.0 まで広がる。
+        let mut spec = make_scatter_spec(&[(1.0, 0.0), (10.0, 0.0)]);
+        spec.x_axis.suggested_max = Some(15.0);
+        let (_lo, hi) = axis_domain(&spec, &spec.x_axis, |p| p.x);
+        assert_eq!(
+            hi, 15.0,
+            "suggested_max=15 はドメインを正確に 15.0 に設定すべき: 実際 hi={hi}"
+        );
+    }
+
+    #[test]
+    fn axis_domain_suggested_max_noop_when_data_higher() {
+        // x データが [1.0, 10.0]、suggested_max=5.0 → データ(10.0)が優先されるので no-op。
+        let mut spec = make_scatter_spec(&[(1.0, 0.0), (10.0, 0.0)]);
+        spec.x_axis.suggested_max = Some(5.0);
+        let (_lo, hi) = axis_domain(&spec, &spec.x_axis, |p| p.x);
+        assert_eq!(
+            hi, 10.0,
+            "suggested_max=5 はデータの上端(10.0)を縮小してはいけない: 実際 hi={hi}"
         );
     }
 }
