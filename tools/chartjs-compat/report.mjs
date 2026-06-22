@@ -74,7 +74,23 @@ function diffRows(dimName, dim) {
     .join('\n');
 }
 
-/// cross-check の divergences / unpainted を別テーブルへ。
+/// 診断 info(例: geometry の plot_area 差)を表へ。pass には影響しない旨を
+/// dimension 名で明示する。各要素が自領域正規化済みのため plot_area 画素差は
+/// pass を落とさないが、内側領域の取り方の目安として可視化しておく。
+function infoRows(dimName, dim) {
+  const info = dim && dim.info ? dim.info : [];
+  if (info.length === 0) return '';
+  return info
+    .map(
+      (d) =>
+        `<tr><td>${esc(dimName)} (info)</td><td>${esc(d.field)}</td><td class="f">${fmtVal(
+          d.fulgur,
+        )}</td><td class="c">${fmtVal(d.chartjs)}</td></tr>`,
+    )
+    .join('\n');
+}
+
+
 function crossRows(cross) {
   const rows = [];
   for (const dv of cross.divergences || []) {
@@ -131,6 +147,7 @@ export function writeHtmlReport(
     diffRows('axes', dims.axes),
     diffRows('counts', dims.counts),
     diffRows('geometry', dims.geometry),
+    infoRows('geometry', dims.geometry),
   ]
     .filter(Boolean)
     .join('\n');
