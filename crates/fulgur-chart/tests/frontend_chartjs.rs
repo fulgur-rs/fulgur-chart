@@ -228,7 +228,7 @@ fn scales_absent_is_not_stacked() {
 #[test]
 fn scales_stacked_false_is_not_stacked() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
-      "options":{"scales":{"y":{"stacked":false}}} }"#;
+      "options":{"scales":{"x":{"stacked":false}}} }"#;
     let spec = chartjs::parse(json, false).unwrap();
     assert!(matches!(spec.kind, ChartKind::Bar { stacked: false, .. }));
 }

@@ -338,14 +338,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let has_bar = series_types.contains(&SeriesType::Bar);
     let has_line = series_types.contains(&SeriesType::Line);
     let bar_kind = || ChartKind::Bar {
-        horizontal: raw.options.index_axis.as_deref() == Some("y"),
+        horizontal: index_axis == "y",
         stacked,
     };
 
     // 混合(bar+line)は縦・非積み上げのみ対応。横棒(indexAxis:y)や積み上げと併用すると
     // それらが黙って失われるため、受理せず明示エラーにする(mixed.rs は縦・非積み上げ前提)。
     if is_mixable_base && has_bar && has_line {
-        let horizontal = raw.options.index_axis.as_deref() == Some("y");
+        let horizontal = index_axis == "y";
         if horizontal || stacked {
             return Err(
                 "混合チャート(bar+line)は横棒(indexAxis:y)・積み上げ(stacked)と併用できません"
