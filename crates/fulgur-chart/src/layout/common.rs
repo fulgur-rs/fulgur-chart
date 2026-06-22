@@ -54,7 +54,13 @@ fn has_legend(spec: &ChartSpec) -> bool {
 pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
-    if matches!(spec.kind, crate::ir::ChartKind::Bar { value_stacked: true, .. }) {
+    if matches!(
+        spec.kind,
+        crate::ir::ChartKind::Bar {
+            value_stacked: true,
+            ..
+        }
+    ) {
         // 積み上げ: カテゴリごとに正値の和(上限)・負値の和(下限)をとる。
         // chart.js 互換: beginAtZero=false のとき 0 ではなく実データの個別値を境界にする。
         // 全正値ケース(neg_sum が常に 0)では min_individual を下限として使う。
