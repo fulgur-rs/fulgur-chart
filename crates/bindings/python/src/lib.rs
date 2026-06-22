@@ -28,11 +28,7 @@ fn detect_dsl(json: &str) -> Option<&'static str> {
     }
 }
 
-fn parse_spec(
-    json: &str,
-    strict: bool,
-    dsl: &str,
-) -> PyResult<fulgur_core::ir::ChartSpec> {
+fn parse_spec(json: &str, strict: bool, dsl: &str) -> PyResult<fulgur_core::ir::ChartSpec> {
     // 非 strict でパース（JSON / DSL 構文エラー → ParseError）
     let spec = match dsl {
         "chartjs" => fulgur_core::frontend::chartjs::parse(json, false),
@@ -123,9 +119,8 @@ fn render_image<'py>(
     let spec = build_ir(spec_json, width, height, strict, dsl)?;
     let font_bytes = font.unwrap_or(fulgur_core::font::DEFAULT_FONT);
     // PNG パスの全エラー（フォントエラー含む）→ RenderError（binding-api-contract の非対称規約）
-    let png_data =
-        fulgur_core::raster_direct::render_chart_to_png(&spec, scale as f32, font_bytes)
-            .map_err(render_error)?;
+    let png_data = fulgur_core::raster_direct::render_chart_to_png(&spec, scale as f32, font_bytes)
+        .map_err(render_error)?;
     Ok(pyo3::types::PyBytes::new(py, &png_data))
 }
 
@@ -137,14 +132,13 @@ fn version() -> &'static str {
 #[pyfunction]
 fn schema(dsl: &str) -> PyResult<String> {
     let s = match dsl {
-        "chartjs" => serde_json::to_string(
-            &schemars::schema_for!(fulgur_core::schema::ChartJsSpec),
-        )
-        .unwrap(),
-        "vegalite" => serde_json::to_string(
-            &schemars::schema_for!(fulgur_core::schema::VegaLiteSpec),
-        )
-        .unwrap(),
+        "chartjs" => {
+            serde_json::to_string(&schemars::schema_for!(fulgur_core::schema::ChartJsSpec)).unwrap()
+        }
+        "vegalite" => {
+            serde_json::to_string(&schemars::schema_for!(fulgur_core::schema::VegaLiteSpec))
+                .unwrap()
+        }
         other => return Err(parse_error(format!("未知のDSL: {other}"))),
     };
     Ok(s)
