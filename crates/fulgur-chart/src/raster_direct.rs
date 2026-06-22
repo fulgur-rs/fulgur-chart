@@ -3,9 +3,10 @@
 //! グリフ輪郭をパスに変換して描く。
 //!
 //! ## SVG 経由との違い
-//! - SVG 文字列と usvg/resvg パーサを PNG 経路から除去。
+//! - SVG 文字列と SVG パーサ（かつての usvg/resvg 経路）を排除。依存自体からも除去済みで、
+//!   この経路は tiny-skia と ttf-parser のみに依存する。
 //! - アンチエイリアスは tiny-skia 直描きの AA になるため、SVG 経由と画素単位では一致しない。
-//! - テキスト描画品質は resvg 経由と実用上同等（グリフ輪郭ベース）。
+//! - テキスト描画品質は SVG パーサ経由と実用上同等（グリフ輪郭ベース）。
 //!
 //! ## 制約
 //! - Prim::Path の d 文字列は M/L/C/A/Z コマンドのみを含む前提（レイアウト生成コードの不変条件）。
@@ -14,7 +15,7 @@
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
-use resvg::tiny_skia::{self, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
+use tiny_skia::{self, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 use ttf_parser::OutlineBuilder;
 
 use crate::font::DEFAULT_FONT;

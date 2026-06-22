@@ -81,7 +81,7 @@ jobs:
         run: cross test --workspace --locked --target ${{ matrix.target }}
 
   wasm:
-    name: Check (wasm32-unknown-unknown)
+    name: Check + runtime test (wasm32-unknown-unknown)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -96,6 +96,13 @@ jobs:
 
       - name: Check
         run: cargo check --workspace --locked --target wasm32-unknown-unknown
+
+      # wasm32 でビルドが通るだけでなく、実際に SVG/PNG を生成して native と
+      # byte 一致する(決定論が cross-platform で保たれる)ことを node 上で検証する。
+      - uses: taiki-e/install-action@wasm-pack
+
+      - name: Runtime byte-equality test (node)
+        run: wasm-pack test --node crates/fulgur-chart --test wasm_runtime
 
   msrv:
     name: MSRV (1.85.0)

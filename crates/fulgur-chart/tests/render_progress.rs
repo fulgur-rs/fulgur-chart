@@ -132,7 +132,7 @@ fn progress_bars_render_in_png() {
     // 描画されること。パスのコマンドと座標が連結していると parse_path_data が
     // 失敗し、PNG でバーが消える(テキストのみになる)。前景色のピクセルが
     // PNG に現れることで、パスが解釈・描画されたことを保証する。
-    use resvg::tiny_skia::Pixmap;
+    use tiny_skia::Pixmap;
     let spec = chartjs::parse(
         r##"{"type":"progress","data":{"datasets":[{"data":[100],"backgroundColor":"#36a2eb"}]}}"##,
         false,

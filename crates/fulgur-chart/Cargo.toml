@@ -14,10 +14,12 @@ repository.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-resvg = { workspace = true }
+tiny-skia = { workspace = true }
 schemars = { workspace = true }
-usvg = { workspace = true }
 ttf-parser = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
