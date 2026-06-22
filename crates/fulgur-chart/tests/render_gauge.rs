@@ -186,7 +186,7 @@ fn gauge_snapshot() {
 #[test]
 fn radial_gauge_rasterizes_value_color_in_png() {
     // 回帰: 弧パスが PNG 直接ラスタライザで描画される。前景色ピクセルが PNG に現れる。
-    use resvg::tiny_skia::Pixmap;
+    use tiny_skia::Pixmap;
     let spec = chartjs::parse(
         r##"{"type":"radialGauge","data":{"datasets":[{"data":[100],"backgroundColor":"#36a2eb"}]},
         "options":{"roundedCorners":false}}"##,

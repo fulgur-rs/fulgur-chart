@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use fulgur_chart::frontend::chartjs;
 use fulgur_chart::raster_direct::render_chart_to_png;
-use resvg::tiny_skia::Pixmap;
+use tiny_skia::Pixmap;
 
 /// 比較対象の代表 spec 名（examples/specs/<name>.json）。
 const NAMES: &[&str] = &["bar", "line", "area", "pie"];
