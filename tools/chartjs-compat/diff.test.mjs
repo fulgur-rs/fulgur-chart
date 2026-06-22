@@ -130,3 +130,34 @@ test('片方に geometry が無ければ skip', () => {
   assert.equal(r.dimensions.geometry.skipped, true);
   assert.equal(r.dimensions.geometry.pass, true);
 });
+
+test('paint-state: 片側 null スロットは colors 照合から除外され PASS', () => {
+  // chart.js 側が未描画(null)、fulgur 側は色 → 照合対象外で PASS。
+  const f = base(); const c = base();
+  c.series[0].stroke = [null]; // borderWidth:0 で未描画
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, true);
+});
+
+test('paint-state: 混在 null/色は非 null スロットのみ照合', () => {
+  const f = base(); const c = base();
+  f.series[0].fill = ['rgba(1,1,1,1)', 'rgba(2,2,2,1)'];
+  c.series[0].fill = [null, 'rgba(2,2,2,1)']; // 0番は未描画、1番は一致
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, true);
+});
+
+test('paint-state: 混在で非 null スロットが不一致なら FAIL', () => {
+  const f = base(); const c = base();
+  f.series[0].fill = ['rgba(1,1,1,1)', 'rgba(2,2,2,1)'];
+  c.series[0].fill = [null, 'rgba(9,9,9,1)']; // 1番が不一致
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, false);
+});
+
+test('paint-state: null を含まない通常の不一致は従来どおり FAIL', () => {
+  const f = base(); const c = base();
+  c.series[0].fill = ['rgba(99,99,99,0.5)'];
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.colors.pass, false);
+});
