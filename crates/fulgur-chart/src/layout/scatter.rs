@@ -8,7 +8,7 @@ use super::common::{
 };
 use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos, Point};
 use crate::num::fmt_num;
-use crate::scale::{LinearScale, nice_ticks};
+use crate::scale::{LinearScale, NiceTicks, nice_ticks};
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 
@@ -35,6 +35,8 @@ pub struct PointBox {
 pub struct ScatterLayout {
     pub xs: LinearScale,
     pub ys: LinearScale,
+    pub x_ticks: NiceTicks,
+    pub y_ticks: NiceTicks,
     pub plot_left: f64,
     pub plot_right: f64,
     pub plot_top: f64,
@@ -79,6 +81,8 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     ScatterLayout {
         xs: LinearScale::new(x_ticks.min, x_ticks.max, plot_left, plot_right),
         ys: LinearScale::new(y_ticks.min, y_ticks.max, plot_bottom, plot_top),
+        x_ticks,
+        y_ticks,
         plot_left,
         plot_right,
         plot_top,
@@ -213,11 +217,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let plot_top = layout.plot_top;
     let plot_bottom = layout.plot_bottom;
 
-    // グリッド描画用 ticks(フレーム計算ではなく表示用)。
-    let (xmin, xmax) = axis_domain(spec, &spec.x_axis, |p| p.x);
-    let (ymin, ymax) = axis_domain(spec, &spec.y_axis, |p| p.y);
-    let x_ticks = nice_ticks(xmin, xmax, 10);
-    let y_ticks = nice_ticks(ymin, ymax, 10);
+    // グリッド描画用 ticks は compute_scatter_layout で計算済み。
+    let x_ticks = &layout.x_ticks;
+    let y_ticks = &layout.y_ticks;
 
     // 凡例描画用フラグ(フレーム計算ではなく表示用)。
     let legend = has_legend(spec);
