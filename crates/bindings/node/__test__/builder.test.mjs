@@ -67,6 +67,12 @@ test('explicit null/false format is invalid, not silently rendered', () => {
   assert.throws(() => build(BAR).format('png').render(null), FulgurParseError)
 })
 
+test('an explicitly stored format(null) is forwarded, not defaulted to svg', () => {
+  // Only an unset .format() falls back to svg; .format(null) is an explicit (invalid) value,
+  // so render() forwards it (matching render(null)) instead of silently rendering svg.
+  assert.throws(() => build(BAR).format(null).render(), FulgurParseError)
+})
+
 // --- chainable setters: width/height/scale/dsl/strict ---
 
 test('width/height override', () => {

@@ -27,9 +27,11 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepack": "npm run build"
   },
+  "dependencies": {
+    "@types/node": "^20.0.0"
+  },
   "devDependencies": {
     "@napi-rs/cli": "^3.0.0",
-    "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   }
 }

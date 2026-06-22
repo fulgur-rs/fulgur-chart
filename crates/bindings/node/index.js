@@ -101,10 +101,13 @@ class Builder {
   }
 
   // Format precedence: explicit argument > .format() setter > default 'svg'.
-  // `undefined` (or no argument) means "not specified" and falls back; any other value
-  // (null/false/...) is forwarded to the native layer, which rejects it as ParseError.
+  // Only a truly unset setter falls back: an explicitly stored format (even null/false) is
+  // forwarded to the native layer, which rejects an invalid value as ParseError. Presence is
+  // tested with `in` (not `??`) so `.format(null).render()` matches `render(null)` — and the
+  // Ruby binding's `@opts.key?(:format)` semantics — rather than silently rendering svg.
   render(format) {
-    const resolved = format === undefined ? this._opts.format ?? 'svg' : format
+    const resolved =
+      format !== undefined ? format : 'format' in this._opts ? this._opts.format : 'svg'
     const { format: _ignored, ...rest } = this._opts
     return render(this._spec, resolved, rest)
   }
