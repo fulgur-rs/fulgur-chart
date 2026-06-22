@@ -160,26 +160,10 @@ ${crossTableBody}
       : '<h2>Cross-check</h2><p class="ok">All claimed colors painted with consistent alpha.</p>';
 
   const geo = result.geometry || {};
-  const geomSection =
-    geo.fulgur || geo.chartjs
-      ? `<h2>Geometry overlay (normalized boxes on render)</h2>
-<div class="images">
-  <figure>
-    <figcaption>fulgur</figcaption>
-    <div class="imgwrap">
-      <img alt="fulgur ${esc(name)}" src="data:image/png;base64,${fulgurB64}">
-      ${overlaySvg(geo.fulgur, '#1565c0')}
-    </div>
-  </figure>
-  <figure>
-    <figcaption>chart.js</figcaption>
-    <div class="imgwrap">
-      <img alt="chart.js ${esc(name)}" src="data:image/png;base64,${chartjsB64}">
-      ${overlaySvg(geo.chartjs, '#c62828')}
-    </div>
-  </figure>
-</div>`
-      : '';
+  const hasGeometry = Boolean(geo.fulgur || geo.chartjs);
+  const imagesCaption = hasGeometry
+    ? '<p class="hint">Normalized geometry boxes are overlaid on each render (fulgur in blue, chart.js in red).</p>'
+    : '';
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -208,22 +192,29 @@ ${crossTableBody}
   td.f { color: #1565c0; }
   td.c { color: #6a1b9a; }
   p.ok { color: #2e7d32; }
+  p.hint { color: #555; font-size: 13px; margin: 16px 0 0; }
 </style>
 </head>
 <body>
 <h1>chart.js compat report: ${esc(name)}</h1>
 <p>${badges} &nbsp; ${overall}</p>
+${imagesCaption}
 <div class="images">
   <figure>
     <figcaption>fulgur</figcaption>
-    <img alt="fulgur ${esc(name)}" src="data:image/png;base64,${fulgurB64}">
+    <div class="imgwrap">
+      <img alt="fulgur ${esc(name)}" src="data:image/png;base64,${fulgurB64}">
+      ${overlaySvg(geo.fulgur, '#1565c0')}
+    </div>
   </figure>
   <figure>
     <figcaption>chart.js</figcaption>
-    <img alt="chart.js ${esc(name)}" src="data:image/png;base64,${chartjsB64}">
+    <div class="imgwrap">
+      <img alt="chart.js ${esc(name)}" src="data:image/png;base64,${chartjsB64}">
+      ${overlaySvg(geo.chartjs, '#c62828')}
+    </div>
   </figure>
 </div>
-${geomSection}
 ${diffSection}
 ${crossSection}
 </body>
