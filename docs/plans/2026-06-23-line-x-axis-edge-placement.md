@@ -14,7 +14,7 @@
 
 ---
 
-### Task 1: `line_x` を common.rs に追加(TDD)
+## Task 1: `line_x` を common.rs に追加(TDD)
 
 **Files:**
 - Modify: `crates/fulgur-chart/src/layout/common.rs`(`category_center` 直後, 228 付近)
@@ -68,7 +68,7 @@ pub fn line_x(frame: &Frame, i: usize, n: usize) -> f64 {
 
 ---
 
-### Task 2: line.rs の点計算を line_x に切替
+## Task 2: line.rs の点計算を line_x に切替
 
 **Files:**
 - Modify: `crates/fulgur-chart/src/layout/line.rs:23`(`line_points` 内)
@@ -83,7 +83,7 @@ Expected: `line_points_x_is_edge_to_edge` PASS、既存の count/monotone/cy も
 
 ---
 
-### Task 3: x カテゴリラベルを Line のとき edge 配置に
+## Task 3: x カテゴリラベルを Line のとき edge 配置に
 
 **Files:**
 - Modify: `crates/fulgur-chart/src/layout/common.rs:306-316`(`draw_frame` の x ラベルループ)
@@ -106,7 +106,7 @@ Expected: 成功。
 
 ---
 
-### Task 4: スナップショット再生成 + 視覚確認
+## Task 4: スナップショット再生成 + 視覚確認
 
 **Files:**
 - `crates/fulgur-chart/tests/snapshots/render_line__line_snapshot.snap`
@@ -120,7 +120,7 @@ Expected: 成功。
 
 ---
 
-### Task 5: compat geometry PASS と全テスト検証 + コミット
+## Task 5: compat geometry PASS と全テスト検証 + コミット
 
 **Step 1:** `cd tools && npm run compat -- line area`
 Expected: `PASS line` / `PASS area`(geometry 次元 PASS、axes も PASS のまま）。

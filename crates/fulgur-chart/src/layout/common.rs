@@ -203,8 +203,31 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     } else {
         0.0
     };
-    let plot_left = OUTER_PAD + y_axis_w + legend_left;
-    let plot_right = spec.width - OUTER_PAD - legend_right;
+    // line(edge-to-edge)では先頭/末尾の点が plot_left/plot_right に乗り、中央寄せの
+    // x ラベルが点の外側へ半幅はみ出してキャンバス端でクリップされる。chart.js が
+    // chartArea を edge ラベル半幅ぶん内側へ取るのと同様に edge 余白を確保する。
+    // 末尾は常に内側化し、先頭は y 軸ラベル幅で足りなければ拡張する。
+    let (edge_pad_left, edge_pad_right) =
+        if matches!(spec.kind, ChartKind::Line) && spec.categories.len() > 1 {
+            let lf = spec.theme.font_size as f32;
+            let half = |c: &String| (m.width(c, lf) as f64) / 2.0;
+            let first = spec
+                .categories
+                .first()
+                .filter(|c| !c.is_empty())
+                .map_or(0.0, half);
+            let last = spec
+                .categories
+                .last()
+                .filter(|c| !c.is_empty())
+                .map_or(0.0, half);
+            (first, last)
+        } else {
+            (0.0, 0.0)
+        };
+    let plot_left =
+        (OUTER_PAD + y_axis_w + legend_left).max(OUTER_PAD + legend_left + edge_pad_left);
+    let plot_right = spec.width - OUTER_PAD - legend_right - edge_pad_right;
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
 
