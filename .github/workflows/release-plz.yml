@@ -14,11 +14,57 @@ on:
   push:
     branches:
       - main
+  # リリース PR が通らなかった場合の手動 escape hatch。
+  # main から実行した場合のみ approve なしで即 publish できる。
+  # main 以外の ref で実行しても publish は skip する(未マージ code の publish 防止)。
+  workflow_dispatch:
 
 jobs:
+  # release-plz PR のマージかどうかを判定する (approve 不要)。
+  # - merge commit message に "release-plz-YYYY-MM-DD" が含まれる → リリース PR マージ
+  # - merge commit message に "chore: release" が含まれる → squash-merge 時のフォールバック
+  # - workflow_dispatch かつ main ref → 手動実行なので publish (main 以外の ref は skip)
+  #
+  # NOTE: このチェックはマージコミット方式に依存している。
+  # リリース PR を squash-merge に変更する場合は "chore: release" フォールバックが機能するか確認すること。
+  check-releases:
+    name: Check for releases
+    runs-on: ubuntu-latest
+    outputs:
+      has_releases: ${{ steps.check.outputs.has_releases }}
+    steps:
+      - name: Determine if this push includes a release
+        id: check
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          EVENT_NAME: ${{ github.event_name }}
+          GIT_REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # 手動実行(escape hatch)は main からのみ publish を許可する。feature や
+            # stale な release ブランチから実行して main 未マージの code が
+            # publish されるのを防ぐ。
+            if [ "$GIT_REF" = "refs/heads/main" ]; then
+              echo "has_releases=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::workflow_dispatch on non-main ref ($GIT_REF); skipping release"
+              echo "has_releases=false" >> "$GITHUB_OUTPUT"
+            fi
+          elif echo "$COMMIT_MSG" | grep -qE "release-plz-[0-9]{4}-[0-9]{2}"; then
+            echo "has_releases=true" >> "$GITHUB_OUTPUT"
+          elif echo "$COMMIT_MSG" | grep -q "chore: release"; then
+            echo "has_releases=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_releases=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # 公開可能なバージョンを crates.io へ publish し、git タグと GitHub Release を作成する。
+  # release-plz PR がマージされたときだけ実行される (environment approve が必要)。
   release-plz-release:
     name: Release-plz release
+    needs: check-releases
+    # 二重防御: check-releases に加え、publish ジョブ自体も main ref に限定する。
+    if: needs.check-releases.outputs.has_releases == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: crates-io
     permissions:
