@@ -278,7 +278,13 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // index 軸の stacked だけを見る。scales は緩く型付けされた serde_json::Value のまま
     // navigate する(深い検証はしない)。
     // 既知の制約: per-dataset の stack プロパティによる積み上げは未対応(scales 経由のみ)。
-    let index_axis = raw.options.index_axis.as_deref().unwrap_or("x");
+    // indexAxis は chart.js では "x"/"y" のみ。想定外の値は orientation 判定と同様に
+    // 縦棒(index 軸=x)として扱うため、"y" 以外は "x" に正規化する。
+    let index_axis = if raw.options.index_axis.as_deref() == Some("y") {
+        "y"
+    } else {
+        "x"
+    };
     let stacked = raw
         .options
         .scales
