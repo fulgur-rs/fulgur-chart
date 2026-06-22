@@ -1,9 +1,8 @@
-use fulgur_chart::guard::{validate_spec, InputLimits};
+use fulgur_chart::guard::{InputLimits, validate_spec};
 use magnus::{
-    function,
+    Error, ExceptionClass, RHash, RString, Ruby, Value, function,
     prelude::*,
     scan_args::{get_kwargs, scan_args},
-    Error, ExceptionClass, RHash, RString, Ruby, Value,
 };
 
 // --- error helpers (classification is by CALL SITE, never by parsing the message) ---
@@ -326,7 +325,7 @@ fn schema(ruby: &Ruby, dsl: Value) -> Result<String, Error> {
             return Err(parse_err(
                 ruby,
                 format!("unsupported DSL '{other}' (supported: chartjs, vegalite)"),
-            ))
+            ));
         }
     };
     serde_json::to_string(&s).map_err(|e| render_err(ruby, format!("schema serialization: {e}")))

@@ -1,4 +1,4 @@
-use fulgur_chart::guard::{validate_spec, InputLimits};
+use fulgur_chart::guard::{InputLimits, validate_spec};
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 
@@ -209,7 +209,7 @@ pub fn schema(dsl: String) -> SchemaResult {
                 message: Some(format!(
                     "unsupported DSL '{other}' (supported: chartjs, vegalite)"
                 )),
-            }
+            };
         }
     };
     match serde_json::to_string(&s) {
