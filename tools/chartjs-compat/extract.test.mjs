@@ -54,23 +54,16 @@ test('horizontal bar は geometry を出さない(スコープ外)', async () =>
   assert.equal(model.geometry, undefined);
 });
 
-test('mixed bar+line: line データセットの要素は bar geometry に含めない', async () => {
+test('mixed bar+line: geometry を出さない(fulgur Mixed=None に揃える)', async () => {
   const spec = { type: 'bar', data: { labels: ['A','B','C'],
     datasets: [
       { type: 'bar', data: [10,20,30] },
       { type: 'line', data: [5,15,25] },
     ] } };
   const model = await extractChartjsModel(spec, 800, 600);
-  // bar を含む混在チャートでは geometry を必ず持つ(undefined への退行を検出)。
-  assert.ok(model.geometry, 'bar を含む混在チャートでは geometry を持つべき');
-  // 全要素が有限な bar であること(NaN を含まない)。
-  for (const e of model.geometry.elements) {
-    assert.equal(e.kind, 'bar');
-    assert.ok(Number.isFinite(e.nx) && Number.isFinite(e.nw)
-      && Number.isFinite(e.ny) && Number.isFinite(e.nh), `NaN element: ${JSON.stringify(e)}`);
-  }
-  // bar データセット(series 0)の 3 要素のみ。
-  assert.ok(model.geometry.elements.every((e) => e.series === 0));
+  // 混在チャートは fulgur 側 compute_geometry が None。chart.js だけ bar geometry を
+  // 出すと diff が片側 skip=pass で緑になり実際の棒を照合しないため undefined に揃える。
+  assert.equal(model.geometry, undefined);
 });
 
 test('toRgba: 空白付き rgba を canonical 形へ正規化', () => {

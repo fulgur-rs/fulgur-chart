@@ -42,11 +42,20 @@ function collapse(arr) {
   return arr.length > 0 && arr.every((x) => x === arr[0]) ? [arr[0]] : arr;
 }
 
-/// 縦棒の BarElement を chartArea 基準 [0,1] へ正規化。横棒(indexAxis:'y')と
-/// 非 bar は undefined(fulgur 側スコープに揃える)。
+/// 縦棒の BarElement を chartArea 基準 [0,1] へ正規化。横棒(indexAxis:'y')、
+/// 非 bar、混在(bar+line 等)は undefined。fulgur 側 compute_geometry は
+/// `ChartKind::Bar { horizontal: false }` のみ Some を返し Mixed は None なので、
+/// 混在で chart.js だけ bar geometry を出すと diff が片側 skip=pass で緑になり
+/// 実際に描く棒を一切照合しなくなる。両側 None に揃えて「両者とも未対応」を顕在化する。
 function barGeometry(chart, spec, width, height) {
   const indexAxis = (spec.options && spec.options.indexAxis) || 'x';
   if (spec.type !== 'bar' || indexAxis === 'y') return undefined;
+  // データセット単位 type を解決し(未指定はトップレベル type を継承)、bar 以外を
+  // 1 つでも含めば混在チャート → fulgur のスコープ外なので geometry を出さない。
+  const isMixed = spec.data.datasets.some(
+    (ds) => (ds.type ?? spec.type) !== 'bar',
+  );
+  if (isMixed) return undefined;
   const a = chart.chartArea;
   const caw = a.right - a.left;
   const cah = a.bottom - a.top;
@@ -59,8 +68,7 @@ function barGeometry(chart, spec, width, height) {
         ['x', 'y', 'base', 'width'],
         true,
       );
-      /// 混在 bar/line チャートでは line データセットの要素は PointElement で
-      /// width/base を持たない。bw===undefined ならそれらを除外し、bar 要素のみ出す。
+      /// 純 bar チャートでも防御的に非 bar 要素(width/base 無し)は除外する。
       if (bw === undefined) continue;
       const left = x - bw / 2;
       const top = Math.min(y, base);
