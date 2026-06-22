@@ -1,0 +1,14 @@
+{
+  "type": "outlabeledPie",
+  "data": {
+    "labels": ["Desktop", "Mobile", "Tablet", "Other"],
+    "datasets": [
+      { "data": [55, 30, 12, 3] }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "Access by Device (outlabeled)" }
+    }
+  }
+}

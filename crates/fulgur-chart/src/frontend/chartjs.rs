@@ -47,12 +47,25 @@ struct RawPlugins {
     title: Option<RawTitle>,
     legend: Option<RawLegend>,
     datalabels: Option<RawDataLabels>,
+    outlabels: Option<RawOutlabels>,
 }
 
 #[derive(Deserialize)]
 struct RawDataLabels {
     #[serde(default)]
     display: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct RawOutlabels {
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    color: Option<String>,
+    #[serde(rename = "backgroundColor", default)]
+    background_color: Option<String>,
+    #[serde(default)]
+    stretch: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -250,7 +263,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
             // progress は専用チェック済み、汎用 check_unknown_keys はスキップ
         } else if strict {
-            check_unknown_keys(json)?;
+            let allow_outlabels = matches!(
+                chart_type.as_deref(),
+                Some("outlabeledPie") | Some("outlabeledDoughnut")
+            );
+            check_unknown_keys(json, allow_outlabels)?;
         }
     }
 
@@ -358,6 +375,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             "boxplot" => ChartKind::BoxPlot,
             "polarArea" => ChartKind::PolarArea,
             "sparkline" => ChartKind::Sparkline,
+            "outlabeledPie" => ChartKind::OutlabeledPie {
+                donut_ratio: 0.0,
+                outlabel: build_outlabel_config(&raw.options.plugins.outlabels),
+            },
+            "outlabeledDoughnut" => ChartKind::OutlabeledPie {
+                donut_ratio: 0.5,
+                outlabel: build_outlabel_config(&raw.options.plugins.outlabels),
+            },
             other => return Err(format!("未対応の type: {other}")),
         }
     };
@@ -373,7 +398,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // テーマ解決(配色に使うため色解決より先に行う)。
     let theme = build_theme(raw.options.theme);
 
-    let is_pie = matches!(kind, ChartKind::Pie { .. } | ChartKind::PolarArea);
+    let is_pie = matches!(
+        kind,
+        ChartKind::Pie { .. } | ChartKind::PolarArea | ChartKind::OutlabeledPie { .. }
+    );
     // progress も pie 同様に前景をソリッド(alpha=1.0)で塗る。
     let is_progress = matches!(kind, ChartKind::Progress);
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
@@ -600,6 +628,37 @@ fn build_theme(raw: Option<RawTheme>) -> Theme {
     theme
 }
 
+fn build_outlabel_config(raw: &Option<RawOutlabels>) -> crate::ir::OutlabelConfig {
+    use crate::ir::OutlabelConfig;
+    let mut cfg = OutlabelConfig::default();
+    let Some(raw) = raw else { return cfg };
+    if let Some(t) = &raw.text {
+        // DoS 防止: テンプレートを MAX_LABEL_BYTES でクランプ。
+        const MAX_TEMPLATE_BYTES: usize = crate::guard::DEFAULT_MAX_LABEL_BYTES;
+        if t.len() <= MAX_TEMPLATE_BYTES {
+            cfg.text = t.clone();
+        } else {
+            let mut end = MAX_TEMPLATE_BYTES;
+            while !t.is_char_boundary(end) {
+                end -= 1;
+            }
+            cfg.text = t[..end].to_string();
+        }
+    }
+    if let Some(c) = raw.color.as_deref().and_then(parse_color) {
+        cfg.color = c;
+    }
+    if let Some(c) = raw.background_color.as_deref().and_then(parse_color) {
+        cfg.background = Some(c);
+    }
+    if let Some(s) = raw.stretch {
+        if s.is_finite() && s >= 0.0 {
+            cfg.stretch = s;
+        }
+    }
+    cfg
+}
+
 /// 系列の既定線幅。line 系列は太く(3.0)、bar 系列は細い(1.0)。
 /// chart 基本型でなく系列種別で決めることで、混合チャートの line 系列も正しく太くなる。
 /// 単一種別では従来挙動(全 Line→3.0 / 非 Line→1.0)と byte 一致する。
@@ -675,7 +734,7 @@ fn legend_pos(l: &Option<RawLegend>) -> LegendPos {
 // IR へ未マップでも、設計で v1 サポート対象に挙げたキーは strict でも受理する
 // （strict が弾くのは未知キーであり、認識済み・未完成キーではない）:
 //   datalabels=Task16(最小データラベル) / scales=Task9 / pointRadius=Task13。
-fn check_unknown_keys(json: &str) -> Result<(), String> {
+fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return Ok(()), // 不正 JSON は後段パースに委ねる
@@ -731,13 +790,23 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
             "options",
         )?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            check_object(
-                plugins,
-                &["title", "legend", "datalabels"],
-                "options.plugins",
-            )?;
+            let allowed_plugins: &[&str] = if allow_outlabels {
+                &["title", "legend", "datalabels", "outlabels"]
+            } else {
+                &["title", "legend", "datalabels"]
+            };
+            check_object(plugins, allowed_plugins, "options.plugins")?;
             if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
                 check_object(dl, &["display"], "options.plugins.datalabels")?;
+            }
+            if allow_outlabels {
+                if let Some(ol) = plugins.get("outlabels").and_then(|v| v.as_object()) {
+                    check_object(
+                        ol,
+                        &["text", "color", "backgroundColor", "stretch"],
+                        "options.plugins.outlabels",
+                    )?;
+                }
             }
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
@@ -1611,5 +1680,69 @@ mod tests {
         let json = r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3]}]}}"#;
         let spec = parse(json, false).unwrap();
         assert!(matches!(spec.kind, crate::ir::ChartKind::Sparkline));
+    }
+
+    #[test]
+    fn parse_outlabeled_pie_kind() {
+        let json = r#"{"type":"outlabeledPie","data":{"labels":["A","B","C"],"datasets":[{"data":[10,20,30]}]}}"#;
+        let spec = parse(json, false).expect("parse error");
+        assert!(matches!(
+            spec.kind,
+            crate::ir::ChartKind::OutlabeledPie { donut_ratio, .. } if (donut_ratio - 0.0).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn parse_outlabeled_doughnut_kind() {
+        let json = r#"{"type":"outlabeledDoughnut","data":{"labels":["A","B"],"datasets":[{"data":[40,60]}]}}"#;
+        let spec = parse(json, false).expect("parse error");
+        assert!(matches!(
+            spec.kind,
+            crate::ir::ChartKind::OutlabeledPie { donut_ratio, .. } if (donut_ratio - 0.5).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn parse_outlabeled_pie_outlabels_plugin() {
+        let json = r#"{
+            "type": "outlabeledPie",
+            "data": {"labels": ["X"], "datasets": [{"data": [100]}]},
+            "options": {"plugins": {"outlabels": {"stretch": 60.0, "color": "black"}}}
+        }"#;
+        let spec = parse(json, false).expect("parse error");
+        if let crate::ir::ChartKind::OutlabeledPie { outlabel, .. } = &spec.kind {
+            assert!((outlabel.stretch - 60.0).abs() < 1e-9, "stretch mismatch");
+            assert_eq!(outlabel.color.r, 0, "color should be black");
+        } else {
+            panic!("wrong kind");
+        }
+    }
+
+    #[test]
+    fn outlabeled_pie_fill_alpha_is_one() {
+        // outlabeledPie も pie 同様に fill alpha = 1.0 であるべき。
+        let json =
+            r#"{"type":"outlabeledPie","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}}"#;
+        let spec = parse(json, false).expect("parse error");
+        assert!(
+            (spec.series[0].fill[0].a - 1.0).abs() < 1e-6,
+            "fill alpha must be 1.0"
+        );
+    }
+
+    #[test]
+    fn parse_outlabeled_pie_strict_with_outlabels_plugin() {
+        // strict モードで outlabels プラグインが正しく受け付けられること。
+        let json = r#"{
+            "type": "outlabeledPie",
+            "data": {"labels": ["A", "B"], "datasets": [{"data": [60, 40]}]},
+            "options": {"plugins": {"outlabels": {"stretch": 50.0, "text": "%l: %p%"}}}
+        }"#;
+        let result = parse(json, true);
+        assert!(
+            result.is_ok(),
+            "strict mode should accept outlabels plugin: {:?}",
+            result
+        );
     }
 }

@@ -39,6 +39,10 @@ pub enum ChartJsSpec {
     PolarArea(PieSpec),
     #[serde(rename = "radialGauge")]
     RadialGauge(RadialGaugeSpec),
+    #[serde(rename = "outlabeledPie")]
+    OutlabeledPie(OutlabeledPieSpec),
+    #[serde(rename = "outlabeledDoughnut")]
+    OutlabeledDoughnut(OutlabeledPieSpec),
 }
 
 // ────────────────────────────────────────────────
@@ -709,4 +713,55 @@ pub struct CenterAreaOptions {
     pub display_text: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<f64>,
+}
+
+// ────────────────────────────────────────────────
+// outlabeledPie / outlabeledDoughnut
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlabeledPieSpec {
+    pub data: PieData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<OutlabeledPieOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OutlabeledPieOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<OutlabeledPiePlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct OutlabeledPiePlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legend: Option<LegendPlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outlabels: Option<OutlabelsPlugin>,
+}
+
+/// `chartjs-plugin-piechart-outlabels` 互換の引き出しラベル設定。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OutlabelsPlugin {
+    /// ラベルテキストのテンプレート。%l=カテゴリ名, %v=値, %p=パーセント。
+    /// デフォルト: "%l\n%p%"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// ラベル文字色。デフォルト: "white"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    /// ラベル背景色。省略時はスライス色を使用。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<ColorString>,
+    /// 引き出し線の長さ(px)。デフォルト: 40
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stretch: Option<f64>,
 }
