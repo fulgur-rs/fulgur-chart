@@ -108,20 +108,22 @@ impl Default for InputLimits {
 
 /// treemap のツリーを再帰走査し、ノード総数を返す。各ノードのラベル長を
 /// `max_label_bytes` で検証し、深さが `DEFAULT_MAX_TREE_DEPTH` を超えたら Err。
-/// 深さチェックを各呼び出しの冒頭で行うため、本関数自身の再帰も有界 (≤ 51)。
+/// 深さチェックはノード処理の直前に行う。空の `children` への再帰では発火しないため、
+/// 深さちょうど `DEFAULT_MAX_TREE_DEPTH` の葉を持つ有効なツリーは受理される。
+/// 実ノードが深さ上限超で初めて Err になるため、本関数自身の再帰も有界。
 fn validate_tree(
     nodes: &[crate::ir::TreeNode],
     depth: usize,
     limits: &InputLimits,
 ) -> Result<usize, String> {
-    if depth > DEFAULT_MAX_TREE_DEPTH {
-        return Err(format!(
-            "treemap のツリー深さが上限 {} を超えています",
-            DEFAULT_MAX_TREE_DEPTH,
-        ));
-    }
     let mut count = 0usize;
     for n in nodes {
+        if depth > DEFAULT_MAX_TREE_DEPTH {
+            return Err(format!(
+                "treemap のツリー深さが上限 {} を超えています",
+                DEFAULT_MAX_TREE_DEPTH,
+            ));
+        }
         if n.label.len() > limits.max_label_bytes {
             return Err(format!(
                 "treemap ラベルの長さ {} バイトが上限 {} を超えています",
@@ -630,6 +632,31 @@ mod tests {
         .unwrap();
         spec.series[0].tree = vec![node];
         assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn treemap_tree_at_max_depth_is_accepted() {
+        // 深さちょうど DEFAULT_MAX_TREE_DEPTH の葉を持つツリーは受理される(境界)。
+        use crate::ir::TreeNode;
+        let mut node = TreeNode {
+            label: "leaf".into(),
+            value: 1.0,
+            children: vec![],
+        };
+        for _ in 0..DEFAULT_MAX_TREE_DEPTH {
+            node = TreeNode {
+                label: "g".into(),
+                value: 1.0,
+                children: vec![node],
+            };
+        }
+        let mut spec = crate::frontend::chartjs::parse(
+            r#"{"type":"treemap","data":{"datasets":[{"tree":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.series[0].tree = vec![node];
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
     }
 
     #[test]
