@@ -329,6 +329,8 @@ jobs:
   wasm-binding:
     name: WASM binding (build + smoke)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: crates/bindings/wasm
