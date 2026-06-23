@@ -326,6 +326,54 @@ jobs:
           cargo run --release -p fulgur-chart-cli -- render examples/specs/bar.json -o /tmp/chart-cli-native.svg
           diff /tmp/chart-cli-smoke.svg /tmp/chart-cli-native.svg
 
+  wasm-binding:
+    name: WASM binding (build + smoke)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/bindings/wasm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/bindings/wasm
+          key: wasm-binding
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: taiki-e/install-action@wasm-pack
+
+      # The native crate is excluded from the root workspace, so the root fmt/clippy jobs
+      # don't cover it — gate it here. No --locked: the crate's Cargo.lock is gitignored
+      # (the path-dependent core version is bumped by release-plz each release).
+      - name: Format check
+        run: cargo fmt --manifest-path Cargo.toml -- --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings
+
+      - name: Install npm deps
+        run: npm install
+
+      - name: Build wasm package
+        run: npm run build
+
+      - name: Typecheck (index.d.ts)
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
   perf:
     name: Perf (memory gate + speed report)
     runs-on: ubuntu-latest
