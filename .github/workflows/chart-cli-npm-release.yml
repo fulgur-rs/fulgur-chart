@@ -21,6 +21,8 @@ jobs:
     name: Build ${{ matrix.platform }}
     if: startsWith(github.event.inputs.tag || github.ref_name, 'fulgur-chart-cli-v')
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
