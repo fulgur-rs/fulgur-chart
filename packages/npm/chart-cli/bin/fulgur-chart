@@ -21,7 +21,7 @@ function isMusl() {
 
 function detectPlatformKey(platform, arch, isMuslFn = isMusl) {
   if (platform === 'linux' && arch === 'x64') return isMuslFn() ? 'linux-x64-musl' : 'linux-x64';
-  if (platform === 'linux' && arch === 'arm64') return 'linux-arm64';
+  if (platform === 'linux' && arch === 'arm64') return isMuslFn() ? null : 'linux-arm64';
   if (platform === 'darwin' && arch === 'arm64') return 'darwin-arm64';
   if (platform === 'darwin' && arch === 'x64') return 'darwin-x64';
   if (platform === 'win32' && arch === 'x64') return 'win32-x64';
@@ -47,7 +47,12 @@ function main() {
     process.exit(1);
   }
 
-  const r = spawnSync(path.join(pkgDir, 'bin', bin), process.argv.slice(2), { stdio: 'inherit' });
+  const binPath = path.join(pkgDir, 'bin', bin);
+  const r = spawnSync(binPath, process.argv.slice(2), { stdio: 'inherit' });
+  if (r.error) {
+    process.stderr.write(`@fulgur-rs/chart-cli: failed to execute binary: ${r.error.message}\n`);
+    process.exit(1);
+  }
   process.exit(r.status ?? 1);
 }
 

@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. fulgur-chart-v0.1.9)"
+        description: "Release tag (e.g. fulgur-chart-cli-v0.1.9)"
         required: true
 
 env:
@@ -19,7 +19,7 @@ env:
 jobs:
   build-binary:
     name: Build ${{ matrix.platform }}
-    if: startsWith(github.event.inputs.tag || github.ref_name, 'fulgur-chart-v')
+    if: startsWith(github.event.inputs.tag || github.ref_name, 'fulgur-chart-cli-v')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -45,6 +45,8 @@ jobs:
             os: windows-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -70,11 +72,21 @@ jobs:
         if: matrix.platform == 'linux-arm64'
         run: cross build --release -p fulgur-chart-cli --target ${{ matrix.target }}
 
+      - name: Set binary name
+        id: binary
+        shell: bash
+        run: |
+          if [[ "${{ matrix.platform }}" == "win32-x64" ]]; then
+            echo "name=fulgur-chart.exe" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=fulgur-chart" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: chart-cli-${{ matrix.platform }}
-          path: target/${{ matrix.target }}/release/fulgur-chart*
+          path: target/${{ matrix.target }}/release/${{ steps.binary.outputs.name }}
 
   publish-packages:
     name: Publish npm packages
@@ -85,6 +97,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - uses: actions/setup-node@v4
         with:
@@ -92,7 +106,7 @@ jobs:
           registry-url: "https://registry.npmjs.org"
 
       - name: Compute version from tag
-        run: echo "VERSION=${RELEASE_TAG#fulgur-chart-v}" >> "$GITHUB_ENV"
+        run: echo "VERSION=${RELEASE_TAG#fulgur-chart-cli-v}" >> "$GITHUB_ENV"
 
       - name: Download all binary artifacts
         uses: actions/download-artifact@v4
@@ -115,9 +129,9 @@ jobs:
           for platform in linux-x64 linux-x64-musl linux-arm64 darwin-arm64 darwin-x64 win32-x64; do
             pkg_dir="packages/npm/chart-cli-${platform}"
             bin_name="${BINARY_NAMES[$platform]}"
-            artifact="artifacts/chart-cli-${platform}/target/*/release/${bin_name}"
+            artifact="artifacts/chart-cli-${platform}/${bin_name}"
             mkdir -p "${pkg_dir}/bin"
-            cp ${artifact} "${pkg_dir}/bin/${bin_name}"
+            cp "${artifact}" "${pkg_dir}/bin/${bin_name}"
             chmod +x "${pkg_dir}/bin/${bin_name}" || true
             node -e "
               const fs = require('fs');
