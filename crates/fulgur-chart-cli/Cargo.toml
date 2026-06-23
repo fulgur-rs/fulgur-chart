@@ -1,6 +1,6 @@
 [package]
 name = "fulgur-chart-cli"
-version = "0.1.9"
+version = "0.1.10"
 description = "CLI for rendering chart.js-compatible JSON specs to deterministic SVG/PNG"
 keywords = ["chart", "svg", "chartjs", "cli", "visualization"]
 categories = ["command-line-utilities", "graphics"]
@@ -16,7 +16,7 @@ name = "fulgur-chart"
 path = "src/main.rs"
 
 [dependencies]
-fulgur-chart = { path = "../fulgur-chart", version = "0.9.0" }
+fulgur-chart = { path = "../fulgur-chart", version = "0.10.0" }
 clap = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
