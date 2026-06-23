@@ -62,8 +62,8 @@ fn measure() -> Baseline {
 }
 
 fn read_baseline(path: &std::path::Path) -> Result<Baseline, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("failed to read baseline file: {e}"))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("failed to read baseline file: {e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("failed to parse baseline JSON: {e}"))
 }
 
