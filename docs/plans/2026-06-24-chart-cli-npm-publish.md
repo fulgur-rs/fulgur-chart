@@ -156,7 +156,7 @@ git push origin feat/chart-cli-npm-publish
 **Step 2: Human action — NPM_TOKEN シークレットを登録**
 
 リポジトリオーナーが以下を実施:
-1. https://www.npmjs.com/settings/<user>/tokens でトークン生成 (Classic / Automation)
+1. https://www.npmjs.com/settings/<user>/tokens でトークン生成 (Granular access token、`@fulgur-rs` スコープに Read and write 権限、Bypass 2FA を有効化)
 2. リポジトリ Settings → Secrets and variables → Actions → `NPM_TOKEN` として登録
 3. https://www.npmjs.com/org/fulgur-rs で `@fulgur-rs` Organization の存在を確認
 

@@ -107,6 +107,7 @@ git restore .               # 確認後、変更を元に戻す
 
 1. npmjs.com → Account Settings → Access Tokens → Generate New Token
 2. **Granular access token** を選択 → 有効期限を設定 → `@fulgur-rs` スコープに **Read and write** 権限を付与
+   → CI から `npm publish` するために **Bypass two-factor authentication** を有効にする（2FA 有効時に必須）
 3. 生成されたトークンをコピーして安全に保管
 
 #### 2. GitHub リポジトリシークレットに登録
