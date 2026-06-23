@@ -20,12 +20,18 @@ export interface RenderOptions {
   font?: Uint8Array
 }
 
+/** Accepted wasm source for {@link init}. Kept to types available without the DOM lib. */
+export type InitInput = Uint8Array | ArrayBuffer
+
 /**
  * Instantiate the WebAssembly module. MUST be awaited once before any other call.
- * Browser: `await init()` (fetches the bundled .wasm). Node: `await init(bytes)` since
- * there is no file fetch. Re-exported from the wasm-pack generated glue.
+ * Browser: `await init()` (fetches the bundled .wasm). Node (no file fetch): pass the
+ * bytes via the object form: `await init({ module_or_path: bytes })`.
+ * Re-exported from the wasm-pack generated glue (`--target web`).
  */
-export default function init(module_or_path?: unknown): Promise<unknown>
+export default function init(
+  options?: { module_or_path: InitInput } | InitInput,
+): Promise<unknown>
 
 /** Input/parse failure: invalid JSON, parse error, unknown DSL/format, dimension limit. */
 export declare class FulgurParseError extends Error {}

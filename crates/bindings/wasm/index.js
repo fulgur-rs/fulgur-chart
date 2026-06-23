@@ -5,7 +5,10 @@
 //
 // `--target web`: the wasm must be instantiated once via the default-exported `init`
 // before any call. In a browser `await init()` fetches the bundled .wasm; in Node (no
-// file fetch) pass the bytes: `await init(await readFile(wasmUrl))`.
+// file fetch) pass the bytes via the object form:
+// `await init({ module_or_path: await readFile(wasmUrl) })`.
+// (The current wasm-bindgen glue uses the object form; positional `init(bytes)` still
+// works but logs a deprecation warning.)
 import init, {
   render as nativeRender,
   schema as nativeSchema,
@@ -75,9 +78,11 @@ export function render(specJson, format, options) {
     if (!r.ok) {
       throw makeError(r.code, r.message)
     }
-    // Exactly one of svg/png is set on success; png is a Uint8Array. `!= null` covers
-    // both null and undefined.
-    return r.svg != null ? r.svg : r.png
+    // Read each field out of wasm memory once (a getter clones; the unused one is
+    // undefined). Exactly one of svg/png is set on success; png is a Uint8Array.
+    const svg = r.svg
+    const png = r.png
+    return svg != null ? svg : png
   } finally {
     r.free()
   }
