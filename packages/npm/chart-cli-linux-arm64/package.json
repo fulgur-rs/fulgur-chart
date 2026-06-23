@@ -1,0 +1,14 @@
+{
+  "name": "@fulgur-rs/chart-cli-linux-arm64",
+  "version": "0.1.9",
+  "description": "fulgur-chart CLI binary for Linux arm64",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fulgur-rs/fulgur-chart.git",
+    "directory": "packages/npm/chart-cli-linux-arm64"
+  },
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["bin/"]
+}
