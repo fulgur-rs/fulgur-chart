@@ -1,0 +1,27 @@
+{
+  "type": "treemap",
+  "data": {
+    "datasets": [{
+      "label": "Revenue by region",
+      "key": "value",
+      "groups": ["region", "product"],
+      "tree": [
+        {"region": "EMEA", "product": "Widgets", "value": 12},
+        {"region": "EMEA", "product": "Gadgets", "value": 8},
+        {"region": "APAC", "product": "Widgets", "value": 7},
+        {"region": "APAC", "product": "Gadgets", "value": 15},
+        {"region": "AMER", "product": "Widgets", "value": 20},
+        {"region": "AMER", "product": "Gadgets", "value": 9}
+      ],
+      "backgroundColor": "rgba(54, 162, 235, 1.0)"
+    }]
+  },
+  "options": {
+    "plugins": {
+      "title": {
+        "display": true,
+        "text": "Revenue Treemap"
+      }
+    }
+  }
+}

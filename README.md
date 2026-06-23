@@ -123,7 +123,7 @@ fulgur-chart inspect chart.json
 
 Supports a data-only, static subset:
 
-- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `boxplot` / `progress` / `gauge` / `radialGauge` (QuickChart's `progressBar` is also accepted as an alias)
+- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `treemap` / `boxplot` / `progress` / `gauge` / `radialGauge` (QuickChart's `progressBar` is also accepted as an alias)
 - `data.labels`
 - `data.datasets[]` — `label` / `data` (numeric array; `{x,y}` / `{x,y,r}` for scatter/bubble; `{x,y,v}` for matrix; nested `[min,q1,median,q3,max]` arrays for boxplot) / `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts)
 - For `progress` (alias `progressBar`), `datasets[0].data` holds each bar's value; an optional second dataset's `data` overrides the per-bar max (default 100). The percentage label is shown by default and can be hidden with `options.plugins.datalabels.display: false`.

@@ -551,6 +551,46 @@ fn matrix_schema_roundtrip() {
 }
 
 #[test]
+fn treemap_schema_roundtrip() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+
+    // Grouped tree (objects + key/groups), exercising the hierarchy path.
+    let grouped = r##"{
+        "type": "treemap",
+        "options": {"plugins": {"title": {"display": true, "text": "T"}}},
+        "data": {
+            "datasets": [{
+                "key": "value",
+                "groups": ["region", "product"],
+                "tree": [
+                    {"region": "EMEA", "product": "A", "value": 12},
+                    {"region": "APAC", "product": "B", "value": 7}
+                ]
+            }]
+        }
+    }"##;
+    let spec: ChartJsSpec = serde_json::from_str(grouped).unwrap();
+    assert!(matches!(spec, ChartJsSpec::Treemap(_)));
+    // The same document must be accepted by the runtime parser in strict mode.
+    assert!(
+        chartjs::parse(grouped, true).is_ok(),
+        "strict parser should accept grouped treemap"
+    );
+
+    // Flat numeric tree (the untagged Numbers branch).
+    let numeric = r##"{
+        "type": "treemap",
+        "data": {"datasets": [{"tree": [6, 4, 3, 2, 1]}]}
+    }"##;
+    let spec: ChartJsSpec = serde_json::from_str(numeric).unwrap();
+    assert!(matches!(spec, ChartJsSpec::Treemap(_)));
+    assert!(
+        chartjs::parse(numeric, true).is_ok(),
+        "strict parser should accept numeric treemap"
+    );
+}
+
+#[test]
 fn matrix_strict_mode_accepts_v_key() {
     let json = r#"{"type":"matrix","data":{"datasets":[{"data":[
         {"x":"A","y":"X","v":1}
