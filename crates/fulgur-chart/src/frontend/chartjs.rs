@@ -1168,14 +1168,22 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
     }
 
     let forest: Vec<TreeNode> = match ds.tree {
-        TreeField::Nums(nums) => nums
-            .into_iter()
-            .map(|v| TreeNode {
-                label: String::new(),
-                value: v,
-                children: vec![],
-            })
-            .collect(),
+        TreeField::Nums(nums) => {
+            // object 分岐と対称に、TreeNode 構築前に生入力件数を上限化する
+            // (各数値が String + 子 Vec を持つ TreeNode を確保するため)。
+            if nums.len() > MAX_TREEMAP_INPUT_ROWS {
+                return Err(format!(
+                    "treemap の入力データ件数が多すぎます (上限 {MAX_TREEMAP_INPUT_ROWS})"
+                ));
+            }
+            nums.into_iter()
+                .map(|v| TreeNode {
+                    label: String::new(),
+                    value: v,
+                    children: vec![],
+                })
+                .collect()
+        }
         TreeField::Objs(objs) => {
             if objs.len() > MAX_TREEMAP_INPUT_ROWS {
                 return Err(format!(

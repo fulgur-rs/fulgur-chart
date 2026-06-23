@@ -331,26 +331,31 @@ fn draw_nodes(
         if node.children.is_empty() {
             draw_leaf_label(node, cell, fill, font, m, items);
         } else {
-            draw_caption(&node.label, cell, fill, font, m, items);
+            // キャプション帯は子を潰さない高さがある場合のみ確保する。帯を引くと
+            // 子が潰れる極小グループ矩形では帯を省き、子を全面にレイアウトして
+            // 実データ(正の子孫)を落とさない。
             let cap_h = font + 6.0;
-            let child_rect = TreemapRect {
-                x: cell.x,
-                y: cell.y + cap_h,
-                w: cell.w,
-                h: (cell.h - cap_h).max(0.0),
+            let child_rect = if cell.h > cap_h {
+                draw_caption(&node.label, cell, fill, font, m, items);
+                TreemapRect {
+                    x: cell.x,
+                    y: cell.y + cap_h,
+                    w: cell.w,
+                    h: cell.h - cap_h,
+                }
+            } else {
+                cell
             };
-            if child_rect.h > 0.0 {
-                draw_nodes(
-                    &node.children,
-                    child_rect,
-                    depth + 1,
-                    Some(node_base),
-                    palette,
-                    font,
-                    m,
-                    items,
-                );
-            }
+            draw_nodes(
+                &node.children,
+                child_rect,
+                depth + 1,
+                Some(node_base),
+                palette,
+                font,
+                m,
+                items,
+            );
         }
     }
 }
@@ -505,6 +510,38 @@ mod tests {
         assert!(rects >= 5, "expected nested rects, got {rects}");
         assert!(texts > 0, "expected labels/captions");
         assert!(!format!("{:?}", scene.items).contains("NaN"));
+    }
+
+    #[test]
+    fn small_group_cell_still_renders_children() {
+        // 背の低いチャートでグループ矩形がキャプション帯(font+6)より低くなっても、
+        // 帯を省いて子(実データ)を描画すること。帯確保で child 高さが 0 になり子が
+        // 全て消える回帰を防ぐ。
+        let json = r#"{
+            "type": "treemap",
+            "data": { "datasets": [{
+                "key": "v", "groups": ["a", "b"],
+                "tree": [
+                    {"a":"X","b":"p","v":8},
+                    {"a":"X","b":"q","v":4},
+                    {"a":"Y","b":"r","v":6}
+                ]
+            }] }
+        }"#;
+        let mut spec = treemap_spec(json);
+        spec.height = 30.0; // プロット高さ < cap_h(font+6) になり、全グループ矩形が極小
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rects = scene
+            .items
+            .iter()
+            .filter(|p| matches!(p, Prim::Rect { .. }))
+            .count();
+        // トップグループ(X,Y)=2。子(p,q,r)が描かれれば rect は 2 より多い。
+        assert!(
+            rects > 2,
+            "children must render even when group cells are shorter than the caption band, got {rects}"
+        );
     }
 
     #[test]
