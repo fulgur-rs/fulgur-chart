@@ -1,0 +1,24 @@
+{
+  "name": "@fulgur-rs/chart-wasm",
+  "version": "0.1.0",
+  "description": "Deterministic chart.js v4 / Vega-Lite JSON to SVG/PNG renderer (WebAssembly)",
+  "type": "module",
+  "main": "index.js",
+  "module": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT OR Apache-2.0",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "pkg/"
+  ],
+  "scripts": {
+    "build": "wasm-pack build --target web --release",
+    "test": "node --test",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
