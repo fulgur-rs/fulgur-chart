@@ -733,6 +733,9 @@ export declare function version(): string
   "module": "index.js",
   "types": "index.d.ts",
   "license": "MIT OR Apache-2.0",
+  "engines": {
+    "node": ">=18.17"
+  },
   "files": [
     "index.js",
     "index.d.ts",
@@ -741,7 +744,8 @@ export declare function version(): string
   "scripts": {
     "build": "wasm-pack build --target web --release",
     "test": "node --test",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepack": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
