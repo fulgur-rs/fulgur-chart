@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: releasing.md に npm リリース手順を追記
+## Task 1: releasing.md に npm リリース手順を追記
 
 **Files:**
 - Modify: `docs/releasing.md`
@@ -99,7 +99,7 @@ git commit -m "docs: add npm release setup guide to releasing.md"
 
 ---
 
-### Task 2: README に npx インストール手順を追記
+## Task 2: README に npx インストール手順を追記
 
 **Files:**
 - Modify: `README.md`
@@ -143,7 +143,7 @@ git commit -m "docs: add npx zero-install section to README"
 
 ---
 
-### Task 3: PR を作成し human へ NPM_TOKEN 設定を依頼 (human action)
+## Task 3: PR を作成し human へ NPM_TOKEN 設定を依頼 (human action)
 
 **Step 1: ブランチを push して PR を作成**
 
@@ -162,7 +162,7 @@ git push origin feat/chart-cli-npm-publish
 
 ---
 
-### Task 4: リリースをトリガーして npm に publish (human action)
+## Task 4: リリースをトリガーして npm に publish (human action)
 
 **Step 1: この PR をマージ** (docs変更のみ)
 
@@ -189,7 +189,7 @@ Actions → **Chart CLI NPM Release** の最新実行を確認:
 
 ---
 
-### Task 5: npx 動作確認 (linux-x64)
+## Task 5: npx 動作確認 (linux-x64)
 
 **前提:** Task 4 で npm publish が成功していること。
 
