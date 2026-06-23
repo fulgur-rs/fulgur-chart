@@ -30,7 +30,8 @@ easy to keep figures under version control.
 npx @fulgur-rs/chart-cli render chart.json -o chart.svg
 ```
 
-Node.js 18+ が必要。初回実行時にプラットフォーム固有のバイナリが自動ダウンロードされる。
+Node.js 18+ が必要。初回実行時にプラットフォーム固有のバイナリが自動ダウンロードされる。  
+`@fulgur-rs/chart-cli` が npm に未公開の場合は、下記の Cargo を使用してください。
 
 ### Cargo
 
