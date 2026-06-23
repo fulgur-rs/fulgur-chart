@@ -1,0 +1,14 @@
+{
+  "name": "@fulgur-rs/chart-cli-darwin-arm64",
+  "version": "0.1.9",
+  "description": "fulgur-chart CLI binary for macOS arm64",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fulgur-rs/fulgur-chart.git",
+    "directory": "packages/npm/chart-cli-darwin-arm64"
+  },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["bin/"]
+}

@@ -1,0 +1,172 @@
+name: Chart CLI NPM Release
+# NOTE: This workflow uses npm provenance. To actually publish, either:
+#   1. Configure an NPM_TOKEN repository secret and keep NODE_AUTH_TOKEN as-is, OR
+#   2. Set up Trusted Publishing (OIDC) for @fulgur-rs/chart-cli* on npm and remove NODE_AUTH_TOKEN.
+# Until one of these is done, the publish steps will fail auth.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. fulgur-chart-cli-v0.1.9)"
+        required: true
+
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build-binary:
+    name: Build ${{ matrix.platform }}
+    if: startsWith(github.event.inputs.tag || github.ref_name, 'fulgur-chart-cli-v')
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - platform: linux-x64-musl
+            target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - platform: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - platform: darwin-arm64
+            target: aarch64-apple-darwin
+            os: macos-latest
+          - platform: darwin-x64
+            target: x86_64-apple-darwin
+            os: macos-latest
+          - platform: win32-x64
+            target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.platform == 'linux-x64-musl'
+        run: sudo apt-get install -y musl-tools
+
+      - name: Install cross
+        if: matrix.platform == 'linux-arm64'
+        uses: taiki-e/install-action@cross
+
+      - name: Build binary (native)
+        if: matrix.platform != 'linux-arm64'
+        run: cargo build --release -p fulgur-chart-cli --target ${{ matrix.target }}
+
+      - name: Build binary (cross)
+        if: matrix.platform == 'linux-arm64'
+        run: cross build --release -p fulgur-chart-cli --target ${{ matrix.target }}
+
+      - name: Set binary name
+        id: binary
+        shell: bash
+        run: |
+          if [[ "${{ matrix.platform }}" == "win32-x64" ]]; then
+            echo "name=fulgur-chart.exe" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=fulgur-chart" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chart-cli-${{ matrix.platform }}
+          path: target/${{ matrix.target }}/release/${{ steps.binary.outputs.name }}
+
+  publish-packages:
+    name: Publish npm packages
+    needs: build-binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Compute version from tag
+        run: echo "VERSION=${RELEASE_TAG#fulgur-chart-cli-v}" >> "$GITHUB_ENV"
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: chart-cli-*
+          path: artifacts/
+
+      - name: Stage platform packages
+        run: |
+          set -e
+          VERSION="$VERSION"
+          declare -A BINARY_NAMES=(
+            [linux-x64]=fulgur-chart
+            [linux-x64-musl]=fulgur-chart
+            [linux-arm64]=fulgur-chart
+            [darwin-arm64]=fulgur-chart
+            [darwin-x64]=fulgur-chart
+            [win32-x64]=fulgur-chart.exe
+          )
+          for platform in linux-x64 linux-x64-musl linux-arm64 darwin-arm64 darwin-x64 win32-x64; do
+            pkg_dir="packages/npm/chart-cli-${platform}"
+            bin_name="${BINARY_NAMES[$platform]}"
+            artifact="artifacts/chart-cli-${platform}/${bin_name}"
+            mkdir -p "${pkg_dir}/bin"
+            cp "${artifact}" "${pkg_dir}/bin/${bin_name}"
+            chmod +x "${pkg_dir}/bin/${bin_name}" || true
+            node -e "
+              const fs = require('fs');
+              const pkg = JSON.parse(fs.readFileSync('${pkg_dir}/package.json', 'utf8'));
+              pkg.version = '${VERSION}';
+              fs.writeFileSync('${pkg_dir}/package.json', JSON.stringify(pkg, null, 2) + '\n');
+            "
+          done
+
+      - name: Publish platform packages
+        run: |
+          set -e
+          for platform in linux-x64 linux-x64-musl linux-arm64 darwin-arm64 darwin-x64 win32-x64; do
+            npm publish --provenance --access public packages/npm/chart-cli-${platform}
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Update meta package optionalDependencies
+        working-directory: packages/npm/chart-cli
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${VERSION}';
+            for (const dep of Object.keys(pkg.optionalDependencies)) {
+              pkg.optionalDependencies[dep] = '${VERSION}';
+            }
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Publish meta package
+        working-directory: packages/npm/chart-cli
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

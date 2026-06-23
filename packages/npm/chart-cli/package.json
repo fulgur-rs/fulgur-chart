@@ -1,0 +1,25 @@
+{
+  "name": "@fulgur-rs/chart-cli",
+  "version": "0.1.9",
+  "description": "Zero-install npx distribution of the fulgur-chart Rust CLI",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fulgur-rs/fulgur-chart.git",
+    "directory": "packages/npm/chart-cli"
+  },
+  "bin": {
+    "fulgur-chart": "bin/fulgur-chart"
+  },
+  "files": [
+    "bin/"
+  ],
+  "optionalDependencies": {
+    "@fulgur-rs/chart-cli-linux-x64": "0.1.9",
+    "@fulgur-rs/chart-cli-linux-x64-musl": "0.1.9",
+    "@fulgur-rs/chart-cli-linux-arm64": "0.1.9",
+    "@fulgur-rs/chart-cli-darwin-arm64": "0.1.9",
+    "@fulgur-rs/chart-cli-darwin-x64": "0.1.9",
+    "@fulgur-rs/chart-cli-win32-x64": "0.1.9"
+  }
+}
