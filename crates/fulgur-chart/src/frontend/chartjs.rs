@@ -1160,6 +1160,13 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
     }
     let ds = raw.data.datasets.into_iter().next().unwrap();
 
+    // groups 階層の深さを再帰前に検証する (build_tree_forest のスタックオーバーフロー/DoS 対策)。
+    if ds.groups.len() > MAX_TREEMAP_GROUP_DEPTH {
+        return Err(format!(
+            "treemap の groups 階層が深すぎます (上限 {MAX_TREEMAP_GROUP_DEPTH})"
+        ));
+    }
+
     let forest: Vec<TreeNode> = match ds.tree {
         TreeField::Nums(nums) => nums
             .into_iter()
@@ -1302,6 +1309,10 @@ fn build_tree_forest(
         })
         .collect()
 }
+
+/// treemap の groups 階層深さの上限 (スタックオーバーフロー/DoS 対策)。
+/// 実用上 treemap が 50 段を超えることはない。
+const MAX_TREEMAP_GROUP_DEPTH: usize = 50;
 
 /// treemap の forest 内ノード総数を再帰的に数える (DoS ガード用)。
 fn count_nodes(nodes: &[crate::ir::TreeNode]) -> usize {
@@ -2095,6 +2106,18 @@ mod tests {
         assert_eq!(t[1].children[0].value, 6.0);
         assert_eq!(t[1].children[1].label, "q");
         assert_eq!(t[1].children[1].value, 4.0);
+    }
+
+    #[test]
+    fn treemap_rejects_excessive_group_depth() {
+        let groups: String = (0..60)
+            .map(|i| format!("\"g{i}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let json = format!(
+            r#"{{"type":"treemap","data":{{"datasets":[{{"key":"v","groups":[{groups}],"tree":[{{"v":1}}]}}]}}}}"#
+        );
+        assert!(parse(&json, false).is_err());
     }
 
     #[test]

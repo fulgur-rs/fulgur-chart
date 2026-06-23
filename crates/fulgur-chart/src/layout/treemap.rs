@@ -253,6 +253,10 @@ fn draw_caption(
     m: &TextMeasurer,
     items: &mut Vec<Prim>,
 ) {
+    // 縦方向に収まらない極小グループ矩形ではキャプションを描かない (リーフと対称)。
+    if r.h < font + PAD {
+        return;
+    }
     let avail_w = r.w - 2.0 * PAD;
     if let Some(t) = truncate_to_width(label, avail_w, font, m) {
         items.push(Prim::Text {
