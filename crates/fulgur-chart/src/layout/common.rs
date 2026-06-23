@@ -276,10 +276,15 @@ pub fn line_x(frame: &Frame, i: usize, n: usize) -> f64 {
 
 /// line/area の category x 座標を x 軸の offset 設定に応じて選ぶ単一窓口。
 /// offset:true → category_center(bar 同様の band 中心)、false → line_x(edge-to-edge)。
-/// mixed は bar を含むため offset 設定に関わらず常に band 中心(grid/ラベル/棒と整合)。
-/// line.rs の点計算と draw_frame の x ラベルがこの関数を共有し、offset 判定の分岐を一元化する。
-pub fn line_category_x(spec: &ChartSpec, frame: &Frame, i: usize, n: usize) -> f64 {
-    if spec.x_axis.offset || matches!(spec.kind, ChartKind::Mixed) {
+/// line.rs の点計算と draw_frame の x ラベル(いずれも ChartKind::Line 経路)が共有し、
+/// offset 判定の分岐を一元化する。mixed は mixed::build が category_center を直接使い
+/// この関数を呼ばないため、ここで ChartKind を分岐する必要はない。
+///
+/// `category_center`/`line_x` が純粋な幾何プリミティブ(外部からの利用に意味がある)なのに対し、
+/// これは spec.kind/offset を読む種別ディスパッチのラッパーであり、line レイアウトの内部都合。
+/// 公開 API に晒すと「mixed 幾何にも使える」という誤解と契約を生むため `pub(crate)` に限定する。
+pub(crate) fn line_category_x(spec: &ChartSpec, frame: &Frame, i: usize, n: usize) -> f64 {
+    if spec.x_axis.offset {
         category_center(frame, i, n)
     } else {
         line_x(frame, i, n)
