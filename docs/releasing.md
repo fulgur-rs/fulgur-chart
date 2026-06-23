@@ -141,9 +141,9 @@ git restore .               # 確認後、変更を元に戻す
 
 ### 手動トリガー (workflow_dispatch)
 
-Actions → **Chart CLI NPM Release** → Run workflow → tag: `fulgur-chart-cli-v0.1.10`
+Actions → **Chart CLI NPM Release** → Run workflow → tag: `fulgur-chart-cli-v<VERSION>` (例: `fulgur-chart-cli-v0.1.10`)
 
-既存の GitHub Release タグに対してのみ動作する (ワークフローが `ref: ${{ env.RELEASE_TAG }}`
+既存の git タグに対してのみ動作する (ワークフローが `ref: ${{ env.RELEASE_TAG }}`
 でチェックアウトするため)。
 
 ### OIDC Trusted Publishing への移行 (将来オプション)
