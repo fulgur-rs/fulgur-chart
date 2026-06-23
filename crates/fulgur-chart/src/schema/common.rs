@@ -85,6 +85,9 @@ pub struct AxisOptions {
     pub grid: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub begin_at_zero: Option<bool>,
+    /// When true, category points/bands are centered (band center) instead of edge-to-edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

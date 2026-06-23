@@ -276,9 +276,10 @@ pub fn line_x(frame: &Frame, i: usize, n: usize) -> f64 {
 
 /// line/area の category x 座標を x 軸の offset 設定に応じて選ぶ単一窓口。
 /// offset:true → category_center(bar 同様の band 中心)、false → line_x(edge-to-edge)。
+/// mixed は bar を含むため offset 設定に関わらず常に band 中心(grid/ラベル/棒と整合)。
 /// line.rs の点計算と draw_frame の x ラベルがこの関数を共有し、offset 判定の分岐を一元化する。
 pub fn line_category_x(spec: &ChartSpec, frame: &Frame, i: usize, n: usize) -> f64 {
-    if spec.x_axis.offset {
+    if spec.x_axis.offset || matches!(spec.kind, ChartKind::Mixed) {
         category_center(frame, i, n)
     } else {
         line_x(frame, i, n)
