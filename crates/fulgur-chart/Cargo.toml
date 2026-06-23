@@ -25,8 +25,14 @@ dhat = { version = "0.3.3", optional = true }
 dhat-heap = ["dep:dhat"]
 
 [dev-dependencies]
-criterion = "0.7.0"
 insta = { workspace = true }
+
+# criterion pulls in rayon, which refuses to compile for wasm32. The speed bench
+# never runs on wasm, so keep criterion off the wasm dev-dep graph — otherwise
+# `wasm-pack test` (which runs `cargo build --tests`) tries to compile it and
+# fails with rayon's "cannot be used when targeting wasi32" compile_error.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = "0.7.0"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
