@@ -501,7 +501,7 @@ pub struct TreemapDataset {
 #[serde(untagged)]
 pub enum TreemapTree {
     Numbers(Vec<f64>),
-    Objects(Vec<serde_json::Value>),
+    Objects(Vec<serde_json::Map<String, serde_json::Value>>),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

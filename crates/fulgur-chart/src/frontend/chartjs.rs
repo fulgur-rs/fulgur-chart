@@ -1177,6 +1177,11 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
             })
             .collect(),
         TreeField::Objs(objs) => {
+            if objs.len() > MAX_TREEMAP_INPUT_ROWS {
+                return Err(format!(
+                    "treemap の入力データ件数が多すぎます (上限 {MAX_TREEMAP_INPUT_ROWS})"
+                ));
+            }
             let key = ds
                 .key
                 .as_deref()
@@ -1185,7 +1190,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
                 objs.iter()
                     .map(|o| TreeNode {
                         label: String::new(),
-                        value: obj_num(o, key),
+                        value: obj_num(o, key).max(0.0),
                         children: vec![],
                     })
                     .collect()
@@ -1291,7 +1296,7 @@ fn build_tree_forest(
         .zip(buckets)
         .map(|(label, bucket)| {
             if groups.len() == 1 {
-                let value: f64 = bucket.iter().map(|o| obj_num(o, key)).sum();
+                let value: f64 = bucket.iter().map(|o| obj_num(o, key).max(0.0)).sum();
                 TreeNode {
                     label,
                     value,
@@ -1314,6 +1319,10 @@ fn build_tree_forest(
 /// 実用上 treemap が 50 段を超えることはない。
 const MAX_TREEMAP_GROUP_DEPTH: usize = 50;
 
+/// treemap のオブジェクト入力行数の上限。集約 (build_tree_forest) は各グループ階層で
+/// object を clone するため、ノード数上限とは別に生入力件数も制限して DoS を防ぐ。
+const MAX_TREEMAP_INPUT_ROWS: usize = 10_000;
+
 /// treemap の forest 内ノード総数を再帰的に数える (DoS ガード用)。
 fn count_nodes(nodes: &[crate::ir::TreeNode]) -> usize {
     nodes.iter().map(|n| 1 + count_nodes(&n.children)).sum()
@@ -1330,7 +1339,7 @@ fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
     };
     check_object(top, &["type", "data", "options"], "")?;
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
-        check_object(data, &["labels", "datasets"], "data")?;
+        check_object(data, &["datasets"], "data")?;
         if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
             for (i, ds) in datasets.iter().enumerate() {
                 if let Some(ds) = ds.as_object() {

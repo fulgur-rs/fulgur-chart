@@ -34,6 +34,9 @@ pub const DEFAULT_MAX_CATEGORICAL_PRIMITIVES: usize = 1_000_000;
 /// ラベル・タイトル文字列の上限(バイト)。
 pub const DEFAULT_MAX_LABEL_BYTES: usize = 4_096;
 
+/// treemap のツリー深さの上限。スタックオーバーフロー/DoS 対策。parser の groups 上限に揃える。
+pub const DEFAULT_MAX_TREE_DEPTH: usize = 50;
+
 /// spec の width/height 上限(px)。
 /// Chrome のブラウザ上限(32,767 px)に合わせた値。
 /// PNG 面積の独立した入口を塞ぐ目的もある。実際の PNG メモリは raster の面積チェックで保護する。
@@ -102,6 +105,34 @@ impl Default for InputLimits {
 }
 
 // --- 検証 ---
+
+/// treemap のツリーを再帰走査し、ノード総数を返す。各ノードのラベル長を
+/// `max_label_bytes` で検証し、深さが `DEFAULT_MAX_TREE_DEPTH` を超えたら Err。
+/// 深さチェックを各呼び出しの冒頭で行うため、本関数自身の再帰も有界 (≤ 51)。
+fn validate_tree(
+    nodes: &[crate::ir::TreeNode],
+    depth: usize,
+    limits: &InputLimits,
+) -> Result<usize, String> {
+    if depth > DEFAULT_MAX_TREE_DEPTH {
+        return Err(format!(
+            "treemap のツリー深さが上限 {} を超えています",
+            DEFAULT_MAX_TREE_DEPTH,
+        ));
+    }
+    let mut count = 0usize;
+    for n in nodes {
+        if n.label.len() > limits.max_label_bytes {
+            return Err(format!(
+                "treemap ラベルの長さ {} バイトが上限 {} を超えています",
+                n.label.len(),
+                limits.max_label_bytes,
+            ));
+        }
+        count += 1 + validate_tree(&n.children, depth + 1, limits)?;
+    }
+    Ok(count)
+}
 
 /// ChartSpec が `limits` の入力上限内にあることを検証する。
 ///
@@ -247,11 +278,19 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
 
     // --- 全データ点数の合計(scatter/bubble 向け) ---
     // values と points の大きい方を各系列のコストとして合算する。
+    // treemap ツリーをノード数・深さ・ラベル長で検証する。深さ上限により本検証と
+    // draw_nodes の再帰スタックが有界になり、IR 直接構築や他フロントエンド経由でも DoS を防ぐ。
+    let mut tree_points = 0usize;
+    for s in &spec.series {
+        tree_points += validate_tree(&s.tree, 0, limits)?;
+    }
+
     let total_points: usize = spec
         .series
         .iter()
         .map(|s| s.values.len().max(s.points.len()).max(s.box_points.len()))
-        .sum();
+        .sum::<usize>()
+        + tree_points;
     if total_points > limits.max_total_data_points {
         return Err(format!(
             "全系列のデータ点数合計 {} が上限 {} を超えています",
@@ -552,5 +591,60 @@ mod tests {
             ..InputLimits::default()
         };
         assert!(validate_spec(&s, &relaxed).is_ok());
+    }
+
+    #[test]
+    fn treemap_tree_nodes_count_toward_total_points() {
+        let spec = crate::frontend::chartjs::parse(
+            r#"{"type":"treemap","data":{"datasets":[{"tree":[1,2,3,4,5]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let mut limits = default_limits();
+        limits.max_total_data_points = 4; // 5 ノード > 4
+        assert!(validate_spec(&spec, &limits).is_err());
+        limits.max_total_data_points = 5;
+        assert!(validate_spec(&spec, &limits).is_ok());
+    }
+
+    #[test]
+    fn treemap_deep_tree_is_rejected() {
+        // 深さ DEFAULT_MAX_TREE_DEPTH+2 の手組みツリー
+        use crate::ir::TreeNode;
+        let mut node = TreeNode {
+            label: "leaf".into(),
+            value: 1.0,
+            children: vec![],
+        };
+        for _ in 0..(DEFAULT_MAX_TREE_DEPTH + 2) {
+            node = TreeNode {
+                label: "g".into(),
+                value: 1.0,
+                children: vec![node],
+            };
+        }
+        let mut spec = crate::frontend::chartjs::parse(
+            r#"{"type":"treemap","data":{"datasets":[{"tree":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.series[0].tree = vec![node];
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn treemap_oversized_label_is_rejected() {
+        use crate::ir::TreeNode;
+        let mut spec = crate::frontend::chartjs::parse(
+            r#"{"type":"treemap","data":{"datasets":[{"tree":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.series[0].tree = vec![TreeNode {
+            label: "x".repeat(DEFAULT_MAX_LABEL_BYTES + 1),
+            value: 1.0,
+            children: vec![],
+        }];
+        assert!(validate_spec(&spec, &default_limits()).is_err());
     }
 }

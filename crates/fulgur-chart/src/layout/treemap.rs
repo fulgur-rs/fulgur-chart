@@ -47,9 +47,14 @@ fn lighten(base: Color, depth: usize) -> Color {
     lerp_color(base, WHITE, t)
 }
 
-/// 背景色の輝度からコントラストの取れる文字色 (濃灰 or 白) を選ぶ。
+/// 背景色を白キャンバスにブレンドした実効色の輝度から、コントラストの取れる
+/// 文字色 (濃灰 or 白) を選ぶ。半透明の塗りでも視認性を確保する。
 fn text_on(bg: Color) -> Color {
-    let lum = 0.299 * bg.r as f64 + 0.587 * bg.g as f64 + 0.114 * bg.b as f64;
+    let a = bg.a.clamp(0.0, 1.0) as f64;
+    let r = bg.r as f64 * a + 255.0 * (1.0 - a);
+    let g = bg.g as f64 * a + 255.0 * (1.0 - a);
+    let b = bg.b as f64 * a + 255.0 * (1.0 - a);
+    let lum = 0.299 * r + 0.587 * g + 0.114 * b;
     if lum > 140.0 {
         Color {
             r: 60,
@@ -72,17 +77,27 @@ fn truncate_to_width(s: &str, max_w: f64, font: f64, m: &TextMeasurer) -> Option
         return Some(s.to_string());
     }
     let ell = "…";
+    if m.width(ell, font as f32) as f64 > max_w {
+        return None;
+    }
     let chars: Vec<char> = s.chars().collect();
-    let mut end = chars.len();
-    while end > 0 {
-        end -= 1;
-        let mut cand: String = chars[..end].iter().collect();
+    // 収まる最大の接頭辞長を二分探索する。幅は接頭辞長に対し単調非減少なので
+    // 線形走査と同じ結果になり、出力は byte 一致のまま。
+    let mut lo = 0usize;
+    let mut hi = chars.len();
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let mut cand: String = chars[..mid].iter().collect();
         cand.push_str(ell);
         if m.width(&cand, font as f32) as f64 <= max_w {
-            return Some(cand);
+            lo = mid;
+        } else {
+            hi = mid - 1;
         }
     }
-    None
+    let mut cand: String = chars[..lo].iter().collect();
+    cand.push_str(ell);
+    Some(cand)
 }
 
 /// `worst`: 与えた area 行を length 辺に沿って並べたときの最悪アスペクト比。
