@@ -301,7 +301,11 @@ jobs:
 
       # Speed benchmarks are informational only (wall-clock is noisy on shared
       # runners), so this never gates — we just run and archive the numbers.
+      # continue-on-error keeps a flaky/non-zero bench run from failing the job;
+      # compile errors in render.rs are still caught by the Test/clippy jobs
+      # (--all-targets, and `render` has no required-features).
       - name: Render speed benchmark (report-only)
+        continue-on-error: true
         run: cargo bench -p fulgur-chart --bench render --locked
 
       - name: Upload criterion report
