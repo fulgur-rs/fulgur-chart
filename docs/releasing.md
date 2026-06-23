@@ -92,3 +92,63 @@ git restore .               # 確認後、変更を元に戻す
 
 > `release-plz update` に `--dry-run` は無い。上記のように一度ローカルへ反映してから
 > `git restore .` で戻すか、`release-plz release --dry-run` で publish 前チェックを行う。
+
+---
+
+## npm リリース (@fulgur-rs/chart-cli)
+
+`.github/workflows/chart-cli-npm-release.yml` が GitHub Release イベント
+(`fulgur-chart-cli-v*` タグ) で自動的に npm publish を実行する。
+認証は `NPM_TOKEN` (クラシック Automation トークン) を使う。
+
+### 一度きりのセットアップ (手動)
+
+#### 1. npm アクセストークンを作成
+
+1. npmjs.com → Account Settings → Access Tokens → Generate New Token
+2. **Classic Token** → **Automation** タイプを選択 (CI/CD 向け、2FA 不要)
+3. 生成されたトークンをコピーして安全に保管
+
+#### 2. GitHub リポジトリシークレットに登録
+
+リポジトリ Settings → Secrets and variables → Actions → New repository secret:
+
+| 項目 | 値 |
+|------|----|
+| Name | `NPM_TOKEN` |
+| Secret | 上で生成した npm Automation トークン |
+
+#### 3. `@fulgur-rs` npm Organization を確認
+
+`@fulgur-rs` スコープが npm Organization として存在することを確認する。
+未作成の場合: npmjs.com → + → Create Organization → `fulgur-rs`
+
+### npm リリースのフロー
+
+通常は **release-plz PR をマージするだけ** で自動化される:
+
+1. release-plz PR (例: PR #60) をマージ → `release-plz-release` ジョブが実行
+2. release-plz が `fulgur-chart-cli-v0.1.10` タグと GitHub Release を作成
+3. GitHub Release の `published` イベントが `chart-cli-npm-release.yml` をトリガー
+4. 全 6 プラットフォームのバイナリがビルドされ、7 パッケージが npm publish される
+   - `@fulgur-rs/chart-cli-linux-x64`
+   - `@fulgur-rs/chart-cli-linux-x64-musl`
+   - `@fulgur-rs/chart-cli-linux-arm64`
+   - `@fulgur-rs/chart-cli-darwin-arm64`
+   - `@fulgur-rs/chart-cli-darwin-x64`
+   - `@fulgur-rs/chart-cli-win32-x64`
+   - `@fulgur-rs/chart-cli` (メタパッケージ)
+
+### 手動トリガー (workflow_dispatch)
+
+Actions → **Chart CLI NPM Release** → Run workflow → tag: `fulgur-chart-cli-v0.1.10`
+
+既存の GitHub Release タグに対してのみ動作する (ワークフローが `ref: ${{ env.RELEASE_TAG }}`
+でチェックアウトするため)。
+
+### OIDC Trusted Publishing への移行 (将来オプション)
+
+npm の OIDC を使う場合は、7 パッケージすべてに対してそれぞれ
+npmjs.com → パッケージ Settings → Trusted Publishing で GitHub Actions を登録し、
+`chart-cli-npm-release.yml` の `NODE_AUTH_TOKEN` 行を削除する。
+初回 publish 後にのみ設定可能 (npm の仕様)。
