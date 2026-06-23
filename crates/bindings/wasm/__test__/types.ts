@@ -11,8 +11,9 @@ import init, {
 
 const SPEC = '{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}'
 
-// init is the default export and returns a Promise.
+// init is the default export and returns a Promise (no-arg + object form both type-check).
 const p: Promise<unknown> = init()
+const p2: Promise<unknown> = init({ module_or_path: new Uint8Array() })
 
 // Builder return-type overloads.
 const a: string = build(SPEC).width(800).height(600).dsl('chartjs').strict().render('svg')
@@ -40,4 +41,4 @@ build(SPEC).dsl('zzz')
 // @ts-expect-error unknown format is rejected
 render(SPEC, 'jpeg')
 
-void [p, a, b, c, cPng, d, e, f, g, h, i, wrong1]
+void [p, p2, a, b, c, cPng, d, e, f, g, h, i, wrong1]

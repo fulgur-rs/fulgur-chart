@@ -20,10 +20,9 @@ const wasmUrl = new URL('../pkg/fulgur_chart_wasm_bg.wasm', import.meta.url)
 await init({ module_or_path: await readFile(fileURLToPath(wasmUrl)) })
 
 const isU8 = (v) => v instanceof Uint8Array
-const startsWithPngMagic = (b) =>
-  isU8(b) && b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
 const bytesEqual = (a, b) =>
   isU8(a) && isU8(b) && a.length === b.length && Buffer.compare(Buffer.from(a), Buffer.from(b)) === 0
+const startsWithPngMagic = (b) => isU8(b) && b.length >= 4 && bytesEqual(b.subarray(0, 4), PNG_MAGIC)
 
 // --- meta ---
 
