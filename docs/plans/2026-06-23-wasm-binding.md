@@ -1202,7 +1202,7 @@ git commit -m "ci: add wasm-binding job (build + smoke)"
 > （`FulgurParseError` / `FulgurStrictError < ParseError` / `FulgurRenderError`）で公開する。
 > **動作（DSL自動判定・RenderOptions・エラー分類・決定性・フォント非対称性）は本仕様に準拠する。**
 > WASM は `wasm-pack --target web` 配布のため利用前に一度 `await init()` が必要
-> （Node では `await init(bytes)`）。詳細: `docs/plans/2026-06-22-node-builder-api-design.md`。
+> （Node では `await init({ module_or_path: bytes })`）。詳細: `docs/plans/2026-06-22-node-builder-api-design.md`。
 ```
 
 **Step 2: §3 のエラー変換表の「Node.js / WASM」列を階層クラスに書き換える**
