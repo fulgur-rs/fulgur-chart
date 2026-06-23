@@ -280,3 +280,38 @@ jobs:
 
       - name: Test
         run: npm test
+
+  perf:
+    name: Perf (memory gate + speed report)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: perf
+
+      # Deterministic dhat allocation gate: fails on extreme memory regressions.
+      - name: Memory regression gate (dhat)
+        run: cargo bench -p fulgur-chart --bench membench --features dhat-heap --locked -- --check
+
+      # Speed benchmarks are informational only (wall-clock is noisy on shared
+      # runners), so this never gates — we just run and archive the numbers.
+      # continue-on-error keeps a flaky/non-zero bench run from failing the job;
+      # compile errors in render.rs are still caught by the Test/clippy jobs
+      # (--all-targets, and `render` has no required-features).
+      - name: Render speed benchmark (report-only)
+        continue-on-error: true
+        run: cargo bench -p fulgur-chart --bench render --locked
+
+      - name: Upload criterion report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-report
+          path: target/criterion
+          if-no-files-found: ignore

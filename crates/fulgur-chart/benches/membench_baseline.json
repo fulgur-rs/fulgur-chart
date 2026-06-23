@@ -1,0 +1,26 @@
+{
+  "bar_large": {
+    "alloc_bytes": 1304013,
+    "alloc_blocks": 12931
+  },
+  "bar_small": {
+    "alloc_bytes": 35877,
+    "alloc_blocks": 619
+  },
+  "line_large": {
+    "alloc_bytes": 13489281,
+    "alloc_blocks": 90975
+  },
+  "line_small": {
+    "alloc_bytes": 35570,
+    "alloc_blocks": 597
+  },
+  "pie_small": {
+    "alloc_bytes": 18062,
+    "alloc_blocks": 286
+  },
+  "scatter_large": {
+    "alloc_bytes": 18447547,
+    "alloc_blocks": 170592
+  }
+}
