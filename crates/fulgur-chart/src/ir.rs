@@ -28,6 +28,15 @@ pub struct BoxPoint {
     pub max: f64,
 }
 
+/// treemap の階層ノード。リーフは children 空・value はリーフ値。
+/// グループは value=子の合算・children=サブノード。任意の深さにネストできる。
+#[derive(Clone, Debug, PartialEq)]
+pub struct TreeNode {
+    pub label: String,
+    pub value: f64,
+    pub children: Vec<TreeNode>,
+}
+
 /// 系列ごとの描画種別。混合チャート(bar+line)で dataset 別 type を表す。
 /// 単一種別チャートでは全系列が同じ値になる(描画に影響しない既定は Bar)。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -56,6 +65,8 @@ pub struct Series {
     pub point_radius: Option<f64>,
     /// boxplot の5数要約データ。boxplot 種別のみ使用、他は空。
     pub box_points: Vec<BoxPoint>,
+    /// treemap の階層データ (トップレベルノードの forest)。treemap 種別のみ使用、他は空。
+    pub tree: Vec<TreeNode>,
 }
 
 impl Series {
@@ -195,6 +206,9 @@ pub enum ChartKind {
         donut_ratio: f64,
         outlabel: OutlabelConfig,
     },
+    /// QuickChart / chartjs-chart-treemap 互換の treemap。階層データを squarified で
+    /// ネストした矩形に分割し、深さに応じた色で塗る。データは series[0].tree に持つ。
+    Treemap,
 }
 
 /// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。
@@ -277,6 +291,7 @@ mod tests {
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
+            tree: vec![],
         };
         assert_eq!(s.fill_at(0), c(1, 2, 3));
         assert_eq!(s.fill_at(2), c(1, 2, 3)); // ブロードキャスト
@@ -296,6 +311,7 @@ mod tests {
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
+            tree: vec![],
         };
         assert_eq!(s.fill_at(0), c(10, 0, 0));
         assert_eq!(s.fill_at(1), c(0, 20, 0));
@@ -316,6 +332,7 @@ mod tests {
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
+            tree: vec![],
         };
         assert_eq!(s.stroke_at(0), c(0, 0, 0));
     }
@@ -347,5 +364,22 @@ mod tests {
         assert!(c.background.is_none());
         assert_eq!(c.color.r, 255);
         assert_eq!(c.color.a, 1.0);
+    }
+
+    #[test]
+    fn tree_node_is_recursive() {
+        let leaf = TreeNode {
+            label: "a".into(),
+            value: 3.0,
+            children: vec![],
+        };
+        let group = TreeNode {
+            label: "g".into(),
+            value: 3.0,
+            children: vec![leaf.clone()],
+        };
+        assert_eq!(group.children.len(), 1);
+        assert_eq!(group.children[0].value, 3.0);
+        assert!(leaf.children.is_empty());
     }
 }

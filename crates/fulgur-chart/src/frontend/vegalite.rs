@@ -376,6 +376,7 @@ fn build_categorical(
                 series_type,
                 point_radius: None,
                 box_points: vec![],
+                tree: vec![],
             }
         })
         .collect()
@@ -424,6 +425,7 @@ fn build_scatter(
                 series_type: SeriesType::Bar,
                 point_radius: None,
                 box_points: vec![],
+                tree: vec![],
             }
         })
         .collect()
@@ -470,6 +472,7 @@ fn build_pie(
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
+        tree: vec![],
     }]
 }
 
