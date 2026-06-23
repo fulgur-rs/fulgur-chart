@@ -247,6 +247,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
             return parse_matrix(json);
         }
+        if chart_type.as_deref() == Some("treemap") {
+            if strict {
+                check_unknown_keys_treemap(json)?;
+            }
+            return parse_treemap(json);
+        }
         if matches!(chart_type.as_deref(), Some("gauge") | Some("radialGauge")) {
             let radial = chart_type.as_deref() == Some("radialGauge");
             if strict {
@@ -1112,6 +1118,250 @@ fn check_unknown_keys_progress(json: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// treemap 専用パース。`tree`(数値配列 or オブジェクト配列) + `key` + `groups` を
+/// 挿入順でグルーピング・合算して TreeNode forest を構築する。
+fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
+    use crate::ir::TreeNode;
+
+    #[derive(Deserialize)]
+    struct TreemapWrapper {
+        data: TreemapRawData,
+        #[serde(default)]
+        options: RawOptions,
+    }
+    #[derive(Deserialize)]
+    struct TreemapRawData {
+        datasets: Vec<TreemapRawDataset>,
+    }
+    #[derive(Deserialize)]
+    struct TreemapRawDataset {
+        #[allow(dead_code)]
+        #[serde(default)]
+        label: String,
+        tree: TreeField,
+        #[serde(default)]
+        key: Option<String>,
+        #[serde(default)]
+        groups: Vec<String>,
+        #[serde(rename = "backgroundColor", default)]
+        background_color: Option<ScalarOrArray<String>>,
+    }
+    /// `tree`: 数値配列(フラット) または オブジェクト配列(groups でグルーピング)。
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TreeField {
+        Nums(Vec<f64>),
+        Objs(Vec<serde_json::Map<String, serde_json::Value>>),
+    }
+
+    let raw: TreemapWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if raw.data.datasets.len() != 1 {
+        return Err("treemap チャートには dataset が 1 つ必要です".to_string());
+    }
+    let ds = raw.data.datasets.into_iter().next().unwrap();
+
+    let forest: Vec<TreeNode> = match ds.tree {
+        TreeField::Nums(nums) => nums
+            .into_iter()
+            .map(|v| TreeNode {
+                label: String::new(),
+                value: v,
+                children: vec![],
+            })
+            .collect(),
+        TreeField::Objs(objs) => {
+            let key = ds
+                .key
+                .as_deref()
+                .ok_or("treemap: オブジェクト tree には key が必要です")?;
+            if ds.groups.is_empty() {
+                objs.iter()
+                    .map(|o| TreeNode {
+                        label: String::new(),
+                        value: obj_num(o, key),
+                        children: vec![],
+                    })
+                    .collect()
+            } else {
+                build_tree_forest(&objs, &ds.groups, key)
+            }
+        }
+    };
+
+    // ノード総数の上限 (DoS 対策、matrix の 10000 セル上限に揃える)。
+    if count_nodes(&forest) > 10_000 {
+        return Err("treemap のノード数が多すぎます (上限 10000)".to_string());
+    }
+
+    let theme = build_theme(raw.options.theme);
+    let no_axis = AxisSpec {
+        title: None,
+        min: None,
+        max: None,
+        suggested_min: None,
+        suggested_max: None,
+        begin_at_zero: false,
+        offset: false,
+        grid: false,
+    };
+
+    let series = vec![Series {
+        name: String::new(),
+        values: vec![],
+        points: vec![],
+        fill: vec![],
+        stroke: vec![],
+        stroke_width: 0.0,
+        area: false,
+        tension: 0.0,
+        series_type: SeriesType::Bar,
+        point_radius: None,
+        box_points: vec![],
+        tree: forest,
+    }];
+
+    let _ = ds.background_color;
+
+    Ok(ChartSpec {
+        kind: ChartKind::Treemap,
+        series,
+        categories: vec![],
+        x_axis: no_axis.clone(),
+        y_axis: no_axis,
+        legend: crate::ir::LegendPos::None,
+        title: raw
+            .options
+            .plugins
+            .title
+            .filter(|t| t.display)
+            .map(|t| t.text),
+        width: 800.0,
+        height: 450.0,
+        data_labels: false,
+        theme,
+    })
+}
+
+/// オブジェクトから数値プロパティを読む (欠落/非数値は 0.0)。
+fn obj_num(o: &serde_json::Map<String, serde_json::Value>, key: &str) -> f64 {
+    o.get(key).and_then(|v| v.as_f64()).unwrap_or(0.0)
+}
+
+/// オブジェクトからグルーピングキーを文字列として読む。
+fn obj_group_key(o: &serde_json::Map<String, serde_json::Value>, field: &str) -> String {
+    match o.get(field) {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        Some(serde_json::Value::Bool(b)) => b.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// オブジェクト群を groups[0] でグルーピング(挿入順保持)し、groups[1..] で再帰。
+/// 各レベルの value は子の合算 (最深レベルは key の合算)。
+fn build_tree_forest(
+    objs: &[serde_json::Map<String, serde_json::Value>],
+    groups: &[String],
+    key: &str,
+) -> Vec<crate::ir::TreeNode> {
+    use crate::ir::TreeNode;
+    let field = &groups[0];
+    let mut order: Vec<String> = Vec::new();
+    let mut idx: HashMap<String, usize> = HashMap::new();
+    let mut buckets: Vec<Vec<serde_json::Map<String, serde_json::Value>>> = Vec::new();
+    for o in objs {
+        let gk = obj_group_key(o, field);
+        let bi = *idx.entry(gk.clone()).or_insert_with(|| {
+            order.push(gk);
+            buckets.push(Vec::new());
+            buckets.len() - 1
+        });
+        buckets[bi].push(o.clone());
+    }
+
+    order
+        .into_iter()
+        .zip(buckets)
+        .map(|(label, bucket)| {
+            if groups.len() == 1 {
+                let value: f64 = bucket.iter().map(|o| obj_num(o, key)).sum();
+                TreeNode {
+                    label,
+                    value,
+                    children: vec![],
+                }
+            } else {
+                let children = build_tree_forest(&bucket, &groups[1..], key);
+                let value: f64 = children.iter().map(|c| c.value).sum();
+                TreeNode {
+                    label,
+                    value,
+                    children,
+                }
+            }
+        })
+        .collect()
+}
+
+/// treemap の forest 内ノード総数を再帰的に数える (DoS ガード用)。
+fn count_nodes(nodes: &[crate::ir::TreeNode]) -> usize {
+    nodes.iter().map(|n| 1 + count_nodes(&n.children)).sum()
+}
+
+/// treemap の許可キーを検証する (strict モード)。
+fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let Some(top) = value.as_object() else {
+        return Ok(());
+    };
+    check_object(top, &["type", "data", "options"], "")?;
+    if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
+        check_object(data, &["labels", "datasets"], "data")?;
+        if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
+            for (i, ds) in datasets.iter().enumerate() {
+                if let Some(ds) = ds.as_object() {
+                    check_object(
+                        ds,
+                        &[
+                            "label",
+                            "tree",
+                            "key",
+                            "groups",
+                            "backgroundColor",
+                            "borderColor",
+                            "borderWidth",
+                        ],
+                        &format!("data.datasets[{i}]"),
+                    )?;
+                }
+            }
+        }
+    }
+    if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
+        check_object(options, &["plugins", "theme"], "options")?;
+        if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
+            check_object(plugins, &["title", "legend"], "options.plugins")?;
+        }
+        if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
+            check_object(
+                theme,
+                &[
+                    "palette",
+                    "gridColor",
+                    "textColor",
+                    "backgroundColor",
+                    "fontSize",
+                ],
+                "options.theme",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
     #[derive(Deserialize)]
     struct MatrixWrapper {
@@ -1796,5 +2046,80 @@ mod tests {
             "strict mode should accept outlabels plugin: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn parse_treemap_numeric_tree() {
+        let json = r#"{
+            "type": "treemap",
+            "data": { "datasets": [{ "tree": [6, 4, 3, 2, 1] }] }
+        }"#;
+        let spec = parse(json, false).expect("parse error");
+        assert!(matches!(spec.kind, crate::ir::ChartKind::Treemap));
+        assert_eq!(spec.series.len(), 1);
+        let t = &spec.series[0].tree;
+        assert_eq!(t.len(), 5);
+        assert_eq!(t[0].value, 6.0);
+        assert!(t[0].children.is_empty());
+    }
+
+    #[test]
+    fn parse_treemap_grouped_sums_and_preserves_order() {
+        let json = r#"{
+            "type": "treemap",
+            "data": { "datasets": [{
+                "key": "value",
+                "groups": ["cat", "sub"],
+                "tree": [
+                    {"cat": "B", "sub": "x", "value": 2},
+                    {"cat": "A", "sub": "p", "value": 5},
+                    {"cat": "A", "sub": "p", "value": 1},
+                    {"cat": "A", "sub": "q", "value": 4},
+                    {"cat": "B", "sub": "x", "value": 3}
+                ]
+            }] }
+        }"#;
+        let spec = parse(json, false).expect("parse error");
+        let t = &spec.series[0].tree;
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].label, "B");
+        assert_eq!(t[1].label, "A");
+        assert_eq!(t[0].value, 5.0);
+        assert_eq!(t[0].children.len(), 1);
+        assert_eq!(t[0].children[0].label, "x");
+        assert_eq!(t[0].children[0].value, 5.0);
+        assert!(t[0].children[0].children.is_empty());
+        assert_eq!(t[1].value, 10.0);
+        assert_eq!(t[1].children.len(), 2);
+        assert_eq!(t[1].children[0].label, "p");
+        assert_eq!(t[1].children[0].value, 6.0);
+        assert_eq!(t[1].children[1].label, "q");
+        assert_eq!(t[1].children[1].value, 4.0);
+    }
+
+    #[test]
+    fn treemap_strict_rejects_unknown_dataset_key() {
+        let json = r#"{
+            "type": "treemap",
+            "data": { "datasets": [{ "tree": [1,2], "bogus": true }] }
+        }"#;
+        assert!(parse(json, true).is_err());
+    }
+
+    #[test]
+    fn treemap_strict_accepts_known_keys() {
+        let json = r#"{
+            "type": "treemap",
+            "data": { "datasets": [{ "key": "v", "groups": ["g"],
+                "tree": [{"g": "a", "v": 1}] }] }
+        }"#;
+        assert!(parse(json, true).is_ok());
+    }
+
+    #[test]
+    fn treemap_rejects_too_many_nodes() {
+        let nums: String = (0..10_001).map(|_| "1").collect::<Vec<_>>().join(",");
+        let json = format!(r#"{{"type":"treemap","data":{{"datasets":[{{"tree":[{nums}]}}]}}}}"#);
+        assert!(parse(&json, false).is_err());
     }
 }
