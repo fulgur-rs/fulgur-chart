@@ -92,6 +92,10 @@ pub struct AxisSpec {
     pub suggested_min: Option<f64>,
     pub suggested_max: Option<f64>,
     pub begin_at_zero: bool,
+    /// chart.js category スケールの offset。true でカテゴリを band 中心へ寄せる
+    /// (bar の既定挙動)。false は edge-to-edge(line の既定)。現状 line レイアウトの
+    /// x 軸のみが消費する(y は line の値軸なので無描画)。
+    pub offset: bool,
     pub grid: bool,
 }
 

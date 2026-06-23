@@ -438,6 +438,7 @@ mod tests {
                 suggested_min: None,
                 suggested_max: None,
                 begin_at_zero: false,
+                offset: false,
                 grid: true,
             },
             y_axis: AxisSpec {
@@ -447,6 +448,7 @@ mod tests {
                 suggested_min: None,
                 suggested_max: None,
                 begin_at_zero: false,
+                offset: false,
                 grid: true,
             },
             legend: LegendPos::None,

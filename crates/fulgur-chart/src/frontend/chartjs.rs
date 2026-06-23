@@ -588,6 +588,18 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .and_then(|s| s.get("x"))
         .and_then(|a| a.get("suggestedMax"))
         .and_then(|v| v.as_f64());
+    // category スケールの offset。明示時のみ尊重(既定 false=edge-to-edge)。
+    // line レイアウトの x 軸のみが消費する(y は line の値軸)。
+    let x_offset = scales_val
+        .and_then(|s| s.get("x"))
+        .and_then(|a| a.get("offset"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let y_offset = scales_val
+        .and_then(|s| s.get("y"))
+        .and_then(|a| a.get("offset"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     Ok(ChartSpec {
         kind,
@@ -600,6 +612,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             suggested_min: suggested_min_x,
             suggested_max: suggested_max_x,
             begin_at_zero: x_begin_at_zero,
+            offset: x_offset,
             grid: true,
         },
         y_axis: AxisSpec {
@@ -609,6 +622,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             suggested_min: suggested_min_y,
             suggested_max: suggested_max_y,
             begin_at_zero: y_begin_at_zero,
+            offset: y_offset,
             grid: true,
         },
         legend: legend_pos(&raw.options.plugins.legend),
@@ -871,6 +885,7 @@ fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
                             "beginAtZero",
                             "suggestedMin",
                             "suggestedMax",
+                            "offset",
                         ],
                         &format!("options.scales.{axis}"),
                     )?;
@@ -1234,6 +1249,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             suggested_min: None,
             suggested_max: None,
             begin_at_zero: false,
+            offset: false,
             grid: false,
         },
         y_axis: AxisSpec {
@@ -1243,6 +1259,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             suggested_min: None,
             suggested_max: None,
             begin_at_zero: false,
+            offset: false,
             grid: false,
         },
         legend: legend_pos(&raw.options.plugins.legend),
@@ -1484,6 +1501,7 @@ fn zero_axis() -> AxisSpec {
         suggested_min: None,
         suggested_max: None,
         begin_at_zero: false,
+        offset: false,
         grid: false,
     }
 }
