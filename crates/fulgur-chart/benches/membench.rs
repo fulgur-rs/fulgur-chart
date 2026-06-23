@@ -61,9 +61,10 @@ fn measure() -> Baseline {
     out
 }
 
-fn read_baseline(path: &std::path::Path) -> Option<Baseline> {
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
+fn read_baseline(path: &std::path::Path) -> Result<Baseline, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read baseline file: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("failed to parse baseline JSON: {e}"))
 }
 
 fn write_baseline(path: &std::path::Path, b: &Baseline) {
@@ -132,12 +133,15 @@ fn main() -> ExitCode {
     }
 
     if do_check {
-        let Some(baseline) = read_baseline(&path) else {
-            eprintln!(
-                "error: baseline not found/parsable at {}; run with --update and commit it",
-                path.display()
-            );
-            return ExitCode::FAILURE;
+        let baseline = match read_baseline(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!(
+                    "error: {e} (at {}); run with --update and commit it",
+                    path.display()
+                );
+                return ExitCode::FAILURE;
+            }
         };
         print_table(&current, Some(&baseline));
 
