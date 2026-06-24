@@ -488,9 +488,8 @@ pub struct TreemapDataset {
     /// Grouping property names, outermost first, defining the hierarchy levels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<Vec<String>>,
-    // treemap は塗りのみで枠線を描かないため、borderColor/borderWidth は公開しない。
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub background_color: Option<ScalarOrArray<ColorString>>,
+    // treemap は palette/depth ベースで配色し、dataset レベルの backgroundColor や
+    // border(stroke)は honor しないため、これらのオプションは公開しない。
 }
 
 /// `tree`: flat numeric array, or an array of data objects (grouped via `key`/`groups`).

@@ -12,8 +12,7 @@
         {"region": "APAC", "product": "Gadgets", "value": 15},
         {"region": "AMER", "product": "Widgets", "value": 20},
         {"region": "AMER", "product": "Gadgets", "value": 9}
-      ],
-      "backgroundColor": "rgba(54, 162, 235, 1.0)"
+      ]
     }]
   },
   "options": {

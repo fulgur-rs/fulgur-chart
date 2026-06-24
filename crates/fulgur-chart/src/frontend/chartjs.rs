@@ -1143,8 +1143,6 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         key: Option<String>,
         #[serde(default)]
         groups: Vec<String>,
-        #[serde(rename = "backgroundColor", default)]
-        background_color: Option<ScalarOrArray<String>>,
     }
     /// `tree`: 数値配列(フラット) または オブジェクト配列(groups でグルーピング)。
     #[derive(Deserialize)]
@@ -1240,8 +1238,6 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         tree: forest,
     }];
 
-    let _ = ds.background_color;
-
     Ok(ChartSpec {
         kind: ChartKind::Treemap,
         series,
@@ -1303,8 +1299,14 @@ fn build_tree_forest(
         .into_iter()
         .zip(buckets)
         .map(|(label, bucket)| {
+            // 集約が +Inf に overflow すると layout が非有限の面積を 0 扱いして空描画に
+            // なるため、合計を有限値(f64::MAX)にクランプして正の親値を保つ。
             if groups.len() == 1 {
-                let value: f64 = bucket.iter().map(|o| obj_num(o, key).max(0.0)).sum();
+                let value = bucket
+                    .iter()
+                    .map(|o| obj_num(o, key).max(0.0))
+                    .sum::<f64>()
+                    .min(f64::MAX);
                 TreeNode {
                     label,
                     value,
@@ -1312,7 +1314,7 @@ fn build_tree_forest(
                 }
             } else {
                 let children = build_tree_forest(&bucket, &groups[1..], key);
-                let value: f64 = children.iter().map(|c| c.value).sum();
+                let value = children.iter().map(|c| c.value).sum::<f64>().min(f64::MAX);
                 TreeNode {
                     label,
                     value,
@@ -1353,9 +1355,10 @@ fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
                 if let Some(ds) = ds.as_object() {
                     check_object(
                         ds,
-                        // treemap は枠線非対応のため borderColor/borderWidth は許可しない
+                        // treemap は palette/depth 配色で dataset レベルの色(backgroundColor)・
+                        // 枠線(borderColor/borderWidth)を honor しないため許可しない
                         // (schema TreemapDataset とも一致させる)。
-                        &["label", "tree", "key", "groups", "backgroundColor"],
+                        &["label", "tree", "key", "groups"],
                         &format!("data.datasets[{i}]"),
                     )?;
                 }
@@ -2155,5 +2158,31 @@ mod tests {
         let nums: String = (0..10_001).map(|_| "1").collect::<Vec<_>>().join(",");
         let json = format!(r#"{{"type":"treemap","data":{{"datasets":[{{"tree":[{nums}]}}]}}}}"#);
         assert!(parse(&json, false).is_err());
+    }
+
+    #[test]
+    fn treemap_grouped_overflow_value_is_finite() {
+        // 同一バケットの大きな有限値が +Inf に overflow しても、集約値は有限に
+        // クランプされる(layout の空描画を防ぐ)。
+        let json = r#"{
+            "type": "treemap",
+            "data": { "datasets": [{
+                "key": "v", "groups": ["a"],
+                "tree": [
+                    {"a":"X","v":1e308},
+                    {"a":"X","v":1e308},
+                    {"a":"X","v":1e308}
+                ]
+            }] }
+        }"#;
+        let spec = parse(json, false).expect("parse error");
+        let t = &spec.series[0].tree;
+        assert_eq!(t.len(), 1);
+        assert!(
+            t[0].value.is_finite(),
+            "grouped overflow must clamp to finite, got {}",
+            t[0].value
+        );
+        assert!(t[0].value > 0.0);
     }
 }
