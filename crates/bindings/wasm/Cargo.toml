@@ -1,0 +1,20 @@
+# Standalone workspace: this crate is excluded from the repo-root workspace
+# (root Cargo.toml `exclude = ["crates/bindings"]`), mirroring the Node/Python bindings.
+[workspace]
+
+[package]
+name = "fulgur-chart-wasm"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+# Path dependency on the core crate (mirrors the Node/Python bindings).
+fulgur-chart = { path = "../../fulgur-chart" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.2", features = ["preserve_order"] }
