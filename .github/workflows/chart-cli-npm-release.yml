@@ -1,8 +1,10 @@
 name: Chart CLI NPM Release
-# NOTE: This workflow uses npm provenance. To actually publish, either:
-#   1. Configure an NPM_TOKEN repository secret and keep NODE_AUTH_TOKEN as-is, OR
-#   2. Set up Trusted Publishing (OIDC) for @fulgur-rs/chart-cli* on npm and remove NODE_AUTH_TOKEN.
-# Until one of these is done, the publish steps will fail auth.
+# NOTE: Publishing uses npm Trusted Publishing (OIDC) with provenance — no
+# long-lived npm token. Requirements:
+#   - A Trusted Publisher configured on npm for each @fulgur-rs/chart-cli*
+#     package (repo + this workflow filename + the `npm` environment).
+#   - npm >= 11.5.1 and Node >= 22.14.0 on the runner (set up below).
+#   - The publish job's `id-token: write` permission (set below).
 
 on:
   release:
@@ -187,8 +189,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+        run: npm install -g npm@latest
 
       - name: Export validated package version
         env:
@@ -233,8 +238,6 @@ jobs:
           for platform in linux-x64 linux-x64-musl linux-arm64 darwin-arm64 darwin-x64 win32-x64; do
             npm publish --provenance --access public packages/npm/chart-cli-${platform}
           done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Update meta package optionalDependencies
         working-directory: packages/npm/chart-cli
@@ -252,5 +255,3 @@ jobs:
       - name: Publish meta package
         working-directory: packages/npm/chart-cli
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
