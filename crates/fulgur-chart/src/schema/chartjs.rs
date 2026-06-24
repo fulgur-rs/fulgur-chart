@@ -28,6 +28,7 @@ pub enum ChartJsSpec {
     Bubble(BubbleSpec),
     Radar(RadarSpec),
     Matrix(MatrixSpec),
+    Treemap(TreemapSpec),
     /// QuickChart's canonical name is `progressBar`; `progress` is accepted too.
     #[serde(alias = "progressBar")]
     Progress(ProgressSpec),
@@ -453,6 +454,70 @@ pub struct MatrixOptions {
     pub plugins: Option<CommonPlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOptions>,
+}
+
+// ────────────────────────────────────────────────
+// Treemap chart (QuickChart / chartjs-chart-treemap)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TreemapSpec {
+    pub data: TreemapData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<TreemapOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TreemapData {
+    pub datasets: Vec<TreemapDataset>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TreemapDataset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Hierarchical data: either a flat array of numbers, or an array of objects
+    /// grouped via `key` + `groups`.
+    pub tree: TreemapTree,
+    /// Numeric property name to sum. Required when `tree` holds objects (strict
+    /// parsing errors without it); ignored for a flat numeric `tree`. Modeled as
+    /// optional here because the untagged number/object `tree` cannot express the
+    /// conditional requirement in JSON Schema.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Grouping property names, outermost first, defining the hierarchy levels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<String>>,
+    // treemap は palette/depth ベースで配色し、dataset レベルの backgroundColor や
+    // border(stroke)は honor しないため、これらのオプションは公開しない。
+}
+
+/// `tree`: flat numeric array, or an array of data objects (grouped via `key`/`groups`).
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum TreemapTree {
+    Numbers(Vec<f64>),
+    Objects(Vec<serde_json::Map<String, serde_json::Value>>),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TreemapOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<TreemapPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+/// treemap は凡例を描かない(各矩形がラベルを持つ)ため legend は公開しない。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct TreemapPlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<TitlePlugin>,
 }
 
 // ────────────────────────────────────────────────

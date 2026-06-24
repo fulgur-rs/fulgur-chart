@@ -123,12 +123,13 @@ fulgur-chart inspect chart.json
 
 Supports a data-only, static subset:
 
-- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `boxplot` / `progress` / `gauge` / `radialGauge` (QuickChart's `progressBar` is also accepted as an alias)
+- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `treemap` / `boxplot` / `progress` / `gauge` / `radialGauge` (QuickChart's `progressBar` is also accepted as an alias)
 - `data.labels`
 - `data.datasets[]` — `label` / `data` (numeric array; `{x,y}` / `{x,y,r}` for scatter/bubble; `{x,y,v}` for matrix; nested `[min,q1,median,q3,max]` arrays for boxplot) / `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts)
 - For `progress` (alias `progressBar`), `datasets[0].data` holds each bar's value; an optional second dataset's `data` overrides the per-bar max (default 100). The percentage label is shown by default and can be hidden with `options.plugins.datalabels.display: false`.
 - For `gauge`, `datasets[0].data` holds cumulative zone thresholds, `value` is the needle value, and `backgroundColor` is the per-zone colors (`minValue` sets the lower bound). Configure with `options.needle` / `options.valueLabel`. The value label falls back to the rounded value (JS `valueLabel.formatter` is not executed).
 - For `radialGauge`, `datasets[0].data` holds a single value drawn as a fill-to-value arc on a track ring. Configure with `options.domain` / `options.trackColor` / `options.centerPercentage` / `options.roundedCorners` / `options.centerArea` (`displayText` / `fontSize`). The center value text falls back to the rounded value (JS `centerArea.text` is not executed).
+- For `treemap`, `datasets[0].tree` holds the hierarchical data: either a flat numeric array, or an array of objects with `key` (the numeric property to sum — **required** for object trees) and `groups` (grouping property names, outermost first) defining the nesting levels. Cells are colored from the palette by depth; dataset-level `backgroundColor` / `borderColor` / `borderWidth` and `options.plugins.legend` are not used. `options.plugins.title` and `options.theme` apply.
 - `options.indexAxis`
 - `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right; `legend` does not apply to `gauge` / `radialGauge`)
 - `options.plugins.datalabels` (`display` — renders a value label at each data point)

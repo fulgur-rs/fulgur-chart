@@ -549,6 +549,7 @@ mod tests {
                 series_type: SeriesType::Bar,
                 point_radius: None,
                 box_points: vec![],
+                tree: vec![],
             }],
             x_axis: AxisSpec {
                 title: None,
