@@ -14,6 +14,9 @@
   "files": [
     "bin/"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "optionalDependencies": {
     "@fulgur-rs/chart-cli-linux-x64": "0.1.9",
     "@fulgur-rs/chart-cli-linux-x64-musl": "0.1.9",

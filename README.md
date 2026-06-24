@@ -24,11 +24,29 @@ easy to keep figures under version control.
 
 ## Installation
 
+### npx (ゼロインストール)
+
+```sh
+npx @fulgur-rs/chart-cli render chart.json -o chart.svg
+```
+
+Node.js 18+ が必要。`npm install` 時（または `npx` 初回呼び出し時）に
+対応プラットフォームのバイナリが optionalDependencies として自動選択される。  
+`@fulgur-rs/chart-cli` が npm に未公開の場合は、下記の Cargo を使用してください。
+
+### Cargo
+
+```sh
+cargo install fulgur-chart-cli
+```
+
+インストール後は `fulgur-chart` コマンドが使えるようになる。
+
+### ソースからビルド (開発向け)
+
 ```sh
 cargo install --path crates/fulgur-chart-cli
 ```
-
-This installs a binary named `fulgur-chart`.
 
 ## Usage
 
