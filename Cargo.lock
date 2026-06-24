@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "fulgur-chart"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "criterion",
  "dhat",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "fulgur-chart-cli"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "assert_cmd",
  "clap",
