@@ -13,13 +13,88 @@ on:
         description: "Release tag (e.g. fulgur-chart-cli-v0.1.9)"
         required: true
 
-env:
-  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-
 jobs:
+  validate-release-tag:
+    name: Validate release tag
+    # Cheap event filter: only this package's tag series belongs to this
+    # workflow. Non-matching releases (e.g. core/Ruby fulgur-chart-v*) skip
+    # here, which cascades to build/publish via `needs`. The real security
+    # gate is this job's body (strict semver / branch-shadow / SHA resolve).
+    if: startsWith(github.event.inputs.tag || github.ref_name, 'fulgur-chart-cli-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      sha: ${{ steps.validate.outputs.sha }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Validate immutable release tag
+        id: validate
+        env:
+          REQUESTED_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+
+          tag="$REQUESTED_TAG"
+
+          # 1. Enforce a strict SemVer shape under the required prefix. This is
+          #    the ERE form of the semver.org spec: it forbids leading zeros in
+          #    numeric identifiers and empty dot-separated prerelease/build
+          #    segments (e.g. v01.2.3 and v1.2.3-alpha..1 are rejected).
+          semver_re='^fulgur-chart-cli-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$tag" =~ $semver_re ]]; then
+            echo "Invalid release tag (expected fulgur-chart-cli-v<strict-semver>): '$tag'" >&2
+            exit 1
+          fi
+
+          # 2. The workflow must always run from the tag itself — release events
+          #    and manual dispatch alike. This pins the workflow definition (not
+          #    just the built content) to the immutable tag; manual runs must
+          #    select the tag as the "Use workflow from" ref.
+          if [[ "$REF_TYPE" != "tag" || "$REF_NAME" != "$tag" ]]; then
+            echo "Workflow must run from the requested release tag (ref_type=$REF_TYPE ref_name=$REF_NAME tag=$tag)." >&2
+            exit 1
+          fi
+
+          # 3. Refuse if a branch EXACTLY named like the tag exists: an
+          #    unqualified ref would be ambiguous and could resolve to
+          #    attacker-controlled branch code. ls-remote patterns glob-match
+          #    ref-name tails, so compare the full refname exactly to avoid
+          #    false positives like a release/fulgur-chart-cli-v1.2.3 branch.
+          branch_match="$(git ls-remote --heads "$REPO_URL" "refs/heads/$tag" \
+            | awk -v ref="refs/heads/$tag" '$2 == ref { print $1 }')"
+          if [[ -n "$branch_match" ]]; then
+            echo "Refusing ambiguous release ref: branch '$tag' exists." >&2
+            exit 1
+          fi
+
+          # 4. Resolve the tag to an immutable commit SHA (deref annotated tags
+          #    via ^{}). No --exit-code: an empty result is reported by the -z
+          #    check below, which would be unreachable under 'set -e' otherwise.
+          tag_refs="$(git ls-remote "$REPO_URL" "refs/tags/$tag" "refs/tags/$tag^{}")"
+          sha="$(awk '$2 ~ /\^\{\}$/ { print $1 }' <<< "$tag_refs")"
+          if [[ -z "$sha" ]]; then
+            sha="$(awk -v ref="refs/tags/$tag" '$2 == ref { print $1 }' <<< "$tag_refs")"
+          fi
+          if [[ -z "$sha" ]]; then
+            echo "Tag '$tag' does not exist on origin." >&2
+            exit 1
+          fi
+
+          echo "Resolved $tag -> $sha"
+          {
+            echo "tag=$tag"
+            echo "sha=$sha"
+            echo "version=${tag#fulgur-chart-cli-v}"
+          } >> "$GITHUB_OUTPUT"
+
   build-binary:
     name: Build ${{ matrix.platform }}
-    if: startsWith(github.event.inputs.tag || github.ref_name, 'fulgur-chart-cli-v')
+    needs: validate-release-tag
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -48,7 +123,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.validate-release-tag.outputs.sha }}
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -92,23 +168,32 @@ jobs:
 
   publish-packages:
     name: Publish npm packages
-    needs: build-binary
+    needs: [validate-release-tag, build-binary]
     runs-on: ubuntu-latest
+    # Defense-in-depth: gate publish behind a GitHub Environment so the npm
+    # credential can be an environment secret protected by required reviewers
+    # and tag deployment rules (configure in repo Settings → Environments).
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@fulgur-rs/chart-cli
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.validate-release-tag.outputs.sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Compute version from tag
-        run: echo "VERSION=${RELEASE_TAG#fulgur-chart-cli-v}" >> "$GITHUB_ENV"
+      - name: Export validated package version
+        env:
+          VALIDATED_VERSION: ${{ needs.validate-release-tag.outputs.version }}
+        run: echo "VERSION=$VALIDATED_VERSION" >> "$GITHUB_ENV"
 
       - name: Download all binary artifacts
         uses: actions/download-artifact@v4
@@ -119,7 +204,6 @@ jobs:
       - name: Stage platform packages
         run: |
           set -e
-          VERSION="$VERSION"
           declare -A BINARY_NAMES=(
             [linux-x64]=fulgur-chart
             [linux-x64-musl]=fulgur-chart
@@ -133,7 +217,7 @@ jobs:
             bin_name="${BINARY_NAMES[$platform]}"
             artifact="artifacts/chart-cli-${platform}/${bin_name}"
             mkdir -p "${pkg_dir}/bin"
-            cp "${artifact}" "${pkg_dir}/bin/${bin_name}"
+            cp -f "${artifact}" "${pkg_dir}/bin/${bin_name}"
             chmod +x "${pkg_dir}/bin/${bin_name}" || true
             node -e "
               const fs = require('fs');
