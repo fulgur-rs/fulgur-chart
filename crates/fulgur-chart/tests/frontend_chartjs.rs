@@ -588,6 +588,22 @@ fn treemap_schema_roundtrip() {
         chartjs::parse(numeric, true).is_ok(),
         "strict parser should accept numeric treemap"
     );
+
+    // Documented asymmetry: the JSON Schema is a deliberate superset, so it accepts
+    // an object tree without `key` (the untagged enum can't make `key` conditionally
+    // required), but the runtime parser rejects it because `key` is required to sum
+    // object values into a hierarchy.
+    let object_no_key = r##"{
+        "type": "treemap",
+        "data": {"datasets": [{"groups": ["g"], "tree": [{"g": "a", "v": 1}]}]}
+    }"##;
+    let spec: ChartJsSpec = serde_json::from_str(object_no_key)
+        .expect("schema (superset) should accept object tree without key");
+    assert!(matches!(spec, ChartJsSpec::Treemap(_)));
+    assert!(
+        chartjs::parse(object_no_key, false).is_err(),
+        "runtime parser must reject an object tree without key"
+    );
 }
 
 #[test]

@@ -482,7 +482,10 @@ pub struct TreemapDataset {
     /// Hierarchical data: either a flat array of numbers, or an array of objects
     /// grouped via `key` + `groups`.
     pub tree: TreemapTree,
-    /// Numeric property name to sum when `tree` holds objects.
+    /// Numeric property name to sum. Required when `tree` holds objects (strict
+    /// parsing errors without it); ignored for a flat numeric `tree`. Modeled as
+    /// optional here because the untagged number/object `tree` cannot express the
+    /// conditional requirement in JSON Schema.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     /// Grouping property names, outermost first, defining the hierarchy levels.
