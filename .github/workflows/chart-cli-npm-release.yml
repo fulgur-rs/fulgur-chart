@@ -33,7 +33,6 @@ jobs:
         id: validate
         env:
           REQUESTED_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-          EVENT_NAME: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
@@ -42,21 +41,33 @@ jobs:
 
           tag="$REQUESTED_TAG"
 
-          # 1. Enforce the prefixed semver shape; reject anything else.
-          if [[ ! "$tag" =~ ^fulgur-chart-cli-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release tag: '$tag'" >&2
+          # 1. Enforce a strict SemVer shape under the required prefix. This is
+          #    the ERE form of the semver.org spec: it forbids leading zeros in
+          #    numeric identifiers and empty dot-separated prerelease/build
+          #    segments (e.g. v01.2.3 and v1.2.3-alpha..1 are rejected).
+          semver_re='^fulgur-chart-cli-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$tag" =~ $semver_re ]]; then
+            echo "Invalid release tag (expected fulgur-chart-cli-v<strict-semver>): '$tag'" >&2
             exit 1
           fi
 
-          # 2. For release events the triggering ref must itself be this tag.
-          if [[ "$EVENT_NAME" == "release" && ( "$REF_TYPE" != "tag" || "$REF_NAME" != "$tag" ) ]]; then
-            echo "Release event ref must be the requested tag (ref_type=$REF_TYPE ref_name=$REF_NAME)." >&2
+          # 2. The workflow must always run from the tag itself — release events
+          #    and manual dispatch alike. This pins the workflow definition (not
+          #    just the built content) to the immutable tag; manual runs must
+          #    select the tag as the "Use workflow from" ref.
+          if [[ "$REF_TYPE" != "tag" || "$REF_NAME" != "$tag" ]]; then
+            echo "Workflow must run from the requested release tag (ref_type=$REF_TYPE ref_name=$REF_NAME tag=$tag)." >&2
             exit 1
           fi
 
-          # 3. Refuse if a branch shares the tag name: an unqualified ref would
-          #    be ambiguous and could resolve to attacker-controlled branch code.
-          if git ls-remote --exit-code --heads "$REPO_URL" "$tag" >/dev/null 2>&1; then
+          # 3. Refuse if a branch EXACTLY named like the tag exists: an
+          #    unqualified ref would be ambiguous and could resolve to
+          #    attacker-controlled branch code. ls-remote patterns glob-match
+          #    ref-name tails, so compare the full refname exactly to avoid
+          #    false positives like a release/fulgur-chart-cli-v1.2.3 branch.
+          branch_match="$(git ls-remote --heads "$REPO_URL" "refs/heads/$tag" \
+            | awk -v ref="refs/heads/$tag" '$2 == ref { print $1 }')"
+          if [[ -n "$branch_match" ]]; then
             echo "Refusing ambiguous release ref: branch '$tag' exists." >&2
             exit 1
           fi
@@ -113,6 +124,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -171,6 +183,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
