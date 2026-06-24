@@ -1368,7 +1368,8 @@ fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
     if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
         check_object(options, &["plugins", "theme"], "options")?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            check_object(plugins, &["title", "legend"], "options.plugins")?;
+            // treemap は凡例を描かない(LegendPos::None 固定)ため legend は許可しない。
+            check_object(plugins, &["title"], "options.plugins")?;
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
             check_object(

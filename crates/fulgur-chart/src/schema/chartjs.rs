@@ -509,13 +509,12 @@ pub struct TreemapOptions {
     pub theme: Option<ThemeOptions>,
 }
 
+/// treemap は凡例を描かない(各矩形がラベルを持つ)ため legend は公開しない。
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct TreemapPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub legend: Option<LegendPlugin>,
 }
 
 // ────────────────────────────────────────────────
