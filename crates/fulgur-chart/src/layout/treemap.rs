@@ -127,12 +127,33 @@ pub(crate) fn squarify(areas: &[f64], rect: TreemapRect) -> Vec<TreemapRect> {
         w: 0.0,
         h: 0.0,
     };
-    let total: f64 = areas.iter().map(|a| a.max(0.0)).sum();
-    if n == 0 || total <= 0.0 || rect.w <= 0.0 || rect.h <= 0.0 {
+    if n == 0 || rect.w <= 0.0 || rect.h <= 0.0 {
         return vec![zero; n];
     }
-    let scale = (rect.w * rect.h) / total;
-    let scaled: Vec<f64> = areas.iter().map(|a| a.max(0.0) * scale).collect();
+    // 非有限値(overflow した合計や NaN/Inf)は面積を持てないので 0 として扱う。
+    let clamped: Vec<f64> = areas
+        .iter()
+        .map(|a| if a.is_finite() && *a > 0.0 { *a } else { 0.0 })
+        .collect();
+    let total: f64 = clamped.iter().sum();
+    let scaled: Vec<f64> = if total.is_finite() && total > 0.0 {
+        let scale = (rect.w * rect.h) / total;
+        clamped.iter().map(|a| a * scale).collect()
+    } else {
+        // 大きな有限値の合計が +Inf に overflow した場合: max で正規化(各 ≤ 1・和 ≤ n で
+        // 有限)してから container 面積へスケールし直し、空描画を防ぐ。
+        let maxv = clamped.iter().cloned().fold(0.0_f64, f64::max);
+        if maxv <= 0.0 {
+            return vec![zero; n];
+        }
+        let norm: Vec<f64> = clamped.iter().map(|a| a / maxv).collect();
+        let norm_total: f64 = norm.iter().sum();
+        if norm_total <= 0.0 {
+            return vec![zero; n];
+        }
+        let scale = (rect.w * rect.h) / norm_total;
+        norm.iter().map(|x| x * scale).collect()
+    };
 
     let mut result = vec![zero; n];
     let mut free = rect;
@@ -333,9 +354,10 @@ fn draw_nodes(
         } else {
             // キャプション帯は子を潰さない高さがある場合のみ確保する。帯を引くと
             // 子が潰れる極小グループ矩形では帯を省き、子を全面にレイアウトして
-            // 実データ(正の子孫)を落とさない。
+            // 実データ(正の子孫)を落とさない。帯確保後に子再帰の SPACING inset でも
+            // 子が残るよう、最低でも cap_h + SPACING を要求する。
             let cap_h = font + 6.0;
-            let child_rect = if cell.h > cap_h {
+            let child_rect = if cell.h > cap_h + SPACING {
                 draw_caption(&node.label, cell, fill, font, m, items);
                 TreemapRect {
                     x: cell.x,
@@ -474,6 +496,32 @@ mod tests {
             assert!(r.x >= rect.x - 1e-6 && r.y >= rect.y - 1e-6);
             assert!(r.x + r.w <= rect.x + rect.w + 1e-6);
             assert!(r.y + r.h <= rect.y + rect.h + 1e-6);
+        }
+    }
+
+    #[test]
+    fn squarify_handles_overflowing_total() {
+        // 大きな有限値の合計が +Inf に overflow しても空描画にならず、container を
+        // ほぼ充填し、座標は有限であること。
+        let rect = TreemapRect {
+            x: 0.0,
+            y: 0.0,
+            w: 100.0,
+            h: 100.0,
+        };
+        let vals = [1e308_f64; 10]; // 合計 = 1e309 → +Inf
+        let rects = squarify(&vals, rect);
+        let sum: f64 = rects.iter().map(|r| r.w * r.h).sum();
+        assert!(
+            (sum - rect.w * rect.h).abs() < 1e-3,
+            "overflowing totals must still fill the container, got {sum}"
+        );
+        for r in &rects {
+            assert!(r.w * r.h > 0.0, "each rect must have positive area");
+            assert!(
+                r.w.is_finite() && r.h.is_finite() && r.x.is_finite() && r.y.is_finite(),
+                "coords must be finite"
+            );
         }
     }
 

@@ -1353,15 +1353,9 @@ fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
                 if let Some(ds) = ds.as_object() {
                     check_object(
                         ds,
-                        &[
-                            "label",
-                            "tree",
-                            "key",
-                            "groups",
-                            "backgroundColor",
-                            "borderColor",
-                            "borderWidth",
-                        ],
+                        // treemap は枠線非対応のため borderColor/borderWidth は許可しない
+                        // (schema TreemapDataset とも一致させる)。
+                        &["label", "tree", "key", "groups", "backgroundColor"],
                         &format!("data.datasets[{i}]"),
                     )?;
                 }
