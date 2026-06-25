@@ -653,8 +653,10 @@ mod tests {
             false,
         )
         .unwrap();
-        let mut outlabel = OutlabelConfig::default();
-        outlabel.text = "x".repeat(DEFAULT_MAX_LABEL_BYTES);
+        let outlabel = OutlabelConfig {
+            text: "x".repeat(DEFAULT_MAX_LABEL_BYTES),
+            ..OutlabelConfig::default()
+        };
         spec.kind = crate::ir::ChartKind::OutlabeledPie {
             donut_ratio: 0.0,
             outlabel,
@@ -678,8 +680,10 @@ mod tests {
             false,
         )
         .unwrap();
-        let mut outlabel = OutlabelConfig::default();
-        outlabel.text = "%l".to_string();
+        let outlabel = OutlabelConfig {
+            text: "%l".to_string(),
+            ..OutlabelConfig::default()
+        };
         spec.kind = crate::ir::ChartKind::OutlabeledPie {
             donut_ratio: 0.0,
             outlabel,
