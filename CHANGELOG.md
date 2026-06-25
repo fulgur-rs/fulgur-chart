@@ -14,6 +14,46 @@
 
 ### Other
 
+- release
+- Merge pull request #63 from fulgur-rs/feat/chart-cli-npm-publish
+- Merge pull request #62 from fulgur-rs/feat/treemap-chart
+- *(treemap)* document tree/key/groups shape and key requirement
+
+## [0.11.0](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.10.0...fulgur-chart-v0.11.0) - 2026-06-24
+
+### Added
+
+- *(layout)* implement squarified treemap with depth color, captions, labels
+- *(frontend)* parse treemap type with tree/key/groups hierarchy
+- *(ir)* add TreeNode, Series.tree, ChartKind::Treemap
+
+### Fixed
+
+- *(treemap)* drop unsupported legend option (Codex)
+- *(treemap)* handle non-finite areas; drop backgroundColor (Codex)
+- *(treemap)* overflow-safe squarify; tighter caption threshold; drop border opts (Codex)
+- *(treemap)* cap numeric tree rows; keep children when group cell too short (Codex)
+- *(guard)* accept treemap leaf at exactly max depth (coderabbit)
+- *(treemap)* address AI review (DoS guards, schema/strict parity, perf)
+- *(schema)* add treemap variant to ChartJsSpec; README type list
+- *(treemap)* cap groups depth to prevent parser stack overflow (DoS); guard short-rect captions
+
+### Other
+
+- release
+- Merge pull request #63 from fulgur-rs/feat/chart-cli-npm-publish
+- Merge pull request #62 from fulgur-rs/feat/treemap-chart
+- *(treemap)* document tree/key/groups shape and key requirement
+- *(render)* add treemap end-to-end render and snapshot tests
+
+## [0.1.11](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.10...fulgur-chart-cli-v0.1.11) - 2026-06-24
+
+### Fixed
+
+- *(schema)* add treemap variant to ChartJsSpec; README type list
+
+### Other
+
 - Merge pull request #63 from fulgur-rs/feat/chart-cli-npm-publish
 - Merge pull request #62 from fulgur-rs/feat/treemap-chart
 - *(treemap)* document tree/key/groups shape and key requirement
