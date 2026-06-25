@@ -102,19 +102,22 @@ fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
     }
 
     let range = max - min;
+    // range が inf になる場合（例: min=-f64::MAX, max=f64::MAX）は
+    // range / count も inf になるため、分配してから減算する形で step を計算する。
     let step = if range.is_finite() && range > 0.0 {
         range / count as f64
     } else {
-        1.0
+        max / count as f64 - min / count as f64
     };
+    // 同じ理由で tick 生成も lerp を使う: min + range*t は中間でオーバーフローするが
+    // min*(1-t) + max*t は各係数が 1 以下なので有限を保てる。
     let ticks = (0..=count)
         .map(|i| {
             if i == count {
                 max
-            } else if range.is_finite() {
-                min + step * i as f64
             } else {
-                min
+                let t = i as f64 / count as f64;
+                min * (1.0 - t) + max * t
             }
         })
         .collect();
@@ -180,6 +183,20 @@ mod tests {
     fn nice_ticks_caps_requested_tick_count() {
         let t = nice_ticks(0.0, 10.0, usize::MAX);
         assert!(t.ticks.len() <= 1_001);
+    }
+
+    #[test]
+    fn nice_ticks_full_f64_range_is_bounded() {
+        // min=-f64::MAX, max=f64::MAX: range がオーバーフローして inf になる場合でも
+        // 全 tick が有限値で等分されること。
+        let t = nice_ticks(-f64::MAX, f64::MAX, 5);
+        assert_eq!(t.min, -f64::MAX);
+        assert_eq!(t.max, f64::MAX);
+        assert!(t.step.is_finite());
+        assert_eq!(t.ticks.len(), 6);
+        assert!(t.ticks.iter().all(|v| v.is_finite()));
+        // 中間 tick が全て -f64::MAX ではなく単調増加していること。
+        assert!(t.ticks.windows(2).all(|w| w[0] < w[1]));
     }
 
     #[test]
