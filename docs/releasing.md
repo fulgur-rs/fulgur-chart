@@ -66,6 +66,10 @@ crates.io の各クレートページ → Settings → Trusted Publishing → Gi
 
 これにより、`release-plz-release` は Required reviewers の承認後にのみ実行される。
 
+> セキュリティ上、`.github/workflows/release-plz.yml` の外部 GitHub Actions は
+> 可変タグではなく full commit SHA に固定している。更新時は upstream release を確認し、
+> 対応する SHA とコメント内のバージョンを同時に更新する。
+
 ### 3. GitHub App を作成して Secrets を登録
 
 `GITHUB_TOKEN` で作成した PR は CI / release イベントをトリガーしないため、App トークンを使う。
