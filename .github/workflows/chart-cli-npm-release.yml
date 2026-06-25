@@ -187,14 +187,15 @@ jobs:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
 
-      # IMPORTANT: do NOT add `registry-url` here. It makes setup-node write an
-      # .npmrc with always-auth + a placeholder _authToken, which npm prefers
-      # over OIDC — the trusted-publisher handshake is skipped entirely and
-      # publish fails with a misleading 404 (npm/cli#8730). OIDC needs NO npm
-      # token; npm publishes to the default registry (registry.npmjs.org).
-      - uses: actions/setup-node@v4
+      # setup-node MUST be >= v6.1.0 for OIDC trusted publishing: older versions
+      # write an .npmrc with `always-auth=true` + a placeholder _authToken, which
+      # npm uses instead of OIDC (publish 404s). v6.1.0 removed always-auth
+      # handling (actions/setup-node#1436). `registry-url` is required so npm
+      # engages the OIDC handshake against the registry; do NOT pass a token.
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
         run: |
