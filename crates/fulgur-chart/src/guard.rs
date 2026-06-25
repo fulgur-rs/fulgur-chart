@@ -350,6 +350,38 @@ fn estimate_outlabel_expanded_bytes(spec: &ChartSpec, template: &str) -> usize {
         return 0;
     };
 
+    // テンプレートを1回だけ解析してプレースホルダー数とリテラル長を取得する。
+    // これにより O(N × T) の二重ループを O(T + N) に削減し、ガード自体が
+    // DoS ベクターにならないようにする。
+    let mut num_l = 0usize;
+    let mut num_v = 0usize;
+    let mut num_p = 0usize;
+    let mut other_len = 0usize;
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            match chars.peek() {
+                Some(&'l') => {
+                    chars.next();
+                    num_l = num_l.saturating_add(1);
+                }
+                Some(&'v') => {
+                    chars.next();
+                    num_v = num_v.saturating_add(1);
+                }
+                Some(&'p') => {
+                    chars.next();
+                    num_p = num_p.saturating_add(1);
+                }
+                _ => {
+                    other_len = other_len.saturating_add(c.len_utf8());
+                }
+            }
+        } else {
+            other_len = other_len.saturating_add(c.len_utf8());
+        }
+    }
+
     series
         .values
         .iter()
@@ -361,43 +393,12 @@ fn estimate_outlabel_expanded_bytes(spec: &ChartSpec, template: &str) -> usize {
             // pct は round(value / total * 100) だが最大でも i64 の十進表記なので
             // 実用上 20 字以内。32 で余裕を持たせた保守的な上限を使う。
             const PCT_LEN_BOUND: usize = 32;
-            estimate_template_expanded_len(template, label_len, value_len, PCT_LEN_BOUND)
+            other_len
+                .saturating_add(num_l.saturating_mul(label_len))
+                .saturating_add(num_v.saturating_mul(value_len))
+                .saturating_add(num_p.saturating_mul(PCT_LEN_BOUND))
         })
         .fold(0usize, usize::saturating_add)
-}
-
-fn estimate_template_expanded_len(
-    template: &str,
-    label_len: usize,
-    value_len: usize,
-    pct_len: usize,
-) -> usize {
-    let mut len = 0usize;
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            match chars.peek() {
-                Some(&'l') => {
-                    chars.next();
-                    len = len.saturating_add(label_len);
-                }
-                Some(&'v') => {
-                    chars.next();
-                    len = len.saturating_add(value_len);
-                }
-                Some(&'p') => {
-                    chars.next();
-                    len = len.saturating_add(pct_len);
-                }
-                _ => {
-                    len = len.saturating_add(c.len_utf8());
-                }
-            }
-        } else {
-            len = len.saturating_add(c.len_utf8());
-        }
-    }
-    len
 }
 
 #[cfg(test)]
