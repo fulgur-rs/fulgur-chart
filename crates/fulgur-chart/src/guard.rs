@@ -390,9 +390,9 @@ fn estimate_outlabel_expanded_bytes(spec: &ChartSpec, template: &str) -> usize {
         .map(|(idx, value)| {
             let label_len = spec.categories.get(idx).map(|s| s.len()).unwrap_or(0);
             let value_len = fmt_num(*value).len();
-            // pct は round(value / total * 100) だが最大でも i64 の十進表記なので
-            // 実用上 20 字以内。32 で余裕を持たせた保守的な上限を使う。
-            const PCT_LEN_BOUND: usize = 32;
+            // pct は `(frac * 100.0).round() as i64` で frac ∈ (0, 1] なので
+            // pct ∈ [0, 100] → i64::to_string() の最大長は 3 バイト ("100")。
+            const PCT_LEN_BOUND: usize = 3;
             other_len
                 .saturating_add(num_l.saturating_mul(label_len))
                 .saturating_add(num_v.saturating_mul(value_len))
@@ -670,6 +670,27 @@ mod tests {
             result.is_err(),
             "must reject aggregate outlabel text amplification"
         );
+    }
+
+    #[test]
+    fn outlabeled_pie_allows_default_template_many_slices() {
+        // デフォルトテンプレート "%l\n%p%" × 100,000 スライスは合法。
+        // PCT_LEN_BOUND を過大に設定すると誤拒否されていたケースの回帰テスト。
+        // pct ∈ [0, 100] なので最大 3 バイト。
+        // 推定: 100,000 × (2 + 1 + 3) = 600,000 bytes ≤ 1,000,000
+        let mut spec = chartjs::parse(
+            r#"{"type":"outlabeledPie","data":{"labels":["A"],"datasets":[{"data":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        // OutlabelConfig::default().text == "%l\n%p%"
+        spec.kind = crate::ir::ChartKind::OutlabeledPie {
+            donut_ratio: 0.0,
+            outlabel: crate::ir::OutlabelConfig::default(),
+        };
+        spec.categories = vec!["A".to_string(); 100_000];
+        spec.series[0].values = vec![1.0; 100_000];
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
     }
 
     #[test]
