@@ -224,12 +224,7 @@ jobs:
             mkdir -p "${pkg_dir}/bin"
             cp -f "${artifact}" "${pkg_dir}/bin/${bin_name}"
             chmod +x "${pkg_dir}/bin/${bin_name}" || true
-            node -e "
-              const fs = require('fs');
-              const pkg = JSON.parse(fs.readFileSync('${pkg_dir}/package.json', 'utf8'));
-              pkg.version = '${VERSION}';
-              fs.writeFileSync('${pkg_dir}/package.json', JSON.stringify(pkg, null, 2) + '\n');
-            "
+            PKG_DIR="$pkg_dir" node -e 'const fs=require("fs"),path=require("path"); const p=path.join(process.env.PKG_DIR,"package.json"); const pkg=JSON.parse(fs.readFileSync(p,"utf8")); pkg.version=process.env.VERSION; fs.writeFileSync(p,JSON.stringify(pkg,null,2)+"\n");'
           done
 
       - name: Publish platform packages
@@ -242,15 +237,7 @@ jobs:
       - name: Update meta package optionalDependencies
         working-directory: packages/npm/chart-cli
         run: |
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '${VERSION}';
-            for (const dep of Object.keys(pkg.optionalDependencies)) {
-              pkg.optionalDependencies[dep] = '${VERSION}';
-            }
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
+          node -e 'const fs=require("fs"); const v=process.env.VERSION; const pkg=JSON.parse(fs.readFileSync("package.json","utf8")); pkg.version=v; for(const dep of Object.keys(pkg.optionalDependencies||{})){pkg.optionalDependencies[dep]=v;} fs.writeFileSync("package.json",JSON.stringify(pkg,null,2)+"\n");'
 
       - name: Publish meta package
         working-directory: packages/npm/chart-cli
