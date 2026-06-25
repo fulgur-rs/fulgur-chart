@@ -13,6 +13,7 @@
 //!   ttf_parser::Face::parse が Err を返すので別途処理済み。
 
 use crate::ir::ChartSpec;
+use crate::num::fmt_num;
 
 // --- デフォルト上限定数 ---
 
@@ -276,6 +277,18 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
                 slices, prims_per_slice, outlabeled_primitives, limits.max_categorical_primitives,
             ));
         }
+
+        // テンプレートはスライスごとに展開・計測・SVG へ保持されるため、単体の
+        // outlabel.text がラベル上限内でも「スライス数 × 展開後テキスト量」が
+        // 大きい入力は拒否する。カテゴリ名と値の実データを使って、レンダリングで
+        // 生成されるテキスト量の保守的な上限を見積もる。
+        let expanded_text_bytes = estimate_outlabel_expanded_bytes(spec, &outlabel.text);
+        if expanded_text_bytes > limits.max_categorical_primitives {
+            return Err(format!(
+                "outlabeledPie: 展開後ラベル文字列 {} バイトが上限 {} を超えます",
+                expanded_text_bytes, limits.max_categorical_primitives,
+            ));
+        }
     }
 
     // --- 全データ点数の合計(scatter/bubble 向け) ---
@@ -330,6 +343,61 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
     }
 
     Ok(())
+}
+
+fn estimate_outlabel_expanded_bytes(spec: &ChartSpec, template: &str) -> usize {
+    let Some(series) = spec.series.first() else {
+        return 0;
+    };
+
+    series
+        .values
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.is_finite() && **v > 0.0)
+        .map(|(idx, value)| {
+            let label_len = spec.categories.get(idx).map(|s| s.len()).unwrap_or(0);
+            let value_len = fmt_num(*value).len();
+            // pct は round(value / total * 100) だが最大でも i64 の十進表記なので
+            // 実用上 20 字以内。32 で余裕を持たせた保守的な上限を使う。
+            const PCT_LEN_BOUND: usize = 32;
+            estimate_template_expanded_len(template, label_len, value_len, PCT_LEN_BOUND)
+        })
+        .fold(0usize, usize::saturating_add)
+}
+
+fn estimate_template_expanded_len(
+    template: &str,
+    label_len: usize,
+    value_len: usize,
+    pct_len: usize,
+) -> usize {
+    let mut len = 0usize;
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            match chars.peek() {
+                Some(&'l') => {
+                    chars.next();
+                    len = len.saturating_add(label_len);
+                }
+                Some(&'v') => {
+                    chars.next();
+                    len = len.saturating_add(value_len);
+                }
+                Some(&'p') => {
+                    chars.next();
+                    len = len.saturating_add(pct_len);
+                }
+                _ => {
+                    len = len.saturating_add(c.len_utf8());
+                }
+            }
+        } else {
+            len = len.saturating_add(c.len_utf8());
+        }
+    }
+    len
 }
 
 #[cfg(test)]
@@ -574,6 +642,52 @@ mod tests {
         let limits = default_limits();
         let result = validate_spec(&spec, &limits);
         assert!(result.is_err(), "must reject too many outlabel primitives");
+    }
+
+    #[test]
+    fn outlabeled_pie_rejects_amplified_outlabel_text() {
+        use crate::ir::OutlabelConfig;
+        let mut spec = chartjs::parse(
+            r#"{"type":"outlabeledPie","data":{"labels":["A"],"datasets":[{"data":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let mut outlabel = OutlabelConfig::default();
+        outlabel.text = "x".repeat(DEFAULT_MAX_LABEL_BYTES);
+        spec.kind = crate::ir::ChartKind::OutlabeledPie {
+            donut_ratio: 0.0,
+            outlabel,
+        };
+        // 1,000 スライス × 4,096 バイト = 約 4 MiB。プリミティブ数は
+        // 4,000 と上限内だが、保持・計測・シリアライズされる文字列量が過大。
+        spec.categories = vec!["A".to_string(); 1_000];
+        spec.series[0].values = vec![1.0; 1_000];
+        let result = validate_spec(&spec, &default_limits());
+        assert!(
+            result.is_err(),
+            "must reject aggregate outlabel text amplification"
+        );
+    }
+
+    #[test]
+    fn outlabeled_pie_allows_small_template_many_slices() {
+        use crate::ir::OutlabelConfig;
+        let mut spec = chartjs::parse(
+            r#"{"type":"outlabeledPie","data":{"labels":["A"],"datasets":[{"data":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let mut outlabel = OutlabelConfig::default();
+        outlabel.text = "%l".to_string();
+        spec.kind = crate::ir::ChartKind::OutlabeledPie {
+            donut_ratio: 0.0,
+            outlabel,
+        };
+        // プリミティブ数・展開後文字列量の両方がデフォルト上限内。
+        // %l は 1 バイトラベルに展開されるため 100,000 × 1 = 100,000 bytes < 1,000,000。
+        spec.categories = vec!["A".to_string(); 100_000];
+        spec.series[0].values = vec![1.0; 100_000];
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
     }
 
     #[test]
