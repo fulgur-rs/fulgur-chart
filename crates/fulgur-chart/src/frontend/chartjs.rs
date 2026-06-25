@@ -532,7 +532,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 stroke,
                 stroke_width: ds.border_width.unwrap_or(default_border_width(series_type)),
                 area: ds.fill.is_filled(),
-                tension: ds.tension,
+                tension: normalize_tension(ds.tension),
                 series_type,
                 point_radius: ds.point_radius,
                 box_points,
@@ -709,6 +709,16 @@ fn build_outlabel_config(raw: &Option<RawOutlabels>) -> crate::ir::OutlabelConfi
         }
     }
     cfg
+}
+
+/// Chart.js の tension は 0.0〜1.0 の範囲で扱い、巨大な有限値で
+/// SVG パスのコントロールポイントが膨張しないよう正規化する。
+fn normalize_tension(tension: f64) -> f64 {
+    if !tension.is_finite() || tension <= 0.0 {
+        0.0
+    } else {
+        tension.min(1.0)
+    }
 }
 
 /// 系列の既定線幅。line 系列は太く(3.0)、bar 系列は細い(1.0)。
@@ -2008,6 +2018,34 @@ mod tests {
         let json = r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3]}]}}"#;
         let spec = parse(json, false).unwrap();
         assert!(matches!(spec.kind, crate::ir::ChartKind::Sparkline));
+    }
+
+    #[test]
+    fn tension_is_normalized_to_chartjs_range() {
+        let spec = parse(
+            r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3],"tension":1e308}]}}"#,
+            false,
+        )
+        .unwrap();
+        assert_eq!(spec.series[0].tension, 1.0);
+
+        let spec = parse(
+            r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3],"tension":-2}]}}"#,
+            false,
+        )
+        .unwrap();
+        assert_eq!(spec.series[0].tension, 0.0);
+    }
+
+    #[test]
+    fn normalize_tension_edge_cases() {
+        assert_eq!(normalize_tension(0.5), 0.5);
+        assert_eq!(normalize_tension(0.0), 0.0);
+        assert_eq!(normalize_tension(-0.5), 0.0);
+        assert_eq!(normalize_tension(1.5), 1.0);
+        assert_eq!(normalize_tension(f64::NAN), 0.0);
+        assert_eq!(normalize_tension(f64::INFINITY), 0.0);
+        assert_eq!(normalize_tension(f64::NEG_INFINITY), 0.0);
     }
 
     #[test]

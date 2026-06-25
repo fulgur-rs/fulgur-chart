@@ -55,6 +55,25 @@ fn sparkline_tension_uses_bezier() {
 }
 
 #[test]
+fn sparkline_huge_tension_is_bounded() {
+    let svg =
+        render(r#"{"type":"sparkline","data":{"datasets":[{"data":[1,3,2],"tension":1e308}]}}"#);
+    assert!(
+        svg.contains("<path"),
+        "positive tension should still render a Bezier path"
+    );
+    assert!(
+        svg.contains(" C "),
+        "Bezier path should contain cubic commands"
+    );
+    assert!(
+        svg.len() < 2_000,
+        "huge tension should not inflate SVG size: {}",
+        svg.len()
+    );
+}
+
+#[test]
 fn sparkline_deterministic() {
     let j = r#"{"type":"sparkline","data":{"datasets":[{"data":[5,3,8,2,7]}]}}"#;
     assert_eq!(render(j), render(j));
