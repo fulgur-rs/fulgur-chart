@@ -74,8 +74,12 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
 
     // 7. 整数 i から目盛りを生成（決定性のため浮動加算ループは使わない）。
     let intervals = ((nice_max - nice_min) / step).round();
+    // nice_min と nice_max が両方有限でも、その差が f64::MAX を超えて span = inf に
+    // なる場合がある（例: nice_min=-8e307, nice_max=1e308）。nice 境界を bounded_ticks
+    // に渡すと LinearScale も同じ inf span を使い、全値が p0 にマップされる。
+    // data_min/data_max は入力境界なので span が有限であることが保証されている。
     if !intervals.is_finite() || intervals < 1.0 || intervals > MAX_TICK_INTERVALS as f64 {
-        return bounded_ticks(nice_min, nice_max, count);
+        return bounded_ticks(data_min, data_max, count);
     }
     let n = intervals as usize;
     let ticks = (0..=n).map(|i| nice_min + i as f64 * step).collect();
@@ -183,6 +187,21 @@ mod tests {
     fn nice_ticks_caps_requested_tick_count() {
         let t = nice_ticks(0.0, 10.0, usize::MAX);
         assert!(t.ticks.len() <= 1_001);
+    }
+
+    #[test]
+    fn nice_ticks_near_f64_max_span_has_finite_domain() {
+        // nice 丸めが境界を拡張して span = inf になるケース。
+        // nice_min=-8e307, nice_max=1e308 → 差が f64::MAX を超えて inf になる。
+        // bounded_ticks に nice 境界を渡すと LinearScale が壊れるため、
+        // data 境界にフォールバックして min/max が有限の span に収まること。
+        let t = nice_ticks(-8e307, 9e307, 10);
+        assert!(t.min.is_finite());
+        assert!(t.max.is_finite());
+        let span = t.max - t.min;
+        assert!(span.is_finite(), "span={span}");
+        assert!(t.step.is_finite());
+        assert!(t.ticks.iter().all(|v| v.is_finite()));
     }
 
     #[test]
