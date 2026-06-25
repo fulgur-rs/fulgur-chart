@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.1.12](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.11...fulgur-chart-cli-v0.1.12) - 2026-06-25
+
+### Other
+
+- updated the following local packages: fulgur-chart
+
 ## [0.1.11](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.10...fulgur-chart-cli-v0.1.11) - 2026-06-24
 
 ### Fixed
