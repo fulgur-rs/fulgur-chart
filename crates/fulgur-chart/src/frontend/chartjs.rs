@@ -2038,6 +2038,17 @@ mod tests {
     }
 
     #[test]
+    fn normalize_tension_edge_cases() {
+        assert_eq!(normalize_tension(0.5), 0.5);
+        assert_eq!(normalize_tension(0.0), 0.0);
+        assert_eq!(normalize_tension(-0.5), 0.0);
+        assert_eq!(normalize_tension(1.5), 1.0);
+        assert_eq!(normalize_tension(f64::NAN), 0.0);
+        assert_eq!(normalize_tension(f64::INFINITY), 0.0);
+        assert_eq!(normalize_tension(f64::NEG_INFINITY), 0.0);
+    }
+
+    #[test]
     fn parse_outlabeled_pie_kind() {
         let json = r#"{"type":"outlabeledPie","data":{"labels":["A","B","C"],"datasets":[{"data":[10,20,30]}]}}"#;
         let spec = parse(json, false).expect("parse error");
