@@ -253,6 +253,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
             return parse_treemap(json);
         }
+        if matches!(chart_type.as_deref(), Some("wordCloud") | Some("word")) {
+            if strict {
+                check_unknown_keys_wordcloud(json)?;
+            }
+            return parse_wordcloud(json);
+        }
         if matches!(chart_type.as_deref(), Some("gauge") | Some("radialGauge")) {
             let radial = chart_type.as_deref() == Some("radialGauge");
             if strict {
@@ -1398,6 +1404,12 @@ fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn check_unknown_keys_wordcloud(json: &str) -> Result<(), String> {
+    serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(json)
+        .map(|_| ())
+        .map_err(|e| format!("wordCloud (strict): {e}"))
+}
+
 fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
     #[derive(Deserialize)]
     struct MatrixWrapper {
@@ -1793,6 +1805,151 @@ fn zero_axis() -> AxisSpec {
         offset: false,
         grid: false,
     }
+}
+
+/// wordCloud 専用パース。labels + datasets[0].data を WordEntry に変換する。
+fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
+    #[derive(serde::Deserialize)]
+    struct WcWrapper {
+        data: WcData,
+        #[serde(default)]
+        options: Option<WcOptions>,
+        #[serde(default)]
+        width: Option<f64>,
+        #[serde(default)]
+        height: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    struct WcData {
+        labels: Vec<String>,
+        datasets: Vec<WcDataset>,
+    }
+    #[derive(serde::Deserialize)]
+    struct WcDataset {
+        data: Vec<f64>,
+        #[serde(default)]
+        color: Option<serde_json::Value>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct WcOptions {
+        #[serde(default)]
+        elements: Option<WcElements>,
+        #[serde(default)]
+        plugins: Option<serde_json::Value>,
+        #[serde(default)]
+        theme: Option<serde_json::Value>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct WcElements {
+        #[serde(default)]
+        word: Option<WcWordOpts>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    #[serde(rename_all = "camelCase")]
+    struct WcWordOpts {
+        #[serde(default)]
+        min_rotation: Option<f64>,
+        #[serde(default)]
+        max_rotation: Option<f64>,
+        #[serde(default)]
+        rotation_steps: Option<u32>,
+        #[serde(default)]
+        padding: Option<f64>,
+    }
+
+    let raw: WcWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if raw.data.datasets.is_empty() {
+        return Err("wordCloud チャートには dataset が 1 つ必要です".to_string());
+    }
+    let ds = &raw.data.datasets[0];
+    if ds.data.len() != raw.data.labels.len() {
+        return Err(format!(
+            "wordCloud: labels ({}) と data ({}) の長さが一致しません",
+            raw.data.labels.len(),
+            ds.data.len(),
+        ));
+    }
+
+    // color の解析（スカラー or 配列）
+    let n = ds.data.len();
+    let colors: Vec<Option<crate::ir::Color>> = match &ds.color {
+        None => vec![None; n],
+        Some(serde_json::Value::String(s)) => {
+            let c = parse_color(s);
+            vec![c; n]
+        }
+        Some(serde_json::Value::Array(arr)) => arr
+            .iter()
+            .map(|v| v.as_str().and_then(parse_color))
+            .collect(),
+        _ => vec![None; n],
+    };
+
+    let entries: Vec<crate::ir::WordEntry> = raw
+        .data
+        .labels
+        .iter()
+        .zip(ds.data.iter())
+        .zip(colors.iter())
+        .map(|((text, &size), color)| crate::ir::WordEntry {
+            text: text.clone(),
+            size,
+            color: *color,
+        })
+        .collect();
+
+    let word_opts = raw
+        .options
+        .as_ref()
+        .and_then(|o| o.elements.as_ref())
+        .and_then(|e| e.word.as_ref());
+
+    let min_rotation = word_opts.and_then(|w| w.min_rotation).unwrap_or(-90.0);
+    let max_rotation = word_opts.and_then(|w| w.max_rotation).unwrap_or(0.0);
+    let rotation_steps = word_opts.and_then(|w| w.rotation_steps).unwrap_or(2).max(1);
+    let padding = word_opts.and_then(|w| w.padding).unwrap_or(2.0);
+
+    // title
+    let title = raw
+        .options
+        .as_ref()
+        .and_then(|o| o.plugins.as_ref())
+        .and_then(|p| p.get("title"))
+        .and_then(|t| {
+            if t.get("display").and_then(|v| v.as_bool()).unwrap_or(false) {
+                t.get("text")?.as_str().map(|s| s.to_string())
+            } else {
+                None
+            }
+        });
+
+    // theme
+    let raw_theme = raw
+        .options
+        .as_ref()
+        .and_then(|o| o.theme.as_ref())
+        .and_then(|t| serde_json::from_value::<RawTheme>(t.clone()).ok());
+    let theme = build_theme(raw_theme);
+
+    Ok(ChartSpec {
+        kind: ChartKind::WordCloud {
+            entries,
+            min_rotation,
+            max_rotation,
+            rotation_steps,
+            padding,
+        },
+        series: vec![],
+        categories: vec![],
+        x_axis: zero_axis(),
+        y_axis: zero_axis(),
+        legend: LegendPos::None,
+        title,
+        width: raw.width.unwrap_or(500.0),
+        height: raw.height.unwrap_or(300.0),
+        data_labels: false,
+        theme,
+    })
 }
 
 /// `obj` のキーを `allowed` に照らし、最初の未知キーを `Err(パス)` で返す。
