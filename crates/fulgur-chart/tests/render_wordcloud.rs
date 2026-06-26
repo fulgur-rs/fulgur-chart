@@ -72,3 +72,12 @@ fn wordcloud_snapshot() {
     let svg = render(BASIC);
     insta::assert_snapshot!(svg);
 }
+
+#[test]
+fn wordcloud_example_spec_renders() {
+    let json = include_str!("../../../examples/specs/wordcloud.json");
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"), "should produce valid SVG");
+    assert!(svg.contains("<text"), "SVG should contain text elements");
+    assert!(!svg.contains("NaN"), "SVG must not contain NaN");
+}
