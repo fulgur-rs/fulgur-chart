@@ -1,0 +1,16 @@
+{
+  "type": "wordCloud",
+  "width": 500,
+  "height": 300,
+  "data": {
+    "labels": ["Rust", "SVG", "Chart", "Fast", "Safe", "Concurrent", "Memory", "Zero-Cost", "Abstraction", "Performance"],
+    "datasets": [{
+      "data": [90, 70, 60, 55, 50, 45, 40, 35, 30, 25],
+      "color": ["#e63946", "#457b9d", "#2a9d8f", "#e9c46a", "#264653", "#f4a261", "#e76f51", "#023e8a", "#80b918", "#7b2d8b"]
+    }]
+  },
+  "options": {
+    "elements": {"word": {"minRotation": -90, "maxRotation": 0, "rotationSteps": 2, "padding": 3}},
+    "plugins": {"title": {"display": true, "text": "Rust WordCloud"}}
+  }
+}
