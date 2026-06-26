@@ -15,6 +15,7 @@ pub mod radar;
 pub mod scatter;
 pub mod sparkline;
 pub mod treemap;
+pub mod wordcloud;
 
 use crate::ir::{ChartKind, ChartSpec};
 use crate::scene::{Prim, Scene};
@@ -37,7 +38,7 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::RadialGauge { .. } | ChartKind::Gauge { .. } => gauge::build(spec, m),
         ChartKind::OutlabeledPie { .. } => outlabeled_pie::build(spec, m),
         ChartKind::Treemap => treemap::build(spec, m),
-        ChartKind::WordCloud { .. } => unreachable!("wordcloud layout not yet implemented"),
+        ChartKind::WordCloud { .. } => wordcloud::build(spec, m),
     };
 
     // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。
