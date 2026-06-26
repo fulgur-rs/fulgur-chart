@@ -161,9 +161,10 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
             anchor,
             fill,
             content,
+            rotate_deg,
         } => {
-            let x = fmt_num(*x);
-            let y = fmt_num(*y);
+            let xv = fmt_num(*x);
+            let yv = fmt_num(*y);
             let size = fmt_num(*size);
             let anchor = match anchor {
                 Anchor::Start => "start",
@@ -176,9 +177,12 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
             // font_family は --font のフォント name table 由来(信頼できない)になり得る。
             // 二重引用符属性なので `"` を含む family 名による属性インジェクションを防ぐ。
             let fam = xml_escape_attr(font_family);
+            let transform = rotate_deg
+                .map(|d| format!(r#" transform="rotate({},{},{})"#, fmt_num(d), xv, yv))
+                .unwrap_or_default();
             write!(
                 s,
-                r#"<text x="{x}" y="{y}" font-family="{fam}" font-size="{size}" text-anchor="{anchor}" fill="{hex}"{op}>{escaped}</text>"#
+                r#"<text x="{xv}" y="{yv}"{transform} font-family="{fam}" font-size="{size}" text-anchor="{anchor}" fill="{hex}"{op}>{escaped}</text>"#
             )
             .unwrap();
         }
@@ -292,6 +296,7 @@ mod tests {
                 anchor: Anchor::Middle,
                 fill: black(),
                 content: "a<b & c>d".into(),
+                rotate_deg: None,
             }],
         };
         let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
@@ -314,6 +319,7 @@ mod tests {
                     anchor: Anchor::Start,
                     fill: black(),
                     content: "s".into(),
+                    rotate_deg: None,
                 },
                 Prim::Text {
                     x: 0.0,
@@ -322,6 +328,7 @@ mod tests {
                     anchor: Anchor::End,
                     fill: black(),
                     content: "e".into(),
+                    rotate_deg: None,
                 },
             ],
         };
@@ -604,6 +611,7 @@ mod tests {
                     anchor: Anchor::Start,
                     fill: black(),
                     content: "x".into(),
+                    rotate_deg: None,
                 },
             ],
         };
@@ -629,6 +637,7 @@ mod tests {
                 anchor: Anchor::Start,
                 fill: black(),
                 content: "x".into(),
+                rotate_deg: None,
             }],
         };
         let svg = render_svg(&scene, r#"Evil" onload="boom"#);

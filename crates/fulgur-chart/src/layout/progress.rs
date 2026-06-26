@@ -72,6 +72,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             anchor: Anchor::Middle,
             fill: ink,
             content: title.clone(),
+            rotate_deg: None,
         });
     }
 
@@ -101,6 +102,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     anchor: Anchor::End,
                     fill: ink,
                     content: name.clone(),
+                    rotate_deg: None,
                 });
             }
         }
@@ -150,6 +152,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 anchor: Anchor::Middle,
                 fill: ink,
                 content: format!("{}%", fmt_num(pct.round())),
+                rotate_deg: None,
             });
         }
     }

@@ -231,6 +231,7 @@ fn render_prim(
             anchor,
             fill,
             content,
+            rotate_deg: _,
         } => {
             render_text(
                 pixmap, *x, *y, *size, *anchor, *fill, content, face, transform, cache,
