@@ -88,11 +88,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             (text_w / 2.0 + padding, text_h / 2.0 + padding)
         };
 
-        // 螺旋探索
+        // 螺旋探索 (最大 5000 ステップで CPU 枯渇を防止)
         let mut theta: f64 = 0.0;
         let mut placed_pos: Option<(f64, f64)> = None;
+        let mut steps: u32 = 0;
 
-        loop {
+        while steps < 5000 {
+            steps += 1;
             let r = SPIRAL_A * theta;
             let cx = center_x + r * theta.cos();
             let cy = center_y + r * theta.sin();

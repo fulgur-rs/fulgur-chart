@@ -1405,9 +1405,59 @@ fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
 }
 
 fn check_unknown_keys_wordcloud(json: &str) -> Result<(), String> {
-    serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(json)
-        .map(|_| ())
-        .map_err(|e| format!("wordCloud (strict): {e}"))
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let Some(top) = value.as_object() else {
+        return Ok(());
+    };
+    // fulgur 拡張の width/height をトップレベルで許可する（他チャート種別と同様）
+    check_object(top, &["type", "data", "options", "width", "height"], "")?;
+    if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
+        check_object(data, &["labels", "datasets"], "data")?;
+        if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
+            for (i, ds) in datasets.iter().enumerate() {
+                if let Some(ds) = ds.as_object() {
+                    check_object(
+                        ds,
+                        &["label", "data", "color"],
+                        &format!("data.datasets[{i}]"),
+                    )?;
+                }
+            }
+        }
+    }
+    if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
+        check_object(options, &["elements", "plugins", "theme"], "options")?;
+        if let Some(elements) = options.get("elements").and_then(|v| v.as_object()) {
+            check_object(elements, &["word"], "options.elements")?;
+            if let Some(word) = elements.get("word").and_then(|v| v.as_object()) {
+                check_object(
+                    word,
+                    &["minRotation", "maxRotation", "rotationSteps", "padding"],
+                    "options.elements.word",
+                )?;
+            }
+        }
+        if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
+            check_object(plugins, &["title"], "options.plugins")?;
+        }
+        if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
+            check_object(
+                theme,
+                &[
+                    "palette",
+                    "gridColor",
+                    "textColor",
+                    "backgroundColor",
+                    "fontSize",
+                ],
+                "options.theme",
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
@@ -1878,9 +1928,8 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
             let c = parse_color(s);
             vec![c; n]
         }
-        Some(serde_json::Value::Array(arr)) => arr
-            .iter()
-            .map(|v| v.as_str().and_then(parse_color))
+        Some(serde_json::Value::Array(arr)) => (0..n)
+            .map(|i| arr.get(i).and_then(|v| v.as_str()).and_then(parse_color))
             .collect(),
         _ => vec![None; n],
     };

@@ -347,8 +347,15 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         }
     }
 
-    // --- wordcloud 単語数・ラベル長 ---
-    if let crate::ir::ChartKind::WordCloud { entries, .. } = &spec.kind {
+    // --- wordcloud 単語数・ラベル長・パラメータ ---
+    if let crate::ir::ChartKind::WordCloud {
+        entries,
+        min_rotation,
+        max_rotation,
+        padding,
+        ..
+    } = &spec.kind
+    {
         if entries.len() > MAX_WORDCLOUD_WORDS {
             return Err(format!(
                 "wordcloud の単語数 {} が上限 {} を超えています",
@@ -356,12 +363,26 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
                 MAX_WORDCLOUD_WORDS,
             ));
         }
+        if !padding.is_finite() || *padding < 0.0 {
+            return Err(format!(
+                "wordcloud: padding は 0 以上の有限値でなければなりません: {padding}"
+            ));
+        }
+        if !min_rotation.is_finite() || !max_rotation.is_finite() {
+            return Err("wordcloud: 回転角度は有限値でなければなりません".to_string());
+        }
         for e in entries {
             if e.text.len() > MAX_WORDCLOUD_WORD_BYTES {
                 return Err(format!(
                     "wordcloud: 単語が長すぎます ({}バイト > 上限 {}バイト)",
                     e.text.len(),
                     MAX_WORDCLOUD_WORD_BYTES,
+                ));
+            }
+            if !e.size.is_finite() || e.size <= 0.0 {
+                return Err(format!(
+                    "wordcloud: 単語サイズは正の有限値でなければなりません: {}",
+                    e.size
                 ));
             }
         }
