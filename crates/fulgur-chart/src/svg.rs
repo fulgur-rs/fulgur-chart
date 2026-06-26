@@ -178,7 +178,7 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
             // 二重引用符属性なので `"` を含む family 名による属性インジェクションを防ぐ。
             let fam = xml_escape_attr(font_family);
             let transform = rotate_deg
-                .map(|d| format!(r#" transform="rotate({},{},{})"#, fmt_num(d), xv, yv))
+                .map(|d| format!(" transform=\"rotate({},{},{})\"", fmt_num(d), xv, yv))
                 .unwrap_or_default();
             write!(
                 s,
@@ -648,6 +648,28 @@ mod tests {
         assert!(
             !svg.contains(r#"font-family="Evil" onload="#),
             "属性が早期終端していない: {svg}"
+        );
+    }
+
+    #[test]
+    fn text_with_rotate_deg_emits_transform() {
+        let scene = Scene {
+            width: 100.0,
+            height: 50.0,
+            items: vec![Prim::Text {
+                x: 10.0,
+                y: 20.0,
+                size: 12.0,
+                anchor: Anchor::Middle,
+                fill: black(),
+                content: "hello".into(),
+                rotate_deg: Some(45.0),
+            }],
+        };
+        let svg = render_svg(&scene, "sans-serif");
+        assert!(
+            svg.contains(r#"transform="rotate(45,10,20)""#),
+            "got: {svg}"
         );
     }
 }

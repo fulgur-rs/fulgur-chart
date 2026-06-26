@@ -231,7 +231,7 @@ fn render_prim(
             anchor,
             fill,
             content,
-            rotate_deg: _,
+            rotate_deg: _, // ラスタ出力では回転未サポート
         } => {
             render_text(
                 pixmap, *x, *y, *size, *anchor, *fill, content, face, transform, cache,
