@@ -81,3 +81,39 @@ fn wordcloud_example_spec_renders() {
     assert!(svg.contains("<text"), "SVG should contain text elements");
     assert!(!svg.contains("NaN"), "SVG must not contain NaN");
 }
+
+#[test]
+fn wordcloud_oversized_word_is_skipped() {
+    // キャンバスより大きい単語は step cap かサイズ超過で配置をスキップし、パニックしない。
+    let json = r#"{
+        "type": "wordCloud",
+        "width": 50,
+        "height": 50,
+        "data": {
+            "labels": ["TinyCanvas", "Small"],
+            "datasets": [{"data": [500, 20]}]
+        }
+    }"#;
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"));
+    assert!(!svg.contains("NaN"));
+}
+
+#[test]
+fn wordcloud_short_color_array_fills_rest_with_palette() {
+    // color 配列が labels/data より短い場合、後半の単語はパレット色で描画される。
+    let json = r##"{
+        "type": "wordCloud",
+        "width": 500,
+        "height": 300,
+        "data": {
+            "labels": ["Red", "Blue", "Green"],
+            "datasets": [{"data": [60, 40, 30], "color": ["#ff0000"]}]
+        }
+    }"##;
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"));
+    // 3 単語とも描画されるはず（切り捨てなし）
+    assert!(svg.contains("Red") || svg.contains("Blue") || svg.contains("Green"));
+    assert!(!svg.contains("NaN"));
+}

@@ -661,3 +661,76 @@ fn wordcloud_schema_roundtrip() {
     let m: ChartJsSpec = serde_json::from_str(minimal).unwrap();
     assert!(matches!(m, ChartJsSpec::WordCloud(_)));
 }
+
+#[test]
+fn strict_accepts_wordcloud_with_width_height() {
+    let json = r#"{"type":"wordCloud","width":800,"height":600,"data":{"labels":["A"],"datasets":[{"data":[30.0]}]}}"#;
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict mode should allow width/height"
+    );
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_top_level_key() {
+    let json =
+        r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"typo":1}"#;
+    assert!(
+        chartjs::parse(json, true).is_err(),
+        "strict mode should reject unknown top-level key"
+    );
+    assert!(
+        chartjs::parse(json, false).is_ok(),
+        "non-strict should ignore unknown key"
+    );
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_dataset_key() {
+    let json =
+        r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0],"typo":1}]}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+    assert!(chartjs::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_accepts_wordcloud_elements_word() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"elements":{"word":{"minRotation":-90,"maxRotation":0,"rotationSteps":2,"padding":2}}}}"#;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_word_key() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"elements":{"word":{"minRotation":-90,"typo":1}}}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
+fn strict_accepts_wordcloud_plugins_title() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"plugins":{"title":{"display":true,"text":"Cloud"}}}}"#;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_plugins_key() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"plugins":{"legend":{}}}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
+fn strict_accepts_wordcloud_theme() {
+    let json = r##"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"theme":{"palette":"warm","textColor":"#333"}}}"##;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_theme_key() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"theme":{"unknownKey":1}}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_options_key() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"typo":1}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}
