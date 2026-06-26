@@ -17,13 +17,31 @@ on:
         description: "Release tag (e.g. fulgur-chart-v0.3.0)"
         required: true
 
-env:
-  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-
 jobs:
+  validate-release-tag:
+    name: Validate release tag
+    if: startsWith(github.event.inputs.tag || github.ref_name, 'fulgur-chart-v')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Validate SemVer tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          VERSION="${RELEASE_TAG#fulgur-chart-v}"
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Invalid release tag version: $VERSION" >&2
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
   cross-gem:
     name: Build ${{ matrix.platform }}
-    if: startsWith(github.event.inputs.tag || github.ref_name, 'fulgur-chart-v')
+    needs: validate-release-tag
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -38,14 +56,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ env.RELEASE_TAG }}
+          ref: refs/tags/${{ needs.validate-release-tag.outputs.tag }}
 
       - name: Set gem version from tag
+        env:
+          VERSION: ${{ needs.validate-release-tag.outputs.version }}
         run: |
-          VERSION="${RELEASE_TAG#fulgur-chart-v}"
-          sed -i "s/^version = .*/version = \"$VERSION\"/" \
+          sed -i -E "s|^(version = ).*|\1\"$VERSION\"|" \
             crates/bindings/ruby/ext/fulgur_chart/Cargo.toml
-          sed -i "s/^fulgur-chart = .*/fulgur-chart = \"$VERSION\"/" \
+          sed -i -E "s|^(fulgur-chart = ).*|\1\"$VERSION\"|" \
             crates/bindings/ruby/ext/fulgur_chart/Cargo.toml
 
       - uses: oxidize-rb/actions/setup-ruby-and-rust@v1
@@ -69,19 +88,20 @@ jobs:
 
   source-gem:
     name: Build source gem
-    if: startsWith(github.event.inputs.tag || github.ref_name, 'fulgur-chart-v')
+    needs: validate-release-tag
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ env.RELEASE_TAG }}
+          ref: refs/tags/${{ needs.validate-release-tag.outputs.tag }}
 
       - name: Set gem version from tag
+        env:
+          VERSION: ${{ needs.validate-release-tag.outputs.version }}
         run: |
-          VERSION="${RELEASE_TAG#fulgur-chart-v}"
-          sed -i "s/^version = .*/version = \"$VERSION\"/" \
+          sed -i -E "s|^(version = ).*|\1\"$VERSION\"|" \
             crates/bindings/ruby/ext/fulgur_chart/Cargo.toml
-          sed -i "s/^fulgur-chart = .*/fulgur-chart = \"$VERSION\"/" \
+          sed -i -E "s|^(fulgur-chart = ).*|\1\"$VERSION\"|" \
             crates/bindings/ruby/ext/fulgur_chart/Cargo.toml
 
       - uses: ruby/setup-ruby@v1
@@ -101,7 +121,7 @@ jobs:
 
   push-gem:
     name: Push to RubyGems.org
-    needs: [cross-gem, source-gem]
+    needs: [validate-release-tag, cross-gem, source-gem]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
