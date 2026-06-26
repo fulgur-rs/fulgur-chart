@@ -632,3 +632,32 @@ fn parses_polar_area_spec() {
     assert_eq!(spec.categories, vec!["A", "B", "C"]);
     assert_eq!(spec.series[0].values, vec![10.0, 20.0, 30.0]);
 }
+
+#[test]
+fn wordcloud_schema_roundtrip() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+
+    // color 配列 + options 付き
+    let json = r##"{
+        "type": "wordCloud",
+        "data": {
+            "labels": ["Rust", "SVG", "Chart"],
+            "datasets": [{"data": [90.0, 60.0, 45.0], "color": ["#e63946", "#457b9d", "#2a9d8f"]}]
+        },
+        "options": {
+            "elements": {"word": {"minRotation": -90.0, "maxRotation": 0.0, "rotationSteps": 2, "padding": 2.0}}
+        }
+    }"##;
+    let spec: ChartJsSpec = serde_json::from_str(json).unwrap();
+    assert!(matches!(spec, ChartJsSpec::WordCloud(_)));
+
+    // scalar color
+    let scalar = r##"{"type":"wordCloud","data":{"labels":["Hi"],"datasets":[{"data":[40.0],"color":"#ff0000"}]}}"##;
+    let s: ChartJsSpec = serde_json::from_str(scalar).unwrap();
+    assert!(matches!(s, ChartJsSpec::WordCloud(_)));
+
+    // options なし
+    let minimal = r##"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[20.0]}]}}"##;
+    let m: ChartJsSpec = serde_json::from_str(minimal).unwrap();
+    assert!(matches!(m, ChartJsSpec::WordCloud(_)));
+}
