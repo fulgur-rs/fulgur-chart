@@ -73,12 +73,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let rotate_deg = if *rotation_steps <= 1 {
             *max_rotation
         } else {
+            // 入力順インデックスで回転を割り当て、ソート後の隣接単語が同じ向きにならないようにする。
             let step_idx = orig_idx % (*rotation_steps as usize);
             let t = step_idx as f64 / (*rotation_steps as f64 - 1.0);
             min_rotation + t * (max_rotation - min_rotation)
         };
         // 0° か −90° の 2 択のみ AABB が axis-aligned になる
-        let is_vertical = (rotate_deg + 90.0).abs() < 1e-9;
+        let is_vertical = (rotate_deg.abs() - 90.0).abs() < 1e-9;
 
         // AABB (padding 込み)
         let (hw, hh) = if is_vertical {
