@@ -180,6 +180,14 @@ fn tempfile_dir() -> std::path::PathBuf {
     base
 }
 
+// テスト名ごとに固定・隔離されたディレクトリを作る（並列実行時の競合を防ぐ）
+fn tempfile_dir_for(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("fulgur_chart_test_{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 // バッチ用 tempdir: テスト名ごとに固定ディレクトリを使い、開始時に消してクリーンスレートにする。
 fn batch_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("fulgur_batch_{name}"));
@@ -625,7 +633,7 @@ fn jsonnet_stdin_renders_svg() {
 #[test]
 fn jsonnet_flag_with_file_path_exits_1() {
     // ファイルと --jsonnet の組み合わせは不正（拡張子を使うべき）
-    let dir = tempfile_dir();
+    let dir = tempfile_dir_for("jsonnet_flag_with_file_path_exits_1");
     let spec = dir.join("spec.json");
     std::fs::write(&spec, MINIMAL_BAR_A).unwrap();
     bin()
@@ -650,7 +658,7 @@ const MINIMAL_JSONNET_FILE: &str = r#"
 
 #[test]
 fn jsonnet_file_renders_svg() {
-    let dir = tempfile_dir();
+    let dir = tempfile_dir_for("jsonnet_file_renders_svg");
     let spec = dir.join("spec.jsonnet");
     std::fs::write(&spec, MINIMAL_JSONNET_FILE).unwrap();
     let out = bin()
@@ -681,7 +689,7 @@ fn inspect_bar_emits_model_json() {
 
 #[test]
 fn jsonnet_file_with_import_renders_svg() {
-    let dir = tempfile_dir();
+    let dir = tempfile_dir_for("jsonnet_file_with_import_renders_svg");
 
     // ライブラリファイル
     std::fs::write(
@@ -718,7 +726,7 @@ local colors = import 'colors.libsonnet';
 #[test]
 fn libsonnet_direct_input_exits_1() {
     // .libsonnet は直接入力に使えない（DSL 検出失敗として扱う）
-    let dir = tempfile_dir();
+    let dir = tempfile_dir_for("libsonnet_direct_input_exits_1");
     let lib = dir.join("lib.libsonnet");
     std::fs::write(&lib, r#"{ x: 1 }"#).unwrap();
     let out = bin()
@@ -736,7 +744,7 @@ fn libsonnet_direct_input_exits_1() {
 
 #[test]
 fn jsonnet_inspect_emits_model() {
-    let dir = tempfile_dir();
+    let dir = tempfile_dir_for("jsonnet_inspect_emits_model");
     let spec = dir.join("spec.jsonnet");
     std::fs::write(&spec, MINIMAL_JSONNET_FILE).unwrap();
     let out = bin()
@@ -761,6 +769,18 @@ fn jsonnet_stdin_inspect_emits_model() {
 }
 
 #[test]
+fn inspect_jsonnet_flag_with_file_path_exits_1() {
+    let dir = tempfile_dir_for("inspect_jsonnet_flag_with_file_path_exits_1");
+    let spec = dir.join("spec.json");
+    std::fs::write(&spec, MINIMAL_BAR_A).unwrap();
+    bin()
+        .args(["inspect", spec.to_str().unwrap(), "-o", "-", "--jsonnet"])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
 fn jsonnet_syntax_error_exits_1() {
     bin()
         .args(["render", "-", "-o", "-", "--jsonnet"])
@@ -772,7 +792,7 @@ fn jsonnet_syntax_error_exits_1() {
 
 #[test]
 fn jsonnet_file_syntax_error_exits_1() {
-    let dir = tempfile_dir();
+    let dir = tempfile_dir_for("jsonnet_file_syntax_error_exits_1");
     let spec = dir.join("bad.jsonnet");
     std::fs::write(&spec, "{ not valid jsonnet ::::").unwrap();
     bin()

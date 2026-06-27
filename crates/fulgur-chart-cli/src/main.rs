@@ -356,6 +356,10 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
         eprintln!("error: --out-dir and --output cannot be used together");
         std::process::exit(1);
     }
+    if args.jsonnet {
+        eprintln!("error: --jsonnet is not valid in batch mode (use the .jsonnet extension)");
+        std::process::exit(1);
+    }
 
     // In batch mode there is no output path to inspect, so the format defaults to svg.
     let format = args.format.clone().unwrap_or(Format::Svg);
@@ -584,6 +588,13 @@ fn run_schema(args: SchemaArgs) {
 
 /// inspect サブコマンド: IR + layout から意味モデルを構築し pretty JSON で出力する。
 fn run_inspect(args: InspectArgs) {
+    // --jsonnet は stdin 専用。.jsonnet 拡張子は自動検出。stdin を消費する前に検証。
+    if args.jsonnet && args.spec != "-" {
+        eprintln!(
+            "error: --jsonnet is only valid with stdin ('-'). For .jsonnet files, use the .jsonnet extension."
+        );
+        std::process::exit(1);
+    }
     let json = match read_spec(&args.spec) {
         Ok(s) => s,
         Err(e) => {
@@ -591,13 +602,6 @@ fn run_inspect(args: InspectArgs) {
             std::process::exit(1);
         }
     };
-    // --jsonnet は stdin 専用。.jsonnet 拡張子は自動検出。
-    if args.jsonnet && args.spec != "-" {
-        eprintln!(
-            "error: --jsonnet is only valid with stdin ('-'). For .jsonnet files, use the .jsonnet extension."
-        );
-        std::process::exit(1);
-    }
     let json = if args.jsonnet {
         match evaluate_jsonnet_snippet(&json) {
             Ok(j) => j,
