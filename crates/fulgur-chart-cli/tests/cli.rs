@@ -733,3 +733,29 @@ fn libsonnet_direct_input_exits_1() {
         "stderr should mention rejection reason (DSL detection or JSON parse error), got: {stderr}"
     );
 }
+
+#[test]
+fn jsonnet_inspect_emits_model() {
+    let dir = tempfile_dir();
+    let spec = dir.join("spec.jsonnet");
+    std::fs::write(&spec, MINIMAL_JSONNET_FILE).unwrap();
+    let out = bin()
+        .args(["inspect", spec.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .success();
+    let bytes = out.get_output().stdout.clone();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+    assert_eq!(v["meta"]["type"], "bar");
+}
+
+#[test]
+fn jsonnet_stdin_inspect_emits_model() {
+    let out = bin()
+        .args(["inspect", "-", "-o", "-", "--jsonnet"])
+        .write_stdin(MINIMAL_JSONNET_STDIN)
+        .assert()
+        .success();
+    let bytes = out.get_output().stdout.clone();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+    assert_eq!(v["meta"]["type"], "bar");
+}

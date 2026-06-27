@@ -93,6 +93,9 @@ struct InspectArgs {
     /// Override chart height.
     #[arg(long)]
     height: Option<f64>,
+    /// Evaluate input as Jsonnet before parsing. Only valid with stdin ('-').
+    #[arg(long)]
+    jsonnet: bool,
     /// Font file for text metrics. Defaults to the bundled font.
     #[arg(long)]
     font: Option<String>,
@@ -575,6 +578,32 @@ fn run_inspect(args: InspectArgs) {
             eprintln!("error: failed to read input: {e}");
             std::process::exit(1);
         }
+    };
+    // --jsonnet は stdin 専用。.jsonnet 拡張子は自動検出。
+    if args.jsonnet && args.spec != "-" {
+        eprintln!(
+            "error: --jsonnet is only valid with stdin ('-'). For .jsonnet files, use the .jsonnet extension."
+        );
+        std::process::exit(1);
+    }
+    let json = if args.jsonnet {
+        match evaluate_jsonnet_snippet(&json) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("error: jsonnet evaluation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else if is_jsonnet_path(&args.spec) {
+        match evaluate_jsonnet_file(std::path::Path::new(&args.spec)) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("error: jsonnet evaluation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        json
     };
     let dsl: String = match &args.dsl {
         Some(d) => {
