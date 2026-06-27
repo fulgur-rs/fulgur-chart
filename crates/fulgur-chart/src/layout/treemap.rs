@@ -251,6 +251,7 @@ fn draw_leaf_label(
                 anchor: Anchor::Middle,
                 fill: color,
                 content: lbl,
+                rotate_deg: None,
             });
         }
         if let Some(v) = truncate_to_width(&value_str, avail_w, font, m) {
@@ -261,6 +262,7 @@ fn draw_leaf_label(
                 anchor: Anchor::Middle,
                 fill: color,
                 content: v,
+                rotate_deg: None,
             });
         }
     } else {
@@ -277,6 +279,7 @@ fn draw_leaf_label(
                 anchor: Anchor::Middle,
                 fill: color,
                 content: t,
+                rotate_deg: None,
             });
         }
     }
@@ -304,6 +307,7 @@ fn draw_caption(
             anchor: Anchor::Start,
             fill: text_on(fill),
             content: t,
+            rotate_deg: None,
         });
     }
 }
@@ -409,6 +413,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             anchor: Anchor::Middle,
             fill: ink,
             content: title.clone(),
+            rotate_deg: None,
         });
     }
 

@@ -17,6 +17,11 @@ use crate::num::fmt_num;
 
 // --- デフォルト上限定数 ---
 
+/// wordcloud の単語数上限 (DoS 対策)。
+const MAX_WORDCLOUD_WORDS: usize = 500;
+/// wordcloud の 1 語あたりバイト長上限 (SVG サイズ攻撃対策)。
+const MAX_WORDCLOUD_WORD_BYTES: usize = 200;
+
 /// 全系列の合計データ点数の上限(scatter/bubble 向け)。
 /// 合計で抑えることで series × points の積による爆発を防ぐ。
 pub const DEFAULT_MAX_TOTAL_DATA_POINTS: usize = 1_000_000;
@@ -339,6 +344,47 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
                 ser.name.len(),
                 limits.max_label_bytes,
             ));
+        }
+    }
+
+    // --- wordcloud 単語数・ラベル長・パラメータ ---
+    if let crate::ir::ChartKind::WordCloud {
+        entries,
+        min_rotation,
+        max_rotation,
+        padding,
+        ..
+    } = &spec.kind
+    {
+        if entries.len() > MAX_WORDCLOUD_WORDS {
+            return Err(format!(
+                "wordcloud の単語数 {} が上限 {} を超えています",
+                entries.len(),
+                MAX_WORDCLOUD_WORDS,
+            ));
+        }
+        if !padding.is_finite() || *padding < 0.0 {
+            return Err(format!(
+                "wordcloud: padding は 0 以上の有限値でなければなりません: {padding}"
+            ));
+        }
+        if !min_rotation.is_finite() || !max_rotation.is_finite() {
+            return Err("wordcloud: 回転角度は有限値でなければなりません".to_string());
+        }
+        for e in entries {
+            if e.text.len() > MAX_WORDCLOUD_WORD_BYTES {
+                return Err(format!(
+                    "wordcloud: 単語が長すぎます ({}バイト > 上限 {}バイト)",
+                    e.text.len(),
+                    MAX_WORDCLOUD_WORD_BYTES,
+                ));
+            }
+            if !e.size.is_finite() || e.size <= 0.0 {
+                return Err(format!(
+                    "wordcloud: 単語サイズは正の有限値でなければなりません: {}",
+                    e.size
+                ));
+            }
         }
     }
 
@@ -813,5 +859,191 @@ mod tests {
             children: vec![],
         }];
         assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn wordcloud_too_many_words() {
+        use crate::ir::{ChartKind, WordEntry};
+        let entries: Vec<WordEntry> = (0..=500)
+            .map(|i| WordEntry {
+                text: format!("word{i}"),
+                size: 12.0,
+                color: None,
+            })
+            .collect();
+        let s = ChartSpec {
+            kind: ChartKind::WordCloud {
+                entries,
+                min_rotation: -90.0,
+                max_rotation: 0.0,
+                rotation_steps: 2,
+                padding: 2.0,
+            },
+            series: vec![],
+            categories: vec![],
+            ..base_spec()
+        };
+        assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn wordcloud_label_too_long() {
+        use crate::ir::{ChartKind, WordEntry};
+        let s = ChartSpec {
+            kind: ChartKind::WordCloud {
+                entries: vec![WordEntry {
+                    text: "a".repeat(201),
+                    size: 12.0,
+                    color: None,
+                }],
+                min_rotation: -90.0,
+                max_rotation: 0.0,
+                rotation_steps: 2,
+                padding: 2.0,
+            },
+            series: vec![],
+            categories: vec![],
+            ..base_spec()
+        };
+        assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn wordcloud_valid_passes_guard() {
+        use crate::ir::{ChartKind, WordEntry};
+        let s = ChartSpec {
+            kind: ChartKind::WordCloud {
+                entries: vec![
+                    WordEntry {
+                        text: "Rust".to_string(),
+                        size: 80.0,
+                        color: None,
+                    },
+                    WordEntry {
+                        text: "SVG".to_string(),
+                        size: 60.0,
+                        color: None,
+                    },
+                ],
+                min_rotation: -90.0,
+                max_rotation: 0.0,
+                rotation_steps: 2,
+                padding: 2.0,
+            },
+            series: vec![],
+            categories: vec![],
+            ..base_spec()
+        };
+        assert!(validate_spec(&s, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn wordcloud_negative_padding_rejected() {
+        use crate::ir::{ChartKind, WordEntry};
+        let s = ChartSpec {
+            kind: ChartKind::WordCloud {
+                entries: vec![WordEntry {
+                    text: "A".to_string(),
+                    size: 12.0,
+                    color: None,
+                }],
+                min_rotation: -90.0,
+                max_rotation: 0.0,
+                rotation_steps: 2,
+                padding: -1.0,
+            },
+            series: vec![],
+            categories: vec![],
+            ..base_spec()
+        };
+        assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn wordcloud_nonfinite_padding_rejected() {
+        use crate::ir::{ChartKind, WordEntry};
+        let s = ChartSpec {
+            kind: ChartKind::WordCloud {
+                entries: vec![WordEntry {
+                    text: "A".to_string(),
+                    size: 12.0,
+                    color: None,
+                }],
+                min_rotation: -90.0,
+                max_rotation: 0.0,
+                rotation_steps: 2,
+                padding: f64::NAN,
+            },
+            series: vec![],
+            categories: vec![],
+            ..base_spec()
+        };
+        assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn wordcloud_nonfinite_rotation_rejected() {
+        use crate::ir::{ChartKind, WordEntry};
+        let s = ChartSpec {
+            kind: ChartKind::WordCloud {
+                entries: vec![WordEntry {
+                    text: "A".to_string(),
+                    size: 12.0,
+                    color: None,
+                }],
+                min_rotation: f64::INFINITY,
+                max_rotation: 0.0,
+                rotation_steps: 2,
+                padding: 2.0,
+            },
+            series: vec![],
+            categories: vec![],
+            ..base_spec()
+        };
+        assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn wordcloud_zero_size_rejected() {
+        use crate::ir::{ChartKind, WordEntry};
+        let s = ChartSpec {
+            kind: ChartKind::WordCloud {
+                entries: vec![WordEntry {
+                    text: "A".to_string(),
+                    size: 0.0,
+                    color: None,
+                }],
+                min_rotation: -90.0,
+                max_rotation: 0.0,
+                rotation_steps: 2,
+                padding: 2.0,
+            },
+            series: vec![],
+            categories: vec![],
+            ..base_spec()
+        };
+        assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn wordcloud_negative_size_rejected() {
+        use crate::ir::{ChartKind, WordEntry};
+        let s = ChartSpec {
+            kind: ChartKind::WordCloud {
+                entries: vec![WordEntry {
+                    text: "A".to_string(),
+                    size: -5.0,
+                    color: None,
+                }],
+                min_rotation: -90.0,
+                max_rotation: 0.0,
+                rotation_steps: 2,
+                padding: 2.0,
+            },
+            series: vec![],
+            categories: vec![],
+            ..base_spec()
+        };
+        assert!(validate_spec(&s, &default_limits()).is_err());
     }
 }

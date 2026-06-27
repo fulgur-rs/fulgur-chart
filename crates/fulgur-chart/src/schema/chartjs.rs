@@ -44,6 +44,8 @@ pub enum ChartJsSpec {
     OutlabeledPie(OutlabeledPieSpec),
     #[serde(rename = "outlabeledDoughnut")]
     OutlabeledDoughnut(OutlabeledPieSpec),
+    #[serde(rename = "wordCloud")]
+    WordCloud(WordCloudSpec),
 }
 
 // ────────────────────────────────────────────────
@@ -829,4 +831,83 @@ pub struct OutlabelsPlugin {
     /// 引き出し線の長さ(px)。デフォルト: 40
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stretch: Option<f64>,
+}
+
+// ────────────────────────────────────────────────
+// WordCloud chart (QuickChart / chartjs-chart-wordcloud)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WordCloudSpec {
+    pub data: WordCloudData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<WordCloudOptions>,
+    /// キャンバス幅 (px)。省略時は fulgur のデフォルト。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// キャンバス高さ (px)。省略時は fulgur のデフォルト。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WordCloudData {
+    pub labels: Vec<String>,
+    pub datasets: Vec<WordCloudDataset>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WordCloudDataset {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Word sizes in pixels (same length as labels).
+    pub data: Vec<f64>,
+    /// Optional color(s) for words. Scalar = all same, array = per-word.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<ScalarOrArray<ColorString>>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WordCloudOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elements: Option<WordCloudElements>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<WordCloudPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WordCloudElements {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word: Option<WordElementOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WordElementOptions {
+    /// Minimum rotation angle in degrees. Default: -90.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_rotation: Option<f64>,
+    /// Maximum rotation angle in degrees. Default: 0.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_rotation: Option<f64>,
+    /// Number of discrete rotation steps. Default: 2
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation_steps: Option<u32>,
+    /// Padding around each word in pixels. Default: 2.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub padding: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WordCloudPlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<TitlePlugin>,
 }

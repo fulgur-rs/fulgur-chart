@@ -318,6 +318,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             anchor: Anchor::Middle,
             fill: ink,
             content: title.clone(),
+            rotate_deg: None,
         });
     }
 
@@ -339,6 +340,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             anchor: Anchor::Middle,
             fill: ink,
             content: fmt_num(t),
+            rotate_deg: None,
         });
     }
 
@@ -390,6 +392,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 anchor: Anchor::End,
                 fill: ink,
                 content: spec.categories[i].clone(),
+                rotate_deg: None,
             });
         }
 
@@ -530,6 +533,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 anchor: Anchor::Start,
                 fill: ink,
                 content: ser.name.clone(),
+                rotate_deg: None,
             });
             cursor += legend_entry_width(m, &ser.name, label_font);
         }

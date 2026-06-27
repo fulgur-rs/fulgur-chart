@@ -59,6 +59,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             anchor: Anchor::Middle,
             fill: ink,
             content: title.clone(),
+            rotate_deg: None,
         });
     }
 
@@ -108,6 +109,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 anchor: Anchor::Start,
                 fill: ink,
                 content: cat.clone(),
+                rotate_deg: None,
             });
             cursor += common::legend_entry_width(m, cat, label_font);
         }
@@ -281,6 +283,7 @@ fn draw_outlabel(
             anchor,
             fill: cfg.color,
             content: line,
+            rotate_deg: None,
         });
     }
 }

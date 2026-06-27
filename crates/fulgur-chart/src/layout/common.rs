@@ -316,6 +316,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             anchor: Anchor::Middle,
             fill: ink,
             content: title.clone(),
+            rotate_deg: None,
         });
     }
 
@@ -337,6 +338,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             anchor: Anchor::End,
             fill: ink,
             content: fmt_num(t),
+            rotate_deg: None,
         });
     }
 
@@ -383,6 +385,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                 anchor: Anchor::Middle,
                 fill: ink,
                 content: cat.clone(),
+                rotate_deg: None,
             });
         }
     }
@@ -420,6 +423,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                 anchor: Anchor::Start,
                 fill: ink,
                 content: ser.name.clone(),
+                rotate_deg: None,
             });
             let ew = legend_entry_width(m, &ser.name, label_font);
             cursor += ew;
@@ -498,6 +502,7 @@ pub fn draw_vertical_legend(
             anchor: Anchor::Start,
             fill: ink,
             content: name.clone(),
+            rotate_deg: None,
         });
     }
 }
@@ -518,6 +523,7 @@ pub fn value_label(x: f64, y: f64, size: f64, anchor: Anchor, fill: Color, v: f6
         anchor,
         fill,
         content: fmt_num(v),
+        rotate_deg: None,
     }
 }
 

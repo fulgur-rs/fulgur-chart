@@ -28,6 +28,17 @@ pub struct BoxPoint {
     pub max: f64,
 }
 
+/// ワードクラウドの 1 単語エントリ。
+#[derive(Clone, Debug, PartialEq)]
+pub struct WordEntry {
+    /// 表示テキスト。
+    pub text: String,
+    /// フォントサイズ (px)。入力 data[] の値をそのまま使う。
+    pub size: f64,
+    /// 塗り色。None のときはパレット巡回。
+    pub color: Option<Color>,
+}
+
 /// treemap の階層ノード。リーフは children 空・value はリーフ値。
 /// グループは value=子の合算・children=サブノード。任意の深さにネストできる。
 #[derive(Clone, Debug, PartialEq)]
@@ -209,6 +220,19 @@ pub enum ChartKind {
     /// QuickChart / chartjs-chart-treemap 互換の treemap。階層データを squarified で
     /// ネストした矩形に分割し、深さに応じた色で塗る。データは series[0].tree に持つ。
     Treemap,
+    /// QuickChart / chartjs-chart-wordcloud 互換のワードクラウド。
+    /// 単語の重要度をフォントサイズで表現し、アルキメデス螺旋で非重複配置する。
+    WordCloud {
+        entries: Vec<WordEntry>,
+        /// 最小回転角度 (度)。デフォルト: -90.0
+        min_rotation: f64,
+        /// 最大回転角度 (度)。デフォルト: 0.0
+        max_rotation: f64,
+        /// 離散回転ステップ数。デフォルト: 2
+        rotation_steps: u32,
+        /// 各単語の周囲パディング (px)。デフォルト: 2.0
+        padding: f64,
+    },
 }
 
 /// 視覚トークンのテーマ。`options.theme` で上書きできる解決済みの値。

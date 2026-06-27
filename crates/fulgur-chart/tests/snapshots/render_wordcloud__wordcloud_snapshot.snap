@@ -1,0 +1,5 @@
+---
+source: crates/fulgur-chart/tests/render_wordcloud.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="300" viewBox="0 0 500 300"><text x="250" y="150" transform="rotate(-90,250,150)" font-family="Noto Sans JP, sans-serif" font-size="80" text-anchor="middle" fill="#36a2eb">Rust</text><text x="358.57" y="142.22" font-family="Noto Sans JP, sans-serif" font-size="60" text-anchor="middle" fill="#ff6384">SVG</text><text x="167.35" y="166.27" transform="rotate(-90,167.35,166.27)" font-family="Noto Sans JP, sans-serif" font-size="50" text-anchor="middle" fill="#ff9f40">Chart</text><text x="356.05" y="206.47" font-family="Noto Sans JP, sans-serif" font-size="40" text-anchor="middle" fill="#ffcd56">Fast</text><text x="159.48" y="64.09" transform="rotate(-90,159.48,64.09)" font-family="Noto Sans JP, sans-serif" font-size="30" text-anchor="middle" fill="#4bc0c0">Safe</text></svg>

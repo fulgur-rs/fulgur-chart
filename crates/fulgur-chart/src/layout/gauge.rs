@@ -43,6 +43,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             anchor: Anchor::Middle,
             fill: ink,
             content: title.clone(),
+            rotate_deg: None,
         });
     }
 
@@ -193,6 +194,7 @@ fn build_radial(
             anchor: Anchor::Middle,
             fill: spec.theme.text_color,
             content: fmt_num(value.round()),
+            rotate_deg: None,
         });
     }
 }
@@ -364,6 +366,7 @@ fn build_semi(
             anchor: Anchor::Middle,
             fill: label_color,
             content: text,
+            rotate_deg: None,
         });
     }
 }

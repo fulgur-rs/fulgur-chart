@@ -632,3 +632,105 @@ fn parses_polar_area_spec() {
     assert_eq!(spec.categories, vec!["A", "B", "C"]);
     assert_eq!(spec.series[0].values, vec![10.0, 20.0, 30.0]);
 }
+
+#[test]
+fn wordcloud_schema_roundtrip() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+
+    // color 配列 + options 付き
+    let json = r##"{
+        "type": "wordCloud",
+        "data": {
+            "labels": ["Rust", "SVG", "Chart"],
+            "datasets": [{"data": [90.0, 60.0, 45.0], "color": ["#e63946", "#457b9d", "#2a9d8f"]}]
+        },
+        "options": {
+            "elements": {"word": {"minRotation": -90.0, "maxRotation": 0.0, "rotationSteps": 2, "padding": 2.0}}
+        }
+    }"##;
+    let spec: ChartJsSpec = serde_json::from_str(json).unwrap();
+    assert!(matches!(spec, ChartJsSpec::WordCloud(_)));
+
+    // scalar color
+    let scalar = r##"{"type":"wordCloud","data":{"labels":["Hi"],"datasets":[{"data":[40.0],"color":"#ff0000"}]}}"##;
+    let s: ChartJsSpec = serde_json::from_str(scalar).unwrap();
+    assert!(matches!(s, ChartJsSpec::WordCloud(_)));
+
+    // options なし
+    let minimal = r##"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[20.0]}]}}"##;
+    let m: ChartJsSpec = serde_json::from_str(minimal).unwrap();
+    assert!(matches!(m, ChartJsSpec::WordCloud(_)));
+}
+
+#[test]
+fn strict_accepts_wordcloud_with_width_height() {
+    let json = r#"{"type":"wordCloud","width":800,"height":600,"data":{"labels":["A"],"datasets":[{"data":[30.0]}]}}"#;
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict mode should allow width/height"
+    );
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_top_level_key() {
+    let json =
+        r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"typo":1}"#;
+    assert!(
+        chartjs::parse(json, true).is_err(),
+        "strict mode should reject unknown top-level key"
+    );
+    assert!(
+        chartjs::parse(json, false).is_ok(),
+        "non-strict should ignore unknown key"
+    );
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_dataset_key() {
+    let json =
+        r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0],"typo":1}]}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+    assert!(chartjs::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_accepts_wordcloud_elements_word() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"elements":{"word":{"minRotation":-90,"maxRotation":0,"rotationSteps":2,"padding":2}}}}"#;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_word_key() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"elements":{"word":{"minRotation":-90,"typo":1}}}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
+fn strict_accepts_wordcloud_plugins_title() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"plugins":{"title":{"display":true,"text":"Cloud"}}}}"#;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_plugins_key() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"plugins":{"legend":{}}}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
+fn strict_accepts_wordcloud_theme() {
+    let json = r##"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"theme":{"palette":"warm","textColor":"#333"}}}"##;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_theme_key() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"theme":{"unknownKey":1}}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
+fn strict_rejects_wordcloud_unknown_options_key() {
+    let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"typo":1}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}

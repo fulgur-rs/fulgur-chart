@@ -261,6 +261,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::OutlabeledPie { donut_ratio, .. } if *donut_ratio > 0.0 => "outlabeledDoughnut",
         ChartKind::OutlabeledPie { .. } => "outlabeledPie",
         ChartKind::Treemap => "treemap",
+        ChartKind::WordCloud { .. } => "wordCloud",
     }
 }
 

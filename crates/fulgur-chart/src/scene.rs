@@ -58,6 +58,7 @@ pub enum Prim {
         anchor: Anchor,
         fill: Color,
         content: String,
+        rotate_deg: Option<f64>, // Some(deg) → SVG transform="rotate(deg,x,y)"
     },
 }
 
