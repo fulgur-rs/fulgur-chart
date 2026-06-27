@@ -70,7 +70,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let text_h = entry.size * LINE_HEIGHT;
 
         // 回転角度の決定
-        let rotate_deg = if *rotation_steps <= 1 {
+        let rotate_deg_raw = if *rotation_steps <= 1 {
             *max_rotation
         } else {
             // 入力順インデックスで回転を割り当て、ソート後の隣接単語が同じ向きにならないようにする。
@@ -78,7 +78,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             let t = step_idx as f64 / (*rotation_steps as f64 - 1.0);
             min_rotation + t * (max_rotation - min_rotation)
         };
-        // 0° か −90° の 2 択のみ AABB が axis-aligned になる
+        // AABB は axis-aligned な矩形のため 0°/±90° 以外では正確に計算できない。
+        // 任意角を最近接の軸揃え角にスナップすることで重なり・はみ出しを防ぐ。
+        let rotate_deg = snap_to_axis_aligned(rotate_deg_raw);
         let is_vertical = (rotate_deg.abs() - 90.0).abs() < 1e-9;
 
         // AABB (padding 込み)
@@ -173,6 +175,22 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         height: spec.height,
         items,
     }
+}
+
+/// 任意の回転角を最近接の軸揃え角 {−90°, 0°, 90°} にスナップする。
+/// AABB 衝突判定は axis-aligned な矩形のみ正確に扱えるため、中間角はスナップで吸収する。
+fn snap_to_axis_aligned(deg: f64) -> f64 {
+    let candidates = [-90.0_f64, 0.0, 90.0];
+    candidates
+        .iter()
+        .copied()
+        .min_by(|&a, &b| {
+            (deg - a)
+                .abs()
+                .partial_cmp(&(deg - b).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(0.0)
 }
 
 #[cfg(test)]

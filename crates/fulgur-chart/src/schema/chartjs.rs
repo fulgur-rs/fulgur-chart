@@ -843,6 +843,12 @@ pub struct WordCloudSpec {
     pub data: WordCloudData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<WordCloudOptions>,
+    /// キャンバス幅 (px)。省略時は fulgur のデフォルト。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// キャンバス高さ (px)。省略時は fulgur のデフォルト。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
