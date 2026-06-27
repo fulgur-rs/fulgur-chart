@@ -678,3 +678,58 @@ fn inspect_bar_emits_model_json() {
     assert!(!v["series"].as_array().unwrap().is_empty());
     assert!(v["axes"]["y"]["ticks"].is_array());
 }
+
+#[test]
+fn jsonnet_file_with_import_renders_svg() {
+    let dir = tempfile_dir();
+
+    // ライブラリファイル
+    std::fs::write(
+        dir.join("colors.libsonnet"),
+        r#"{ red: "rgb(255,0,0)", blue: "rgb(0,0,255)" }"#,
+    )
+    .unwrap();
+
+    // メインスペック（import あり）
+    let spec = dir.join("spec.jsonnet");
+    std::fs::write(
+        &spec,
+        r#"
+local colors = import 'colors.libsonnet';
+{
+  type: "bar",
+  data: {
+    labels: ["A"],
+    datasets: [{ backgroundColor: colors.red, data: [1] }],
+  },
+}
+"#,
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["render", spec.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .success();
+    let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(s.starts_with("<svg"), "expected SVG, got: {s}");
+}
+
+#[test]
+fn libsonnet_direct_input_exits_1() {
+    // .libsonnet は直接入力に使えない（DSL 検出失敗として扱う）
+    let dir = tempfile_dir();
+    let lib = dir.join("lib.libsonnet");
+    std::fs::write(&lib, r#"{ x: 1 }"#).unwrap();
+    let out = bin()
+        .args(["render", lib.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    // .libsonnet は JSON として解析されるため、JSON パースエラー or DSL 検出エラーのいずれかが出る。
+    assert!(
+        stderr.contains("auto-detect") || stderr.contains("DSL") || stderr.contains("JSON"),
+        "stderr should mention rejection reason (DSL detection or JSON parse error), got: {stderr}"
+    );
+}
