@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: workflow_dispatch トリガー削除と式の統一
+## Task 1: workflow_dispatch トリガー削除と式の統一
 
 **Files:**
 - Modify: `.github/workflows/ruby-gem-release.yml`
