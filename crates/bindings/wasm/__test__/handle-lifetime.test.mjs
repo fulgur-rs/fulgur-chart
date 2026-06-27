@@ -33,6 +33,12 @@ await init({ module_or_path: await readFile(fileURLToPath(wasmUrl)) })
 // Install a counting spy on a handle class's `free`, delegating to the original so the wasm
 // allocation is still released. Returns a mutable counter reset before each measured block.
 function installFreeSpy(klass) {
+  // Fail fast and clearly at setup if the handle class or its free() ever goes missing (e.g.
+  // a future wasm-bindgen renames/drops it), instead of a cryptic deferred "undefined is not a
+  // function" raised later from inside the spy, far from the actual cause.
+  if (!klass || typeof klass.prototype?.free !== 'function') {
+    throw new TypeError("expected a handle class with a 'free' method on its prototype")
+  }
   const original = klass.prototype.free
   const state = { count: 0 }
   klass.prototype.free = function free() {
