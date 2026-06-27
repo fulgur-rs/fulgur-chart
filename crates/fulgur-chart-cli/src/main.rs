@@ -398,6 +398,18 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
             }
         };
 
+        let json = if is_jsonnet_path(spec_path) {
+            match evaluate_jsonnet_file(std::path::Path::new(spec_path)) {
+                Ok(j) => j,
+                Err(e) => {
+                    eprintln!("{spec_path}: error: jsonnet evaluation failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            json
+        };
+
         // Render but don't write yet; abort with the relevant exit code on failure.
         let bytes = match render_one(&json, args, &format, font_bytes) {
             Ok(b) => b,

@@ -759,3 +759,50 @@ fn jsonnet_stdin_inspect_emits_model() {
     let v: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
     assert_eq!(v["meta"]["type"], "bar");
 }
+
+#[test]
+fn jsonnet_syntax_error_exits_1() {
+    bin()
+        .args(["render", "-", "-o", "-", "--jsonnet"])
+        .write_stdin("{ invalid jsonnet ::::")
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn jsonnet_file_syntax_error_exits_1() {
+    let dir = tempfile_dir();
+    let spec = dir.join("bad.jsonnet");
+    std::fs::write(&spec, "{ not valid jsonnet ::::").unwrap();
+    bin()
+        .args(["render", spec.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn batch_renders_jsonnet_files() {
+    let dir = batch_dir("batch_renders_jsonnet_files");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+
+    std::fs::write(in_dir.join("a.jsonnet"), MINIMAL_JSONNET_FILE).unwrap();
+    std::fs::write(in_dir.join("b.jsonnet"), MINIMAL_JSONNET_FILE).unwrap();
+
+    bin()
+        .args([
+            "render",
+            in_dir.join("a.jsonnet").to_str().unwrap(),
+            in_dir.join("b.jsonnet").to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let sa = std::fs::read_to_string(out_dir.join("a.svg")).unwrap();
+    assert!(sa.starts_with("<svg"));
+}
