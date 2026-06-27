@@ -219,6 +219,25 @@ fn evaluate_jsonnet_snippet(src: &str) -> Result<String, String> {
         .map_err(|e| format!("{e}"))
 }
 
+/// .jsonnet ファイルを JSON に評価。import はファイルのディレクトリから解決。
+fn evaluate_jsonnet_file(path: &std::path::Path) -> Result<String, String> {
+    let mut b = State::builder();
+    b.import_resolver(FileImportResolver::default());
+    let state = b.build();
+    let _guard = state.enter();
+    let val = state.import(path).map_err(|e| format!("{e}"))?;
+    JsonFormat::default()
+        .manifest(val)
+        .map_err(|e| format!("{e}"))
+}
+
+/// パスが .jsonnet 拡張子を持つか判定（大文字小文字を区別しない）。
+fn is_jsonnet_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("jsonnet"))
+}
+
 /// Top-level render subcommand: validates explicit --dsl, loads font, dispatches to single or batch mode.
 fn run_render(args: RenderArgs) {
     // Validate explicit DSL; only chartjs and vegalite are supported.
@@ -287,9 +306,17 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
         }
     };
 
-    // --jsonnet フラグが立っていたら Jsonnet として評価
+    // Jsonnet の評価: --jsonnet フラグ（stdin 専用）または .jsonnet 拡張子
     let json = if args.jsonnet {
         match evaluate_jsonnet_snippet(&json) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("error: jsonnet evaluation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else if is_jsonnet_path(spec_path) {
+        match evaluate_jsonnet_file(std::path::Path::new(spec_path)) {
             Ok(j) => j,
             Err(e) => {
                 eprintln!("error: jsonnet evaluation failed: {e}");

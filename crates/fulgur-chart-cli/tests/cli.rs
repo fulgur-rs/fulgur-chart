@@ -635,6 +635,32 @@ fn jsonnet_flag_with_file_path_exits_1() {
         .code(1);
 }
 
+// --- .jsonnet ファイルの自動検出 ---
+
+const MINIMAL_JSONNET_FILE: &str = r#"
+// Jsonnet で書いた bar チャート
+{
+  type: "bar",
+  data: {
+    labels: ["X", "Y"],
+    datasets: [{ data: [3, 7] }],
+  },
+}
+"#;
+
+#[test]
+fn jsonnet_file_renders_svg() {
+    let dir = tempfile_dir();
+    let spec = dir.join("spec.jsonnet");
+    std::fs::write(&spec, MINIMAL_JSONNET_FILE).unwrap();
+    let out = bin()
+        .args(["render", spec.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .success();
+    let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(s.starts_with("<svg"), "expected SVG, got: {s}");
+}
+
 // --- inspect サブコマンド（意味モデルを JSON で出力）---
 
 #[test]
