@@ -261,6 +261,14 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
     }
     let spec_path = &args.spec[0];
 
+    // --jsonnet はファイル入力と組み合わせ不可（.jsonnet 拡張子を使うこと）
+    if args.jsonnet && spec_path != "-" {
+        eprintln!(
+            "error: --jsonnet is only valid with stdin ('-'). For .jsonnet files, use the .jsonnet extension."
+        );
+        std::process::exit(1);
+    }
+
     // --output is required in single-spec mode.
     let output = match &args.output {
         Some(o) => o,

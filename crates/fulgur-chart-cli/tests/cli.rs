@@ -622,6 +622,19 @@ fn jsonnet_stdin_renders_svg() {
     assert!(s.starts_with("<svg"), "expected SVG, got: {s}");
 }
 
+#[test]
+fn jsonnet_flag_with_file_path_exits_1() {
+    // ファイルと --jsonnet の組み合わせは不正（拡張子を使うべき）
+    let dir = tempfile_dir();
+    let spec = dir.join("spec.json");
+    std::fs::write(&spec, MINIMAL_BAR_A).unwrap();
+    bin()
+        .args(["render", spec.to_str().unwrap(), "-o", "-", "--jsonnet"])
+        .assert()
+        .failure()
+        .code(1);
+}
+
 // --- inspect サブコマンド（意味モデルを JSON で出力）---
 
 #[test]
