@@ -598,6 +598,30 @@ fn zero_width_exits_1() {
         .code(1);
 }
 
+// --- Jsonnet サポート ---
+
+const MINIMAL_JSONNET_STDIN: &str = r#"
+// コメント付き bar チャート
+{
+  type: "bar",
+  data: {
+    labels: ["A", "B"],
+    datasets: [{ data: [1, 2] }],
+  },
+}
+"#;
+
+#[test]
+fn jsonnet_stdin_renders_svg() {
+    let out = bin()
+        .args(["render", "-", "-o", "-", "--jsonnet"])
+        .write_stdin(MINIMAL_JSONNET_STDIN)
+        .assert()
+        .success();
+    let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(s.starts_with("<svg"), "expected SVG, got: {s}");
+}
+
 // --- inspect サブコマンド（意味モデルを JSON で出力）---
 
 #[test]

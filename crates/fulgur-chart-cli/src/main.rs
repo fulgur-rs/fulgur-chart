@@ -1,6 +1,10 @@
 use std::io::{Read, Write};
 
 use clap::{Parser, Subcommand, ValueEnum};
+use jrsonnet_evaluator::{
+    FileImportResolver, State,
+    manifest::{JsonFormat, ManifestFormat},
+};
 
 /// Render chart.js-compatible JSON specs to deterministic static SVG/PNG.
 #[derive(Parser)]
@@ -166,6 +170,10 @@ struct RenderArgs {
     #[arg(long)]
     strict: bool,
 
+    /// Evaluate input as Jsonnet before parsing. Only valid with stdin ('-').
+    #[arg(long)]
+    jsonnet: bool,
+
     /// Input DSL (chartjs or vegalite). Auto-detected from the spec when omitted.
     #[arg(long)]
     dsl: Option<String>,
@@ -192,6 +200,23 @@ fn main() {
         Command::Schema(args) => run_schema(args),
         Command::Inspect(args) => run_inspect(args),
     }
+}
+
+/// Jsonnet ソース文字列を JSON に評価（stdin 用）。
+fn evaluate_jsonnet_snippet(src: &str) -> Result<String, String> {
+    let mut b = State::builder();
+    b.import_resolver(FileImportResolver::default());
+    let state = b.build();
+    let _guard = state.enter();
+    let val = state
+        .evaluate_snippet(
+            jrsonnet_evaluator::IStr::from("(stdin)"),
+            jrsonnet_evaluator::IStr::from(src),
+        )
+        .map_err(|e| format!("{e}"))?;
+    JsonFormat::default()
+        .manifest(val)
+        .map_err(|e| format!("{e}"))
 }
 
 /// Top-level render subcommand: validates explicit --dsl, loads font, dispatches to single or batch mode.
@@ -252,6 +277,19 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
             eprintln!("error: failed to read input: {e}");
             std::process::exit(1);
         }
+    };
+
+    // --jsonnet フラグが立っていたら Jsonnet として評価
+    let json = if args.jsonnet {
+        match evaluate_jsonnet_snippet(&json) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("error: jsonnet evaluation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        json
     };
 
     // Determine output format: explicit flag > infer from extension > default svg.
