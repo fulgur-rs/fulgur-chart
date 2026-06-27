@@ -1908,8 +1908,11 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
     }
 
     let raw: WcWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    if raw.data.datasets.is_empty() {
-        return Err("wordCloud チャートには dataset が 1 つ必要です".to_string());
+    if raw.data.datasets.len() != 1 {
+        return Err(format!(
+            "wordCloud チャートは dataset が 1 つのみサポートされます ({}件指定)",
+            raw.data.datasets.len()
+        ));
     }
     let ds = &raw.data.datasets[0];
     if ds.data.len() != raw.data.labels.len() {
