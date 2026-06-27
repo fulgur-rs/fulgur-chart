@@ -6,6 +6,43 @@
 
 ## [Unreleased]
 
+## [0.1.14](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.13...fulgur-chart-cli-v0.1.14) - 2026-06-27
+
+### Other
+
+- add wordCloud to supported chart types in README
+
+## [0.11.3](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.11.2...fulgur-chart-v0.11.3) - 2026-06-27
+
+### Added
+
+- *(layout)* implement wordcloud archimedean spiral placement
+- *(frontend)* add wordCloud parser
+- *(guard)* add wordcloud word count and label byte validation
+- *(schema)* add WordCloudSpec and schema roundtrip test
+- *(ir)* add WordEntry and ChartKind::WordCloud
+- *(scene)* add rotate_deg to Prim::Text for SVG transform support
+
+### Fixed
+
+- *(wordcloud)* reject multiple datasets explicitly
+- *(wordcloud)* address coderabbit review
+- *(wordcloud)* address AI review feedback
+- *(wordcloud)* handle +90deg vertical, clarify step_idx intent
+- *(guard)* tighten PCT_LEN_BOUND from 32 to 3 to avoid false positives
+- *(guard)* use struct-init syntax in tests to satisfy clippy field_reassign_with_default
+- *(guard)* reject outlabeledPie when aggregate expanded outlabel text exceeds limit
+
+### Other
+
+- *(wordcloud)* improve coverage for guard, strict mode, and layout
+- add wordCloud to supported chart types in README
+- *(wordcloud)* verify example spec renders end-to-end
+- *(wordcloud)* add render tests and example spec
+- add WordCloud stub arms to fix exhaustive match build errors
+- *(svg)* add rotate_deg transform test; note raster unsupported
+- *(guard)* pre-analyze outlabel template once to avoid O(N×T) in validator
+
 ## [0.1.13](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.12...fulgur-chart-cli-v0.1.13) - 2026-06-25
 
 ### Other
