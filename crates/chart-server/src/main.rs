@@ -1,6 +1,7 @@
 mod config;
 mod handlers;
 mod render;
+mod response;
 mod server;
 use clap::Parser;
 
