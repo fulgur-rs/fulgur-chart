@@ -67,14 +67,23 @@ async fn handle_render(
 ) -> Response {
     let etag = etag_value(&json);
 
-    // 304 check
+    // 304 check (RFC 7232 compliant)
     if let Some(inm) = headers.get(axum::http::header::IF_NONE_MATCH) {
-        if inm
-            .to_str()
-            .unwrap_or("")
-            .contains(etag.trim_matches('"').split('-').next().unwrap_or(""))
-        {
-            return (StatusCode::NOT_MODIFIED, cache_headers(&etag)).into_response();
+        if let Ok(inm_str) = inm.to_str() {
+            let etag_bare = etag.trim_matches('"');
+            let matches = inm_str.trim() == "*"
+                || inm_str
+                    .split(',')
+                    .map(|s| {
+                        s.trim()
+                            .trim_matches('"')
+                            .trim_start_matches("W/")
+                            .trim_matches('"')
+                    })
+                    .any(|candidate| candidate == etag_bare);
+            if matches {
+                return (StatusCode::NOT_MODIFIED, cache_headers(&etag)).into_response();
+            }
         }
     }
 
@@ -107,11 +116,12 @@ fn apply_overrides(json: &str, w: Option<u32>, h: Option<u32>, bkg: Option<&str>
             obj.insert("height".into(), h.into());
         }
         if let Some(bkg) = bkg {
-            obj.entry("options")
-                .or_insert(Value::Object(Default::default()))
-                .as_object_mut()
-                .unwrap()
-                .insert("backgroundColor".into(), bkg.into());
+            let options = obj
+                .entry("options")
+                .or_insert(Value::Object(Default::default()));
+            if let Some(opts_obj) = options.as_object_mut() {
+                opts_obj.insert("backgroundColor".into(), bkg.into());
+            }
         }
     }
     v.to_string()
