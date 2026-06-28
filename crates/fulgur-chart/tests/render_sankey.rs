@@ -32,6 +32,16 @@ fn sankey_is_byte_deterministic() {
     assert_eq!(render(ENERGY), render(ENERGY));
 }
 
+/// `examples/specs/sankey.json`(README/CLI スモークで使う「Energy flow」サンプル)が
+/// ライブラリ経路でも問題なく SVG を生成することを検証する。
+#[test]
+fn sankey_example_spec_renders() {
+    let json = include_str!("../../../examples/specs/sankey.json");
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"));
+    assert!(!svg.contains("NaN"));
+}
+
 #[test]
 fn sankey_gradient_default_emits_defs() {
     let svg = render(

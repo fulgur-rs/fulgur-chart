@@ -1,0 +1,19 @@
+{
+  "type": "sankey",
+  "data": {
+    "datasets": [{
+      "label": "Energy flow",
+      "colorFrom": "#36a2eb",
+      "colorTo": "#ff6384",
+      "data": [
+        {"from": "Coal",        "to": "Electricity", "flow": 25},
+        {"from": "Gas",         "to": "Electricity", "flow": 15},
+        {"from": "Solar",       "to": "Electricity", "flow": 10},
+        {"from": "Electricity", "to": "Residential", "flow": 22},
+        {"from": "Electricity", "to": "Industrial",  "flow": 18},
+        {"from": "Electricity", "to": "Commercial",  "flow": 10}
+      ]
+    }]
+  },
+  "options": { "plugins": { "title": { "display": true, "text": "Energy Sankey" } } }
+}
