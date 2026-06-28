@@ -183,7 +183,7 @@ fn render_inner(
             Ok(Output::Png(png))
         }
         "webp" => {
-            let fb = font.as_deref().unwrap_or(fulgur_chart::font::DEFAULT_FONT);
+            let fb = font.unwrap_or(fulgur_chart::font::DEFAULT_FONT);
             let webp = fulgur_chart::raster_direct::render_chart_to_webp(&ir, scale, fb)
                 .map_err(|e| (RENDER_ERROR, e))?;
             Ok(Output::Webp(webp))

@@ -43,9 +43,9 @@ pub fn render_chart_to_png(
     font_bytes: &[u8],
 ) -> Result<Vec<u8>, String> {
     let face =
-        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("フォント解析失敗: {e}"))?;
-    let measurer =
-        crate::text::TextMeasurer::new(font_bytes).map_err(|e| format!("計測初期化失敗: {e}"))?;
+        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
+    let measurer = crate::text::TextMeasurer::new(font_bytes)
+        .map_err(|e| format!("text measurer init failed: {e}"))?;
     let scene = crate::layout::build_scene(spec, &measurer);
     scene_to_png_with_face(&scene, scale, &face)
 }
@@ -67,9 +67,9 @@ pub fn render_chart_to_webp(
     font_bytes: &[u8],
 ) -> Result<Vec<u8>, String> {
     let face =
-        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("フォント解析失敗: {e}"))?;
-    let measurer =
-        crate::text::TextMeasurer::new(font_bytes).map_err(|e| format!("計測初期化失敗: {e}"))?;
+        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
+    let measurer = crate::text::TextMeasurer::new(font_bytes)
+        .map_err(|e| format!("text measurer init failed: {e}"))?;
     let scene = crate::layout::build_scene(spec, &measurer);
     let pixmap = scene_to_pixmap(&scene, scale, &face)?;
 
@@ -81,7 +81,7 @@ pub fn render_chart_to_webp(
             pixmap.height(),
             ExtendedColorType::Rgba8,
         )
-        .map_err(|e| format!("WebP エンコード失敗: {e}"))?;
+        .map_err(|e| format!("WebP encode failed: {e}"))?;
     Ok(buf)
 }
 
@@ -90,7 +90,7 @@ pub fn render_chart_to_webp(
 /// `scale` が 0 以下または非有限の場合は 1.0 にフォールバックする。
 pub fn scene_to_png(scene: &Scene, scale: f32, font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     let face =
-        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("フォント解析失敗: {e}"))?;
+        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     scene_to_png_with_face(scene, scale, &face)
 }
 
@@ -112,12 +112,12 @@ fn scene_to_pixmap(
     let area = w as u64 * h as u64;
     if area > MAX_PNG_AREA_PIXELS {
         return Err(format!(
-            "出力解像度 {w}×{h} px ({area} ピクセル) が上限 {MAX_PNG_AREA_PIXELS} px² を超えています"
+            "raster output {w}×{h} px ({area} pixels) exceeds the area limit of {MAX_PNG_AREA_PIXELS} px"
         ));
     }
 
-    let mut pixmap =
-        Pixmap::new(w, h).ok_or_else(|| format!("Pixmap 確保失敗: 寸法 {w}x{h} が無効です"))?;
+    let mut pixmap = Pixmap::new(w, h)
+        .ok_or_else(|| format!("Pixmap allocation failed: invalid dimensions {w}x{h}"))?;
 
     let transform = Transform::from_scale(scale, scale);
     let mut glyph_cache: HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>> = HashMap::new();
@@ -137,7 +137,7 @@ fn scene_to_png_with_face(
     let pixmap = scene_to_pixmap(scene, scale, face)?;
     pixmap
         .encode_png()
-        .map_err(|e| format!("PNG エンコード失敗: {e}"))
+        .map_err(|e| format!("PNG encode failed: {e}"))
 }
 
 fn render_prim(
@@ -691,7 +691,7 @@ mod tests {
         spec.height = 8001.0;
         let err = render_chart_to_png(&spec, 1.0, DEFAULT_FONT);
         assert!(err.is_err());
-        assert!(err.unwrap_err().contains("上限"));
+        assert!(err.unwrap_err().contains("exceeds"));
     }
 
     #[test]
@@ -784,7 +784,7 @@ mod tests {
         spec.height = 8001.0;
         let err = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT);
         assert!(err.is_err());
-        assert!(err.unwrap_err().contains("上限"));
+        assert!(err.unwrap_err().contains("exceeds"));
     }
 
     #[test]
