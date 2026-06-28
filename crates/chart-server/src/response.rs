@@ -23,9 +23,12 @@ pub fn etag_value(spec_json: &str, format: OutputFormat) -> String {
 pub fn cache_headers(etag: &str) -> HeaderMap {
     static X_FULGUR_VERSION: HeaderName = HeaderName::from_static("x-fulgur-version");
     let mut h = HeaderMap::new();
+    // immutable は「max-age 内は絶対再検証しない」意味になるため、
+    // バージョン更新後に古いキャッシュが残り続ける問題がある。
+    // immutable を除去し ETag + If-None-Match によるキャッシュ検証を有効にする。
     h.insert(
         header::CACHE_CONTROL,
-        "public, max-age=86400, immutable".parse().unwrap(),
+        "public, max-age=86400".parse().unwrap(),
     );
     h.insert(header::ETAG, etag.parse().unwrap());
     h.insert(

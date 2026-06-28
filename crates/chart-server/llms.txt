@@ -11,14 +11,14 @@
 
 POST /chart with JSON body:
 
-{"chart":{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}},"format":"svg"}
+{"chart":{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}}}
 
-Returns: SVG string (Content-Type: image/svg+xml)
+Returns: PNG binary (Content-Type: image/png) — default format is png
 
 ## Formats
 
-- svg  — inline SVG (default)
-- png  — binary PNG
+- png  — binary PNG (default)
+- svg  — inline SVG
 - webp — binary WebP
 - data-uri — base64 data URI (use in <img src> or Markdown ![](…))
 

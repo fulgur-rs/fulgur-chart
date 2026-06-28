@@ -7,6 +7,9 @@ on:
   pull_request:
     paths:
       - 'crates/chart-server/**'
+      - 'crates/fulgur-chart/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/chart-server-docker.yml'
 
 env:

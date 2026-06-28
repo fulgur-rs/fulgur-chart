@@ -26,7 +26,8 @@ use crate::{
 };
 
 pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
-    let semaphore = Arc::new(Semaphore::new(cfg.max_concurrent));
+    // max_concurrent=0 は Semaphore::new(0) で恒久 503 になるため最低 1 に補正。
+    let semaphore = Arc::new(Semaphore::new(cfg.max_concurrent.max(1)));
     let state = AppState {
         store,
         semaphore,
@@ -77,10 +78,13 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
         .route("/mcp", post(mcp::mcp_handler))
         .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
         .with_state(state)
-        .layer(cors)
         .layer(compression)
         .layer(DefaultBodyLimit::max(cfg.max_body_size))
         .layer(GovernorLayer {
             config: governor_conf,
         })
+        // CORS は最外層に置く。こうしないと GovernorLayer の 429 や
+        // DefaultBodyLimit の 413 に CORS ヘッダーが付かず、
+        // ブラウザが CORS エラーを報告してしまう。
+        .layer(cors)
 }

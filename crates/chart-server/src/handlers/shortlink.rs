@@ -1,4 +1,4 @@
-use crate::state::AppState;
+use crate::{render::OutputFormat, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
@@ -21,12 +21,8 @@ pub struct CreateRequest {
     #[serde(rename = "backgroundColor")]
     pub background_color: Option<String>,
     /// Output format: `svg`, `png`, `webp`, `data-uri`
-    #[serde(default = "default_fmt")]
-    pub format: String,
-}
-
-fn default_fmt() -> String {
-    "png".to_string()
+    #[serde(default)]
+    pub format: OutputFormat,
 }
 
 #[utoipa::path(
@@ -47,7 +43,7 @@ pub async fn post_create(
     // ID はチャート JSON + レンダーパラメータ全体のハッシュ（同スペックで異なるサイズ/フォーマットは別リンク）
     let id_input = format!(
         "{json}\x00{}\x00{}\x00{}\x00{}",
-        req.format,
+        req.format.as_str(),
         req.width.map_or(0, |v| v),
         req.height.map_or(0, |v| v),
         req.background_color.as_deref().unwrap_or(""),
@@ -60,7 +56,7 @@ pub async fn post_create(
         req.width,
         req.height,
         req.background_color.as_deref(),
-        &req.format,
+        req.format,
     );
     let url = format!("/chart/s/{id}");
 
@@ -92,9 +88,16 @@ pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>
     }
 }
 
-fn build_query(json: &str, w: Option<u32>, h: Option<u32>, bkg: Option<&str>, fmt: &str) -> String {
+fn build_query(
+    json: &str,
+    w: Option<u32>,
+    h: Option<u32>,
+    bkg: Option<&str>,
+    fmt: OutputFormat,
+) -> String {
     let encoded = urlencoding::encode(json);
-    let mut q = format!("c={encoded}&f={fmt}");
+    let fmt_encoded = urlencoding::encode(fmt.as_str());
+    let mut q = format!("c={encoded}&f={fmt_encoded}");
     if let Some(w) = w {
         q.push_str(&format!("&w={w}"));
     }

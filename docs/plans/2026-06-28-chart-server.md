@@ -150,7 +150,7 @@ Vary: Accept
 | HTTP | code | 原因 |
 |---|---|---|
 | 400 | `PARSE_ERROR` | spec のパースエラー |
-| 400 | `STRICT_ERROR` | strict モードの検証エラー |
+| 400 | `VALIDATE_ERROR` | strict モードの検証エラー |
 | 400 | `MISSING_PARAM` | 必須パラメータ不足 |
 | 404 | `NOT_FOUND` | 短縮 URL の ID が存在しない |
 | 500 | `RENDER_ERROR` | レンダリング内部エラー |

@@ -29,6 +29,17 @@ pub enum OutputFormat {
     DataUri,
 }
 
+impl OutputFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Svg => "svg",
+            Self::Png => "png",
+            Self::Webp => "webp",
+            Self::DataUri => "data-uri",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // エラー型
 // ---------------------------------------------------------------------------

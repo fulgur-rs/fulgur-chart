@@ -62,6 +62,12 @@ pub async fn mcp_handler(
     State(state): State<AppState>,
     Json(req): Json<JsonRpcRequest>,
 ) -> Response {
+    // MCP notification は id フィールドが存在しない（JSON デシリアライズ後 None）。
+    // 仕様上 notification への返信は禁止されているため 200 empty を返す。
+    if req.id.is_none() {
+        return StatusCode::OK.into_response();
+    }
+
     if req.jsonrpc != "2.0" {
         return (
             StatusCode::BAD_REQUEST,
@@ -109,7 +115,7 @@ fn handle_tools_list() -> Result<Value, (i64, String)> {
         "tools": [
             {
                 "name": "generate_chart",
-                "description": "Render a Chart.js v4 spec to SVG or PNG. Returns SVG string (format=svg) or base64 data URI (format=png/webp).",
+                "description": "Render a Chart.js v4 spec to SVG or PNG. Returns SVG string (format=svg) or base64 data URI (format=png/webp/data-uri).",
                 "inputSchema": {
                     "type": "object",
                     "required": ["chart"],
@@ -121,7 +127,7 @@ fn handle_tools_list() -> Result<Value, (i64, String)> {
                         "format": {
                             "type": "string",
                             "enum": ["svg", "png", "webp", "data-uri"],
-                            "default": "svg",
+                            "default": "png",
                             "description": "Output format"
                         },
                         "width": { "type": "integer", "description": "Width in px" },
@@ -150,12 +156,12 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         .ok_or((-32602, "Missing required argument: chart".to_string()))?
         .clone();
 
-    let format_str = args.get("format").and_then(|v| v.as_str()).unwrap_or("svg");
+    let format_str = args.get("format").and_then(|v| v.as_str()).unwrap_or("png");
     let format: OutputFormat = match format_str {
-        "png" => OutputFormat::Png,
+        "svg" => OutputFormat::Svg,
         "webp" => OutputFormat::Webp,
         "data-uri" => OutputFormat::DataUri,
-        _ => OutputFormat::Svg,
+        _ => OutputFormat::Png,
     };
 
     let width = args.get("width").and_then(|v| v.as_u64()).map(|v| v as u32);
@@ -175,9 +181,8 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         std::time::Duration::from_millis(state.render_timeout_ms),
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let spec = render::parse_and_validate(&json_str, "chartjs", false)
-                .map_err(|e| e.message().to_string())?;
-            render::render(&spec, format, 1.0).map_err(|e| e.message().to_string())
+            let spec = render::parse_and_validate(&json_str, "chartjs", false)?;
+            render::render(&spec, format, 1.0)
         }),
     )
     .await;
@@ -185,14 +190,24 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
     match result {
         Err(_) => Err((-32000, "Render timeout".to_string())),
         Ok(Err(_)) => Err((-32000, "Render task panicked".to_string())),
-        Ok(Ok(Err(msg))) => Err((-32602, msg.to_string())),
+        // エラー種別ごとに JSON-RPC エラーコードを使い分ける
+        Ok(Ok(Err(e))) => {
+            let code = match &e {
+                render::RenderError::Parse(_) => -32700,    // Parse error
+                render::RenderError::Validate(_) => -32602, // Invalid params
+                render::RenderError::Render(_) => -32603,   // Internal error
+            };
+            Err((code, e.message().to_string()))
+        }
         Ok(Ok(Ok(bytes))) => {
+            use base64::{Engine, engine::general_purpose::STANDARD};
             let content = match format {
-                OutputFormat::Svg | OutputFormat::DataUri => {
-                    String::from_utf8_lossy(&bytes).into_owned()
+                OutputFormat::DataUri => {
+                    // SVG を base64 エンコードして data URI に変換
+                    format!("data:image/svg+xml;base64,{}", STANDARD.encode(&bytes))
                 }
+                OutputFormat::Svg => String::from_utf8_lossy(&bytes).into_owned(),
                 OutputFormat::Png | OutputFormat::Webp => {
-                    use base64::{Engine, engine::general_purpose::STANDARD};
                     let mime = if format == OutputFormat::Webp {
                         "image/webp"
                     } else {

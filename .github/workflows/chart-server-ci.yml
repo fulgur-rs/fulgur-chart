@@ -5,6 +5,8 @@ on:
     paths:
       - 'crates/chart-server/**'
       - 'crates/fulgur-chart/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/chart-server-ci.yml'
 
 jobs:
