@@ -103,3 +103,25 @@ on the svg path and `FulgurRenderError` on the png path.
 
 Same `specJson` + same `format` + same `options` -> identical output bytes. SVG and PNG never
 match byte-for-byte (different render paths). See `docs/binding-api-contract.md` §4.
+
+## npm Package Distribution
+
+Publishing is fully automated: when a `fulgur-chart-v*` GitHub Release is published, the
+`node-npm-release.yml` workflow triggers and publishes 7 npm packages:
+
+- `@fulgur-rs/chart-node` — loader + JS wrapper (main package)
+- `@fulgur-rs/chart-node-linux-x64-gnu` — Linux x64 (glibc)
+- `@fulgur-rs/chart-node-linux-x64-musl` — Linux x64 (musl)
+- `@fulgur-rs/chart-node-linux-arm64-gnu` — Linux arm64 (glibc)
+- `@fulgur-rs/chart-node-darwin-arm64` — macOS arm64
+- `@fulgur-rs/chart-node-darwin-x64` — macOS x64
+- `@fulgur-rs/chart-node-win32-x64-msvc` — Windows x64
+
+### First-time setup (once only)
+
+Register a Trusted Publisher on npm for all 7 packages above:
+
+- **Owner**: `fulgur-rs`
+- **Repo**: `fulgur-chart`
+- **Workflow**: `node-npm-release.yml`
+- **Environment**: `npm`
