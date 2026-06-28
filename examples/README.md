@@ -24,6 +24,9 @@ features.
     - `datalabels.json` … data labels (`plugins.datalabels.display`)
     - `theme.json` … theme override (`options.theme`, dark palette)
     - `vegalite.json` … Vega-Lite subset input (`--dsl vegalite`)
+  - Jsonnet input (`.jsonnet` files are evaluated before parsing):
+    - `bar.jsonnet` … bar chart using `local` variables and comments
+    - `line-generated.jsonnet` … sine wave generated with `std.range` / `std.map`
 - `out/` … the SVGs rendered from those specs by the CLI (committed)
 - `report.html` … a minimal gallery embedding the generated SVGs with `<img>`
 
@@ -39,6 +42,13 @@ for n in bar bar-horizontal stacked-bar line area pie doughnut \
          scatter bubble radar mixed matrix datalabels theme; do
   cargo run -q -p fulgur-chart-cli -- render "examples/specs/$n.json" -o "examples/out/$n.svg"
 done
+```
+
+Jsonnet specs are detected by `.jsonnet` extension and evaluated automatically:
+
+```sh
+cargo run -q -p fulgur-chart-cli -- render examples/specs/bar.jsonnet -o examples/out/bar.jsonnet.svg
+cargo run -q -p fulgur-chart-cli -- render examples/specs/line-generated.jsonnet -o examples/out/line-generated.svg
 ```
 
 Vega-Lite input needs `--dsl vegalite`:
