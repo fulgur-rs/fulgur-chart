@@ -69,11 +69,12 @@ pub fn scene_to_png(scene: &Scene, scale: f32, font_bytes: &[u8]) -> Result<Vec<
 // 内部実装
 // ---------------------------------------------------------------------------
 
-fn scene_to_png_with_face(
+/// Scene を RGBA Pixmap にラスタライズする（PNG/WebP 共通）。
+fn scene_to_pixmap(
     scene: &Scene,
     scale: f32,
     face: &ttf_parser::Face<'_>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Pixmap, String> {
     let scale = if scale > 0.0 { scale } else { 1.0 };
 
     let w = (scene.width as f32 * scale).round().max(1.0) as u32;
@@ -82,7 +83,7 @@ fn scene_to_png_with_face(
     let area = w as u64 * h as u64;
     if area > MAX_PNG_AREA_PIXELS {
         return Err(format!(
-            "PNG 解像度 {w}×{h} px ({area} ピクセル) が上限 {MAX_PNG_AREA_PIXELS} px² を超えています"
+            "出力解像度 {w}×{h} px ({area} ピクセル) が上限 {MAX_PNG_AREA_PIXELS} px² を超えています"
         ));
     }
 
@@ -96,6 +97,15 @@ fn scene_to_png_with_face(
         render_prim(&mut pixmap, prim, transform, face, &mut glyph_cache);
     }
 
+    Ok(pixmap)
+}
+
+fn scene_to_png_with_face(
+    scene: &Scene,
+    scale: f32,
+    face: &ttf_parser::Face<'_>,
+) -> Result<Vec<u8>, String> {
+    let pixmap = scene_to_pixmap(scene, scale, face)?;
     pixmap
         .encode_png()
         .map_err(|e| format!("PNG エンコード失敗: {e}"))
