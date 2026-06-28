@@ -188,8 +188,9 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Verify Node.js and npm versions
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
         run: |
+          npm install -g npm@latest
           node --version
           npm --version
 
@@ -290,8 +291,9 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Verify Node.js and npm versions
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
         run: |
+          npm install -g npm@latest
           node --version
           npm --version
 
