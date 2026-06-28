@@ -12,7 +12,7 @@
 
 ---
 
-### Task 1: `image` クレートを依存に追加
+## Task 1: `image` クレートを依存に追加
 
 **Files:**
 - Modify: `Cargo.toml`（ワークスペースルート）
@@ -52,7 +52,7 @@ git commit -m "chore: add image crate dependency for WebP encoding"
 
 ---
 
-### Task 2: `raster_direct.rs` に `scene_to_pixmap()` を切り出す
+## Task 2: `raster_direct.rs` に `scene_to_pixmap()` を切り出す
 
 **Files:**
 - Modify: `crates/fulgur-chart/src/raster_direct.rs`
@@ -130,7 +130,7 @@ git commit -m "refactor: extract scene_to_pixmap() for PNG/WebP sharing"
 
 ---
 
-### Task 3: `render_chart_to_webp()` を実装してテストを追加
+## Task 3: `render_chart_to_webp()` を実装してテストを追加
 
 **Files:**
 - Modify: `crates/fulgur-chart/src/raster_direct.rs`
@@ -244,7 +244,7 @@ git commit -m "feat: add render_chart_to_webp() lossless via image crate"
 
 ---
 
-### Task 4: CLI に `--format webp` を追加
+## Task 4: CLI に `--format webp` を追加
 
 **Files:**
 - Modify: `crates/fulgur-chart-cli/src/main.rs`
@@ -363,7 +363,7 @@ git commit -m "feat(cli): add --format webp with auto-detection from .webp exten
 
 ---
 
-### Task 5: Node バインディングに webp を追加
+## Task 5: Node バインディングに webp を追加
 
 **Files:**
 - Modify: `crates/bindings/node/src/lib.rs`
@@ -438,7 +438,7 @@ git commit -m "feat(node): add webp format to render()"
 
 ---
 
-### Task 6: Ruby バインディングに webp を追加
+## Task 6: Ruby バインディングに webp を追加
 
 **Files:**
 - Modify: `crates/bindings/ruby/ext/fulgur_chart/src/lib.rs`
@@ -491,7 +491,7 @@ git commit -m "feat(ruby): add webp format to FulgurChart.render()"
 
 ---
 
-### Task 7: WASM バインディングに webp を追加
+## Task 7: WASM バインディングに webp を追加
 
 **Files:**
 - Modify: `crates/bindings/wasm/src/lib.rs`
@@ -558,7 +558,7 @@ git commit -m "feat(wasm): add webp format to render()"
 
 ---
 
-### Task 8: Python バインディングに webp を追加
+## Task 8: Python バインディングに webp を追加
 
 **Files:**
 - Modify: `crates/bindings/python/src/lib.rs`
@@ -611,7 +611,7 @@ git commit -m "feat(python): add webp format to render_image()"
 
 ---
 
-### 最終確認
+## 最終確認
 
 ```bash
 cd /home/ubuntu/fulgur-chart/.worktrees/feat/webp

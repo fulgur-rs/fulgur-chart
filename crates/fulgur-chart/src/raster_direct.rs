@@ -73,10 +73,29 @@ pub fn render_chart_to_webp(
     let scene = crate::layout::build_scene(spec, &measurer);
     let pixmap = scene_to_pixmap(&scene, scale, &face)?;
 
+    // WebP lossless per-axis limit
+    const MAX_WEBP_AXIS: u32 = 16_384;
+    if pixmap.width() > MAX_WEBP_AXIS || pixmap.height() > MAX_WEBP_AXIS {
+        return Err(format!(
+            "WebP output {}×{} px exceeds the per-axis limit of {} px",
+            pixmap.width(),
+            pixmap.height(),
+            MAX_WEBP_AXIS
+        ));
+    }
+
+    // Demultiply premultiplied RGBA → straight RGBA before WebP encoding.
+    // tiny-skia stores pixels as premultiplied; WebPEncoder expects straight alpha.
+    let mut straight = Vec::with_capacity(pixmap.data().len());
+    for pixel in pixmap.pixels() {
+        let c = pixel.demultiply();
+        straight.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+    }
+
     let mut buf = Vec::new();
     WebPEncoder::new_lossless(&mut buf)
         .write_image(
-            pixmap.data(),
+            &straight,
             pixmap.width(),
             pixmap.height(),
             ExtendedColorType::Rgba8,
@@ -104,7 +123,11 @@ fn scene_to_pixmap(
     scale: f32,
     face: &ttf_parser::Face<'_>,
 ) -> Result<Pixmap, String> {
-    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
 
     let w = (scene.width as f32 * scale).round().max(1.0) as u32;
     let h = (scene.height as f32 * scale).round().max(1.0) as u32;
@@ -785,6 +808,17 @@ mod tests {
         let err = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT);
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("exceeds"));
+    }
+
+    #[test]
+    fn webp_axis_limit_is_err() {
+        let mut spec = bar_spec();
+        // 20000×100 = 2M px (area 上限以下) だが WebP 軸制限 16384 を超える
+        spec.width = 20_000.0;
+        spec.height = 100.0;
+        let err = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("per-axis limit"));
     }
 
     #[test]
