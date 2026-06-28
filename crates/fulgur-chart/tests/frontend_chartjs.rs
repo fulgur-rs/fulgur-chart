@@ -950,3 +950,26 @@ fn sankey_rejects_negative_flow() {
         r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":-5}]}]}}"#;
     assert!(chartjs::parse(json, false).is_err());
 }
+
+#[test]
+fn sankey_schema_and_parser_both_reject_datalabels() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    // sankey は datalabels を持たない。schema(SankeyPlugins)と strict パーサが共に拒否し、
+    // 「schema 受理 → strict 拒否」のパリティ破れを起こさないこと。
+    let json = r##"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":{"plugins":{"datalabels":{}}}}"##;
+    assert!(
+        serde_json::from_str::<ChartJsSpec>(json).is_err(),
+        "schema は sankey の plugins.datalabels を拒否すべき"
+    );
+    assert!(
+        chartjs::parse(json, true).is_err(),
+        "strict パーサも plugins.datalabels を拒否すべき"
+    );
+    // title は schema・parser とも受理する(正常系の確認)。
+    let ok = r##"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":{"plugins":{"title":{"display":true,"text":"T"}}}}"##;
+    assert!(matches!(
+        serde_json::from_str::<ChartJsSpec>(ok).unwrap(),
+        ChartJsSpec::Sankey(_)
+    ));
+    assert!(chartjs::parse(ok, true).is_ok());
+}

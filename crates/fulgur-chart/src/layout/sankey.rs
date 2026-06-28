@@ -702,10 +702,14 @@ fn sort_flows(nodes: &mut [Node]) {
             let len = m as f64;
             for (idx, e) in nodes[i].from.iter_mut().enumerate() {
                 if overlap_from {
-                    // upstream `i * (node.size - flow) / (len - 1)` の忠実移植。
-                    // size<in は size='min' でのみ起き、len==1 だと 0/0=NaN(upstream のバグ)。
-                    // ここでガードを足すと挙動が分岐するため足さない。fmt_num が NaN→"0" に潰す。
-                    e.add_y = (idx as f64 * (node_size - e.flow)) / (len - 1.0);
+                    // upstream `i * (node.size - flow) / (len - 1)`。size<in は size='min'
+                    // でのみ起き、len==1 だと upstream は 0/0=NaN になる。fulgur では NaN を
+                    // layout に流さないよう len<=1 を 0.0 に倒す(リボン端点がノードに付く)。
+                    e.add_y = if len <= 1.0 {
+                        0.0
+                    } else {
+                        (idx as f64 * (node_size - e.flow)) / (len - 1.0)
+                    };
                 } else {
                     e.add_y = add_y;
                     add_y += e.flow;
@@ -733,10 +737,14 @@ fn sort_flows(nodes: &mut [Node]) {
             let len = m as f64;
             for (idx, e) in nodes[i].to.iter_mut().enumerate() {
                 if overlap_to {
-                    // upstream `i * (node.size - flow) / (len - 1)` の忠実移植。
-                    // size<out は size='min' でのみ起き、len==1 だと 0/0=NaN(upstream のバグ)。
-                    // ここでガードを足すと挙動が分岐するため足さない。fmt_num が NaN→"0" に潰す。
-                    e.add_y = (idx as f64 * (node_size - e.flow)) / (len - 1.0);
+                    // upstream `i * (node.size - flow) / (len - 1)`。size<out は size='min'
+                    // でのみ起き、len==1 だと upstream は 0/0=NaN になる。fulgur では NaN を
+                    // layout に流さないよう len<=1 を 0.0 に倒す(リボン端点がノードに付く)。
+                    e.add_y = if len <= 1.0 {
+                        0.0
+                    } else {
+                        (idx as f64 * (node_size - e.flow)) / (len - 1.0)
+                    };
                 } else {
                     e.add_y = add_y;
                     add_y += e.flow;
@@ -859,7 +867,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         .unwrap_or(&[]);
 
     let (mut nodes, key_to_idx) = build_nodes(data, size_method, priority, columns);
-    let use_priority = !priority.is_empty();
+    // priority レイアウトは「実際にノードへ priority が設定されたか」で決める。
+    // 未参照キー(タイポ等)だけの priority マップでレイアウトが切り替わるのを防ぐ。
+    let use_priority = nodes.iter().any(|n| n.priority.is_some());
     let (max_x, max_y) = layout(
         &mut nodes,
         data,
@@ -1131,6 +1141,34 @@ mod tests {
         let data = links(&[("A", "B", 10.0), ("B", "C", 5.0)]);
         let (nodes, idx) = build_nodes(&data, SankeySize::Min, &hm_f(), &hm_u());
         assert_eq!(nodes[idx["B"]].size, 5.0);
+    }
+
+    #[test]
+    fn unreferenced_priority_does_not_set_node_priority() {
+        // 未参照キーだけの priority マップはどのノードにも priority を付けない
+        // → build() の use_priority(nodes.any(priority.is_some))は false になり
+        //   既定レイアウトのまま(no-op エントリでレイアウトが切り替わらない)。
+        let data = links(&[("A", "B", 1.0)]);
+        let mut pri = HashMap::new();
+        pri.insert("Unused".to_string(), 0.0);
+        let (nodes, _) = build_nodes(&data, SankeySize::Max, &pri, &hm_u());
+        assert!(nodes.iter().all(|n| n.priority.is_none()));
+    }
+
+    #[test]
+    fn min_size_single_input_overlap_add_y_finite() {
+        // B: in=10 > out=5、size='min' で size=5 → overlap_from。B.from は 1 本(len==1)。
+        // upstream は 0/0=NaN になるが、fulgur は len<=1 を 0.0 に倒し NaN を流さない。
+        let data = links(&[("A", "B", 10.0), ("B", "C", 5.0)]);
+        let (mut nodes, idx) = build_nodes(&data, SankeySize::Min, &hm_f(), &hm_u());
+        let max_x = calculate_x(&mut nodes, &data, &idx, SankeyModeX::Edge);
+        let _ = calculate_y(&mut nodes, max_x);
+        sort_flows(&mut nodes);
+        for nd in &nodes {
+            for e in nd.from.iter().chain(nd.to.iter()) {
+                assert!(e.add_y.is_finite(), "add_y は有限であるべき(NaN 不可)");
+            }
+        }
     }
 
     // ── Task 3.2: x 割り当て ──

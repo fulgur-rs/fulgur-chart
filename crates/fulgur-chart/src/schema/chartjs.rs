@@ -922,7 +922,29 @@ pub struct WordCloudPlugins {
 pub struct SankeySpec {
     pub data: SankeyData,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<MatrixOptions>, // plugins(title/legend) + theme を共用
+    pub options: Option<SankeyOptions>,
+}
+
+/// sankey の options。`MatrixOptions` を流用すると `CommonPlugins` 経由で
+/// `plugins.datalabels` を許してしまうが、strict パーサは title/legend のみ受理するため、
+/// schema と parser の乖離(schema 受理→strict 拒否)を避けて sankey 専用に定義する。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SankeyOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<SankeyPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+/// sankey が受理する plugins(title / legend のみ)。datalabels は持たない。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SankeyPlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legend: Option<LegendPlugin>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

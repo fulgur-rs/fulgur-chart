@@ -421,7 +421,10 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
     // リンク数はリボン(プリミティブ)数・パースコストを、ノード数はレイアウトの
     // 再帰深さ(process_from/process_to/get_all_keys_forward)を抑える。MAX_SANKEY_NODES の
     // 再帰スタック根拠は定数の doc コメント参照(treemap の深さ上限と同趣旨)。
-    if let crate::ir::ChartKind::Sankey { .. } = &spec.kind {
+    if let crate::ir::ChartKind::Sankey {
+        labels, columns, ..
+    } = &spec.kind
+    {
         let links = spec.series.first().map(|s| s.links.len()).unwrap_or(0);
         if links > MAX_SANKEY_LINKS {
             return Err(format!(
@@ -429,9 +432,11 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
                 links, MAX_SANKEY_LINKS,
             ));
         }
-        // ユニークノード集合を走査して数える(数えるだけなので順序は不問、HashSet で可)。
-        // 同時に各ノードキーのバイト長を検証する。
+        // ユニークノード集合 + 各ノードキーのバイト長 + per-node フロー総和を一度に走査する。
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        // key -> (in_flow 累計, out_flow 累計)。
+        let mut totals: std::collections::HashMap<&str, (f64, f64)> =
+            std::collections::HashMap::new();
         if let Some(s) = spec.series.first() {
             for link in &s.links {
                 for key in [link.from.as_str(), link.to.as_str()] {
@@ -443,6 +448,8 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
                         ));
                     }
                 }
+                totals.entry(link.from.as_str()).or_insert((0.0, 0.0)).1 += link.flow;
+                totals.entry(link.to.as_str()).or_insert((0.0, 0.0)).0 += link.flow;
             }
         }
         if seen.len() > MAX_SANKEY_NODES {
@@ -451,6 +458,37 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
                 seen.len(),
                 MAX_SANKEY_NODES,
             ));
+        }
+        // 個々の flow は有限でも、合算でノード総和が ∞ に overflow しうる。非有限の総和は
+        // size(=正規化分母)を壊し、fmt_num が幾何を "0" に潰すため拒否する。
+        for (key, (in_flow, out_flow)) in &totals {
+            if !in_flow.is_finite() || !out_flow.is_finite() {
+                return Err(format!(
+                    "sankey ノード {} のフロー総和が非有限です(値が大きすぎます)",
+                    key,
+                ));
+            }
+        }
+        // labels 上書き値も描画される(幅測定 + SVG 出力)ため max_label_bytes で検証する。
+        for (key, label) in labels {
+            if label.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "sankey ラベル上書き({})の長さ {} バイトが上限 {} を超えています",
+                    key,
+                    label.len(),
+                    limits.max_label_bytes,
+                ));
+            }
+        }
+        // 手動 column の巨大値は max_x を膨張させ fix_top / calculate_y_using_priority の
+        // `0..=max_x` ループを暴走させる(DoS)。参照ノードの column を MAX_SANKEY_NODES 未満に制限する。
+        for (key, &col) in columns {
+            if seen.contains(key.as_str()) && col >= MAX_SANKEY_NODES {
+                return Err(format!(
+                    "sankey の手動 column({})={} が上限 {} 以上です",
+                    key, col, MAX_SANKEY_NODES,
+                ));
+            }
         }
     }
 
@@ -1165,6 +1203,52 @@ mod tests {
         assert!(validate_spec(&spec, &limits).is_err());
         limits.max_total_data_points = 3;
         assert!(validate_spec(&spec, &limits).is_ok());
+    }
+
+    #[test]
+    fn sankey_huge_manual_column_rejected() {
+        // 参照ノードの巨大 column は max_x を膨張させ DoS になるため拒否。
+        let mut spec = sankey_spec_with_links(vec![link("A", "B")]);
+        if let crate::ir::ChartKind::Sankey { columns, .. } = &mut spec.kind {
+            columns.insert("B".to_string(), MAX_SANKEY_NODES);
+        }
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+        // 上限未満は OK。
+        let mut ok = sankey_spec_with_links(vec![link("A", "B")]);
+        if let crate::ir::ChartKind::Sankey { columns, .. } = &mut ok.kind {
+            columns.insert("B".to_string(), MAX_SANKEY_NODES - 1);
+        }
+        assert!(validate_spec(&ok, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn sankey_oversized_label_override_rejected() {
+        // labels 上書き値も描画されるため node キー同様にバイト長を検証する。
+        let long = "x".repeat(DEFAULT_MAX_LABEL_BYTES + 1);
+        let mut spec = sankey_spec_with_links(vec![link("A", "B")]);
+        if let crate::ir::ChartKind::Sankey { labels, .. } = &mut spec.kind {
+            labels.insert("A".to_string(), long);
+        }
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn sankey_non_finite_flow_total_rejected() {
+        // 同一ソースからの 2 本の 1e308 で out_flow が +inf に overflow → 拒否。
+        let links = vec![
+            crate::ir::SankeyLink {
+                from: "A".into(),
+                to: "B".into(),
+                flow: 1e308,
+            },
+            crate::ir::SankeyLink {
+                from: "A".into(),
+                to: "C".into(),
+                flow: 1e308,
+            },
+        ];
+        let spec = sankey_spec_with_links(links);
+        assert!(validate_spec(&spec, &default_limits()).is_err());
     }
 
     #[test]
