@@ -180,6 +180,14 @@ fn tempfile_dir() -> std::path::PathBuf {
     base
 }
 
+// テスト名ごとに固定・隔離されたディレクトリを作る（並列実行時の競合を防ぐ）
+fn tempfile_dir_for(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("fulgur_chart_test_{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 // バッチ用 tempdir: テスト名ごとに固定ディレクトリを使い、開始時に消してクリーンスレートにする。
 fn batch_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("fulgur_batch_{name}"));
@@ -598,6 +606,69 @@ fn zero_width_exits_1() {
         .code(1);
 }
 
+// --- Jsonnet サポート ---
+
+const MINIMAL_JSONNET_STDIN: &str = r#"
+// コメント付き bar チャート
+{
+  type: "bar",
+  data: {
+    labels: ["A", "B"],
+    datasets: [{ data: [1, 2] }],
+  },
+}
+"#;
+
+#[test]
+fn jsonnet_stdin_renders_svg() {
+    let out = bin()
+        .args(["render", "-", "-o", "-", "--jsonnet"])
+        .write_stdin(MINIMAL_JSONNET_STDIN)
+        .assert()
+        .success();
+    let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(s.starts_with("<svg"), "expected SVG, got: {s}");
+}
+
+#[test]
+fn jsonnet_flag_with_file_path_exits_1() {
+    // ファイルと --jsonnet の組み合わせは不正（拡張子を使うべき）
+    let dir = tempfile_dir_for("jsonnet_flag_with_file_path_exits_1");
+    let spec = dir.join("spec.json");
+    std::fs::write(&spec, MINIMAL_BAR_A).unwrap();
+    bin()
+        .args(["render", spec.to_str().unwrap(), "-o", "-", "--jsonnet"])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+// --- .jsonnet ファイルの自動検出 ---
+
+const MINIMAL_JSONNET_FILE: &str = r#"
+// Jsonnet で書いた bar チャート
+{
+  type: "bar",
+  data: {
+    labels: ["X", "Y"],
+    datasets: [{ data: [3, 7] }],
+  },
+}
+"#;
+
+#[test]
+fn jsonnet_file_renders_svg() {
+    let dir = tempfile_dir_for("jsonnet_file_renders_svg");
+    let spec = dir.join("spec.jsonnet");
+    std::fs::write(&spec, MINIMAL_JSONNET_FILE).unwrap();
+    let out = bin()
+        .args(["render", spec.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .success();
+    let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(s.starts_with("<svg"), "expected SVG, got: {s}");
+}
+
 // --- inspect サブコマンド（意味モデルを JSON で出力）---
 
 #[test]
@@ -614,4 +685,144 @@ fn inspect_bar_emits_model_json() {
     assert_eq!(v["meta"]["type"], "bar");
     assert!(!v["series"].as_array().unwrap().is_empty());
     assert!(v["axes"]["y"]["ticks"].is_array());
+}
+
+#[test]
+fn jsonnet_file_with_import_renders_svg() {
+    let dir = tempfile_dir_for("jsonnet_file_with_import_renders_svg");
+
+    // ライブラリファイル
+    std::fs::write(
+        dir.join("colors.libsonnet"),
+        r#"{ red: "rgb(255,0,0)", blue: "rgb(0,0,255)" }"#,
+    )
+    .unwrap();
+
+    // メインスペック（import あり）
+    let spec = dir.join("spec.jsonnet");
+    std::fs::write(
+        &spec,
+        r#"
+local colors = import 'colors.libsonnet';
+{
+  type: "bar",
+  data: {
+    labels: ["A"],
+    datasets: [{ backgroundColor: colors.red, data: [1] }],
+  },
+}
+"#,
+    )
+    .unwrap();
+
+    let out = bin()
+        .args(["render", spec.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .success();
+    let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(s.starts_with("<svg"), "expected SVG, got: {s}");
+}
+
+#[test]
+fn libsonnet_direct_input_exits_1() {
+    // .libsonnet は直接入力に使えない（DSL 検出失敗として扱う）
+    let dir = tempfile_dir_for("libsonnet_direct_input_exits_1");
+    let lib = dir.join("lib.libsonnet");
+    std::fs::write(&lib, r#"{ x: 1 }"#).unwrap();
+    let out = bin()
+        .args(["render", lib.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    // .libsonnet は JSON として解析されるため、JSON パースエラー or DSL 検出エラーのいずれかが出る。
+    assert!(
+        stderr.contains("auto-detect") || stderr.contains("DSL") || stderr.contains("JSON"),
+        "stderr should mention rejection reason (DSL detection or JSON parse error), got: {stderr}"
+    );
+}
+
+#[test]
+fn jsonnet_inspect_emits_model() {
+    let dir = tempfile_dir_for("jsonnet_inspect_emits_model");
+    let spec = dir.join("spec.jsonnet");
+    std::fs::write(&spec, MINIMAL_JSONNET_FILE).unwrap();
+    let out = bin()
+        .args(["inspect", spec.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .success();
+    let bytes = out.get_output().stdout.clone();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+    assert_eq!(v["meta"]["type"], "bar");
+}
+
+#[test]
+fn jsonnet_stdin_inspect_emits_model() {
+    let out = bin()
+        .args(["inspect", "-", "-o", "-", "--jsonnet"])
+        .write_stdin(MINIMAL_JSONNET_STDIN)
+        .assert()
+        .success();
+    let bytes = out.get_output().stdout.clone();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).expect("valid JSON");
+    assert_eq!(v["meta"]["type"], "bar");
+}
+
+#[test]
+fn inspect_jsonnet_flag_with_file_path_exits_1() {
+    let dir = tempfile_dir_for("inspect_jsonnet_flag_with_file_path_exits_1");
+    let spec = dir.join("spec.json");
+    std::fs::write(&spec, MINIMAL_BAR_A).unwrap();
+    bin()
+        .args(["inspect", spec.to_str().unwrap(), "-o", "-", "--jsonnet"])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn jsonnet_syntax_error_exits_1() {
+    bin()
+        .args(["render", "-", "-o", "-", "--jsonnet"])
+        .write_stdin("{ invalid jsonnet ::::")
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn jsonnet_file_syntax_error_exits_1() {
+    let dir = tempfile_dir_for("jsonnet_file_syntax_error_exits_1");
+    let spec = dir.join("bad.jsonnet");
+    std::fs::write(&spec, "{ not valid jsonnet ::::").unwrap();
+    bin()
+        .args(["render", spec.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn batch_renders_jsonnet_files() {
+    let dir = batch_dir("batch_renders_jsonnet_files");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+
+    std::fs::write(in_dir.join("a.jsonnet"), MINIMAL_JSONNET_FILE).unwrap();
+    std::fs::write(in_dir.join("b.jsonnet"), MINIMAL_JSONNET_FILE).unwrap();
+
+    bin()
+        .args([
+            "render",
+            in_dir.join("a.jsonnet").to_str().unwrap(),
+            in_dir.join("b.jsonnet").to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let sa = std::fs::read_to_string(out_dir.join("a.svg")).unwrap();
+    assert!(sa.starts_with("<svg"));
 }

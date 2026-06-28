@@ -678,10 +678,11 @@ fn build_theme(raw: Option<RawTheme>) -> Theme {
     if let Some(c) = raw.background_color.as_deref().and_then(parse_color) {
         theme.background = Some(c);
     }
-    if let Some(sz) = raw.font_size {
-        if sz.is_finite() && sz > 0.0 {
-            theme.font_size = sz;
-        }
+    if let Some(sz) = raw.font_size
+        && sz.is_finite()
+        && sz > 0.0
+    {
+        theme.font_size = sz;
     }
     theme
 }
@@ -709,10 +710,11 @@ fn build_outlabel_config(raw: &Option<RawOutlabels>) -> crate::ir::OutlabelConfi
     if let Some(c) = raw.background_color.as_deref().and_then(parse_color) {
         cfg.background = Some(c);
     }
-    if let Some(s) = raw.stretch {
-        if s.is_finite() && s >= 0.0 {
-            cfg.stretch = s;
-        }
+    if let Some(s) = raw.stretch
+        && s.is_finite()
+        && s >= 0.0
+    {
+        cfg.stretch = s;
     }
     cfg
 }
@@ -867,14 +869,14 @@ fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
             if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
                 check_object(dl, &["display"], "options.plugins.datalabels")?;
             }
-            if allow_outlabels {
-                if let Some(ol) = plugins.get("outlabels").and_then(|v| v.as_object()) {
-                    check_object(
-                        ol,
-                        &["text", "color", "backgroundColor", "stretch"],
-                        "options.plugins.outlabels",
-                    )?;
-                }
+            if allow_outlabels
+                && let Some(ol) = plugins.get("outlabels").and_then(|v| v.as_object())
+            {
+                check_object(
+                    ol,
+                    &["text", "color", "backgroundColor", "stretch"],
+                    "options.plugins.outlabels",
+                )?;
             }
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {

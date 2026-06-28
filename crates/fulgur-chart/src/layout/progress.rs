@@ -93,18 +93,18 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let center_y = band_top + band_h / 2.0;
 
         // バー名（左・右寄せ）。categories[i] があり非空のときのみ。
-        if let Some(name) = spec.categories.get(i) {
-            if !name.is_empty() {
-                items.push(Prim::Text {
-                    x: plot_left - 6.0,
-                    y: center_y + label_font * TEXT_BASELINE_RATIO,
-                    size: label_font,
-                    anchor: Anchor::End,
-                    fill: ink,
-                    content: name.clone(),
-                    rotate_deg: None,
-                });
-            }
+        if let Some(name) = spec.categories.get(i)
+            && !name.is_empty()
+        {
+            items.push(Prim::Text {
+                x: plot_left - 6.0,
+                y: center_y + label_font * TEXT_BASELINE_RATIO,
+                size: label_font,
+                anchor: Anchor::End,
+                fill: ink,
+                content: name.clone(),
+                rotate_deg: None,
+            });
         }
 
         // per-bar max: series.get(1).values[i]。非有限/≤0 は 100。

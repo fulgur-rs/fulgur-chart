@@ -1,6 +1,12 @@
 use std::io::{Read, Write};
 
 use clap::{Parser, Subcommand, ValueEnum};
+use jrsonnet_evaluator::{
+    FileImportResolver, State,
+    manifest::{JsonFormat, ManifestFormat},
+    trace::PathResolver,
+};
+use jrsonnet_stdlib::ContextInitializer;
 
 /// Render chart.js-compatible JSON specs to deterministic static SVG/PNG.
 #[derive(Parser)]
@@ -89,6 +95,9 @@ struct InspectArgs {
     /// Override chart height.
     #[arg(long)]
     height: Option<f64>,
+    /// Evaluate input as Jsonnet before parsing. Only valid with stdin ('-').
+    #[arg(long)]
+    jsonnet: bool,
     /// Font file for text metrics. Defaults to the bundled font.
     #[arg(long)]
     font: Option<String>,
@@ -166,6 +175,10 @@ struct RenderArgs {
     #[arg(long)]
     strict: bool,
 
+    /// Evaluate input as Jsonnet before parsing. Only valid with stdin ('-').
+    #[arg(long)]
+    jsonnet: bool,
+
     /// Input DSL (chartjs or vegalite). Auto-detected from the spec when omitted.
     #[arg(long)]
     dsl: Option<String>,
@@ -194,14 +207,55 @@ fn main() {
     }
 }
 
+fn build_jrsonnet_state() -> State {
+    let mut b = State::builder();
+    b.import_resolver(FileImportResolver::default());
+    b.context_initializer(ContextInitializer::new(PathResolver::new_cwd_fallback()));
+    b.build()
+}
+
+/// Jsonnet ソース文字列を JSON に評価（stdin 用）。
+fn evaluate_jsonnet_snippet(src: &str) -> Result<String, String> {
+    let state = build_jrsonnet_state();
+    let _guard = state.enter();
+    let val = state
+        .evaluate_snippet(
+            jrsonnet_evaluator::IStr::from("(stdin)"),
+            jrsonnet_evaluator::IStr::from(src),
+        )
+        .map_err(|e| format!("{e}"))?;
+    JsonFormat::default()
+        .manifest(val)
+        .map_err(|e| format!("{e}"))
+}
+
+/// .jsonnet ファイルを JSON に評価。import はファイルのディレクトリから解決。
+fn evaluate_jsonnet_file(path: &std::path::Path) -> Result<String, String> {
+    let state = build_jrsonnet_state();
+    let _guard = state.enter();
+    let val = state.import(path).map_err(|e| format!("{e}"))?;
+    JsonFormat::default()
+        .manifest(val)
+        .map_err(|e| format!("{e}"))
+}
+
+/// パスが .jsonnet 拡張子を持つか判定（大文字小文字を区別しない）。
+fn is_jsonnet_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("jsonnet"))
+}
+
 /// Top-level render subcommand: validates explicit --dsl, loads font, dispatches to single or batch mode.
 fn run_render(args: RenderArgs) {
     // Validate explicit DSL; only chartjs and vegalite are supported.
-    if let Some(dsl) = &args.dsl {
-        if dsl != "chartjs" && dsl != "vegalite" {
-            eprintln!("error: unsupported DSL '{dsl}' (supported: chartjs, vegalite)");
-            std::process::exit(1);
-        }
+    if let Some(dsl) = &args.dsl
+        && dsl != "chartjs"
+        && dsl != "vegalite"
+    {
+        eprintln!("error: unsupported DSL '{dsl}' (supported: chartjs, vegalite)");
+        std::process::exit(1);
     }
 
     // Load the font once if --font is given; reused across metric/SVG/PNG stages and all batch files.
@@ -236,6 +290,14 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
     }
     let spec_path = &args.spec[0];
 
+    // --jsonnet はファイル入力と組み合わせ不可（.jsonnet 拡張子を使うこと）
+    if args.jsonnet && spec_path != "-" {
+        eprintln!(
+            "error: --jsonnet is only valid with stdin ('-'). For .jsonnet files, use the .jsonnet extension."
+        );
+        std::process::exit(1);
+    }
+
     // --output is required in single-spec mode.
     let output = match &args.output {
         Some(o) => o,
@@ -252,6 +314,27 @@ fn run_single(args: &RenderArgs, font_bytes: &Option<Vec<u8>>) {
             eprintln!("error: failed to read input: {e}");
             std::process::exit(1);
         }
+    };
+
+    // Jsonnet の評価: --jsonnet フラグ（stdin 専用）または .jsonnet 拡張子
+    let json = if args.jsonnet {
+        match evaluate_jsonnet_snippet(&json) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("error: jsonnet evaluation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else if is_jsonnet_path(spec_path) {
+        match evaluate_jsonnet_file(std::path::Path::new(spec_path)) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("error: jsonnet evaluation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        json
     };
 
     // Determine output format: explicit flag > infer from extension > default svg.
@@ -278,6 +361,10 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
     // --out-dir and --output are mutually exclusive.
     if args.output.is_some() {
         eprintln!("error: --out-dir and --output cannot be used together");
+        std::process::exit(1);
+    }
+    if args.jsonnet {
+        eprintln!("error: --jsonnet is not valid in batch mode (use the .jsonnet extension)");
         std::process::exit(1);
     }
 
@@ -320,6 +407,18 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
                 eprintln!("error: failed to read '{spec_path}': {e}");
                 std::process::exit(1);
             }
+        };
+
+        let json = if is_jsonnet_path(spec_path) {
+            match evaluate_jsonnet_file(std::path::Path::new(spec_path)) {
+                Ok(j) => j,
+                Err(e) => {
+                    eprintln!("{spec_path}: error: jsonnet evaluation failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            json
         };
 
         // Render but don't write yet; abort with the relevant exit code on failure.
@@ -496,12 +595,38 @@ fn run_schema(args: SchemaArgs) {
 
 /// inspect サブコマンド: IR + layout から意味モデルを構築し pretty JSON で出力する。
 fn run_inspect(args: InspectArgs) {
+    // --jsonnet は stdin 専用。.jsonnet 拡張子は自動検出。stdin を消費する前に検証。
+    if args.jsonnet && args.spec != "-" {
+        eprintln!(
+            "error: --jsonnet is only valid with stdin ('-'). For .jsonnet files, use the .jsonnet extension."
+        );
+        std::process::exit(1);
+    }
     let json = match read_spec(&args.spec) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error: failed to read input: {e}");
             std::process::exit(1);
         }
+    };
+    let json = if args.jsonnet {
+        match evaluate_jsonnet_snippet(&json) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("error: jsonnet evaluation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else if is_jsonnet_path(&args.spec) {
+        match evaluate_jsonnet_file(std::path::Path::new(&args.spec)) {
+            Ok(j) => j,
+            Err(e) => {
+                eprintln!("error: jsonnet evaluation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        json
     };
     let dsl: String = match &args.dsl {
         Some(d) => {

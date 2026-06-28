@@ -23,10 +23,10 @@ impl<'a> TextMeasurer<'a> {
         let scale = size_px / self.units_per_em;
         let mut total = 0.0_f32;
         for ch in text.chars() {
-            if let Some(gid) = self.face.glyph_index(ch) {
-                if let Some(adv) = self.face.glyph_hor_advance(gid) {
-                    total += adv as f32 * scale;
-                }
+            if let Some(gid) = self.face.glyph_index(ch)
+                && let Some(adv) = self.face.glyph_hor_advance(gid)
+            {
+                total += adv as f32 * scale;
             }
         }
         total

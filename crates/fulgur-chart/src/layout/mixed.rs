@@ -166,17 +166,17 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // データラベル(点の上)。
         if spec.data_labels {
             for (i, (x, y)) in pts.iter().enumerate() {
-                if let Some(&v) = ser.values.get(i) {
-                    if v.is_finite() {
-                        items.push(common::value_label(
-                            *x,
-                            *y - MARKER_R - common::LABEL_GAP,
-                            label_font,
-                            Anchor::Middle,
-                            spec.theme.text_color,
-                            v,
-                        ));
-                    }
+                if let Some(&v) = ser.values.get(i)
+                    && v.is_finite()
+                {
+                    items.push(common::value_label(
+                        *x,
+                        *y - MARKER_R - common::LABEL_GAP,
+                        label_font,
+                        Anchor::Middle,
+                        spec.theme.text_color,
+                        v,
+                    ));
                 }
             }
         }

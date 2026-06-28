@@ -73,21 +73,21 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
             let mut pos_sum = 0.0_f64;
             let mut neg_sum = 0.0_f64;
             for ser in &spec.series {
-                if let Some(&v) = ser.values.get(i) {
-                    if v.is_finite() {
-                        if v < min_individual {
-                            min_individual = v;
-                        }
-                        if v > max_individual {
-                            max_individual = v;
-                        }
-                        if v >= 0.0 {
-                            pos_sum += v;
-                            has_positive = true;
-                        } else {
-                            neg_sum += v;
-                            has_negative = true;
-                        }
+                if let Some(&v) = ser.values.get(i)
+                    && v.is_finite()
+                {
+                    if v < min_individual {
+                        min_individual = v;
+                    }
+                    if v > max_individual {
+                        max_individual = v;
+                    }
+                    if v >= 0.0 {
+                        pos_sum += v;
+                        has_positive = true;
+                    } else {
+                        neg_sum += v;
+                        has_negative = true;
                     }
                 }
             }
@@ -136,15 +136,17 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     };
     // suggestedMin/suggestedMax: データが優先、suggested はドメインを広げるだけ。
     // 非有限値（Infinity/NaN）は nice_ticks で無限 range を生じさせるため無視する。
-    if let Some(s) = axis.suggested_min {
-        if s.is_finite() && s < domain_min {
-            domain_min = s;
-        }
+    if let Some(s) = axis.suggested_min
+        && s.is_finite()
+        && s < domain_min
+    {
+        domain_min = s;
     }
-    if let Some(s) = axis.suggested_max {
-        if s.is_finite() && s > domain_max {
-            domain_max = s;
-        }
+    if let Some(s) = axis.suggested_max
+        && s.is_finite()
+        && s > domain_max
+    {
+        domain_max = s;
     }
     // ハード制約の y_axis.min / y_axis.max は現状 wire されていない（未実装）。
     // 実装する際は: hard min/max が suggested より優先、かつドメインを縮小できる点に注意。
