@@ -101,7 +101,12 @@ pub async fn post_chart(
     headers: HeaderMap,
     Json(req): Json<ChartRequest>,
 ) -> Response {
-    let json = req.chart.to_string();
+    let json = apply_overrides(
+        &req.chart.to_string(),
+        req.width,
+        req.height,
+        req.background_color.as_deref(),
+    );
     handle_render(json, req.format, req.dsl, headers, state).await
 }
 

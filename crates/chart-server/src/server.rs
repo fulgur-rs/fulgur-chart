@@ -67,10 +67,10 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
         .route("/mcp", post(mcp::mcp_handler))
         .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
         .with_state(state)
+        .layer(cors)
+        .layer(compression)
+        .layer(DefaultBodyLimit::max(cfg.max_body_size))
         .layer(GovernorLayer {
             config: governor_conf,
         })
-        .layer(DefaultBodyLimit::max(cfg.max_body_size))
-        .layer(compression)
-        .layer(cors)
 }
