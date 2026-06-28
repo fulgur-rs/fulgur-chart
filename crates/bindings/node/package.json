@@ -17,7 +17,12 @@
   "napi": {
     "binaryName": "chart-node",
     "targets": [
-      "x86_64-unknown-linux-gnu"
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "aarch64-unknown-linux-gnu",
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-pc-windows-msvc"
     ]
   },
   "scripts": {
@@ -33,5 +38,13 @@
   "devDependencies": {
     "@napi-rs/cli": "^3.0.0",
     "typescript": "^5.0.0"
+  },
+  "optionalDependencies": {
+    "@fulgur-rs/chart-node-linux-x64-gnu": "0.7.0",
+    "@fulgur-rs/chart-node-linux-x64-musl": "0.7.0",
+    "@fulgur-rs/chart-node-linux-arm64-gnu": "0.7.0",
+    "@fulgur-rs/chart-node-darwin-arm64": "0.7.0",
+    "@fulgur-rs/chart-node-darwin-x64": "0.7.0",
+    "@fulgur-rs/chart-node-win32-x64-msvc": "0.7.0"
   }
 }
