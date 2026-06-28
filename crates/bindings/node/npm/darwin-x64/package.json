@@ -1,0 +1,19 @@
+{
+  "name": "@fulgur-rs/chart-node-darwin-x64",
+  "version": "0.7.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "chart-node.darwin-x64.node",
+  "files": [
+    "chart-node.darwin-x64.node"
+  ],
+  "description": "Deterministic chart.js v4 / Vega-Lite JSON to SVG/PNG renderer (Node.js native binding)",
+  "license": "MIT OR Apache-2.0",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "os": [
+    "darwin"
+  ]
+}
