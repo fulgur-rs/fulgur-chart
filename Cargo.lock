@@ -676,6 +676,7 @@ dependencies = [
  "clap",
  "fulgur-chart",
  "jrsonnet-evaluator",
+ "jrsonnet-gcmodule",
  "jrsonnet-stdlib",
  "schemars",
  "serde",

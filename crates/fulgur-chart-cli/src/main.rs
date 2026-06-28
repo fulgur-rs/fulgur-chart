@@ -1,12 +1,128 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use jrsonnet_evaluator::{
-    FileImportResolver, State,
+    AsPathLike, FileImportResolver, IStr, ImportResolver, InitialContextBuilder, ObjValueBuilder,
+    Source, SourcePath, State, Thunk, Val,
+    error::Result as JrsonnetResult,
     manifest::{JsonFormat, ManifestFormat},
     trace::PathResolver,
 };
-use jrsonnet_stdlib::ContextInitializer;
+use jrsonnet_stdlib::{Settings, StdTracePrinter, stdlib_uncached};
+
+/// Jsonnet 入力の最大サイズ（1 MiB）。YAML bomb 等の事前評価 DoS を抑止する。
+const MAX_JSONNET_SOURCE_BYTES: usize = 1024 * 1024;
+
+/// std.parseYaml を除去したカスタム ContextInitializer。
+/// parseYaml は YAML anchor bomb による DoS を起こし得るため公開しない。
+#[derive(jrsonnet_gcmodule::Trace, Clone)]
+struct FulgurContextInitializer {
+    inner: jrsonnet_stdlib::ContextInitializer,
+    patched_stdlib_obj: jrsonnet_evaluator::ObjValue,
+}
+
+impl FulgurContextInitializer {
+    fn new(resolver: PathResolver) -> Self {
+        let settings = Settings {
+            ext_vars: HashMap::new(),
+            ext_natives: HashMap::new(),
+            trace_printer: Rc::new(StdTracePrinter::new(resolver.clone())),
+            path_resolver: resolver.clone(),
+        };
+        let settings_cc = jrsonnet_gcmodule::Cc::new(RefCell::new(settings));
+        let base_stdlib = stdlib_uncached(settings_cc);
+
+        let mut b = ObjValueBuilder::new();
+        b.with_super(base_stdlib);
+        let mut omit = jrsonnet_evaluator::rustc_hash::FxHashSet::default();
+        omit.insert(IStr::from("parseYaml"));
+        b.with_fields_omitted(omit);
+        let patched_stdlib_obj = b.build();
+
+        Self {
+            inner: jrsonnet_stdlib::ContextInitializer::new(resolver),
+            patched_stdlib_obj,
+        }
+    }
+}
+
+impl jrsonnet_evaluator::ContextInitializer for FulgurContextInitializer {
+    fn populate(&self, source: Source, builder: &mut InitialContextBuilder) {
+        let mut b = ObjValueBuilder::new();
+        b.with_super(self.patched_stdlib_obj.clone());
+        b.field("thisFile").hide().value({
+            let sp = source.source_path();
+            sp.path().map_or_else(
+                || sp.to_string(),
+                |p| self.inner.settings().path_resolver.resolve(p),
+            )
+        });
+        builder.bind("std", Thunk::evaluated(Val::Obj(b.build())));
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// .jsonnet ファイルのディレクトリを起点に import を許可するが、
+/// そのディレクトリの外（`../` や絶対パス）へのアクセスはブロックするリゾルバ。
+struct SandboxedImportResolver {
+    inner: FileImportResolver,
+    root: PathBuf,
+}
+
+impl SandboxedImportResolver {
+    fn new(jsonnet_path: &Path) -> std::io::Result<Self> {
+        let root = jsonnet_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .canonicalize()?;
+        Ok(Self {
+            inner: FileImportResolver::default(),
+            root,
+        })
+    }
+}
+
+// SandboxedImportResolver は GC 管理ヒープを持たない（PathBuf のみ）。
+impl jrsonnet_gcmodule::Trace for SandboxedImportResolver {
+    fn trace(&self, _tracer: &mut jrsonnet_gcmodule::Tracer) {}
+    fn is_type_tracked() -> bool {
+        false
+    }
+}
+// SAFETY: GC ヒープへの参照を持たないため循環しない。
+unsafe impl jrsonnet_gcmodule::Acyclic for SandboxedImportResolver {}
+
+impl ImportResolver for SandboxedImportResolver {
+    fn resolve_from(&self, from: &SourcePath, path: &dyn AsPathLike) -> JrsonnetResult<SourcePath> {
+        let resolved = self.inner.resolve_from(from, path)?;
+        if let Some(p) = resolved.path() {
+            if !p.starts_with(&self.root) {
+                return Err(jrsonnet_evaluator::Error::new(
+                    jrsonnet_evaluator::RuntimeError(
+                        format!(
+                            "import '{}' escapes the sandbox root '{}'",
+                            p.display(),
+                            self.root.display()
+                        )
+                        .into(),
+                    ),
+                ));
+            }
+        }
+        Ok(resolved)
+    }
+
+    fn load_file_contents(&self, resolved: &SourcePath) -> JrsonnetResult<Vec<u8>> {
+        self.inner.load_file_contents(resolved)
+    }
+}
 
 /// Render chart.js-compatible JSON specs to deterministic static SVG/PNG.
 #[derive(Parser)]
@@ -104,6 +220,7 @@ struct InspectArgs {
     height: Option<f64>,
     /// Treat stdin ('-') input as Jsonnet instead of raw JSON.
     /// For file input, use a .jsonnet extension (auto-detected, no flag needed).
+    /// Note: file imports (import/importstr) are disabled for stdin input.
     #[arg(long)]
     jsonnet: bool,
     /// Font file for text metrics. Defaults to the bundled font.
@@ -179,7 +296,8 @@ JSONNET INPUT:
   Imports are resolved relative to the .jsonnet file's directory:
     import \"palette.libsonnet\"       # file in the same directory
     import \"shared/colors.libsonnet\" # relative subdirectory path
-  Note: when reading from stdin, imports are resolved relative to the current working directory.
+  Note: file imports (import/importstr/importbin) are disabled for stdin input (--jsonnet).
+  To use imports, save the spec as a .jsonnet file and pass it as a file path instead.
 
 EXIT CODES:
   0  Rendered successfully
@@ -220,6 +338,7 @@ struct RenderArgs {
 
     /// Treat stdin ('-') input as Jsonnet instead of raw JSON.
     /// For file input, use a .jsonnet extension (auto-detected, no flag needed).
+    /// Note: file imports (import/importstr) are disabled for stdin input.
     #[arg(long)]
     jsonnet: bool,
 
@@ -251,20 +370,41 @@ fn main() {
     }
 }
 
-fn build_jrsonnet_state() -> State {
+fn build_jrsonnet_file_state(jsonnet_path: &Path) -> Result<State, String> {
+    let resolver = SandboxedImportResolver::new(jsonnet_path)
+        .map_err(|e| format!("failed to resolve sandbox root: {e}"))?;
     let mut b = State::builder();
-    b.import_resolver(FileImportResolver::default());
-    b.context_initializer(ContextInitializer::new(PathResolver::new_cwd_fallback()));
+    b.import_resolver(resolver);
+    b.context_initializer(FulgurContextInitializer::new(
+        PathResolver::new_cwd_fallback(),
+    ));
+    Ok(b.build())
+}
+
+fn build_jrsonnet_snippet_state() -> State {
+    let mut b = State::builder();
+    b.context_initializer(FulgurContextInitializer::new(
+        PathResolver::new_cwd_fallback(),
+    ));
     b.build()
 }
 
-/// Jsonnet ソース文字列を JSON に評価（stdin 用）。
-fn evaluate_jsonnet_snippet(src: &str) -> Result<String, String> {
-    let state = build_jrsonnet_state();
+/// Jsonnet ソース文字列を JSON に評価（サンドボックスモード）。
+///
+/// ファイル import resolver を登録しないため、import/importstr/importbin は評価時エラーになる。
+/// stdin 入力とバッチモード（自動処理）の両方で使用する。
+fn evaluate_jsonnet_sandboxed(source_name: &str, src: &str) -> Result<String, String> {
+    if src.len() > MAX_JSONNET_SOURCE_BYTES {
+        return Err(format!(
+            "Jsonnet source exceeds the {MAX_JSONNET_SOURCE_BYTES}-byte limit ({} bytes)",
+            src.len()
+        ));
+    }
+    let state = build_jrsonnet_snippet_state();
     let _guard = state.enter();
     let val = state
         .evaluate_snippet(
-            jrsonnet_evaluator::IStr::from("(stdin)"),
+            jrsonnet_evaluator::IStr::from(source_name),
             jrsonnet_evaluator::IStr::from(src),
         )
         .map_err(|e| format!("{e}"))?;
@@ -273,9 +413,21 @@ fn evaluate_jsonnet_snippet(src: &str) -> Result<String, String> {
         .map_err(|e| format!("{e}"))
 }
 
-/// .jsonnet ファイルを JSON に評価。import はファイルのディレクトリから解決。
-fn evaluate_jsonnet_file(path: &std::path::Path) -> Result<String, String> {
-    let state = build_jrsonnet_state();
+/// Jsonnet ソース文字列を JSON に評価（stdin 用）。
+fn evaluate_jsonnet_snippet(src: &str) -> Result<String, String> {
+    evaluate_jsonnet_sandboxed("(stdin)", src)
+}
+
+/// .jsonnet ファイルを JSON に評価。import は同ディレクトリ内に制限（sandbox）。
+fn evaluate_jsonnet_file(path: &Path) -> Result<String, String> {
+    let src = std::fs::read_to_string(path).map_err(|e| format!("{e}"))?;
+    if src.len() > MAX_JSONNET_SOURCE_BYTES {
+        return Err(format!(
+            "Jsonnet source exceeds the {MAX_JSONNET_SOURCE_BYTES}-byte limit ({} bytes)",
+            src.len()
+        ));
+    }
+    let state = build_jrsonnet_file_state(path)?;
     let _guard = state.enter();
     let val = state.import(path).map_err(|e| format!("{e}"))?;
     JsonFormat::default()
@@ -454,7 +606,7 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
         };
 
         let json = if is_jsonnet_path(spec_path) {
-            match evaluate_jsonnet_file(std::path::Path::new(spec_path)) {
+            match evaluate_jsonnet_sandboxed(spec_path, &json) {
                 Ok(j) => j,
                 Err(e) => {
                     eprintln!("{spec_path}: error: jsonnet evaluation failed: {e}");
