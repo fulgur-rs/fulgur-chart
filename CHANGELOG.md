@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+## [0.1.17](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.16...fulgur-chart-cli-v0.1.17) - 2026-06-28
+
+### Other
+
+- Merge pull request #87 from fulgur-rs/feat/sankey
+- Merge pull request #88 from fulgur-rs/feat/webp
+
+## [0.11.5](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.11.4...fulgur-chart-v0.11.5) - 2026-06-28
+
+### Added
+
+- add render_chart_to_webp() lossless via image crate
+
+### Fixed
+
+- revert is_finite() guard — let +Inf scale hit area error per contract
+- demultiply alpha before WebP encode, add axis limit check, fix scale Inf
+- use English error messages and remove redundant as_deref()
+
+### Other
+
+- Merge pull request #87 from fulgur-rs/feat/sankey
+- extract scene_to_pixmap() for PNG/WebP sharing
+- add image crate dependency for WebP encoding
+
 ## [0.1.16](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.15...fulgur-chart-cli-v0.1.16) - 2026-06-28
 
 ### Fixed
