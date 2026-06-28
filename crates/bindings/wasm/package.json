@@ -19,7 +19,7 @@
     "build": "wasm-pack build --target web --release",
     "test": "node --test",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "prepack": "npm run build"
+    "prepack": "npm run build && rm -f pkg/.gitignore"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
