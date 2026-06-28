@@ -80,6 +80,7 @@ impl SandboxedImportResolver {
     fn new(jsonnet_path: &Path) -> std::io::Result<Self> {
         let root = jsonnet_path
             .parent()
+            .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."))
             .canonicalize()?;
         Ok(Self {
@@ -102,25 +103,53 @@ unsafe impl jrsonnet_gcmodule::Acyclic for SandboxedImportResolver {}
 impl ImportResolver for SandboxedImportResolver {
     fn resolve_from(&self, from: &SourcePath, path: &dyn AsPathLike) -> JrsonnetResult<SourcePath> {
         let resolved = self.inner.resolve_from(from, path)?;
-        if let Some(p) = resolved.path() {
-            if !p.starts_with(&self.root) {
+        match resolved.path() {
+            // FIFO・SourceVirtual などファイルシステムパスがない import は拒否する。
+            None => {
                 return Err(jrsonnet_evaluator::Error::new(
                     jrsonnet_evaluator::RuntimeError(
-                        format!(
-                            "import '{}' escapes the sandbox root '{}'",
-                            p.display(),
-                            self.root.display()
-                        )
-                        .into(),
+                        "import of non-filesystem source is not allowed in sandbox mode".into(),
                     ),
                 ));
+            }
+            Some(p) => {
+                // シンボリックリンクを完全展開してからサンドボックス境界をチェックする。
+                let canonical = p.canonicalize().map_err(|e| {
+                    jrsonnet_evaluator::Error::new(jrsonnet_evaluator::RuntimeError(
+                        format!("failed to canonicalize import path '{}': {e}", p.display()).into(),
+                    ))
+                })?;
+                if !canonical.starts_with(&self.root) {
+                    return Err(jrsonnet_evaluator::Error::new(
+                        jrsonnet_evaluator::RuntimeError(
+                            format!(
+                                "import '{}' escapes the sandbox root '{}'",
+                                canonical.display(),
+                                self.root.display()
+                            )
+                            .into(),
+                        ),
+                    ));
+                }
             }
         }
         Ok(resolved)
     }
 
     fn load_file_contents(&self, resolved: &SourcePath) -> JrsonnetResult<Vec<u8>> {
-        self.inner.load_file_contents(resolved)
+        let bytes = self.inner.load_file_contents(resolved)?;
+        if bytes.len() > MAX_JSONNET_SOURCE_BYTES {
+            return Err(jrsonnet_evaluator::Error::new(
+                jrsonnet_evaluator::RuntimeError(
+                    format!(
+                        "imported file exceeds the {MAX_JSONNET_SOURCE_BYTES}-byte limit ({} bytes)",
+                        bytes.len()
+                    )
+                    .into(),
+                ),
+            ));
+        }
+        Ok(bytes)
     }
 }
 
@@ -596,17 +625,9 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
         }
         seen_stems.push(stem.clone());
 
-        // Read spec from file; exit 1 on failure.
-        let json = match std::fs::read_to_string(spec_path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("error: failed to read '{spec_path}': {e}");
-                std::process::exit(1);
-            }
-        };
-
+        // Evaluate or read the spec.
         let json = if is_jsonnet_path(spec_path) {
-            match evaluate_jsonnet_sandboxed(spec_path, &json) {
+            match evaluate_jsonnet_file(std::path::Path::new(spec_path)) {
                 Ok(j) => j,
                 Err(e) => {
                     eprintln!("{spec_path}: error: jsonnet evaluation failed: {e}");
@@ -614,7 +635,13 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
                 }
             }
         } else {
-            json
+            match std::fs::read_to_string(spec_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("error: failed to read '{spec_path}': {e}");
+                    std::process::exit(1);
+                }
+            }
         };
 
         // Render but don't write yet; abort with the relevant exit code on failure.
