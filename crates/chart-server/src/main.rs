@@ -1,7 +1,12 @@
 mod config;
+mod server;
 use clap::Parser;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cfg = config::Config::parse();
-    println!("listening on {}:{}", cfg.host, cfg.port);
+    let addr = format!("{}:{}", cfg.host, cfg.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    println!("chart-server listening on {addr}");
+    axum::serve(listener, server::build_router()).await.unwrap();
 }
