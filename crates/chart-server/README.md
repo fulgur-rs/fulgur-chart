@@ -1,5 +1,7 @@
 # fulgur chart-server
 
+> **⚠️ Experimental** — Not production-ready. APIs and behavior may change without notice.
+
 HTTP rendering server that accepts Chart.js v4 JSON specs and returns SVG, PNG, WebP, or data-URI.
 
 - **OpenAPI UI**: `/docs`
