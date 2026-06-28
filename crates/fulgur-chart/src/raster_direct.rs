@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
+use image::codecs::webp::WebPEncoder;
+use image::{ExtendedColorType, ImageEncoder};
 use tiny_skia::{self, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 use ttf_parser::OutlineBuilder;
 
@@ -54,6 +56,33 @@ pub fn render_chart_to_png_default(
     scale: f32,
 ) -> Result<Vec<u8>, String> {
     render_chart_to_png(spec, scale, DEFAULT_FONT)
+}
+
+/// ChartSpec を WebP バイト列に直接ラスタライズする（ロスレス）。
+///
+/// SVG 文字列を経由しない。決定論性（同一入力 → 同一出力）を保証する。
+pub fn render_chart_to_webp(
+    spec: &crate::ir::ChartSpec,
+    scale: f32,
+    font_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    let face =
+        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("フォント解析失敗: {e}"))?;
+    let measurer =
+        crate::text::TextMeasurer::new(font_bytes).map_err(|e| format!("計測初期化失敗: {e}"))?;
+    let scene = crate::layout::build_scene(spec, &measurer);
+    let pixmap = scene_to_pixmap(&scene, scale, &face)?;
+
+    let mut buf = Vec::new();
+    WebPEncoder::new_lossless(&mut buf)
+        .write_image(
+            pixmap.data(),
+            pixmap.width(),
+            pixmap.height(),
+            ExtendedColorType::Rgba8,
+        )
+        .map_err(|e| format!("WebP エンコード失敗: {e}"))?;
+    Ok(buf)
 }
 
 /// Scene を PNG バイト列に直接ラスタライズする。
@@ -723,6 +752,39 @@ mod tests {
             parse_path_data("M 0 0 Q 5 5 10 0").is_none(),
             "Q コマンドは非対応"
         );
+    }
+
+    #[test]
+    fn rasterizes_to_valid_webp() {
+        let webp = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
+        // WebP ファイルシグネチャ: "RIFF....WEBP"
+        assert_eq!(&webp[0..4], b"RIFF");
+        assert_eq!(&webp[8..12], b"WEBP");
+        assert!(webp.len() > 100);
+    }
+
+    #[test]
+    fn webp_scale_increases_size() {
+        let small = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
+        let large = render_chart_to_webp(&bar_spec(), 2.0, DEFAULT_FONT).unwrap();
+        assert!(large.len() > small.len());
+    }
+
+    #[test]
+    fn webp_is_byte_deterministic() {
+        let a = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
+        let b = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
+        assert_eq!(a, b, "WebP 出力は決定的でなければならない");
+    }
+
+    #[test]
+    fn webp_oversized_area_is_err() {
+        let mut spec = bar_spec();
+        spec.width = 8001.0;
+        spec.height = 8001.0;
+        let err = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("上限"));
     }
 
     #[test]
