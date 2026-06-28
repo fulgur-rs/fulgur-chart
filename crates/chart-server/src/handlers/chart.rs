@@ -196,12 +196,11 @@ pub(crate) fn apply_overrides_value(
             obj.insert("height".into(), h.into());
         }
         if let Some(bkg) = bkg {
+            // options が非オブジェクト値の場合は注入をスキップし、パーサーに拒否させる。
+            // 非オブジェクトを {} に coerce すると invalid な入力が有効なチャートとして通過してしまう。
             let options = obj
                 .entry("options")
                 .or_insert_with(|| Value::Object(Default::default()));
-            if !options.is_object() {
-                *options = Value::Object(Default::default());
-            }
             if let Some(opts_obj) = options.as_object_mut() {
                 let theme = opts_obj
                     .entry("theme")

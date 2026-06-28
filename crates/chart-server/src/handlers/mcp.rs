@@ -159,16 +159,22 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
     let format_str = args.get("format").and_then(|v| v.as_str()).unwrap_or("png");
     let format: OutputFormat = match format_str {
         "svg" => OutputFormat::Svg,
+        "png" => OutputFormat::Png,
         "webp" => OutputFormat::Webp,
         "data-uri" => OutputFormat::DataUri,
-        _ => OutputFormat::Png,
+        other => return Err((-32602, format!("Unsupported format: {other}"))),
     };
 
-    let width = args.get("width").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let width = args
+        .get("width")
+        .and_then(|v| v.as_u64())
+        .map(|v| u32::try_from(v).map_err(|_| (-32602, "width out of u32 range".to_string())))
+        .transpose()?;
     let height = args
         .get("height")
         .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
+        .map(|v| u32::try_from(v).map_err(|_| (-32602, "height out of u32 range".to_string())))
+        .transpose()?;
 
     let json_str = super::chart::apply_overrides_value(chart_spec, width, height, None).to_string();
 
