@@ -846,3 +846,107 @@ fn sankey_strict_rejects_unknown_key() {
     let json = r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}],"bogus":1}]}}"#;
     assert!(chartjs::parse(json, true).is_err());
 }
+
+#[test]
+fn sankey_options_override() {
+    use fulgur_chart::ir::{ChartKind, Color, SankeyColorMode, SankeyModeX, SankeySize};
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":3}],
+        "colorFrom":"#102030",
+        "colorTo":"#405060",
+        "colorMode":"from",
+        "alpha":0.25,
+        "borderColor":"#708090",
+        "borderWidth":2.5,
+        "color":"#a0b0c0",
+        "nodeWidth":14,
+        "nodePadding":8,
+        "modeX":"even",
+        "size":"min",
+        "labels":{"A":"Alpha"},
+        "priority":{"A":0},
+        "column":{"A":2}
+    }]}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let ChartKind::Sankey {
+        color_from,
+        color_to,
+        color_mode,
+        alpha,
+        node_width,
+        node_padding,
+        mode_x,
+        size,
+        border,
+        border_width,
+        label_color,
+        labels,
+        priority,
+        columns,
+    } = spec.kind
+    else {
+        panic!()
+    };
+    assert_eq!(
+        color_from,
+        Color {
+            r: 16,
+            g: 32,
+            b: 48,
+            a: 1.0
+        }
+    );
+    assert_eq!(
+        color_to,
+        Color {
+            r: 64,
+            g: 80,
+            b: 96,
+            a: 1.0
+        }
+    );
+    assert_eq!(color_mode, SankeyColorMode::From);
+    assert!((alpha - 0.25).abs() < 1e-9);
+    assert_eq!(node_width, 14.0);
+    assert_eq!(node_padding, 8.0);
+    assert_eq!(mode_x, SankeyModeX::Even);
+    assert_eq!(size, SankeySize::Min);
+    assert_eq!(
+        border,
+        Color {
+            r: 112,
+            g: 128,
+            b: 144,
+            a: 1.0
+        }
+    );
+    assert_eq!(border_width, 2.5);
+    assert_eq!(
+        label_color,
+        Color {
+            r: 160,
+            g: 176,
+            b: 192,
+            a: 1.0
+        }
+    );
+    assert_eq!(labels.get("A").map(String::as_str), Some("Alpha"));
+    assert_eq!(priority.get("A"), Some(&0.0));
+    assert_eq!(columns.get("A"), Some(&2usize));
+
+    // colorMode "to" → To も検証(From↔To のスワップ回帰を捕捉)。
+    let json_to = r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}],"colorMode":"to"}]}}"#;
+    let spec_to = chartjs::parse(json_to, false).unwrap();
+    let ChartKind::Sankey { color_mode, .. } = spec_to.kind else {
+        panic!()
+    };
+    assert_eq!(color_mode, SankeyColorMode::To);
+}
+
+#[test]
+fn sankey_rejects_negative_flow() {
+    // 数値として有効だが負の flow は guard で弾く(deserialize は通過する)。
+    let json =
+        r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":-5}]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+}

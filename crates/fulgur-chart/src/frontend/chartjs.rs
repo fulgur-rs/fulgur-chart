@@ -1047,6 +1047,19 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             check_object(plugins, &["title", "legend"], "options.plugins")?;
         }
+        if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
+            check_object(
+                theme,
+                &[
+                    "palette",
+                    "gridColor",
+                    "textColor",
+                    "backgroundColor",
+                    "fontSize",
+                ],
+                "options.theme",
+            )?;
+        }
     }
     Ok(())
 }
@@ -1755,7 +1768,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
 
     let raw: W = serde_json::from_str(json).map_err(|e| e.to_string())?;
     if raw.data.datasets.len() != 1 {
-        return Err("sankey チャートは dataset が 1 つのみサポートされます".to_string());
+        return Err("sankey チャートには dataset が 1 つ必要です".to_string());
     }
     let ds = raw.data.datasets.into_iter().next().unwrap();
 
