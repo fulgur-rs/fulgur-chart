@@ -1,0 +1,8 @@
+services:
+  chart-server:
+    image: ghcr.io/fulgur-rs/chart-server:latest
+    ports:
+      - "3000:3000"
+    environment:
+      FULGUR_HOST: "0.0.0.0"
+      FULGUR_PORT: "3000"

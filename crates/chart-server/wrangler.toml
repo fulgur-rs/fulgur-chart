@@ -1,0 +1,6 @@
+name = "chart-server"
+compatibility_date = "2024-01-01"
+
+[[containers]]
+image = "ghcr.io/fulgur-rs/chart-server:latest"
+max_instances = 10
