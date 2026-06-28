@@ -377,6 +377,7 @@ fn build_categorical(
                 point_radius: None,
                 box_points: vec![],
                 tree: vec![],
+                links: vec![],
             }
         })
         .collect()
@@ -426,6 +427,7 @@ fn build_scatter(
                 point_radius: None,
                 box_points: vec![],
                 tree: vec![],
+                links: vec![],
             }
         })
         .collect()
@@ -473,6 +475,7 @@ fn build_pie(
         point_radius: None,
         box_points: vec![],
         tree: vec![],
+        links: vec![],
     }]
 }
 

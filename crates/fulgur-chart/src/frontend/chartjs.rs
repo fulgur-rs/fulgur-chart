@@ -543,6 +543,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 point_radius: ds.point_radius,
                 box_points,
                 tree: vec![],
+                links: vec![],
             }
         })
         .collect();
@@ -1254,6 +1255,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         point_radius: None,
         box_points: vec![],
         tree: forest,
+        links: vec![],
     }];
 
     Ok(ChartSpec {
@@ -1587,6 +1589,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         })
         .collect();
 
@@ -1828,6 +1831,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         point_radius: None,
         box_points: vec![],
         tree: vec![],
+        links: vec![],
     }];
 
     Ok(ChartSpec {

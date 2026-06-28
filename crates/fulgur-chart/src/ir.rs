@@ -48,6 +48,14 @@ pub struct TreeNode {
     pub children: Vec<TreeNode>,
 }
 
+/// sankey のリンク(フロー)。ノード間のフロー量を表す。from/to はノードID(文字列)。
+#[derive(Clone, Debug, PartialEq)]
+pub struct SankeyLink {
+    pub from: String,
+    pub to: String,
+    pub flow: f64,
+}
+
 /// 系列ごとの描画種別。混合チャート(bar+line)で dataset 別 type を表す。
 /// 単一種別チャートでは全系列が同じ値になる(描画に影響しない既定は Bar)。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -78,6 +86,8 @@ pub struct Series {
     pub box_points: Vec<BoxPoint>,
     /// treemap の階層データ (トップレベルノードの forest)。treemap 種別のみ使用、他は空。
     pub tree: Vec<TreeNode>,
+    /// sankey のリンク(フロー)配列。sankey 種別のみ使用、他は空。
+    pub links: Vec<SankeyLink>,
 }
 
 impl Series {
@@ -316,6 +326,7 @@ mod tests {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         };
         assert_eq!(s.fill_at(0), c(1, 2, 3));
         assert_eq!(s.fill_at(2), c(1, 2, 3)); // ブロードキャスト
@@ -336,6 +347,7 @@ mod tests {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         };
         assert_eq!(s.fill_at(0), c(10, 0, 0));
         assert_eq!(s.fill_at(1), c(0, 20, 0));
@@ -357,6 +369,7 @@ mod tests {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         };
         assert_eq!(s.stroke_at(0), c(0, 0, 0));
     }
