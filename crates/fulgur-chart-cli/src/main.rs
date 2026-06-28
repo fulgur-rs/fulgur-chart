@@ -250,11 +250,12 @@ fn is_jsonnet_path(path: &str) -> bool {
 /// Top-level render subcommand: validates explicit --dsl, loads font, dispatches to single or batch mode.
 fn run_render(args: RenderArgs) {
     // Validate explicit DSL; only chartjs and vegalite are supported.
-    if let Some(dsl) = &args.dsl {
-        if dsl != "chartjs" && dsl != "vegalite" {
-            eprintln!("error: unsupported DSL '{dsl}' (supported: chartjs, vegalite)");
-            std::process::exit(1);
-        }
+    if let Some(dsl) = &args.dsl
+        && dsl != "chartjs"
+        && dsl != "vegalite"
+    {
+        eprintln!("error: unsupported DSL '{dsl}' (supported: chartjs, vegalite)");
+        std::process::exit(1);
     }
 
     // Load the font once if --font is given; reused across metric/SVG/PNG stages and all batch files.
