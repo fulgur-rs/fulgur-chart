@@ -2,7 +2,7 @@
 // Hand-written: the generated pkg/*.d.ts only types the low-level native primitive.
 
 export type Dsl = 'chartjs' | 'vegalite'
-export type Format = 'svg' | 'png'
+export type Format = 'svg' | 'png' | 'webp'
 
 /** Render options. All fields optional; omitted fields use the spec / core defaults. */
 export interface RenderOptions {
@@ -61,6 +61,7 @@ export interface Builder {
    */
   render(format: 'svg'): string
   render(format: 'png'): Uint8Array
+  render(format: 'webp'): Uint8Array
   render(format?: Format): string | Uint8Array
 }
 
@@ -75,6 +76,11 @@ export declare function render(specJson: string, format: 'svg', options?: Render
 export declare function render(
   specJson: string,
   format: 'png',
+  options?: RenderOptions,
+): Uint8Array
+export declare function render(
+  specJson: string,
+  format: 'webp',
   options?: RenderOptions,
 ): Uint8Array
 export declare function render(

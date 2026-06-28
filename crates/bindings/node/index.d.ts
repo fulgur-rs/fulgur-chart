@@ -4,7 +4,7 @@
 /// <reference types="node" />
 
 export type Dsl = 'chartjs' | 'vegalite'
-export type Format = 'svg' | 'png'
+export type Format = 'svg' | 'png' | 'webp'
 
 /** Render options. All fields optional; omitted fields use the spec / core defaults. */
 export interface RenderOptions {
@@ -51,6 +51,7 @@ export interface Builder {
    */
   render(format: 'svg'): string
   render(format: 'png'): Buffer
+  render(format: 'webp'): Buffer
   render(format?: Format): string | Buffer
 }
 
@@ -63,6 +64,7 @@ export declare function build(specJson: string): Builder
  */
 export declare function render(specJson: string, format: 'svg', options?: RenderOptions): string
 export declare function render(specJson: string, format: 'png', options?: RenderOptions): Buffer
+export declare function render(specJson: string, format: 'webp', options?: RenderOptions): Buffer
 export declare function render(
   specJson: string,
   format: Format,
