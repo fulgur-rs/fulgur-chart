@@ -6,6 +6,41 @@
 
 ## [Unreleased]
 
+## [0.1.15](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.14...fulgur-chart-cli-v0.1.15) - 2026-06-28
+
+### Added
+
+- *(cli)* support .jsonnet files in batch mode and add syntax-error tests
+- *(cli)* add Jsonnet support to inspect subcommand
+- *(cli)* auto-detect .jsonnet extension and evaluate via jrsonnet
+- *(cli)* reject --jsonnet with file path (use .jsonnet extension instead)
+- *(cli)* add --jsonnet flag and evaluate_jsonnet_snippet for stdin
+
+### Fixed
+
+- *(lint)* collapse nested if in CLI (clippy::collapsible_if)
+- *(cli)* address Codex Review feedback
+- *(cli)* guard --jsonnet in batch mode, fix tempdir isolation, add inspect flag test
+
+### Other
+
+- *(cli)* replace non-runnable Jsonnet stdin example
+- *(cli)* fix Jsonnet help inaccuracies
+- *(cli)* improve --help for Jsonnet input
+- Merge pull request #82 from fulgur-rs/feat/jsonnet-input
+- *(cli)* verify .jsonnet import resolution and .libsonnet direct input rejection
+- *(cli)* add jrsonnet-evaluator dependency
+
+## [0.11.4](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.11.3...fulgur-chart-v0.11.4) - 2026-06-28
+
+### Fixed
+
+- *(lint)* collapse nested if blocks (clippy::collapsible_if)
+
+### Other
+
+- Merge pull request #82 from fulgur-rs/feat/jsonnet-input
+
 ## [0.1.14](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.13...fulgur-chart-cli-v0.1.14) - 2026-06-27
 
 ### Other
