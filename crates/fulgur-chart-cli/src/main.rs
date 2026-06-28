@@ -161,7 +161,7 @@ JSONNET INPUT:
     fulgur-chart render spec.jsonnet -o chart.svg
 
   Stdin input — add --jsonnet to treat the pipe as Jsonnet:
-    printf 'local color=\"#36a2eb\"; {type:\"bar\",...,backgroundColor:color}' \\
+    printf 'local color=\"#36a2eb\"; {type:\"bar\",data:{labels:[\"A\",\"B\",\"C\"],datasets:[{label:\"x\",data:[1,2,3],backgroundColor:color}]}}' \\
       | fulgur-chart render - -o - --jsonnet
 
   The full Jsonnet standard library (std.*) is available:
