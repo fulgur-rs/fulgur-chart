@@ -46,6 +46,7 @@ pub enum ChartJsSpec {
     OutlabeledDoughnut(OutlabeledPieSpec),
     #[serde(rename = "wordCloud")]
     WordCloud(WordCloudSpec),
+    Sankey(SankeySpec),
 }
 
 // ────────────────────────────────────────────────
@@ -910,4 +911,157 @@ pub struct WordElementOptions {
 pub struct WordCloudPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
+}
+
+// ────────────────────────────────────────────────
+// Sankey chart (QuickChart / chartjs-chart-sankey)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SankeySpec {
+    pub data: SankeyData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<SankeyOptions>,
+}
+
+/// sankey の options。`MatrixOptions` を流用すると `CommonPlugins` 経由で
+/// `plugins.datalabels` を許してしまうが、strict パーサは title/legend のみ受理するため、
+/// schema と parser の乖離(schema 受理→strict 拒否)を避けて sankey 専用に定義する。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SankeyOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<SankeyPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+/// sankey が受理する plugins(title のみ)。legend は描画されないため契約から外す。
+/// datalabels も持たない(strict パーサと一致)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SankeyPlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<TitlePlugin>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SankeyData {
+    /// sankey は dataset がちょうど 1 個(parser の契約と一致)。
+    #[schemars(length(min = 1, max = 1))]
+    pub datasets: Vec<SankeyDataset>,
+    /// chart.js 互換のため受理するが sankey では未使用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SankeyDataset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub data: Vec<SankeyFlow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_from: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_to: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_mode: Option<SankeyColorModeOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<ColorString>,
+    // 寸法は [0, 32768](= DEFAULT_MAX_DIMENSION_PX)。parser の上限と一致させる。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 32768.0))]
+    pub border_width: Option<f64>,
+    /// ノードラベル色
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 32768.0))]
+    pub node_width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 32768.0))]
+    pub node_padding: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_x: Option<SankeyModeXOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<SankeySizeOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<std::collections::HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<std::collections::HashMap<String, f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<std::collections::HashMap<String, u32>>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SankeyFlow {
+    pub from: String,
+    pub to: String,
+    /// フロー量は非負(parser が flow < 0 を拒否するのに合わせる)。
+    #[schemars(range(min = 0.0))]
+    pub flow: f64,
+}
+
+/// sankey の colorMode。enum 化することで schema が値を列挙制約し、タイポ(例 "form")を
+/// schema・parser とも拒否できる(silent default を防ぐ)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SankeyColorModeOption {
+    From,
+    To,
+    Gradient,
+}
+
+/// sankey の modeX(列配置モード)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SankeyModeXOption {
+    Edge,
+    Even,
+}
+
+/// sankey の size(ノード高さの算出方式)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SankeySizeOption {
+    Min,
+    Max,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChartJsSpec;
+
+    /// sankey の dataset 契約(ちょうど 1 個)が生成 JSON Schema に minItems/maxItems=1
+    /// として現れること。parser の `datasets.len() != 1` チェックと一致させ、schema 駆動の
+    /// クライアントが 0/複数 dataset を事前に弾けるようにする。
+    #[test]
+    fn sankey_datasets_constrained_to_one_in_schema() {
+        let schema = schemars::schema_for!(ChartJsSpec);
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(
+            json.contains("\"minItems\":1"),
+            "sankey datasets に minItems:1 が必要"
+        );
+        assert!(
+            json.contains("\"maxItems\":1"),
+            "sankey datasets に maxItems:1 が必要"
+        );
+        // flow / nodeWidth 等の非負制約(parser と一致)が minimum として出ること。
+        assert!(
+            json.contains("\"minimum\":0"),
+            "sankey の寸法/flow に minimum:0 が必要"
+        );
+        // 寸法上限(parser の MAX_DIMENSION_PX と一致)が maximum として出ること。
+        assert!(
+            json.contains("\"maximum\":32768"),
+            "sankey の寸法に maximum:32768 が必要"
+        );
+    }
 }

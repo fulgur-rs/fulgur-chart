@@ -5,6 +5,17 @@ use crate::ir::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+/// Deserialize a field that may be explicitly `null`, treating `null` (and a missing
+/// field via `#[serde(default)]`) as `T::default()`. Keeps parser tolerance aligned with
+/// schemas that render optional fields as nullable.
+fn null_or_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 #[derive(Deserialize)]
 struct RawSpec {
     #[serde(rename = "type")]
@@ -18,7 +29,8 @@ struct RawSpec {
 struct RawOptions {
     #[serde(rename = "indexAxis")]
     index_axis: Option<String>,
-    #[serde(default)]
+    // Accept an explicit `options.plugins: null` as the default (schemas render it nullable).
+    #[serde(default, deserialize_with = "null_or_default")]
     plugins: RawPlugins,
     #[serde(default)]
     theme: Option<RawTheme>,
@@ -258,6 +270,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 check_unknown_keys_wordcloud(json)?;
             }
             return parse_wordcloud(json);
+        }
+        if chart_type.as_deref() == Some("sankey") {
+            if strict {
+                check_unknown_keys_sankey(json)?;
+            }
+            return parse_sankey(json);
         }
         if matches!(chart_type.as_deref(), Some("gauge") | Some("radialGauge")) {
             let radial = chart_type.as_deref() == Some("radialGauge");
@@ -543,6 +561,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 point_radius: ds.point_radius,
                 box_points,
                 tree: vec![],
+                links: vec![],
             }
         })
         .collect();
@@ -984,6 +1003,80 @@ fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
+    let value: serde_json::Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Ok(()),
+    };
+    let Some(top) = value.as_object() else {
+        return Ok(());
+    };
+    check_object(top, &["type", "data", "options"], "")?;
+    if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
+        check_object(data, &["datasets", "labels"], "data")?;
+        if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
+            for (i, ds) in datasets.iter().enumerate() {
+                if let Some(ds) = ds.as_object() {
+                    check_object(
+                        ds,
+                        &[
+                            "label",
+                            "data",
+                            "colorFrom",
+                            "colorTo",
+                            "colorMode",
+                            "alpha",
+                            "borderColor",
+                            "borderWidth",
+                            "color",
+                            "nodeWidth",
+                            "nodePadding",
+                            "modeX",
+                            "size",
+                            "labels",
+                            "priority",
+                            "column",
+                        ],
+                        &format!("data.datasets[{i}]"),
+                    )?;
+                    if let Some(points) = ds.get("data").and_then(|v| v.as_array()) {
+                        for (j, pt) in points.iter().enumerate() {
+                            if let Some(pt) = pt.as_object() {
+                                check_object(
+                                    pt,
+                                    &["from", "to", "flow"],
+                                    &format!("data.datasets[{i}].data[{j}]"),
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
+        check_object(options, &["plugins", "theme"], "options")?;
+        if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
+            // sankey は legend を描画しないため title のみ受理する(schema と一致)。
+            check_object(plugins, &["title"], "options.plugins")?;
+        }
+        if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
+            check_object(
+                theme,
+                &[
+                    "palette",
+                    "gridColor",
+                    "textColor",
+                    "backgroundColor",
+                    "fontSize",
+                ],
+                "options.theme",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// gauge と radialGauge の許可キーの**和集合**（緩い上位集合）に対して検証する。
 /// 型ごとの厳密な契約は JSON Schema（`schema/chartjs.rs`）が担い、そちらは型別に
 /// 厳密。ランタイムの strict 検証は真に未知のキー（タイポ）だけを安全側で弾く目的で
@@ -1254,6 +1347,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         point_radius: None,
         box_points: vec![],
         tree: forest,
+        links: vec![],
     }];
 
     Ok(ChartSpec {
@@ -1587,6 +1681,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         })
         .collect();
 
@@ -1615,6 +1710,214 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             grid: false,
         },
         legend: legend_pos(&raw.options.plugins.legend),
+        title: raw
+            .options
+            .plugins
+            .title
+            .filter(|t| t.display)
+            .map(|t| t.text),
+        width: 800.0,
+        height: 450.0,
+        data_labels: false,
+        theme,
+    })
+}
+
+fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
+    use crate::ir::{ChartKind, SankeyColorMode, SankeyLink, SankeyModeX, SankeySize};
+    use std::collections::HashMap;
+
+    #[derive(Deserialize)]
+    struct W {
+        data: D,
+        // Accept an explicit `options: null` as the default (schema renders options nullable).
+        #[serde(default, deserialize_with = "null_or_default")]
+        options: RawOptions,
+    }
+    #[derive(Deserialize)]
+    struct D {
+        datasets: Vec<DS>,
+    }
+    #[derive(Deserialize)]
+    struct DS {
+        #[serde(default)]
+        label: String,
+        data: Vec<Flow>,
+        #[serde(rename = "colorFrom", default)]
+        color_from: Option<String>,
+        #[serde(rename = "colorTo", default)]
+        color_to: Option<String>,
+        #[serde(rename = "colorMode", default)]
+        color_mode: Option<String>,
+        #[serde(default)]
+        alpha: Option<f64>,
+        #[serde(rename = "borderColor", default)]
+        border_color: Option<String>,
+        #[serde(rename = "borderWidth", default)]
+        border_width: Option<f64>,
+        #[serde(default)]
+        color: Option<String>,
+        #[serde(rename = "nodeWidth", default)]
+        node_width: Option<f64>,
+        #[serde(rename = "nodePadding", default)]
+        node_padding: Option<f64>,
+        #[serde(rename = "modeX", default)]
+        mode_x: Option<String>,
+        #[serde(default)]
+        size: Option<String>,
+        #[serde(default)]
+        labels: Option<HashMap<String, String>>,
+        #[serde(default)]
+        priority: Option<HashMap<String, f64>>,
+        #[serde(default)]
+        column: Option<HashMap<String, u32>>,
+    }
+    #[derive(Deserialize)]
+    struct Flow {
+        from: String,
+        to: String,
+        flow: f64,
+    }
+
+    let raw: W = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if raw.data.datasets.len() != 1 {
+        return Err("sankey requires exactly one dataset".to_string());
+    }
+    let ds = raw.data.datasets.into_iter().next().unwrap();
+
+    // リンク構築 + flow 有限性チェック。入力順を保持する。
+    let mut links = Vec::with_capacity(ds.data.len());
+    for f in ds.data {
+        if !f.flow.is_finite() || f.flow < 0.0 {
+            return Err("sankey flow must be a non-negative finite number".to_string());
+        }
+        links.push(SankeyLink {
+            from: f.from,
+            to: f.to,
+            flow: f.flow,
+        });
+    }
+
+    let theme = build_theme(raw.options.theme);
+    let red = Color {
+        r: 255,
+        g: 0,
+        b: 0,
+        a: 1.0,
+    };
+    let green = Color {
+        r: 0,
+        g: 128,
+        b: 0,
+        a: 1.0,
+    };
+    let black = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 1.0,
+    };
+
+    let color_from = ds
+        .color_from
+        .as_deref()
+        .and_then(parse_color)
+        .unwrap_or(red);
+    let color_to = ds
+        .color_to
+        .as_deref()
+        .and_then(parse_color)
+        .unwrap_or(green);
+    // 未知値(タイポ)は silent default にせず明示エラーにする(schema の enum 制約と一致)。
+    let color_mode = match ds.color_mode.as_deref() {
+        None | Some("gradient") => SankeyColorMode::Gradient,
+        Some("from") => SankeyColorMode::From,
+        Some("to") => SankeyColorMode::To,
+        Some(other) => return Err(format!("unsupported sankey colorMode: {other}")),
+    };
+    let alpha = ds.alpha.map(|a| a as f32).unwrap_or(0.5).clamp(0.0, 1.0);
+    let border = ds
+        .border_color
+        .as_deref()
+        .and_then(parse_color)
+        .unwrap_or(black);
+    let border_width = ds.border_width.unwrap_or(1.0);
+    let label_color = ds.color.as_deref().and_then(parse_color).unwrap_or(black);
+    let node_width = ds.node_width.unwrap_or(10.0);
+    let node_padding = ds.node_padding.unwrap_or(10.0);
+    // 寸法は [0, MAX_DIMENSION_PX] に収める。負値は <rect width="-5"> 等の不正 SVG を生み、
+    // 巨大な有限値(例 nodePadding=1e308)は layout の (max_y/height)*node_padding で ∞ に
+    // overflow し py(inf)=0 で図形を潰す。canvas 最大寸法を超える寸法は無意味なので拒否する。
+    let max_dim = crate::guard::DEFAULT_MAX_DIMENSION_PX;
+    for (name, v) in [
+        ("nodeWidth", node_width),
+        ("nodePadding", node_padding),
+        ("borderWidth", border_width),
+    ] {
+        if !v.is_finite() || v < 0.0 || v > max_dim {
+            return Err(format!(
+                "sankey {name} must be within [0, {max_dim}] (got {v})"
+            ));
+        }
+    }
+    let mode_x = match ds.mode_x.as_deref() {
+        None | Some("edge") => SankeyModeX::Edge,
+        Some("even") => SankeyModeX::Even,
+        Some(other) => return Err(format!("unsupported sankey modeX: {other}")),
+    };
+    let size = match ds.size.as_deref() {
+        None | Some("max") => SankeySize::Max,
+        Some("min") => SankeySize::Min,
+        Some(other) => return Err(format!("unsupported sankey size: {other}")),
+    };
+    let labels = ds.labels.unwrap_or_default();
+    let priority = ds.priority.unwrap_or_default();
+    let columns: HashMap<String, usize> = ds
+        .column
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (k, v as usize))
+        .collect();
+
+    let series = vec![Series {
+        // 他のパーサと同様、dataset の label を Series.name に保持する(inspect/bindings で観測可能)。
+        name: ds.label,
+        values: vec![],
+        points: vec![],
+        fill: vec![],
+        stroke: vec![],
+        stroke_width: 0.0,
+        area: false,
+        tension: 0.0,
+        series_type: SeriesType::Bar,
+        point_radius: None,
+        box_points: vec![],
+        tree: vec![],
+        links,
+    }];
+
+    Ok(ChartSpec {
+        kind: ChartKind::Sankey {
+            color_from,
+            color_to,
+            color_mode,
+            alpha,
+            node_width,
+            node_padding,
+            mode_x,
+            size,
+            border,
+            border_width,
+            label_color,
+            labels,
+            priority,
+            columns,
+        },
+        series,
+        categories: vec![],
+        x_axis: zero_axis(),
+        y_axis: zero_axis(),
+        legend: crate::ir::LegendPos::None,
         title: raw
             .options
             .plugins
@@ -1828,6 +2131,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         point_radius: None,
         box_points: vec![],
         tree: vec![],
+        links: vec![],
     }];
 
     Ok(ChartSpec {

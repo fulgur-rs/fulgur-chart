@@ -14,11 +14,58 @@ pub fn render_svg(scene: &Scene, font_family: &str) -> String {
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">"#
     )
     .unwrap();
+
+    // defs: GradientPath を出現順に grad{n} で採番(userSpaceOnUse・水平)。
+    let mut grad_defs = String::new();
+    let mut gi = 0usize;
     for item in &scene.items {
-        write_prim(&mut s, item, font_family);
+        if let Prim::GradientPath {
+            x0,
+            x1,
+            stop0,
+            stop1,
+            ..
+        } = item
+        {
+            write_linear_gradient(&mut grad_defs, gi, *x0, *x1, stop0, stop1);
+            gi += 1;
+        }
+    }
+    if gi > 0 {
+        s.push_str("<defs>");
+        s.push_str(&grad_defs);
+        s.push_str("</defs>");
+    }
+
+    // 各プリミティブの出力は write_prim が担う。GradientPath は出現順に grad{n} を
+    // 参照する必要があるため、defs パスと同じ順序で採番するカウンタを渡す。
+    let mut grad_idx = 0usize;
+    for item in &scene.items {
+        write_prim(&mut s, item, font_family, &mut grad_idx);
     }
     s.push_str("</svg>\n");
     s
+}
+
+fn write_linear_gradient(
+    s: &mut String,
+    idx: usize,
+    x0: f64,
+    x1: f64,
+    stop0: &Color,
+    stop1: &Color,
+) {
+    let x0f = fmt_num(x0);
+    let x1f = fmt_num(x1);
+    let c0 = color_hex(stop0);
+    let c1 = color_hex(stop1);
+    let o0 = opacity_attr("stop-opacity", stop0.a);
+    let o1 = opacity_attr("stop-opacity", stop1.a);
+    write!(
+        s,
+        r#"<linearGradient id="grad{idx}" gradientUnits="userSpaceOnUse" x1="{x0f}" y1="0" x2="{x1f}" y2="0"><stop offset="0" stop-color="{c0}"{o0}/><stop offset="1" stop-color="{c1}"{o1}/></linearGradient>"#
+    )
+    .unwrap();
 }
 
 /// 色を小文字 `#rrggbb` に整形する。
@@ -36,7 +83,7 @@ fn opacity_attr(name: &str, a: f32) -> String {
     }
 }
 
-fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
+fn write_prim(s: &mut String, prim: &Prim, font_family: &str, grad_idx: &mut usize) {
     match prim {
         Prim::Rect { x, y, w, h, fill } => {
             let x = fmt_num(*x);
@@ -125,6 +172,16 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
                 r#"<path d="{d}" fill="{fill_attr}" stroke="{stroke_attr}"{tail}/>"#
             )
             .unwrap();
+        }
+        // GradientPath: render_svg の defs パスが出力した grad{n} を url() で参照する。
+        // 採番は defs パスと同じ「出現順」で、grad_idx を GradientPath ごとに進める。
+        Prim::GradientPath { d, .. } => {
+            write!(
+                s,
+                r#"<path d="{d}" fill="url(#grad{grad_idx})" stroke="none"/>"#
+            )
+            .unwrap();
+            *grad_idx += 1;
         }
         Prim::Circle {
             cx,
@@ -649,6 +706,74 @@ mod tests {
             !svg.contains(r#"font-family="Evil" onload="#),
             "属性が早期終端していない: {svg}"
         );
+    }
+
+    #[test]
+    fn gradient_path_emits_defs_and_url_ref() {
+        let scene = Scene {
+            width: 100.0,
+            height: 100.0,
+            items: vec![Prim::GradientPath {
+                d: "M0 0L10 0L10 10Z".to_string(),
+                x0: 0.0,
+                x1: 10.0,
+                stop0: Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 0.5,
+                },
+                stop1: Color {
+                    r: 0,
+                    g: 128,
+                    b: 0,
+                    a: 0.5,
+                },
+            }],
+        };
+        let svg = render_svg(&scene, "sans-serif");
+        assert!(svg.contains("<defs>"), "must emit defs");
+        assert!(
+            svg.contains("<linearGradient id=\"grad0\""),
+            "deterministic id"
+        );
+        assert!(svg.contains("gradientUnits=\"userSpaceOnUse\""));
+        assert!(svg.contains("stop-color=\"#ff0000\""));
+        assert!(svg.contains("stop-color=\"#008000\""));
+        assert!(
+            svg.contains(r##"stop-opacity="0.5""##),
+            "alpha<1 stop must emit stop-opacity"
+        );
+        assert!(
+            svg.contains(r##"fill="url(#grad0)""##),
+            "path must ref gradient"
+        );
+    }
+
+    #[test]
+    fn gradient_path_is_byte_deterministic() {
+        let scene = Scene {
+            width: 50.0,
+            height: 50.0,
+            items: vec![Prim::GradientPath {
+                d: "M0 0L5 0L5 5Z".into(),
+                x0: 0.0,
+                x1: 5.0,
+                stop0: Color {
+                    r: 1,
+                    g: 2,
+                    b: 3,
+                    a: 1.0,
+                },
+                stop1: Color {
+                    r: 4,
+                    g: 5,
+                    b: 6,
+                    a: 1.0,
+                },
+            }],
+        };
+        assert_eq!(render_svg(&scene, "s"), render_svg(&scene, "s"));
     }
 
     #[test]

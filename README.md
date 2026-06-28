@@ -141,7 +141,7 @@ fulgur-chart inspect chart.json
 
 Supports a data-only, static subset:
 
-- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `treemap` / `boxplot` / `progress` / `gauge` / `radialGauge` / `wordCloud` (QuickChart's `progressBar` is also accepted as an alias for `progress`)
+- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `treemap` / `boxplot` / `progress` / `gauge` / `radialGauge` / `wordCloud` / `sankey` (QuickChart's `progressBar` is also accepted as an alias for `progress`)
 - `data.labels`
 - `data.datasets[]` — `label` / `data` (numeric array; `{x,y}` / `{x,y,r}` for scatter/bubble; `{x,y,v}` for matrix; nested `[min,q1,median,q3,max]` arrays for boxplot) / `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts)
 - For `progress` (alias `progressBar`), `datasets[0].data` holds each bar's value; an optional second dataset's `data` overrides the per-bar max (default 100). The percentage label is shown by default and can be hidden with `options.plugins.datalabels.display: false`.
@@ -149,6 +149,7 @@ Supports a data-only, static subset:
 - For `radialGauge`, `datasets[0].data` holds a single value drawn as a fill-to-value arc on a track ring. Configure with `options.domain` / `options.trackColor` / `options.centerPercentage` / `options.roundedCorners` / `options.centerArea` (`displayText` / `fontSize`). The center value text falls back to the rounded value (JS `centerArea.text` is not executed).
 - For `treemap`, `datasets[0].tree` holds the hierarchical data: either a flat numeric array, or an array of objects with `key` (the numeric property to sum — **required** for object trees) and `groups` (grouping property names, outermost first) defining the nesting levels. Cells are colored from the palette by depth; dataset-level `backgroundColor` / `borderColor` / `borderWidth` and `options.plugins.legend` are not used. `options.plugins.title` and `options.theme` apply.
 - For `wordCloud`, `data.labels` holds the words and `datasets[0].data` holds the corresponding font sizes (numeric). `datasets[0].color` (string or string array) sets per-word fill colors. Configure rotation with `options.elements.word` (`minRotation` / `maxRotation` / `rotationSteps` / `padding`). Up to 500 words are rendered.
+- For `sankey`, `datasets[0].data` holds the flow links as `{from, to, flow}` objects (node names are derived from `from` / `to`). Ribbon color is set by `colorMode`: `gradient` (default) blends `colorFrom` → `colorTo` along each link, while `from` / `to` paint a single solid color. Node columns are laid out left-to-right; tune with `nodeWidth` / `nodePadding`, `modeX` (column placement) and `size` (node height basis). Override per-node values with `labels` (display text), `priority` (vertical ordering) and `column` (forced column index). `options.plugins.title` and `options.theme` apply.
 - `options.indexAxis`
 - `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right; `legend` does not apply to `gauge` / `radialGauge`)
 - `options.plugins.datalabels` (`display` — renders a value label at each data point)

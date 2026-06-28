@@ -43,6 +43,18 @@ pub enum Prim {
         stroke: Option<Color>,
         stroke_width: f64,
     },
+    /// 水平リニアグラデーションで塗る任意パス。sankey のリボンに使う。
+    /// グラデーションは userSpace の x0→x1 で stop0→stop1 に補間する(y 方向は一定)。
+    /// d は `Prim::Path` と同じく fmt_num 整形済みトークンのみを含むこと。
+    GradientPath {
+        d: String,
+        /// グラデーション開始 x(stop0 の位置、ユーザ座標)。
+        x0: f64,
+        /// グラデーション終了 x(stop1 の位置、ユーザ座標)。
+        x1: f64,
+        stop0: Color,
+        stop1: Color,
+    },
     Circle {
         cx: f64,
         cy: f64,

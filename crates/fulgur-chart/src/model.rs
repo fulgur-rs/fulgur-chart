@@ -262,6 +262,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::OutlabeledPie { .. } => "outlabeledPie",
         ChartKind::Treemap => "treemap",
         ChartKind::WordCloud { .. } => "wordCloud",
+        ChartKind::Sankey { .. } => "sankey",
     }
 }
 

@@ -253,6 +253,41 @@ fn render_prim(
             }
         }
 
+        Prim::GradientPath {
+            d,
+            x0,
+            x1,
+            stop0,
+            stop1,
+        } => {
+            let Some(path) = parse_path_data(d) else {
+                return;
+            };
+            use tiny_skia::{GradientStop, LinearGradient, Point, Shader, SpreadMode};
+            // x0/x1 はユーザ座標で、シェーダ変換は identity。tiny-skia は fill_path の
+            // transform をシェーダ評価にも適用するため、これだけで --scale 時もグラデーションは
+            // リボン全幅に正しく伸びる(ここで scale を二重に渡すと広がりすぎる)。
+            // 回帰: tests/render_gradient.rs::gradient_png_scales_with_geometry_at_2x。
+            let shader = LinearGradient::new(
+                Point::from_xy(*x0 as f32, 0.0),
+                Point::from_xy(*x1 as f32, 0.0),
+                vec![
+                    GradientStop::new(0.0, to_skia_color(stop0)),
+                    GradientStop::new(1.0, to_skia_color(stop1)),
+                ],
+                SpreadMode::Pad,
+                Transform::identity(),
+            );
+            // LinearGradient::new は縮退時(x0==x1)に None を返す。SVG 1.1 では
+            // x1==x2 のグラデーションは最後の stop の色で塗るため、SVG 出力と
+            // 揃えて stop1 で solid フォールバックする。
+            let paint = Paint {
+                shader: shader.unwrap_or_else(|| Shader::SolidColor(to_skia_color(stop1))),
+                ..Default::default()
+            };
+            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+        }
+
         Prim::Circle {
             cx,
             cy,
@@ -634,12 +669,15 @@ fn vec_angle(ux: f64, uy: f64, vx: f64, vy: f64) -> f64 {
 // ペイント・ストロークヘルパ
 // ---------------------------------------------------------------------------
 
+/// ir::Color を tiny-skia の色へ変換する（アルファは 0–255 に丸め）。
+fn to_skia_color(color: &Color) -> tiny_skia::Color {
+    let alpha = (color.a * 255.0).round() as u8;
+    tiny_skia::Color::from_rgba8(color.r, color.g, color.b, alpha)
+}
+
 fn solid_paint(color: Color) -> Paint<'static> {
     let mut paint = Paint::default();
-    let alpha = (color.a * 255.0).round() as u8;
-    paint.set_color(tiny_skia::Color::from_rgba8(
-        color.r, color.g, color.b, alpha,
-    ));
+    paint.set_color(to_skia_color(&color));
     paint
 }
 

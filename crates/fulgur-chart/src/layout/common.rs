@@ -558,6 +558,7 @@ mod tests {
                 point_radius: None,
                 box_points: vec![],
                 tree: vec![],
+                links: vec![],
             }],
             x_axis: AxisSpec {
                 title: None,

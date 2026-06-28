@@ -12,6 +12,7 @@ pub mod pie;
 pub mod polar_area;
 pub mod progress;
 pub mod radar;
+pub mod sankey;
 pub mod scatter;
 pub mod sparkline;
 pub mod treemap;
@@ -39,6 +40,7 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::OutlabeledPie { .. } => outlabeled_pie::build(spec, m),
         ChartKind::Treemap => treemap::build(spec, m),
         ChartKind::WordCloud { .. } => wordcloud::build(spec, m),
+        ChartKind::Sankey { .. } => sankey::build(spec, m),
     };
 
     // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。

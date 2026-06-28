@@ -48,6 +48,14 @@ pub struct TreeNode {
     pub children: Vec<TreeNode>,
 }
 
+/// sankey のリンク(フロー)。ノード間のフロー量を表す。from/to はノードID(文字列)。
+#[derive(Clone, Debug, PartialEq)]
+pub struct SankeyLink {
+    pub from: String,
+    pub to: String,
+    pub flow: f64,
+}
+
 /// 系列ごとの描画種別。混合チャート(bar+line)で dataset 別 type を表す。
 /// 単一種別チャートでは全系列が同じ値になる(描画に影響しない既定は Bar)。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -78,6 +86,8 @@ pub struct Series {
     pub box_points: Vec<BoxPoint>,
     /// treemap の階層データ (トップレベルノードの forest)。treemap 種別のみ使用、他は空。
     pub tree: Vec<TreeNode>,
+    /// sankey のリンク(フロー)配列。sankey 種別のみ使用、他は空。
+    pub links: Vec<SankeyLink>,
 }
 
 impl Series {
@@ -159,6 +169,28 @@ impl Default for OutlabelConfig {
     }
 }
 
+/// sankey リンクの配色モード。chartjs-chart-sankey の colorMode に対応。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SankeyColorMode {
+    From,
+    To,
+    Gradient,
+}
+
+/// sankey の x 方向レイアウトモード。chartjs の modeX に対応。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SankeyModeX {
+    Edge,
+    Even,
+}
+
+/// sankey のノードサイズ算出方式。chartjs の size に対応(max=既定)。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SankeySize {
+    Min,
+    Max,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChartKind {
     Bar {
@@ -232,6 +264,28 @@ pub enum ChartKind {
         rotation_steps: u32,
         /// 各単語の周囲パディング (px)。デフォルト: 2.0
         padding: f64,
+    },
+    /// QuickChart / chartjs-chart-sankey 互換の sankey。ノード間フロー量を帯幅で表す。
+    /// データは series[0].links に持つ。設定値は kind に保持(Gauge 同様)。
+    Sankey {
+        color_from: Color,
+        color_to: Color,
+        color_mode: SankeyColorMode,
+        /// リンク塗りの不透明度(0.0–1.0)。chartjs default 0.5。
+        alpha: f32,
+        node_width: f64,
+        node_padding: f64,
+        mode_x: SankeyModeX,
+        size: SankeySize,
+        border: Color,
+        border_width: f64,
+        label_color: Color,
+        /// ノードID→表示ラベル上書き。未登録は ID をそのまま表示。
+        labels: std::collections::HashMap<String, String>,
+        /// ノードID→priority(列内ソートキー)。空なら priority レイアウト無効。
+        priority: std::collections::HashMap<String, f64>,
+        /// ノードID→列番号(手動 x 指定)。
+        columns: std::collections::HashMap<String, usize>,
     },
 }
 
@@ -316,6 +370,7 @@ mod tests {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         };
         assert_eq!(s.fill_at(0), c(1, 2, 3));
         assert_eq!(s.fill_at(2), c(1, 2, 3)); // ブロードキャスト
@@ -336,6 +391,7 @@ mod tests {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         };
         assert_eq!(s.fill_at(0), c(10, 0, 0));
         assert_eq!(s.fill_at(1), c(0, 20, 0));
@@ -357,6 +413,7 @@ mod tests {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         };
         assert_eq!(s.stroke_at(0), c(0, 0, 0));
     }

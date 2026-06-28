@@ -734,3 +734,316 @@ fn strict_rejects_wordcloud_unknown_options_key() {
     let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"typo":1}}"#;
     assert!(chartjs::parse(json, true).is_err());
 }
+
+#[test]
+fn sankey_schema_roundtrip() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    let json = r##"{
+        "type": "sankey",
+        "data": { "datasets": [{
+            "label": "Energy",
+            "data": [
+                {"from": "A", "to": "B", "flow": 10},
+                {"from": "A", "to": "C", "flow": 5},
+                {"from": "B", "to": "C", "flow": 10}
+            ],
+            "colorFrom": "#36a2eb",
+            "colorTo": "#ff6384",
+            "colorMode": "gradient",
+            "labels": {"A": "Alpha"},
+            "priority": {"A": 0},
+            "column": {"A": 0}
+        }],
+        "labels": []
+        },
+        "options": { "plugins": { "title": {"display": true, "text": "T"} } }
+    }"##;
+    let spec: ChartJsSpec = serde_json::from_str(json).unwrap();
+    assert!(matches!(spec, ChartJsSpec::Sankey(_)));
+    // 同じ文書を strict パーサも受理すること(parser↔schema パリティ)。
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict parser should accept sankey"
+    );
+}
+
+#[test]
+fn sankey_basic_parse() {
+    let json = r#"{"type":"sankey","data":{"datasets":[{"data":[
+        {"from":"A","to":"B","flow":10},
+        {"from":"A","to":"C","flow":5},
+        {"from":"B","to":"C","flow":10},
+        {"from":"C","to":"D","flow":15}
+    ]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(
+        spec.kind,
+        fulgur_chart::ir::ChartKind::Sankey { .. }
+    ));
+    assert_eq!(spec.series.len(), 1);
+    assert_eq!(spec.series[0].links.len(), 4);
+    assert_eq!(spec.series[0].links[0].from, "A");
+    assert_eq!(spec.series[0].links[0].flow, 10.0);
+}
+
+#[test]
+fn sankey_defaults_match_chartjs() {
+    use fulgur_chart::ir::{ChartKind, Color, SankeyColorMode, SankeyModeX, SankeySize};
+    let json =
+        r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    let ChartKind::Sankey {
+        color_from,
+        color_to,
+        color_mode,
+        alpha,
+        node_width,
+        node_padding,
+        mode_x,
+        size,
+        border_width,
+        ..
+    } = spec.kind
+    else {
+        panic!()
+    };
+    assert_eq!(
+        color_from,
+        Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 1.0
+        }
+    ); // 'red'
+    assert_eq!(
+        color_to,
+        Color {
+            r: 0,
+            g: 128,
+            b: 0,
+            a: 1.0
+        }
+    ); // 'green'
+    assert_eq!(color_mode, SankeyColorMode::Gradient);
+    assert!((alpha - 0.5).abs() < 1e-9);
+    assert_eq!(node_width, 10.0);
+    assert_eq!(node_padding, 10.0);
+    assert_eq!(mode_x, SankeyModeX::Edge);
+    assert_eq!(size, SankeySize::Max);
+    assert_eq!(border_width, 1.0);
+}
+
+#[test]
+fn sankey_rejects_non_finite_flow() {
+    let json =
+        r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":"x"}]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+}
+
+#[test]
+fn sankey_strict_rejects_unknown_key() {
+    let json = r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}],"bogus":1}]}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
+fn sankey_options_override() {
+    use fulgur_chart::ir::{ChartKind, Color, SankeyColorMode, SankeyModeX, SankeySize};
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":3}],
+        "colorFrom":"#102030",
+        "colorTo":"#405060",
+        "colorMode":"from",
+        "alpha":0.25,
+        "borderColor":"#708090",
+        "borderWidth":2.5,
+        "color":"#a0b0c0",
+        "nodeWidth":14,
+        "nodePadding":8,
+        "modeX":"even",
+        "size":"min",
+        "labels":{"A":"Alpha"},
+        "priority":{"A":0},
+        "column":{"A":2}
+    }]}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let ChartKind::Sankey {
+        color_from,
+        color_to,
+        color_mode,
+        alpha,
+        node_width,
+        node_padding,
+        mode_x,
+        size,
+        border,
+        border_width,
+        label_color,
+        labels,
+        priority,
+        columns,
+    } = spec.kind
+    else {
+        panic!()
+    };
+    assert_eq!(
+        color_from,
+        Color {
+            r: 16,
+            g: 32,
+            b: 48,
+            a: 1.0
+        }
+    );
+    assert_eq!(
+        color_to,
+        Color {
+            r: 64,
+            g: 80,
+            b: 96,
+            a: 1.0
+        }
+    );
+    assert_eq!(color_mode, SankeyColorMode::From);
+    assert!((alpha - 0.25).abs() < 1e-9);
+    assert_eq!(node_width, 14.0);
+    assert_eq!(node_padding, 8.0);
+    assert_eq!(mode_x, SankeyModeX::Even);
+    assert_eq!(size, SankeySize::Min);
+    assert_eq!(
+        border,
+        Color {
+            r: 112,
+            g: 128,
+            b: 144,
+            a: 1.0
+        }
+    );
+    assert_eq!(border_width, 2.5);
+    assert_eq!(
+        label_color,
+        Color {
+            r: 160,
+            g: 176,
+            b: 192,
+            a: 1.0
+        }
+    );
+    assert_eq!(labels.get("A").map(String::as_str), Some("Alpha"));
+    assert_eq!(priority.get("A"), Some(&0.0));
+    assert_eq!(columns.get("A"), Some(&2usize));
+
+    // colorMode "to" → To も検証(From↔To のスワップ回帰を捕捉)。
+    let json_to = r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}],"colorMode":"to"}]}}"#;
+    let spec_to = chartjs::parse(json_to, false).unwrap();
+    let ChartKind::Sankey { color_mode, .. } = spec_to.kind else {
+        panic!()
+    };
+    assert_eq!(color_mode, SankeyColorMode::To);
+}
+
+#[test]
+fn sankey_rejects_negative_flow() {
+    // 数値として有効だが負の flow は guard で弾く(deserialize は通過する)。
+    let json =
+        r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":-5}]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+}
+
+#[test]
+fn sankey_schema_and_parser_both_reject_datalabels() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    // sankey は datalabels を持たない。schema(SankeyPlugins)と strict パーサが共に拒否し、
+    // 「schema 受理 → strict 拒否」のパリティ破れを起こさないこと。
+    let json = r##"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":{"plugins":{"datalabels":{}}}}"##;
+    assert!(
+        serde_json::from_str::<ChartJsSpec>(json).is_err(),
+        "schema は sankey の plugins.datalabels を拒否すべき"
+    );
+    assert!(
+        chartjs::parse(json, true).is_err(),
+        "strict パーサも plugins.datalabels を拒否すべき"
+    );
+    // title は schema・parser とも受理する(正常系の確認)。
+    let ok = r##"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":{"plugins":{"title":{"display":true,"text":"T"}}}}"##;
+    assert!(matches!(
+        serde_json::from_str::<ChartJsSpec>(ok).unwrap(),
+        ChartJsSpec::Sankey(_)
+    ));
+    assert!(chartjs::parse(ok, true).is_ok());
+}
+
+#[test]
+fn sankey_schema_and_parser_both_reject_legend() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    // sankey は legend を描画しないため契約から外す。schema・strict パーサ双方が拒否し、
+    // 「strict が受理するのに描画では無視される」silent-drop を避ける。
+    let json = r##"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":{"plugins":{"legend":{"display":true}}}}"##;
+    assert!(
+        serde_json::from_str::<ChartJsSpec>(json).is_err(),
+        "schema は sankey の plugins.legend を拒否すべき"
+    );
+    assert!(
+        chartjs::parse(json, true).is_err(),
+        "strict パーサも plugins.legend を拒否すべき"
+    );
+}
+
+#[test]
+fn sankey_rejects_negative_node_width() {
+    // 負の nodeWidth は <rect width="-5"> 等の不正 SVG を生むため parse で弾く。
+    let json = r#"{"type":"sankey","data":{"datasets":[{"nodeWidth":-5,"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+    // 非有限も拒否。
+    let nan = r#"{"type":"sankey","data":{"datasets":[{"borderWidth":1e400,"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    assert!(chartjs::parse(nan, false).is_err());
+}
+
+#[test]
+fn sankey_rejects_huge_node_padding() {
+    // 巨大な有限 nodePadding は layout の (max_y/height)*node_padding で ∞ に overflow し
+    // 図形を潰すため、canvas 最大寸法を超える値は parse で弾く。
+    let json = r#"{"type":"sankey","data":{"datasets":[{"nodePadding":1e308,"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+    // 妥当な範囲(canvas 上限以下)は受理。
+    let ok = r#"{"type":"sankey","data":{"datasets":[{"nodePadding":20,"nodeWidth":15,"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    assert!(chartjs::parse(ok, false).is_ok());
+}
+
+#[test]
+fn sankey_preserves_dataset_label() {
+    // 他のパーサと同様、dataset の label を Series.name に保持する。
+    let json = r#"{"type":"sankey","data":{"datasets":[{"label":"Energy","data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert_eq!(spec.series[0].name, "Energy");
+}
+
+#[test]
+fn sankey_rejects_unknown_enum_values() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    // colorMode/modeX/size のタイポは silent default にせず、schema・parser とも拒否する。
+    for (field, bad) in [("colorMode", "form"), ("modeX", "edeg"), ("size", "mn")] {
+        let json = format!(
+            r#"{{"type":"sankey","data":{{"datasets":[{{"{field}":"{bad}","data":[{{"from":"A","to":"B","flow":1}}]}}]}}}}"#
+        );
+        assert!(
+            serde_json::from_str::<ChartJsSpec>(&json).is_err(),
+            "schema should reject {field}={bad}"
+        );
+        assert!(
+            chartjs::parse(&json, false).is_err(),
+            "parser should reject {field}={bad}"
+        );
+    }
+}
+
+#[test]
+fn sankey_accepts_null_options() {
+    // schema は optional フィールドを nullable として描くため、parser も明示 null を
+    // 既定として受理し、schema-valid な spec が strict で落ちないようにする。
+    let null_opts = r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":null}"#;
+    assert!(chartjs::parse(null_opts, true).is_ok());
+    let null_plugins = r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":{"plugins":null}}"#;
+    assert!(chartjs::parse(null_plugins, true).is_ok());
+}

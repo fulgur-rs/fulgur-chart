@@ -22,6 +22,30 @@ const MAX_WORDCLOUD_WORDS: usize = 500;
 /// wordcloud の 1 語あたりバイト長上限 (SVG サイズ攻撃対策)。
 const MAX_WORDCLOUD_WORD_BYTES: usize = 200;
 
+/// sankey のリンク数上限 (DoS 対策)。
+/// 各リンクは 1 本のリボン(SVG path プリミティブ)になるため、リンク数がほぼ
+/// プリミティブ数・パースコストに直結する。10,000 本 ≈ 出力規模・処理量ともに実用上限。
+pub const MAX_SANKEY_LINKS: usize = 10_000;
+
+/// sankey のユニークノード数上限 (スタックオーバーフロー/DoS 対策)。
+///
+/// レイアウト(`layout/sankey.rs`)の `process_from`/`process_to`、および
+/// `calculate_x` 内の `get_all_keys_forward` は、連鎖に沿ってノード 1 つあたり
+/// スタックフレーム 1 つを消費する再帰で実装されている。線形連鎖(`n0→n1→…`)では
+/// 再帰深さがノード数とほぼ等しくなるため、ノード数がそのままスタック消費の上限になる。
+///
+/// テストスレッドの既定スタックは約 2 MB(本番メインスレッドは約 8 MB)と小さい。
+/// treemap がツリー深さを `DEFAULT_MAX_TREE_DEPTH = 50` で抑えてスタックを有界化する
+/// のと同じ理由で、sankey もノード数を抑えて最悪ケースの再帰深さを安全圏に保つ。
+/// この値は 2 MB スタックで線形連鎖をレンダリングしてもオーバーフローしないことを
+/// 経験的に検証して決めている(`tests/render_sankey.rs` のスタック安全テスト参照)。
+/// 線形連鎖は支配的な再帰(`process_*`/`get_all_keys_forward`)の深さを最大化する
+/// 一方、各ノードの辺が 1 本なので `sort_by_node_count` 経由の `node_count` 再帰は
+/// 発火しない。分岐グラフでは `process_*` の深さに `node_count` の再帰深さが加算され
+/// うるが、本番メインスレッドのスタックは約 8 MB(測定に使った 2 MB の約 4 倍)あり、
+/// 線形連鎖で確保した約 3 倍のマージンと合わせて、この加算分を吸収できる範囲に収まる。
+pub const MAX_SANKEY_NODES: usize = 2_000;
+
 /// 全系列の合計データ点数の上限(scatter/bubble 向け)。
 /// 合計で抑えることで series × points の積による爆発を防ぐ。
 pub const DEFAULT_MAX_TOTAL_DATA_POINTS: usize = 1_000_000;
@@ -305,12 +329,17 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         tree_points += validate_tree(&s.tree, 0, limits)?;
     }
 
+    // sankey のリンクもデータ点として合算する(各リンク=1 リボン)。これにより
+    // グローバルな max_total_data_points 上限が sankey にも効く。
+    let link_points: usize = spec.series.iter().map(|s| s.links.len()).sum();
+
     let total_points: usize = spec
         .series
         .iter()
         .map(|s| s.values.len().max(s.points.len()).max(s.box_points.len()))
         .sum::<usize>()
-        + tree_points;
+        + tree_points
+        + link_points;
     if total_points > limits.max_total_data_points {
         return Err(format!(
             "全系列のデータ点数合計 {} が上限 {} を超えています",
@@ -383,6 +412,77 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
                 return Err(format!(
                     "wordcloud: 単語サイズは正の有限値でなければなりません: {}",
                     e.size
+                ));
+            }
+        }
+    }
+
+    // --- sankey リンク数・ノード数・ノードラベル長 ---
+    // リンク数はリボン(プリミティブ)数・パースコストを、ノード数はレイアウトの
+    // 再帰深さ(process_from/process_to/get_all_keys_forward)を抑える。MAX_SANKEY_NODES の
+    // 再帰スタック根拠は定数の doc コメント参照(treemap の深さ上限と同趣旨)。
+    if let crate::ir::ChartKind::Sankey {
+        labels, columns, ..
+    } = &spec.kind
+    {
+        let links = spec.series.first().map(|s| s.links.len()).unwrap_or(0);
+        if links > MAX_SANKEY_LINKS {
+            return Err(format!(
+                "sankey link count {} exceeds limit {}",
+                links, MAX_SANKEY_LINKS,
+            ));
+        }
+        // ユニークノード集合 + 各ノードキーのバイト長 + 全フロー合計を一度に走査する。
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut total_flow = 0.0_f64;
+        if let Some(s) = spec.series.first() {
+            for link in &s.links {
+                for key in [link.from.as_str(), link.to.as_str()] {
+                    if seen.insert(key) && key.len() > limits.max_label_bytes {
+                        return Err(format!(
+                            "sankey node label length {} bytes exceeds limit {}",
+                            key.len(),
+                            limits.max_label_bytes,
+                        ));
+                    }
+                }
+                total_flow += link.flow;
+            }
+        }
+        if seen.len() > MAX_SANKEY_NODES {
+            return Err(format!(
+                "sankey node count {} exceeds limit {}",
+                seen.len(),
+                MAX_SANKEY_NODES,
+            ));
+        }
+        // 個々の flow が有限でも、合算で全フロー合計が ∞ に overflow すると、layout の
+        // 列内サイズ合計や max_y も ∞ になり py(inf)=0 で幾何が潰れる。逆に合計が有限なら、
+        // 各列のサイズ合計 ≈ 合計(保存則)も max_y も有限で、padding も(node_padding は上限済み)
+        // 有限に収まる。よって「合計が有限であること」だけを検証すればよい(per-node を包含)。
+        if !total_flow.is_finite() {
+            return Err(format!(
+                "sankey total flow is non-finite (values too large): {total_flow}"
+            ));
+        }
+        // labels 上書き値も描画される(幅測定 + SVG 出力)ため max_label_bytes で検証する。
+        for (key, label) in labels {
+            if label.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "sankey label override ({}) length {} bytes exceeds limit {}",
+                    key,
+                    label.len(),
+                    limits.max_label_bytes,
+                ));
+            }
+        }
+        // 手動 column の巨大値は max_x を膨張させ fix_top / calculate_y_using_priority の
+        // `0..=max_x` ループを暴走させる(DoS)。参照ノードの column を MAX_SANKEY_NODES 未満に制限する。
+        for (key, &col) in columns {
+            if seen.contains(key.as_str()) && col >= MAX_SANKEY_NODES {
+                return Err(format!(
+                    "sankey manual column ({})={} must be below limit {}",
+                    key, col, MAX_SANKEY_NODES,
                 ));
             }
         }
@@ -527,6 +627,7 @@ mod tests {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         };
         s.series = vec![dummy; DEFAULT_MAX_SERIES + 1];
         assert!(validate_spec(&s, &default_limits()).is_err());
@@ -562,6 +663,7 @@ mod tests {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         };
         s.series = vec![dummy; 100];
         s.categories = vec!["x".to_string(); 10_001];
@@ -591,6 +693,7 @@ mod tests {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         };
         s.series = vec![dummy; 100];
         s.categories = vec!["x".to_string(); 10_000];
@@ -619,6 +722,7 @@ mod tests {
             point_radius: None,
             box_points: vec![],
             tree: vec![],
+            links: vec![],
         };
         s.series = vec![big_series];
         assert!(validate_spec(&s, &default_limits()).is_err());
@@ -1023,6 +1127,132 @@ mod tests {
             ..base_spec()
         };
         assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    // ── sankey ガード ──
+
+    /// 最小の sankey spec を作り、リンク配列を差し替えるヘルパ。
+    fn sankey_spec_with_links(links: Vec<crate::ir::SankeyLink>) -> ChartSpec {
+        let mut s = chartjs::parse(
+            r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]}}"#,
+            false,
+        )
+        .unwrap();
+        s.series[0].links = links;
+        s
+    }
+
+    fn link(from: &str, to: &str) -> crate::ir::SankeyLink {
+        crate::ir::SankeyLink {
+            from: from.to_string(),
+            to: to.to_string(),
+            flow: 1.0,
+        }
+    }
+
+    #[test]
+    fn sankey_link_count_over_limit_rejected() {
+        // A→B を MAX_SANKEY_LINKS+1 本。ノードは 2 つだけなので link 数チェックを単離する。
+        let links = vec![link("A", "B"); MAX_SANKEY_LINKS + 1];
+        let spec = sankey_spec_with_links(links);
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn sankey_node_count_over_limit_rejected() {
+        // 自己ループ n_i→n_i を MAX_SANKEY_NODES+1 本。各リンク 1 ユニークキーで
+        // ノード数 = MAX_SANKEY_NODES+1、リンク数は MAX_SANKEY_LINKS 未満に収め node 数チェックを単離する。
+        let links: Vec<_> = (0..=MAX_SANKEY_NODES)
+            .map(|i| {
+                let key = format!("n{i}");
+                link(&key, &key)
+            })
+            .collect();
+        let spec = sankey_spec_with_links(links);
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn sankey_within_limits_ok() {
+        let links = vec![
+            link("A", "B"),
+            link("A", "C"),
+            link("B", "D"),
+            link("C", "D"),
+        ];
+        let spec = sankey_spec_with_links(links);
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn sankey_node_label_too_long_rejected() {
+        let long = "x".repeat(DEFAULT_MAX_LABEL_BYTES + 1);
+        let spec = sankey_spec_with_links(vec![link(&long, "B")]);
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn sankey_links_count_toward_total_points() {
+        let spec = sankey_spec_with_links(vec![link("A", "B"), link("B", "C"), link("C", "D")]);
+        let mut limits = default_limits();
+        limits.max_total_data_points = 2; // 3 リンク > 2
+        assert!(validate_spec(&spec, &limits).is_err());
+        limits.max_total_data_points = 3;
+        assert!(validate_spec(&spec, &limits).is_ok());
+    }
+
+    #[test]
+    fn sankey_huge_manual_column_rejected() {
+        // 参照ノードの巨大 column は max_x を膨張させ DoS になるため拒否。
+        let mut spec = sankey_spec_with_links(vec![link("A", "B")]);
+        if let crate::ir::ChartKind::Sankey { columns, .. } = &mut spec.kind {
+            columns.insert("B".to_string(), MAX_SANKEY_NODES);
+        }
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+        // 上限未満は OK。
+        let mut ok = sankey_spec_with_links(vec![link("A", "B")]);
+        if let crate::ir::ChartKind::Sankey { columns, .. } = &mut ok.kind {
+            columns.insert("B".to_string(), MAX_SANKEY_NODES - 1);
+        }
+        assert!(validate_spec(&ok, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn sankey_oversized_label_override_rejected() {
+        // labels 上書き値も描画されるため node キー同様にバイト長を検証する。
+        let long = "x".repeat(DEFAULT_MAX_LABEL_BYTES + 1);
+        let mut spec = sankey_spec_with_links(vec![link("A", "B")]);
+        if let crate::ir::ChartKind::Sankey { labels, .. } = &mut spec.kind {
+            labels.insert("A".to_string(), long);
+        }
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    fn flow_link(from: &str, to: &str, flow: f64) -> crate::ir::SankeyLink {
+        crate::ir::SankeyLink {
+            from: from.into(),
+            to: to.into(),
+            flow,
+        }
+    }
+
+    #[test]
+    fn sankey_non_finite_flow_total_rejected() {
+        // 同一ソースからの 2 本の 1e308 で合計が +inf に overflow → 拒否。
+        let spec =
+            sankey_spec_with_links(vec![flow_link("A", "B", 1e308), flow_link("A", "C", 1e308)]);
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn sankey_aggregate_flow_overflow_rejected() {
+        // 別ソースの 2 本(各 1e308)でも合計が ∞ に overflow → 全フロー合計の有限性で弾く。
+        let spec =
+            sankey_spec_with_links(vec![flow_link("A", "B", 1e308), flow_link("C", "D", 1e308)]);
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+        // 単一の大きい有限 flow は合計も有限なので受理される(下流も保存則で有限に収まる)。
+        let ok = sankey_spec_with_links(vec![flow_link("A", "B", 1e308)]);
+        assert!(validate_spec(&ok, &default_limits()).is_ok());
     }
 
     #[test]
