@@ -195,6 +195,40 @@ fn render_prim(
             }
         }
 
+        Prim::GradientPath {
+            d,
+            x0,
+            x1,
+            stop0,
+            stop1,
+        } => {
+            let Some(path) = parse_path_data(d) else {
+                return;
+            };
+            use tiny_skia::{GradientStop, LinearGradient, Point, Shader, SpreadMode};
+            let to_ts = |c: &Color| {
+                tiny_skia::Color::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round() as u8)
+            };
+            let shader = LinearGradient::new(
+                Point::from_xy(*x0 as f32, 0.0),
+                Point::from_xy(*x1 as f32, 0.0),
+                vec![
+                    GradientStop::new(0.0, to_ts(stop0)),
+                    GradientStop::new(1.0, to_ts(stop1)),
+                ],
+                SpreadMode::Pad,
+                Transform::identity(),
+            );
+            // LinearGradient::new は縮退時(x0==x1)に None を返す。SVG 1.1 では
+            // x1==x2 のグラデーションは最後の stop の色で塗るため、SVG 出力と
+            // 揃えて stop1 で solid フォールバックする。
+            let paint = Paint {
+                shader: shader.unwrap_or_else(|| Shader::SolidColor(to_ts(stop1))),
+                ..Default::default()
+            };
+            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+        }
+
         Prim::Circle {
             cx,
             cy,
