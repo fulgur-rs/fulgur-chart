@@ -974,14 +974,18 @@ pub struct SankeyDataset {
     pub alpha: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_color: Option<ColorString>,
+    // 寸法は非負(parser が負値を拒否するのに合わせ schema も制約)。
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
     pub border_width: Option<f64>,
     /// ノードラベル色
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<ColorString>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
     pub node_width: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
     pub node_padding: Option<f64>,
     /// "edge" | "even"
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1002,6 +1006,8 @@ pub struct SankeyDataset {
 pub struct SankeyFlow {
     pub from: String,
     pub to: String,
+    /// フロー量は非負(parser が flow < 0 を拒否するのに合わせる)。
+    #[schemars(range(min = 0.0))]
     pub flow: f64,
 }
 
@@ -1023,6 +1029,11 @@ mod tests {
         assert!(
             json.contains("\"maxItems\":1"),
             "sankey datasets に maxItems:1 が必要"
+        );
+        // flow / nodeWidth 等の非負制約(parser と一致)が minimum として出ること。
+        assert!(
+            json.contains("\"minimum\":0"),
+            "sankey の寸法/flow に minimum:0 が必要"
         );
     }
 }

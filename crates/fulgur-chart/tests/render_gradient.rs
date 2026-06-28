@@ -68,3 +68,35 @@ fn gradient_png_renders_left_red_right_green() {
         (right.red(), right.green(), right.blue())
     );
 }
+
+#[test]
+fn gradient_png_scales_with_geometry_at_2x() {
+    // tiny-skia は fill_path の transform をシェーダ評価にも適用する。よって x0/x1 を
+    // ユーザ座標のまま(シェーダ変換は identity)にしておけば、--scale 時もグラデーションは
+    // リボン全幅に正しく伸びる。逆にシェーダへ scale を明示的に渡すと二重適用になり、
+    // グラデーションが広がりすぎて右端が stop1 に届かなくなる。device 全幅で stop0→stop1 を
+    // 辿ること(左端=赤優勢、右端=緑優勢、中央=blend)を回帰として固定する。
+    let png = scene_to_png(&scene(), 2.0, FONT).unwrap();
+    let pm = tiny_skia::Pixmap::decode_png(&png).expect("生成 PNG はデコード可能");
+    assert_eq!((pm.width(), pm.height()), (80, 40), "scale=2 で 2x の寸法");
+
+    let left = pm.pixel(2, 20).expect("画素は範囲内");
+    let mid = pm.pixel(40, 20).expect("画素は範囲内");
+    let right = pm.pixel(77, 20).expect("画素は範囲内");
+
+    assert!(
+        left.red() > left.green(),
+        "左端は stop0(赤)優勢: {:?}",
+        (left.red(), left.green(), left.blue())
+    );
+    assert!(
+        right.green() > right.red(),
+        "右端は stop1(緑)優勢=全幅に伸びている(二重スケールなら赤優勢になる): {:?}",
+        (right.red(), right.green(), right.blue())
+    );
+    assert!(
+        mid.red() > 0 && mid.green() > 0,
+        "中央は blend(両成分 > 0): {:?}",
+        (mid.red(), mid.green(), mid.blue())
+    );
+}

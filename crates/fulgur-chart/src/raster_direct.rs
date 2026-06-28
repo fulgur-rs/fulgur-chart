@@ -206,6 +206,10 @@ fn render_prim(
                 return;
             };
             use tiny_skia::{GradientStop, LinearGradient, Point, Shader, SpreadMode};
+            // x0/x1 はユーザ座標で、シェーダ変換は identity。tiny-skia は fill_path の
+            // transform をシェーダ評価にも適用するため、これだけで --scale 時もグラデーションは
+            // リボン全幅に正しく伸びる(ここで scale を二重に渡すと広がりすぎる)。
+            // 回帰: tests/render_gradient.rs::gradient_png_scales_with_geometry_at_2x。
             let shader = LinearGradient::new(
                 Point::from_xy(*x0 as f32, 0.0),
                 Point::from_xy(*x1 as f32, 0.0),
