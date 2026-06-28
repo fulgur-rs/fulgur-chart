@@ -140,12 +140,12 @@ jobs:
         run: wasm-pack test --node crates/fulgur-chart --test wasm_runtime
 
   msrv:
-    name: MSRV (1.85.0)
+    name: MSRV (1.89)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.89
 
       - uses: Swatinem/rust-cache@v2
 
