@@ -70,6 +70,13 @@ struct SchemaArgs {
   # Inspect a Vega-Lite spec (DSL auto-detected from top-level \"mark\" key)
   fulgur-chart inspect vega.json -o model.json
 
+  # Inspect a Jsonnet spec (auto-detected from .jsonnet extension)
+  fulgur-chart inspect spec.jsonnet -o -
+
+  # Inspect Jsonnet from stdin
+  printf 'local n=3; {type:\"bar\",data:{labels:[\"A\",\"B\",\"C\"],datasets:[{data:[n,n*2,n*3]}]}}' \\
+    | fulgur-chart inspect - -o - --jsonnet
+
 OUTPUT:
   Structured JSON with these top-level keys:
     meta    chart type and canvas dimensions
@@ -95,7 +102,8 @@ struct InspectArgs {
     /// Override chart height.
     #[arg(long)]
     height: Option<f64>,
-    /// Evaluate input as Jsonnet before parsing. Only valid with stdin ('-').
+    /// Treat stdin ('-') input as Jsonnet instead of raw JSON.
+    /// For file input, use a .jsonnet extension (auto-detected, no flag needed).
     #[arg(long)]
     jsonnet: bool,
     /// Font file for text metrics. Defaults to the bundled font.
@@ -133,15 +141,50 @@ struct InspectArgs {
   # Override canvas dimensions from the spec
   fulgur-chart render spec.json -o chart.svg --width 1200 --height 600
 
+  # Render a Jsonnet spec (auto-detected from .jsonnet extension, no flag needed)
+  fulgur-chart render spec.jsonnet -o chart.svg
+
+  # Write a Jsonnet spec inline and pipe it to render
+  printf 'local xs=std.range(1,6); {type:\"bar\",data:{labels:std.map(std.toString,xs),datasets:[{label:\"x²\",data:std.map(function(x) x*x, xs)}]}}' \\
+    | fulgur-chart render - -o - --jsonnet
+
 DSL AUTO-DETECT:
   chartjs   detected when the spec has a top-level \"type\" key
   vegalite  detected when the spec has a top-level \"mark\" key
   Use --dsl to override when auto-detection fails (exit 1).
 
+JSONNET INPUT:
+  Jsonnet is a superset of JSON with comments, local variables, functions, and
+  imports. Use it to write reusable or programmatically generated chart specs.
+
+  File input — use a .jsonnet extension (evaluated automatically, no flag needed):
+    fulgur-chart render spec.jsonnet -o chart.svg
+
+  Stdin input — add --jsonnet to treat the pipe as Jsonnet:
+    printf 'local color=\"#36a2eb\"; {type:\"bar\",data:{labels:[\"A\",\"B\",\"C\"],datasets:[{label:\"x\",data:[1,2,3],backgroundColor:color}]}}' \\
+      | fulgur-chart render - -o - --jsonnet
+
+  The full Jsonnet standard library (std.*) is available:
+    std.range(from, to)          integer range, e.g. std.range(0, 11) → [0..11]
+    std.map(fn, arr)             transform array, e.g. std.map(std.toString, xs)
+    std.filter(fn, arr)          keep elements matching a predicate
+    std.format(fmt, args)        string formatting, e.g. std.format(\"Q%d\", quarter) or \"Q%d\" % quarter
+    std.join(sep, arr)           join strings with a separator
+    std.sort(arr)                sort an array
+    std.length(arr)              length of array or string
+    std.objectFields(obj)        object keys as an array
+    std.sin/cos/sqrt/floor/ceil  math functions
+    std.toString(v)              convert a value to string
+
+  Imports are resolved relative to the .jsonnet file's directory:
+    import \"palette.libsonnet\"       # file in the same directory
+    import \"shared/colors.libsonnet\" # relative subdirectory path
+  Note: when reading from stdin, imports are resolved relative to the current working directory.
+
 EXIT CODES:
   0  Rendered successfully
-  1  Input error: bad JSON, unsupported DSL, missing/unreadable spec, render failure,
-     or invalid dimensions (max 32768px per axis)
+  1  Input error: bad JSON/Jsonnet, unsupported DSL, missing/unreadable spec, render
+     failure, or invalid dimensions (max 32768px per axis)
   2  Strict violation: spec contains unknown or unsupported keys (only with --strict)
   3  I/O error: output write failure or PNG conversion failure")]
 struct RenderArgs {
@@ -175,7 +218,8 @@ struct RenderArgs {
     #[arg(long)]
     strict: bool,
 
-    /// Evaluate input as Jsonnet before parsing. Only valid with stdin ('-').
+    /// Treat stdin ('-') input as Jsonnet instead of raw JSON.
+    /// For file input, use a .jsonnet extension (auto-detected, no flag needed).
     #[arg(long)]
     jsonnet: bool,
 
