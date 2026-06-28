@@ -1,15 +1,16 @@
 use crate::{
     render::{self, OutputFormat, RenderError},
     response::{cache_headers, error_response, etag_value, render_response},
+    state::AppState,
 };
 use axum::{
     Json,
-    extract::Query,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 pub struct ChartQuery {
@@ -39,11 +40,15 @@ fn default_dsl() -> String {
     "chartjs".to_string()
 }
 
-pub async fn get_chart(Query(q): Query<ChartQuery>, headers: HeaderMap) -> Response {
+pub async fn get_chart(
+    State(state): State<AppState>,
+    Query(q): Query<ChartQuery>,
+    headers: HeaderMap,
+) -> Response {
     let Some(c) = q.c else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
+            Json(json!({
                 "error": "missing required parameter: c",
                 "code": "MISSING_PARAM"
             })),
@@ -51,12 +56,16 @@ pub async fn get_chart(Query(q): Query<ChartQuery>, headers: HeaderMap) -> Respo
             .into_response();
     };
     let json = apply_overrides(&c, q.w, q.h, q.bkg.as_deref());
-    handle_render(json, q.f, "chartjs".to_string(), headers).await
+    handle_render(json, q.f, "chartjs".to_string(), headers, state).await
 }
 
-pub async fn post_chart(headers: HeaderMap, Json(req): Json<ChartRequest>) -> Response {
+pub async fn post_chart(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ChartRequest>,
+) -> Response {
     let json = req.chart.to_string();
-    handle_render(json, req.format, req.dsl, headers).await
+    handle_render(json, req.format, req.dsl, headers, state).await
 }
 
 async fn handle_render(
@@ -64,6 +73,7 @@ async fn handle_render(
     format: OutputFormat,
     dsl: String,
     headers: HeaderMap,
+    state: AppState,
 ) -> Response {
     let etag = etag_value(&json);
 
@@ -87,20 +97,45 @@ async fn handle_render(
         }
     }
 
-    let result = tokio::task::spawn_blocking(move || {
-        let spec = render::parse_and_validate(&json, &dsl, false)?;
-        render::render(&spec, format, 1.0)
-    })
+    // Semaphore 取得（超過時 503）
+    let permit = match state.semaphore.try_acquire_owned() {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                [("Retry-After", "1")],
+                Json(json!({"error": "server busy", "code": "BUSY"})),
+            )
+                .into_response();
+        }
+    };
+
+    // タイムアウト付きレンダリング
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(state.render_timeout_ms),
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit; // クロージャ完了まで permit を保持して Semaphore を正しく解放
+            let spec = render::parse_and_validate(&json, &dsl, false)?;
+            render::render(&spec, format, 1.0)
+        }),
+    )
     .await;
 
     match result {
-        Ok(Ok(bytes)) => render_response(bytes, format, &etag),
-        Ok(Err(e @ RenderError::Parse(_))) => error_response(StatusCode::BAD_REQUEST, &e),
-        Ok(Err(e @ RenderError::Validate(_))) => error_response(StatusCode::BAD_REQUEST, &e),
-        Ok(Err(e @ RenderError::Render(_))) => {
+        Err(_timeout) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            Json(json!({"error": "render timeout", "code": "TIMEOUT"})),
+        )
+            .into_response(),
+        Ok(Ok(Ok(bytes))) => render_response(bytes, format, &etag),
+        Ok(Ok(Err(e @ RenderError::Parse(_)))) => error_response(StatusCode::BAD_REQUEST, &e),
+        Ok(Ok(Err(e @ RenderError::Validate(_)))) => error_response(StatusCode::BAD_REQUEST, &e),
+        Ok(Ok(Err(e @ RenderError::Render(_)))) => {
             error_response(StatusCode::INTERNAL_SERVER_ERROR, &e)
         }
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "render task panicked").into_response(),
+        Ok(Err(_join_err)) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "render task panicked").into_response()
+        }
     }
 }
 

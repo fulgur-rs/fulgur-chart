@@ -3,7 +3,11 @@ mod handlers;
 mod render;
 mod response;
 mod server;
+mod state;
 mod store;
+
+use std::net::SocketAddr;
+
 use clap::Parser;
 
 #[tokio::main]
@@ -13,7 +17,10 @@ async fn main() {
     let addr = format!("{}:{}", cfg.host, cfg.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     println!("chart-server listening on {addr}");
-    axum::serve(listener, server::build_router(store))
-        .await
-        .unwrap();
+    axum::serve(
+        listener,
+        server::build_router(&cfg, store).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }

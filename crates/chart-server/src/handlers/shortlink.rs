@@ -1,4 +1,4 @@
-use crate::store::ShortlinkStore;
+use crate::state::AppState;
 use axum::{
     Json,
     extract::{Path, State},
@@ -25,7 +25,7 @@ fn default_fmt() -> String {
 }
 
 pub async fn post_create(
-    State(store): State<ShortlinkStore>,
+    State(state): State<AppState>,
     Json(req): Json<CreateRequest>,
 ) -> Response {
     let json = req.chart.to_string();
@@ -41,7 +41,7 @@ pub async fn post_create(
     );
     let url = format!("/chart/s/{id}");
 
-    if store.insert(id, query) {
+    if state.store.insert(id, query) {
         (StatusCode::OK, Json(json!({"url": url}))).into_response()
     } else {
         (
@@ -55,11 +55,8 @@ pub async fn post_create(
     }
 }
 
-pub async fn get_shortlink(
-    Path(id): Path<String>,
-    State(store): State<ShortlinkStore>,
-) -> Response {
-    match store.get(&id) {
+pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>) -> Response {
+    match state.store.get(&id) {
         Some(query) => Redirect::temporary(&format!("/chart?{query}")).into_response(),
         None => (
             StatusCode::NOT_FOUND,
