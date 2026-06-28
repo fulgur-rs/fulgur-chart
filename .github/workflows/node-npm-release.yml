@@ -1,0 +1,245 @@
+# @fulgur-rs/chart-node の マルチプラットフォーム prebuild と npm への自動配布。
+# release-plz が fulgur-chart-v* タグを含む GitHub Release を publish したときに起動する。
+# OIDC Trusted Publishing を使用するため npm トークン不要。
+#
+# 手動セットアップ (一度だけ):
+#   npm の @fulgur-rs/chart-node* パッケージ群に Trusted Publisher を登録する。
+#   Owner: fulgur-rs, Repo: fulgur-chart, Workflow: node-npm-release.yml, Environment: npm
+#
+# 配布するパッケージ (7つ):
+#   @fulgur-rs/chart-node-linux-x64-gnu
+#   @fulgur-rs/chart-node-linux-x64-musl
+#   @fulgur-rs/chart-node-linux-arm64-gnu
+#   @fulgur-rs/chart-node-darwin-arm64
+#   @fulgur-rs/chart-node-darwin-x64
+#   @fulgur-rs/chart-node-win32-x64-msvc
+#   @fulgur-rs/chart-node (loader + JS wrapper)
+
+name: Node.js NPM Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  validate-release-tag:
+    name: Validate release tag
+    if: startsWith(github.ref_name, 'fulgur-chart-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.validate.outputs.tag }}
+      sha: ${{ steps.validate.outputs.sha }}
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Validate immutable release tag
+        id: validate
+        env:
+          REQUESTED_TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          set -euo pipefail
+
+          tag="$REQUESTED_TAG"
+
+          # 1. Strict SemVer under the fulgur-chart-v prefix.
+          semver_re='^fulgur-chart-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "$tag" =~ $semver_re ]]; then
+            echo "Invalid release tag (expected fulgur-chart-v<strict-semver>): '$tag'" >&2
+            exit 1
+          fi
+
+          # 2. Workflow must run from the tag itself.
+          if [[ "$REF_TYPE" != "tag" || "$REF_NAME" != "$tag" ]]; then
+            echo "Workflow must run from the release tag (ref_type=$REF_TYPE ref_name=$REF_NAME tag=$tag)." >&2
+            exit 1
+          fi
+
+          # 3. Refuse if a branch with the same name exists (branch-shadow attack).
+          branch_match="$(git ls-remote --heads "$REPO_URL" "refs/heads/$tag" \
+            | awk -v ref="refs/heads/$tag" '$2 == ref { print $1 }')"
+          if [[ -n "$branch_match" ]]; then
+            echo "Refusing ambiguous release ref: branch '$tag' exists." >&2
+            exit 1
+          fi
+
+          # 4. Resolve to immutable commit SHA.
+          tag_refs="$(git ls-remote "$REPO_URL" "refs/tags/$tag" "refs/tags/$tag^{}")"
+          sha="$(awk '$2 ~ /\^\{\}$/ { print $1 }' <<< "$tag_refs")"
+          if [[ -z "$sha" ]]; then
+            sha="$(awk -v ref="refs/tags/$tag" '$2 == ref { print $1 }' <<< "$tag_refs")"
+          fi
+          if [[ -z "$sha" ]]; then
+            echo "Tag '$tag' does not exist on origin." >&2
+            exit 1
+          fi
+
+          echo "Resolved $tag -> $sha"
+          {
+            echo "tag=$tag"
+            echo "sha=$sha"
+            echo "version=${tag#fulgur-chart-v}"
+          } >> "$GITHUB_OUTPUT"
+
+  build-native:
+    name: Build ${{ matrix.settings.target }}
+    needs: validate-release-tag
+    runs-on: ${{ matrix.settings.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use-cross: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use-cross: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    defaults:
+      run:
+        working-directory: crates/bindings/node
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate-release-tag.outputs.sha }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.settings.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/bindings/node
+          key: ${{ matrix.settings.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm deps
+        run: npm install
+
+      - name: Install cross (musl / arm64)
+        if: matrix.settings.use-cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build native addon (cross)
+        if: matrix.settings.use-cross
+        run: npx napi build --platform --release --strip --target ${{ matrix.settings.target }} --use-cross
+
+      - name: Build native addon (native)
+        if: '!matrix.settings.use-cross'
+        run: npx napi build --platform --release --strip --target ${{ matrix.settings.target }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: crates/bindings/node/*.node
+          if-no-files-found: error
+
+  publish-packages:
+    name: Publish npm packages
+    needs: [validate-release-tag, build-native]
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@fulgur-rs/chart-node
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: crates/bindings/node
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate-release-tag.outputs.sha }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/bindings/node
+          key: publish
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+        run: |
+          npm install -g npm@latest
+          node --version
+          npm --version
+
+      - name: Install npm deps
+        run: npm install
+
+      - name: Download all .node artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: bindings-*
+          path: crates/bindings/node/artifacts/
+          merge-multiple: true
+
+      - name: Move artifacts into npm sub-packages
+        run: npx napi artifacts --output-dir artifacts/ --npm-dir npm/
+
+      - name: Build binding.js loader (regenerates loader covering all 6 platforms)
+        run: npx napi build --platform --release --js binding.js --dts binding.d.ts
+
+      - name: Verify binding.js covers all 6 platforms
+        run: |
+          count=$(grep -c "chart-node\." binding.js)
+          echo "binding.js references $count platform entries"
+          if [ "$count" -lt 6 ]; then
+            echo "ERROR: expected >= 6 platform entries in binding.js, got $count" >&2
+            exit 1
+          fi
+
+      - name: Set package version from tag
+        env:
+          VERSION: ${{ needs.validate-release-tag.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = process.env.VERSION;
+            const main = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            main.version = v;
+            for (const dep of Object.keys(main.optionalDependencies || {})) {
+              main.optionalDependencies[dep] = v;
+            }
+            fs.writeFileSync("package.json", JSON.stringify(main, null, 2) + "\n");
+            const platforms = ["linux-x64-gnu","linux-x64-musl","linux-arm64-gnu","darwin-arm64","darwin-x64","win32-x64-msvc"];
+            for (const p of platforms) {
+              const path = `npm/${p}/package.json`;
+              const pkg = JSON.parse(fs.readFileSync(path, "utf8"));
+              pkg.version = v;
+              fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + "\n");
+            }
+          '
+
+      - name: Publish platform packages
+        run: |
+          for platform in linux-x64-gnu linux-x64-musl linux-arm64-gnu darwin-arm64 darwin-x64 win32-x64-msvc; do
+            npm publish --provenance --access public npm/$platform/
+          done
+
+      - name: Publish main package (@fulgur-rs/chart-node)
+        run: npm publish --provenance --access public
