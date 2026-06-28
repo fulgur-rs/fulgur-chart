@@ -10,6 +10,8 @@
 
 ---
 
+## Tasks
+
 ### Task 1: node-npm-release.yml に publish-wasm ジョブを追加
 
 **Files:**
@@ -25,7 +27,7 @@ cat .github/workflows/node-npm-release.yml
 
 1行目のコメントブロックを以下に更新（WASM パッケージの追記）:
 
-```
+```yaml
 # @fulgur-rs/chart-node および @fulgur-rs/chart-wasm の npm への自動配布。
 # release-plz が fulgur-chart-v* タグを含む GitHub Release を publish したときに起動する。
 # OIDC Trusted Publishing を使用するため npm トークン不要。

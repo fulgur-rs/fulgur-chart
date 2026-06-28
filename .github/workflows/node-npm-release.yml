@@ -188,9 +188,8 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+      - name: Verify Node.js and npm versions
         run: |
-          npm install -g npm@latest
           node --version
           npm --version
 
@@ -291,9 +290,8 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+      - name: Verify Node.js and npm versions
         run: |
-          npm install -g npm@latest
           node --version
           npm --version
 
@@ -311,6 +309,7 @@ jobs:
             pkg.version = v;
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
           '
+          sed -i 's/^version = "[^"]*"/version = "'"$VERSION"'"/' Cargo.toml
 
       - name: Build WASM (regenerates pkg/)
         run: npm run build
