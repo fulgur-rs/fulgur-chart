@@ -791,6 +791,45 @@ fn jsonnet_syntax_error_exits_1() {
 }
 
 #[test]
+fn renders_to_webp_stdout() {
+    let out = Command::cargo_bin("fulgur-chart")
+        .unwrap()
+        .args(["render", "-", "-o", "-", "--format", "webp"])
+        .write_stdin(r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}}"#)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "exit: {:?}\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(&out.stdout[0..4], b"RIFF");
+    assert_eq!(&out.stdout[8..12], b"WEBP");
+}
+
+#[test]
+fn renders_bar_to_webp_file() {
+    let dir = tempfile_dir_for("renders_bar_to_webp_file");
+    let out_path = dir.join("out.webp");
+    let out = Command::cargo_bin("fulgur-chart")
+        .unwrap()
+        .args(["render", "-", "-o", out_path.to_str().unwrap()])
+        .write_stdin(r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}}"#)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "exit: {:?}\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let bytes = std::fs::read(&out_path).unwrap();
+    assert_eq!(&bytes[0..4], b"RIFF");
+    assert_eq!(&bytes[8..12], b"WEBP");
+}
+
+#[test]
 fn jsonnet_file_syntax_error_exits_1() {
     let dir = tempfile_dir_for("jsonnet_file_syntax_error_exits_1");
     let spec = dir.join("bad.jsonnet");
