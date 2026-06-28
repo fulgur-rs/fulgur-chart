@@ -42,13 +42,14 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
 
     // レート制限: N req/分/IP
     // burst = N、1要素あたり 60000/N ms で補充
-    let rate_per_ms = 60_000u64 / cfg.rate_limit.max(1);
+    let rate_limit = cfg.rate_limit.max(1) as u32;
+    let rate_per_ms = (60_000u64 / rate_limit as u64).max(1);
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
             .per_millisecond(rate_per_ms)
-            .burst_size(cfg.rate_limit as u32)
+            .burst_size(rate_limit)
             .finish()
-            .unwrap(),
+            .expect("invalid governor config: check rate_limit setting"),
     );
 
     // 圧縮: image/ (PNG, WebP 含む) は DefaultPredicate が除外する
