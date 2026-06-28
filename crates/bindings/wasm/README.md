@@ -44,3 +44,16 @@ Errors: `FulgurParseError`, `FulgurStrictError` (`< FulgurParseError`), `FulgurR
 
 Behavior (DSL auto-detection, options, error classification, determinism, font asymmetry)
 follows `docs/binding-api-contract.md`.
+
+## npm Package Distribution
+
+Releases are triggered automatically when a `fulgur-chart-v*` GitHub Release is published,
+running `node-npm-release.yml` to build and publish `@fulgur-rs/chart-wasm`.
+
+### One-time setup
+
+Register a Trusted Publisher on npm for `@fulgur-rs/chart-wasm`:
+- **Owner**: `fulgur-rs`
+- **Repo**: `fulgur-chart`
+- **Workflow**: `node-npm-release.yml`
+- **Environment**: `npm`

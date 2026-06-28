@@ -11,6 +11,11 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+
 [dependencies]
 wasm-bindgen = "0.2"
 # Path dependency on the core crate (mirrors the Node/Python bindings).
