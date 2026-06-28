@@ -9,12 +9,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 pub fn etag_value(spec_json: &str, format: OutputFormat) -> String {
-    let fmt_str = match format {
-        OutputFormat::Svg | OutputFormat::DataUri => "svg",
-        OutputFormat::Png => "png",
-        OutputFormat::Webp => "webp",
-    };
-    let input = format!("{spec_json}\x00{fmt_str}");
+    // format.as_str() を使い、各フォーマット（"svg"/"png"/"webp"/"data-uri"）を区別する。
+    // DataUri と Svg で同一 ETag になると、片方のキャッシュで誤った 304 が返る。
+    let input = format!("{spec_json}\x00{}", format.as_str());
     let hash = Sha256::digest(input.as_bytes());
     let short = hex::encode(&hash[..8]);
     format!("\"{short}-v{ver}\"", ver = env!("CARGO_PKG_VERSION"))

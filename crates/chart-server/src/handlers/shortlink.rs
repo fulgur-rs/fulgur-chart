@@ -41,15 +41,18 @@ pub async fn post_create(
 ) -> Response {
     let json = req.chart.to_string();
     // ID はチャート JSON + レンダーパラメータ全体のハッシュ（同スペックで異なるサイズ/フォーマットは別リンク）
+    // "_" を番兵として None と Some(0) を区別する。
+    // ハッシュは 6 bytes（48bit）: 10000件時の誕生日衝突確率 < 0.001%。
     let id_input = format!(
         "{json}\x00{}\x00{}\x00{}\x00{}",
         req.format.as_str(),
-        req.width.map_or(0, |v| v),
-        req.height.map_or(0, |v| v),
+        req.width.map_or_else(|| "_".to_string(), |v| v.to_string()),
+        req.height
+            .map_or_else(|| "_".to_string(), |v| v.to_string()),
         req.background_color.as_deref().unwrap_or(""),
     );
     let hash = Sha256::digest(id_input.as_bytes());
-    let id = hex::encode(&hash[..4]);
+    let id = hex::encode(&hash[..6]);
 
     let query = build_query(
         &json,

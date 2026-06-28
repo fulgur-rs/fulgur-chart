@@ -49,18 +49,6 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
             .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
     };
 
-    // レート制限: N req/分/IP
-    // burst = N、1要素あたり 60000/N ms で補充
-    let rate_limit = cfg.rate_limit.max(1) as u32;
-    let rate_per_ms = (60_000u64 / rate_limit as u64).max(1);
-    let governor_conf = Arc::new(
-        GovernorConfigBuilder::default()
-            .per_millisecond(rate_per_ms)
-            .burst_size(rate_limit)
-            .finish()
-            .expect("invalid governor config: check rate_limit setting"),
-    );
-
     // 圧縮: PNG/WebP は既に圧縮済みのため除外。SVG は image/svg+xml だが圧縮効果が高い。
     let compression = CompressionLayer::new().compress_when(
         SizeAbove::new(32)
@@ -68,7 +56,7 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
             .and(NotForContentType::const_new("image/webp")),
     );
 
-    Router::new()
+    let mut router = Router::new()
         .route("/health", get(meta::health))
         .route("/llms.txt", get(meta::llms_txt))
         .route("/chart", get(chart::get_chart).post(chart::post_chart))
@@ -79,12 +67,27 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
         .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
         .with_state(state)
         .layer(compression)
-        .layer(DefaultBodyLimit::max(cfg.max_body_size))
-        .layer(GovernorLayer {
+        .layer(DefaultBodyLimit::max(cfg.max_body_size));
+
+    // レート制限: FULGUR_RATE_LIMIT=0（デフォルト）で無効。
+    // プロキシ背後のデプロイでは peer アドレスが proxy になるため、
+    // 使用する場合は信頼できる転送ヘッダーの設定も検討すること。
+    if cfg.rate_limit > 0 {
+        let rate_limit = cfg.rate_limit as u32;
+        let rate_per_ms = (60_000u64 / rate_limit as u64).max(1);
+        let governor_conf = Arc::new(
+            GovernorConfigBuilder::default()
+                .per_millisecond(rate_per_ms)
+                .burst_size(rate_limit)
+                .finish()
+                .expect("invalid governor config: check rate_limit setting"),
+        );
+        router = router.layer(GovernorLayer {
             config: governor_conf,
-        })
-        // CORS は最外層に置く。こうしないと GovernorLayer の 429 や
-        // DefaultBodyLimit の 413 に CORS ヘッダーが付かず、
-        // ブラウザが CORS エラーを報告してしまう。
-        .layer(cors)
+        });
+    }
+
+    // CORS は最外層に置く。こうしないと 429 や 413 に CORS ヘッダーが付かず、
+    // ブラウザが CORS エラーを報告してしまう。
+    router.layer(cors)
 }

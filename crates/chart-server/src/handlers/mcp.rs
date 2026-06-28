@@ -193,9 +193,11 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         // エラー種別ごとに JSON-RPC エラーコードを使い分ける
         Ok(Ok(Err(e))) => {
             let code = match &e {
-                render::RenderError::Parse(_) => -32700,    // Parse error
+                // -32700 は JSON-RPC プロトコルレベルのパースエラー専用。
+                // chart spec のパース失敗はツール引数の問題なので -32602。
+                render::RenderError::Parse(_) => -32602, // Invalid params
                 render::RenderError::Validate(_) => -32602, // Invalid params
-                render::RenderError::Render(_) => -32603,   // Internal error
+                render::RenderError::Render(_) => -32603, // Internal error
             };
             Err((code, e.message().to_string()))
         }

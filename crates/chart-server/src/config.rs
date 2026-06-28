@@ -24,7 +24,8 @@ pub struct Config {
     #[arg(long, env = "FULGUR_CORS_ORIGINS", default_value = "*")]
     pub cors_origins: String,
 
-    #[arg(long, env = "FULGUR_RATE_LIMIT", default_value_t = 60)]
+    /// レート制限（リクエスト/分/IP）。0 で無効。
+    #[arg(long, env = "FULGUR_RATE_LIMIT", default_value_t = 0)]
     pub rate_limit: u64,
 
     #[arg(long, env = "FULGUR_LOG_LEVEL", default_value = "info")]
