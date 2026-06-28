@@ -18,20 +18,15 @@ use fulgur_chart::{
 /// チャートの出力フォーマット。
 ///
 /// `"data-uri"` のみ serde で rename する。
-#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     Svg,
+    #[default]
     Png,
     Webp,
     #[serde(rename = "data-uri")]
     DataUri,
-}
-
-impl Default for OutputFormat {
-    fn default() -> Self {
-        Self::Png
-    }
 }
 
 // ---------------------------------------------------------------------------

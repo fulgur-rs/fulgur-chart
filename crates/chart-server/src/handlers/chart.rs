@@ -120,22 +120,22 @@ async fn handle_render(
     let etag = etag_value(&json);
 
     // 304 check (RFC 7232 compliant)
-    if let Some(inm) = headers.get(axum::http::header::IF_NONE_MATCH) {
-        if let Ok(inm_str) = inm.to_str() {
-            let etag_bare = etag.trim_matches('"');
-            let matches = inm_str.trim() == "*"
-                || inm_str
-                    .split(',')
-                    .map(|s| {
-                        s.trim()
-                            .trim_matches('"')
-                            .trim_start_matches("W/")
-                            .trim_matches('"')
-                    })
-                    .any(|candidate| candidate == etag_bare);
-            if matches {
-                return (StatusCode::NOT_MODIFIED, cache_headers(&etag)).into_response();
-            }
+    if let Some(inm) = headers.get(axum::http::header::IF_NONE_MATCH)
+        && let Ok(inm_str) = inm.to_str()
+    {
+        let etag_bare = etag.trim_matches('"');
+        let matches = inm_str.trim() == "*"
+            || inm_str
+                .split(',')
+                .map(|s| {
+                    s.trim()
+                        .trim_matches('"')
+                        .trim_start_matches("W/")
+                        .trim_matches('"')
+                })
+                .any(|candidate| candidate == etag_bare);
+        if matches {
+            return (StatusCode::NOT_MODIFIED, cache_headers(&etag)).into_response();
         }
     }
 
