@@ -1,0 +1,32 @@
+# fulgur chart-server
+
+> Render Chart.js v4 specs to SVG, PNG, WebP, or data-URI over HTTP.
+
+## Docs
+
+- [OpenAPI Schema](/openapi.json)
+- [Interactive Docs](/docs)
+
+## Quick Start
+
+POST /chart with JSON body:
+
+{"chart":{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}},"format":"svg"}
+
+Returns: SVG string (Content-Type: image/svg+xml)
+
+## Formats
+
+- svg  — inline SVG (default)
+- png  — binary PNG
+- webp — binary WebP
+- data-uri — base64 data URI (use in <img src> or Markdown ![](…))
+
+## Validate Without Rendering
+
+POST /chart/validate — returns {"valid":true} or {"valid":false,"error":"…","code":"…"}
+
+## Short Links
+
+POST /chart/create — returns {"url":"/chart/s/<id>"}
+GET  /chart/s/<id> — redirects to /chart?c=…

@@ -1,4 +1,5 @@
 mod config;
+mod handlers;
 mod server;
 use clap::Parser;
 
