@@ -30,7 +30,7 @@ pub enum OutputFormat {
 
 impl Default for OutputFormat {
     fn default() -> Self {
-        Self::Svg
+        Self::Png
     }
 }
 

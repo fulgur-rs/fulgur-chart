@@ -26,7 +26,7 @@ pub struct CreateRequest {
 }
 
 fn default_fmt() -> String {
-    "svg".to_string()
+    "png".to_string()
 }
 
 #[utoipa::path(
