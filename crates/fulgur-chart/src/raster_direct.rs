@@ -123,11 +123,7 @@ fn scene_to_pixmap(
     scale: f32,
     face: &ttf_parser::Face<'_>,
 ) -> Result<Pixmap, String> {
-    let scale = if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
-    };
+    let scale = if scale > 0.0 { scale } else { 1.0 };
 
     let w = (scene.width as f32 * scale).round().max(1.0) as u32;
     let h = (scene.height as f32 * scale).round().max(1.0) as u32;
@@ -806,6 +802,22 @@ mod tests {
         spec.width = 8001.0;
         spec.height = 8001.0;
         let err = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("exceeds"));
+    }
+
+    #[test]
+    fn infinite_scale_is_err() {
+        // +Inf scale → w/h saturate to u32::MAX → area guard triggers RenderError.
+        // Bindings do not validate scale; +Inf must not silently succeed.
+        let err = render_chart_to_png(&bar_spec(), f32::INFINITY, DEFAULT_FONT);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("exceeds"));
+    }
+
+    #[test]
+    fn webp_infinite_scale_is_err() {
+        let err = render_chart_to_webp(&bar_spec(), f32::INFINITY, DEFAULT_FONT);
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("exceeds"));
     }
