@@ -631,6 +631,29 @@ fn jsonnet_stdin_renders_svg() {
 }
 
 #[test]
+fn jsonnet_stdin_import_exits_1() {
+    let dir = tempfile_dir_for("jsonnet_stdin_import_exits_1");
+    std::fs::write(dir.join("secret.txt"), "SENTINEL_LOCAL_FILE_DISCLOSURE").unwrap();
+
+    bin()
+        .current_dir(&dir)
+        .args(["render", "-", "-o", "-", "--jsonnet"])
+        .write_stdin(
+            r#"{
+  type: "bar",
+  data: {
+    labels: [importstr "secret.txt"],
+    datasets: [{ data: [1] }],
+  },
+}
+"#,
+        )
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
 fn jsonnet_flag_with_file_path_exits_1() {
     // ファイルと --jsonnet の組み合わせは不正（拡張子を使うべき）
     let dir = tempfile_dir_for("jsonnet_flag_with_file_path_exits_1");
@@ -667,6 +690,38 @@ fn jsonnet_file_renders_svg() {
         .success();
     let s = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     assert!(s.starts_with("<svg"), "expected SVG, got: {s}");
+}
+
+#[test]
+fn jsonnet_file_path_traversal_exits_1() {
+    let dir = tempfile_dir_for("jsonnet_file_path_traversal_exits_1");
+    let sub = dir.join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(dir.join("secret.txt"), "SENTINEL_PARENT_FILE").unwrap();
+
+    std::fs::write(
+        sub.join("chart.jsonnet"),
+        r#"{
+  type: "bar",
+  data: {
+    labels: [importstr "../secret.txt"],
+    datasets: [{ data: [1] }],
+  },
+}
+"#,
+    )
+    .unwrap();
+
+    bin()
+        .args([
+            "render",
+            sub.join("chart.jsonnet").to_str().unwrap(),
+            "-o",
+            "-",
+        ])
+        .assert()
+        .failure()
+        .code(1);
 }
 
 // --- inspect サブコマンド（意味モデルを JSON で出力）---
@@ -797,6 +852,168 @@ fn jsonnet_file_syntax_error_exits_1() {
     std::fs::write(&spec, "{ not valid jsonnet ::::").unwrap();
     bin()
         .args(["render", spec.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn batch_jsonnet_importstr_exits_1_without_output() {
+    let dir = batch_dir("batch_jsonnet_importstr_exits_1_without_output");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+    std::fs::write(dir.join("secret.txt"), "FULGUR_SECRET_SHOULD_NOT_RENDER").unwrap();
+
+    std::fs::write(
+        in_dir.join("leak.jsonnet"),
+        r#"{
+  type: "bar",
+  data: {
+    labels: [importstr "../secret.txt"],
+    datasets: [{ data: [1] }],
+  },
+}
+"#,
+    )
+    .unwrap();
+
+    bin()
+        .args([
+            "render",
+            in_dir.join("leak.jsonnet").to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1);
+
+    assert!(
+        !out_dir.join("leak.svg").exists(),
+        "rejected Jsonnet must not produce output"
+    );
+}
+
+#[test]
+fn batch_jsonnet_import_via_textblock_exits_1() {
+    // ||| テキストブロック内に " があってもテキストスキャナを騙せないことを確認するテスト。
+    // import resolver を持たないため jrsonnet 自体が評価時にエラーを返す。
+    let dir = batch_dir("batch_jsonnet_import_via_textblock_exits_1");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+
+    std::fs::write(
+        in_dir.join("bypass.jsonnet"),
+        r#"local x = |||
+  he said "hello
+|||;
+local y = importstr "/etc/hostname";
+{ type: "bar", data: { labels: [y], datasets: [{ data: [1] }] } }
+"#,
+    )
+    .unwrap();
+
+    bin()
+        .args([
+            "render",
+            in_dir.join("bypass.jsonnet").to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1);
+
+    assert!(
+        !out_dir.join("bypass.svg").exists(),
+        "import bypass must not produce output"
+    );
+}
+
+// ---- std.parseYaml は無効化されているため評価エラーになる ----
+
+#[test]
+fn jsonnet_stdin_parse_yaml_exits_1() {
+    // stdin モードで std.parseYaml を呼ぶと "no such field" エラー
+    let spec = r#"{ type: "bar", data: { labels: [std.parseYaml("a: 1").a], datasets: [{ data: [1] }] } }"#;
+    bin()
+        .args(["render", "-", "-o", "-", "--jsonnet"])
+        .write_stdin(spec)
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn jsonnet_file_parse_yaml_exits_1() {
+    let dir = tempfile_dir_for("jsonnet_file_parse_yaml_exits_1");
+    let spec_path = dir.join("spec.jsonnet");
+    std::fs::write(
+        &spec_path,
+        r#"{ type: "bar", data: { labels: [std.parseYaml("a: 1").a], datasets: [{ data: [1] }] } }"#,
+    )
+    .unwrap();
+    bin()
+        .args(["render", spec_path.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn batch_jsonnet_parse_yaml_exits_1() {
+    let dir = batch_dir("batch_jsonnet_parse_yaml_exits_1");
+    let in_dir = dir.join("in");
+    let out_dir = dir.join("out");
+    std::fs::create_dir_all(&in_dir).unwrap();
+
+    std::fs::write(
+        in_dir.join("spec.jsonnet"),
+        r#"{ type: "bar", data: { labels: [std.parseYaml("a: 1").a], datasets: [{ data: [1] }] } }"#,
+    )
+    .unwrap();
+
+    bin()
+        .args([
+            "render",
+            in_dir.join("spec.jsonnet").to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .code(1);
+
+    assert!(
+        !out_dir.join("spec.svg").exists(),
+        "parseYaml error must not produce output"
+    );
+}
+
+// ---- 入力サイズ上限（1 MiB 超）はエラー ----
+
+#[test]
+fn jsonnet_stdin_size_limit_exits_1() {
+    // 1 MiB + 1 byte の入力はエラーになる
+    let over_limit = "x".repeat(1024 * 1024 + 1);
+    bin()
+        .args(["render", "-", "-o", "-", "--jsonnet"])
+        .write_stdin(over_limit)
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn jsonnet_file_size_limit_exits_1() {
+    let dir = tempfile_dir_for("jsonnet_file_size_limit_exits_1");
+    let spec_path = dir.join("big.jsonnet");
+    // 1 MiB + 1 byte の .jsonnet ファイルはサイズチェックで弾かれる
+    std::fs::write(&spec_path, "x".repeat(1024 * 1024 + 1)).unwrap();
+    bin()
+        .args(["render", spec_path.to_str().unwrap(), "-o", "-"])
         .assert()
         .failure()
         .code(1);
