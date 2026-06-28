@@ -4,7 +4,9 @@ use clap::{Parser, Subcommand, ValueEnum};
 use jrsonnet_evaluator::{
     FileImportResolver, State,
     manifest::{JsonFormat, ManifestFormat},
+    trace::PathResolver,
 };
+use jrsonnet_stdlib::ContextInitializer;
 
 /// Render chart.js-compatible JSON specs to deterministic static SVG/PNG.
 #[derive(Parser)]
@@ -205,11 +207,16 @@ fn main() {
     }
 }
 
-/// Jsonnet ソース文字列を JSON に評価（stdin 用）。
-fn evaluate_jsonnet_snippet(src: &str) -> Result<String, String> {
+fn build_jrsonnet_state() -> State {
     let mut b = State::builder();
     b.import_resolver(FileImportResolver::default());
-    let state = b.build();
+    b.context_initializer(ContextInitializer::new(PathResolver::new_cwd_fallback()));
+    b.build()
+}
+
+/// Jsonnet ソース文字列を JSON に評価（stdin 用）。
+fn evaluate_jsonnet_snippet(src: &str) -> Result<String, String> {
+    let state = build_jrsonnet_state();
     let _guard = state.enter();
     let val = state
         .evaluate_snippet(
@@ -224,9 +231,7 @@ fn evaluate_jsonnet_snippet(src: &str) -> Result<String, String> {
 
 /// .jsonnet ファイルを JSON に評価。import はファイルのディレクトリから解決。
 fn evaluate_jsonnet_file(path: &std::path::Path) -> Result<String, String> {
-    let mut b = State::builder();
-    b.import_resolver(FileImportResolver::default());
-    let state = b.build();
+    let state = build_jrsonnet_state();
     let _guard = state.enter();
     let val = state.import(path).map_err(|e| format!("{e}"))?;
     JsonFormat::default()
@@ -238,6 +243,7 @@ fn evaluate_jsonnet_file(path: &std::path::Path) -> Result<String, String> {
 fn is_jsonnet_path(path: &str) -> bool {
     std::path::Path::new(path)
         .extension()
+        .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("jsonnet"))
 }
 
