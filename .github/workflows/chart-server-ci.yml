@@ -1,0 +1,27 @@
+name: chart-server CI
+
+on:
+  pull_request:
+    paths:
+      - 'crates/chart-server/**'
+      - 'crates/fulgur-chart/**'
+      - '.github/workflows/chart-server-ci.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo check -p chart-server
+      - run: cargo clippy -p chart-server -- -D warnings
+      - run: cargo build --release -p chart-server
