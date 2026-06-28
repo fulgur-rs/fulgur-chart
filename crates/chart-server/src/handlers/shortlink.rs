@@ -9,13 +9,18 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateRequest {
+    /// Chart.js v4 spec as JSON object
     pub chart: Value,
+    /// Width in pixels
     pub width: Option<u32>,
+    /// Height in pixels
     pub height: Option<u32>,
+    /// Background colour
     #[serde(rename = "backgroundColor")]
     pub background_color: Option<String>,
+    /// Output format: `svg`, `png`, `webp`, `data-uri`
     #[serde(default = "default_fmt")]
     pub format: String,
 }
@@ -24,6 +29,16 @@ fn default_fmt() -> String {
     "svg".to_string()
 }
 
+#[utoipa::path(
+    post,
+    path = "/chart/create",
+    request_body = CreateRequest,
+    responses(
+        (status = 200, description = "Short link created"),
+        (status = 503, description = "Shortlink store is full"),
+    ),
+    tag = "chart"
+)]
 pub async fn post_create(
     State(state): State<AppState>,
     Json(req): Json<CreateRequest>,

@@ -12,26 +12,37 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct ChartQuery {
+    /// Chart.js JSON spec (URL-encoded)
     pub c: Option<String>,
+    /// Width in pixels
     pub w: Option<u32>,
+    /// Height in pixels
     pub h: Option<u32>,
+    /// Background colour (e.g. `white`)
     pub bkg: Option<String>,
+    /// Output format: `svg`, `png`, `webp`, `data-uri`
     #[serde(default)]
     pub f: OutputFormat,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 #[allow(dead_code)]
 pub struct ChartRequest {
+    /// Chart.js v4 spec as JSON object
     pub chart: Value,
+    /// Width in pixels
     pub width: Option<u32>,
+    /// Height in pixels
     pub height: Option<u32>,
+    /// Background colour
     #[serde(rename = "backgroundColor")]
     pub background_color: Option<String>,
+    /// Output format: `svg`, `png`, `webp`, `data-uri`
     #[serde(default)]
     pub format: OutputFormat,
+    /// DSL frontend (default: `chartjs`)
     #[serde(default = "default_dsl")]
     pub dsl: String,
 }
@@ -40,6 +51,19 @@ fn default_dsl() -> String {
     "chartjs".to_string()
 }
 
+#[utoipa::path(
+    get,
+    path = "/chart",
+    params(ChartQuery),
+    responses(
+        (status = 200, description = "Chart rendered successfully"),
+        (status = 304, description = "Not Modified (ETag match)"),
+        (status = 400, description = "Invalid chart spec or missing parameter"),
+        (status = 503, description = "Server busy"),
+        (status = 504, description = "Render timeout"),
+    ),
+    tag = "chart"
+)]
 pub async fn get_chart(
     State(state): State<AppState>,
     Query(q): Query<ChartQuery>,
@@ -59,6 +83,19 @@ pub async fn get_chart(
     handle_render(json, q.f, "chartjs".to_string(), headers, state).await
 }
 
+#[utoipa::path(
+    post,
+    path = "/chart",
+    request_body = ChartRequest,
+    responses(
+        (status = 200, description = "Chart rendered successfully"),
+        (status = 304, description = "Not Modified (ETag match)"),
+        (status = 400, description = "Invalid chart spec"),
+        (status = 503, description = "Server busy"),
+        (status = 504, description = "Render timeout"),
+    ),
+    tag = "chart"
+)]
 pub async fn post_chart(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -18,7 +18,7 @@ use fulgur_chart::{
 /// チャートの出力フォーマット。
 ///
 /// `"data-uri"` のみ serde で rename する。
-#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputFormat {
     Svg,

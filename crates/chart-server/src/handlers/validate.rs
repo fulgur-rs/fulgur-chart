@@ -7,9 +7,11 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct ValidateRequest {
+    /// Chart.js v4 spec as JSON object
     pub chart: Value,
+    /// DSL frontend (default: `chartjs`)
     #[serde(default = "default_dsl")]
     pub dsl: String,
 }
@@ -18,6 +20,17 @@ fn default_dsl() -> String {
     "chartjs".to_string()
 }
 
+#[utoipa::path(
+    post,
+    path = "/chart/validate",
+    request_body = ValidateRequest,
+    responses(
+        (status = 200, description = "Spec is valid"),
+        (status = 400, description = "Spec is invalid"),
+        (status = 500, description = "Internal error"),
+    ),
+    tag = "chart"
+)]
 pub async fn post_validate(Json(req): Json<ValidateRequest>) -> Response {
     let json = req.chart.to_string();
     let dsl = req.dsl.clone();

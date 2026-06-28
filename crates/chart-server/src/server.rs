@@ -12,10 +12,12 @@ use tower_http::{
     compression::{CompressionLayer, predicate::DefaultPredicate},
     cors::CorsLayer,
 };
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
     config::Config,
-    handlers::{chart, meta, shortlink, validate},
+    handlers::{chart, meta, openapi::ApiDoc, shortlink, validate},
     state::AppState,
     store::ShortlinkStore,
 };
@@ -62,6 +64,7 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
         .route("/chart/validate", post(validate::post_validate))
         .route("/chart/create", post(shortlink::post_create))
         .route("/chart/s/{id}", get(shortlink::get_shortlink))
+        .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
         .with_state(state)
         .layer(GovernorLayer {
             config: governor_conf,
