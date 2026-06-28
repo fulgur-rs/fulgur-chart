@@ -134,13 +134,25 @@ jobs:
       - name: Install npm deps
         run: npm install
 
-      - name: Install cross (musl / arm64)
+      # musl / aarch64-gnu are cross-compiled on the host via cargo-zigbuild
+      # (napi `--cross-compile`), NOT via cross's Docker. cross only mounts this
+      # standalone node workspace plus the `fulgur-chart` path dependency — it does
+      # NOT mount the repo-root Cargo.toml that `crates/fulgur-chart` inherits
+      # `edition.workspace = true` from, so cross fails with "failed to find a
+      # workspace root". zigbuild runs on the host where the full tree is present.
+      - name: Setup zig (zigbuild cross-compile toolchain)
         if: matrix.settings.use-cross
-        uses: taiki-e/install-action@cross
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
 
-      - name: Build native addon (cross)
+      - name: Install cargo-zigbuild
         if: matrix.settings.use-cross
-        run: npx napi build --platform --release --strip --target ${{ matrix.settings.target }} --use-cross
+        uses: taiki-e/install-action@cargo-zigbuild
+
+      - name: Build native addon (cross-compile via zigbuild)
+        if: matrix.settings.use-cross
+        run: npx napi build --platform --release --strip --target ${{ matrix.settings.target }} --cross-compile
 
       - name: Build native addon (native)
         if: '!matrix.settings.use-cross'
