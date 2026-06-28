@@ -37,14 +37,11 @@ pub fn render_svg(scene: &Scene, font_family: &str) -> String {
         s.push_str("</defs>");
     }
 
-    let mut gi = 0usize;
+    // 各プリミティブの出力は write_prim が担う。GradientPath は出現順に grad{n} を
+    // 参照する必要があるため、defs パスと同じ順序で採番するカウンタを渡す。
+    let mut grad_idx = 0usize;
     for item in &scene.items {
-        if let Prim::GradientPath { d, .. } = item {
-            write!(s, r#"<path d="{d}" fill="url(#grad{gi})" stroke="none"/>"#).unwrap();
-            gi += 1;
-        } else {
-            write_prim(&mut s, item, font_family);
-        }
+        write_prim(&mut s, item, font_family, &mut grad_idx);
     }
     s.push_str("</svg>\n");
     s
@@ -86,7 +83,7 @@ fn opacity_attr(name: &str, a: f32) -> String {
     }
 }
 
-fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
+fn write_prim(s: &mut String, prim: &Prim, font_family: &str, grad_idx: &mut usize) {
     match prim {
         Prim::Rect { x, y, w, h, fill } => {
             let x = fmt_num(*x);
@@ -176,8 +173,16 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str) {
             )
             .unwrap();
         }
-        // GradientPath は render_svg 側で <defs> + url() 参照として処理済み(no-op)。
-        Prim::GradientPath { .. } => {}
+        // GradientPath: render_svg の defs パスが出力した grad{n} を url() で参照する。
+        // 採番は defs パスと同じ「出現順」で、grad_idx を GradientPath ごとに進める。
+        Prim::GradientPath { d, .. } => {
+            write!(
+                s,
+                r#"<path d="{d}" fill="url(#grad{grad_idx})" stroke="none"/>"#
+            )
+            .unwrap();
+            *grad_idx += 1;
+        }
         Prim::Circle {
             cx,
             cy,

@@ -206,15 +206,12 @@ fn render_prim(
                 return;
             };
             use tiny_skia::{GradientStop, LinearGradient, Point, Shader, SpreadMode};
-            let to_ts = |c: &Color| {
-                tiny_skia::Color::from_rgba8(c.r, c.g, c.b, (c.a * 255.0).round() as u8)
-            };
             let shader = LinearGradient::new(
                 Point::from_xy(*x0 as f32, 0.0),
                 Point::from_xy(*x1 as f32, 0.0),
                 vec![
-                    GradientStop::new(0.0, to_ts(stop0)),
-                    GradientStop::new(1.0, to_ts(stop1)),
+                    GradientStop::new(0.0, to_skia_color(stop0)),
+                    GradientStop::new(1.0, to_skia_color(stop1)),
                 ],
                 SpreadMode::Pad,
                 Transform::identity(),
@@ -223,7 +220,7 @@ fn render_prim(
             // x1==x2 のグラデーションは最後の stop の色で塗るため、SVG 出力と
             // 揃えて stop1 で solid フォールバックする。
             let paint = Paint {
-                shader: shader.unwrap_or_else(|| Shader::SolidColor(to_ts(stop1))),
+                shader: shader.unwrap_or_else(|| Shader::SolidColor(to_skia_color(stop1))),
                 ..Default::default()
             };
             pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
@@ -610,12 +607,15 @@ fn vec_angle(ux: f64, uy: f64, vx: f64, vy: f64) -> f64 {
 // ペイント・ストロークヘルパ
 // ---------------------------------------------------------------------------
 
+/// ir::Color を tiny-skia の色へ変換する（アルファは 0–255 に丸め）。
+fn to_skia_color(color: &Color) -> tiny_skia::Color {
+    let alpha = (color.a * 255.0).round() as u8;
+    tiny_skia::Color::from_rgba8(color.r, color.g, color.b, alpha)
+}
+
 fn solid_paint(color: Color) -> Paint<'static> {
     let mut paint = Paint::default();
-    let alpha = (color.a * 255.0).round() as u8;
-    paint.set_color(tiny_skia::Color::from_rgba8(
-        color.r, color.g, color.b, alpha,
-    ));
+    paint.set_color(to_skia_color(&color));
     paint
 }
 

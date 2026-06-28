@@ -48,7 +48,6 @@ struct Node {
 struct Edge {
     flow: f64,
     index: usize,
-    key: String,
     /// 相手ノードの index(`from` なら入力元、`to` なら出力先)。
     node: usize,
     add_y: f64,
@@ -150,7 +149,6 @@ fn build_nodes(
         nodes[from_idx].to.push(Edge {
             flow: link.flow,
             index: i,
-            key: link.to.clone(),
             node: to_idx,
             add_y: 0.0,
         });
@@ -158,7 +156,6 @@ fn build_nodes(
         nodes[to_idx].from.push(Edge {
             flow: link.flow,
             index: i,
-            key: link.from.clone(),
             node: from_idx,
             add_y: 0.0,
         });
@@ -780,14 +777,6 @@ fn layout(
 // ────────────────────────────────────────────────
 
 /// `getAddY`: edges の中から key と index が一致する add_y を返す。無ければ 0。
-fn get_add_y(edges: &[Edge], key: &str, index: usize) -> f64 {
-    edges
-        .iter()
-        .find(|e| e.key == key && e.index == index)
-        .map(|e| e.add_y)
-        .unwrap_or(0.0)
-}
-
 /// 色に alpha を上書きする(RGB は保持)。
 fn with_alpha(c: Color, a: f32) -> Color {
     Color { a, ..c }
@@ -887,9 +876,14 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 表示ラベル文字列(labels マップで上書き)と最大幅。
     let display_label =
         |key: &str| -> String { labels.get(key).cloned().unwrap_or_else(|| key.to_string()) };
+    // 幅測定では割り当てを避けて借用で済ませる(最終描画のみ owned String が要る)。
     let mut max_label_w = 0.0_f32;
     for nd in &nodes {
-        let w = m.width(&display_label(&nd.key), label_font as f32);
+        let label = labels
+            .get(&nd.key)
+            .map(String::as_str)
+            .unwrap_or(nd.key.as_str());
+        let w = m.width(label, label_font as f32);
         if w > max_label_w {
             max_label_w = w;
         }
@@ -955,16 +949,28 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
+    // リンク index → add_y を 1 パスで引けるよう前計算する(各リンク index は
+    // from ノードの `to` と to ノードの `from` にちょうど 1 回ずつ現れる)。
+    // これでリボンごとの線形探索(ハブ/スターで O(L^2))を O(1) 直引きに変える。
+    let mut to_add_y = vec![0.0_f64; data.len()];
+    let mut from_add_y = vec![0.0_f64; data.len()];
+    for nd in &nodes {
+        for e in &nd.to {
+            to_add_y[e.index] = e.add_y;
+        }
+        for e in &nd.from {
+            from_add_y[e.index] = e.add_y;
+        }
+    }
+
     // リボン(ノードより背面)。データ順。
     for (i, link) in data.iter().enumerate() {
         let from_idx = key_to_idx[&link.from];
         let to_idx = key_to_idx[&link.to];
         let from_x = nodes[from_idx].x.unwrap_or(0) as f64;
         let to_x = nodes[to_idx].x.unwrap_or(0) as f64;
-        let from_y_val =
-            nodes[from_idx].y.unwrap_or(0.0) + get_add_y(&nodes[from_idx].to, &link.to, i);
-        let to_y_val =
-            nodes[to_idx].y.unwrap_or(0.0) + get_add_y(&nodes[to_idx].from, &link.from, i);
+        let from_y_val = nodes[from_idx].y.unwrap_or(0.0) + to_add_y[i];
+        let to_y_val = nodes[to_idx].y.unwrap_or(0.0) + from_add_y[i];
 
         let x = px(from_x) + node_width + border_space;
         let x2 = px(to_x) - border_space;
@@ -1114,8 +1120,9 @@ mod tests {
         let (nodes, idx) = build_nodes(&data, SankeySize::Max, &hm_f(), &hm_u());
         let c = &nodes[idx["C"]];
         assert_eq!(c.from.len(), 2);
-        assert_eq!(c.from[0].key, "B"); // flow 10 が先
-        assert_eq!(c.from[1].key, "A"); // flow 5
+        let (f0, f1) = (c.from[0].node, c.from[1].node);
+        assert_eq!(nodes[f0].key, "B"); // flow 10 が先
+        assert_eq!(nodes[f1].key, "A"); // flow 5
     }
 
     #[test]

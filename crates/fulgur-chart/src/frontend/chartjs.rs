@@ -1726,9 +1726,6 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     }
     #[derive(Deserialize)]
     struct DS {
-        #[allow(dead_code)]
-        #[serde(default)]
-        label: String,
         data: Vec<Flow>,
         #[serde(rename = "colorFrom", default)]
         color_from: Option<String>,
@@ -1882,26 +1879,8 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         },
         series,
         categories: vec![],
-        x_axis: AxisSpec {
-            title: None,
-            min: None,
-            max: None,
-            suggested_min: None,
-            suggested_max: None,
-            begin_at_zero: false,
-            offset: false,
-            grid: false,
-        },
-        y_axis: AxisSpec {
-            title: None,
-            min: None,
-            max: None,
-            suggested_min: None,
-            suggested_max: None,
-            begin_at_zero: false,
-            offset: false,
-            grid: false,
-        },
+        x_axis: zero_axis(),
+        y_axis: zero_axis(),
         legend: crate::ir::LegendPos::None,
         title: raw
             .options
