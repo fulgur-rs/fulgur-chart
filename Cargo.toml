@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/fulgur-chart", "crates/fulgur-chart-cli"]
+members = ["crates/fulgur-chart", "crates/fulgur-chart-cli", "crates/chart-server"]
 exclude = ["crates/bindings"]
 
 [workspace.package]
