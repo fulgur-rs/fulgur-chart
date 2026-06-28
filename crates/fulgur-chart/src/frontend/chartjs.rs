@@ -1727,6 +1727,8 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     }
     #[derive(Deserialize)]
     struct DS {
+        #[serde(default)]
+        label: String,
         data: Vec<Flow>,
         #[serde(rename = "colorFrom", default)]
         color_from: Option<String>,
@@ -1828,15 +1830,18 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     let label_color = ds.color.as_deref().and_then(parse_color).unwrap_or(black);
     let node_width = ds.node_width.unwrap_or(10.0);
     let node_padding = ds.node_padding.unwrap_or(10.0);
-    // 寸法は非有限・負値を拒否する(負の nodeWidth は <rect width="-5"> 等の不正 SVG を生む)。
+    // 寸法は [0, MAX_DIMENSION_PX] に収める。負値は <rect width="-5"> 等の不正 SVG を生み、
+    // 巨大な有限値(例 nodePadding=1e308)は layout の (max_y/height)*node_padding で ∞ に
+    // overflow し py(inf)=0 で図形を潰す。canvas 最大寸法を超える寸法は無意味なので拒否する。
+    let max_dim = crate::guard::DEFAULT_MAX_DIMENSION_PX;
     for (name, v) in [
         ("nodeWidth", node_width),
         ("nodePadding", node_padding),
         ("borderWidth", border_width),
     ] {
-        if !v.is_finite() || v < 0.0 {
+        if !v.is_finite() || v < 0.0 || v > max_dim {
             return Err(format!(
-                "sankey の {name} は非負の有限数である必要があります(指定値 {v})"
+                "sankey の {name} は [0, {max_dim}] の範囲である必要があります(指定値 {v})"
             ));
         }
     }
@@ -1858,7 +1863,8 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         .collect();
 
     let series = vec![Series {
-        name: String::new(),
+        // 他のパーサと同様、dataset の label を Series.name に保持する(inspect/bindings で観測可能)。
+        name: ds.label,
         values: vec![],
         points: vec![],
         fill: vec![],

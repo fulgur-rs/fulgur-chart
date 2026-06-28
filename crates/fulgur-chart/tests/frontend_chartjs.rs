@@ -999,3 +999,22 @@ fn sankey_rejects_negative_node_width() {
     let nan = r#"{"type":"sankey","data":{"datasets":[{"borderWidth":1e400,"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
     assert!(chartjs::parse(nan, false).is_err());
 }
+
+#[test]
+fn sankey_rejects_huge_node_padding() {
+    // 巨大な有限 nodePadding は layout の (max_y/height)*node_padding で ∞ に overflow し
+    // 図形を潰すため、canvas 最大寸法を超える値は parse で弾く。
+    let json = r#"{"type":"sankey","data":{"datasets":[{"nodePadding":1e308,"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+    // 妥当な範囲(canvas 上限以下)は受理。
+    let ok = r#"{"type":"sankey","data":{"datasets":[{"nodePadding":20,"nodeWidth":15,"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    assert!(chartjs::parse(ok, false).is_ok());
+}
+
+#[test]
+fn sankey_preserves_dataset_label() {
+    // 他のパーサと同様、dataset の label を Series.name に保持する。
+    let json = r#"{"type":"sankey","data":{"datasets":[{"label":"Energy","data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert_eq!(spec.series[0].name, "Energy");
+}
