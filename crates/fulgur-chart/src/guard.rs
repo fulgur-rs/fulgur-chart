@@ -319,14 +319,14 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
     }
 
     // --- 文字列長 ---
-    if let Some(title) = &spec.title {
-        if title.len() > limits.max_label_bytes {
-            return Err(format!(
-                "タイトルの長さ {} バイトが上限 {} を超えています",
-                title.len(),
-                limits.max_label_bytes,
-            ));
-        }
+    if let Some(title) = &spec.title
+        && title.len() > limits.max_label_bytes
+    {
+        return Err(format!(
+            "タイトルの長さ {} バイトが上限 {} を超えています",
+            title.len(),
+            limits.max_label_bytes,
+        ));
     }
     for cat in &spec.categories {
         if cat.len() > limits.max_label_bytes {
