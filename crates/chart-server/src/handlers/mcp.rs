@@ -156,7 +156,13 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         .ok_or((-32602, "Missing required argument: chart".to_string()))?
         .clone();
 
-    let format_str = args.get("format").and_then(|v| v.as_str()).unwrap_or("png");
+    // フィールドが存在するが型が違う場合は黙って無視せず -32602 を返す。
+    let format_str = match args.get("format") {
+        None => "png",
+        Some(v) => v
+            .as_str()
+            .ok_or((-32602, "format must be a string".to_string()))?,
+    };
     let format: OutputFormat = match format_str {
         "svg" => OutputFormat::Svg,
         "png" => OutputFormat::Png,
@@ -165,16 +171,24 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         other => return Err((-32602, format!("Unsupported format: {other}"))),
     };
 
-    let width = args
-        .get("width")
-        .and_then(|v| v.as_u64())
-        .map(|v| u32::try_from(v).map_err(|_| (-32602, "width out of u32 range".to_string())))
-        .transpose()?;
-    let height = args
-        .get("height")
-        .and_then(|v| v.as_u64())
-        .map(|v| u32::try_from(v).map_err(|_| (-32602, "height out of u32 range".to_string())))
-        .transpose()?;
+    let width = match args.get("width") {
+        None => None,
+        Some(v) => {
+            let n = v
+                .as_u64()
+                .ok_or((-32602, "width must be a non-negative integer".to_string()))?;
+            Some(u32::try_from(n).map_err(|_| (-32602, "width out of u32 range".to_string()))?)
+        }
+    };
+    let height = match args.get("height") {
+        None => None,
+        Some(v) => {
+            let n = v
+                .as_u64()
+                .ok_or((-32602, "height must be a non-negative integer".to_string()))?;
+            Some(u32::try_from(n).map_err(|_| (-32602, "height out of u32 range".to_string()))?)
+        }
+    };
 
     let json_str = super::chart::apply_overrides_value(chart_spec, width, height, None).to_string();
 
