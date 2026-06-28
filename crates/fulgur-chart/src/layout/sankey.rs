@@ -101,8 +101,11 @@ fn flow_sort(a: &Edge, b: &Edge) -> std::cmp::Ordering {
     if a.flow == b.flow {
         a.index.cmp(&b.index)
     } else {
-        // chartjs: `b.flow - a.flow`(降順)。flow に NaN は無い。
-        b.flow.partial_cmp(&a.flow).unwrap()
+        // chartjs: `b.flow - a.flow`(降順)。flow に NaN は無い(入力検証で排除済み)。
+        // 万一 NaN が漏れても順序を壊さないよう Equal にフォールバック(plan 不変条件 #4)。
+        b.flow
+            .partial_cmp(&a.flow)
+            .unwrap_or(std::cmp::Ordering::Equal)
     }
 }
 
@@ -285,15 +288,19 @@ fn calculate_x(
     let mut placed = vec![false; n];
     let mut remaining = n;
     let mut x = 0usize;
-    // 病的グラフでの無限ループ防止: 各反復で必ず 1 つ以上を配置するため n+1 回で十分。
+    // 各反復は必ず 1 ノード以上を配置するため、有効グラフでは最大 n 反復で完了する。
+    // cap は upstream の "Fatal error: unable to place nodes" 相当の保険であり、
+    // 有効グラフでは到達しない(無限ループに対する唯一のガード)。
     let cap = n + 1;
     let mut iterations = 0usize;
 
     while remaining > 0 {
         iterations += 1;
         if iterations > cap {
-            // ここに来るのは想定外(各反復で前進するはず)。安全弁。
-            debug_assert!(false, "sankey calculate_x exceeded iteration cap");
+            debug_assert!(
+                false,
+                "sankey calculate_x exceeded iteration cap (unreachable for valid graphs)"
+            );
             break;
         }
         let column = if x == 0 {
@@ -301,24 +308,12 @@ fn calculate_x(
         } else {
             next_column(n, &data_no_loops, &placed)
         };
+        // 有効グラフでは column は常に非空(start_column は n>=1 で非空、next_column は
+        // 残キーがある限り slice(0,1) フォールバックで非空)。
         debug_assert!(
             !column.is_empty(),
             "sankey: unable to place nodes to columns"
         );
-        if column.is_empty() {
-            // 残キー先頭を前進(無限ループ防止)。
-            if let Some(first) = (0..n).find(|&i| !placed[i]) {
-                if nodes[first].x.is_none() {
-                    nodes[first].x = Some(x);
-                }
-                placed[first] = true;
-                remaining -= 1;
-            }
-            if remaining > 0 {
-                x += 1;
-            }
-            continue;
-        }
         for key in column {
             if !placed[key] {
                 if nodes[key].x.is_none() {
@@ -534,7 +529,7 @@ fn fix_top(nodes: &mut [Node], max_x: usize) -> f64 {
                 .y
                 .unwrap_or(0.0)
                 .partial_cmp(&nodes[b].y.unwrap_or(0.0))
-                .unwrap()
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         let mut min_y = 0.0_f64;
         for &i in &col {
@@ -601,7 +596,7 @@ fn calculate_y_using_priority(nodes: &mut [Node], max_x: usize) -> f64 {
         col.sort_by(|&a, &b| {
             let pa = nodes[a].priority.unwrap_or(0.0);
             let pb = nodes[b].priority.unwrap_or(0.0);
-            pa.partial_cmp(&pb).unwrap()
+            pa.partial_cmp(&pb).unwrap_or(std::cmp::Ordering::Equal)
         });
         // 次列の起点: 列先頭ノードが x+1 を飛び越す to のフロー総和。
         next_y_start = if let Some(&first) = col.first() {
@@ -641,9 +636,12 @@ fn add_padding(nodes: &mut [Node], padding: f64) -> f64 {
         let ay = nodes[a].y.unwrap_or(0.0);
         let by = nodes[b].y.unwrap_or(0.0);
         if ay == by {
-            return nodes[a].size.partial_cmp(&nodes[b].size).unwrap();
+            return nodes[a]
+                .size
+                .partial_cmp(&nodes[b].size)
+                .unwrap_or(std::cmp::Ordering::Equal);
         }
-        ay.partial_cmp(&by).unwrap()
+        ay.partial_cmp(&by).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut column_xs: HashMap<usize, usize> = HashMap::new();
@@ -697,12 +695,19 @@ fn sort_flows(nodes: &mut [Node]) {
                 })
                 .collect();
             let mut order: Vec<usize> = (0..m).collect();
-            order.sort_by(|&a, &b| keys[a].partial_cmp(&keys[b]).unwrap());
+            order.sort_by(|&a, &b| {
+                keys[a]
+                    .partial_cmp(&keys[b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             apply_perm(&mut nodes[i].from, &order);
             let mut add_y = 0.0_f64;
             let len = m as f64;
             for (idx, e) in nodes[i].from.iter_mut().enumerate() {
                 if overlap_from {
+                    // upstream `i * (node.size - flow) / (len - 1)` の忠実移植。
+                    // size<in は size='min' でのみ起き、len==1 だと 0/0=NaN(upstream のバグ)。
+                    // ここでガードを足すと挙動が分岐するため足さない。fmt_num が NaN→"0" に潰す。
                     e.add_y = (idx as f64 * (node_size - e.flow)) / (len - 1.0);
                 } else {
                     e.add_y = add_y;
@@ -721,12 +726,19 @@ fn sort_flows(nodes: &mut [Node]) {
                 })
                 .collect();
             let mut order: Vec<usize> = (0..m).collect();
-            order.sort_by(|&a, &b| keys[a].partial_cmp(&keys[b]).unwrap());
+            order.sort_by(|&a, &b| {
+                keys[a]
+                    .partial_cmp(&keys[b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             apply_perm(&mut nodes[i].to, &order);
             let mut add_y = 0.0_f64;
             let len = m as f64;
             for (idx, e) in nodes[i].to.iter_mut().enumerate() {
                 if overlap_to {
+                    // upstream `i * (node.size - flow) / (len - 1)` の忠実移植。
+                    // size<out は size='min' でのみ起き、len==1 だと 0/0=NaN(upstream のバグ)。
+                    // ここでガードを足すと挙動が分岐するため足さない。fmt_num が NaN→"0" に潰す。
                     e.add_y = (idx as f64 * (node_size - e.flow)) / (len - 1.0);
                 } else {
                     e.add_y = add_y;
@@ -826,8 +838,8 @@ fn rect_outline_path(x: f64, y: f64, w: f64, h: f64) -> String {
 }
 
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
-    // sankey 設定値を取り出す。
-    let (
+    // sankey 設定値を取り出す。labels/priority/columns は参照のまま、他は Copy。
+    let ChartKind::Sankey {
         color_from,
         color_to,
         color_mode,
@@ -835,47 +847,21 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         node_width,
         node_padding,
         mode_x,
-        size_method,
+        size: size_method,
         border,
         border_width,
         label_color,
         labels,
         priority,
         columns,
-    ) = match &spec.kind {
-        ChartKind::Sankey {
-            color_from,
-            color_to,
-            color_mode,
-            alpha,
-            node_width,
-            node_padding,
-            mode_x,
-            size,
-            border,
-            border_width,
-            label_color,
-            labels,
-            priority,
-            columns,
-        } => (
-            *color_from,
-            *color_to,
-            *color_mode,
-            *alpha,
-            *node_width,
-            *node_padding,
-            *mode_x,
-            *size,
-            *border,
-            *border_width,
-            *label_color,
-            labels,
-            priority,
-            columns,
-        ),
-        _ => unreachable!("sankey::build called with non-sankey kind"),
+    } = &spec.kind
+    else {
+        unreachable!("sankey::build called with non-sankey kind");
     };
+    let (color_from, color_to, color_mode, alpha) = (*color_from, *color_to, *color_mode, *alpha);
+    let (node_width, node_padding, mode_x, size_method) =
+        (*node_width, *node_padding, *mode_x, *size_method);
+    let (border, border_width, label_color) = (*border, *border_width, *label_color);
 
     let data: &[SankeyLink] = spec
         .series
@@ -1248,6 +1234,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn calculate_y_disconnected_components_no_overlap() {
+        // 2 つの独立フロー A→B と C→D(両者を繋ぐリンクなし)。
+        // start ノードから到達できない側は process_rest の left/right Y 埋めで処理される。
+        let data = links(&[("A", "B", 10.0), ("C", "D", 6.0)]);
+        let (mut nodes, idx) = build_nodes(&data, SankeySize::Max, &hm_f(), &hm_u());
+        let max_x = calculate_x(&mut nodes, &data, &idx, SankeyModeX::Edge);
+        let max_y = calculate_y(&mut nodes, max_x);
+        // 全ノードが有限 y を得る。
+        for nd in &nodes {
+            assert!(nd.y.is_some_and(|y| y.is_finite()), "node {} y", nd.key);
+        }
+        assert!(max_y.is_finite() && max_y > 0.0);
+        // 各列で重なりなし。
+        for x in 0..=max_x {
+            let mut col: Vec<usize> = (0..nodes.len())
+                .filter(|&i| nodes[i].x == Some(x))
+                .collect();
+            col.sort_by(|&a, &b| {
+                nodes[a]
+                    .y
+                    .unwrap()
+                    .partial_cmp(&nodes[b].y.unwrap())
+                    .unwrap()
+            });
+            for w in col.windows(2) {
+                let bottom = nodes[w[0]].y.unwrap() + nodes[w[0]].size;
+                assert!(
+                    bottom <= nodes[w[1]].y.unwrap() + 1e-6,
+                    "overlap in column {x}"
+                );
+            }
+        }
+    }
+
     // ── Task 3.4: priority 順 ──
 
     #[test]
@@ -1263,6 +1284,30 @@ mod tests {
         let _ = calculate_y_using_priority(&mut nodes, max_x);
         assert!(nodes[idx["C"]].y.unwrap() < nodes[idx["B"]].y.unwrap());
         assert!(nodes[idx["B"]].y.unwrap() < nodes[idx["A"]].y.unwrap());
+    }
+
+    #[test]
+    fn priority_next_y_start_carries_spanning_flow() {
+        // A→B→C に加え列をまたぐ A→C。A=col0, B=col1, C=col2。
+        // col0 先頭 A の to のうち x>1 を飛び越す A→C(flow 2)が次列 col1 の起点 y に繰り越される。
+        let data = links(&[("A", "B", 3.0), ("B", "C", 3.0), ("A", "C", 2.0)]);
+        let mut prio = HashMap::new();
+        prio.insert("A".to_string(), 0.0); // priority レイアウトを有効化。
+        let (mut nodes, idx) = build_nodes(&data, SankeySize::Max, &prio, &hm_u());
+        let max_x = calculate_x(&mut nodes, &data, &idx, SankeyModeX::Edge);
+        assert_eq!(nodes[idx["A"]].x, Some(0));
+        assert_eq!(nodes[idx["B"]].x, Some(1));
+        assert_eq!(nodes[idx["C"]].x, Some(2));
+        let _ = calculate_y_using_priority(&mut nodes, max_x);
+        // 繰り越しにより col1 の B は y=0 ではなく A→C の flow(2)から始まる。
+        assert_eq!(nodes[idx["A"]].y, Some(0.0));
+        assert!(
+            (nodes[idx["B"]].y.unwrap() - 2.0).abs() < 1e-9,
+            "B.y should carry spanning flow 2, got {}",
+            nodes[idx["B"]].y.unwrap()
+        );
+        // col2 の C は繰り越しなし(B の to は x>2 を飛び越さない)→ y=0。
+        assert_eq!(nodes[idx["C"]].y, Some(0.0));
     }
 
     // ── Task 3.5: padding と flow オフセット ──
