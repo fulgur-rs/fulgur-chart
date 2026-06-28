@@ -22,6 +22,26 @@ const MAX_WORDCLOUD_WORDS: usize = 500;
 /// wordcloud の 1 語あたりバイト長上限 (SVG サイズ攻撃対策)。
 const MAX_WORDCLOUD_WORD_BYTES: usize = 200;
 
+/// sankey のリンク数上限 (DoS 対策)。
+/// 各リンクは 1 本のリボン(SVG path プリミティブ)になるため、リンク数がほぼ
+/// プリミティブ数・パースコストに直結する。10,000 本 ≈ 出力規模・処理量ともに実用上限。
+pub const MAX_SANKEY_LINKS: usize = 10_000;
+
+/// sankey のユニークノード数上限 (スタックオーバーフロー/DoS 対策)。
+///
+/// レイアウト(`layout/sankey.rs`)の `process_from`/`process_to`、および
+/// `calculate_x` 内の `get_all_keys_forward` は、連鎖に沿ってノード 1 つあたり
+/// スタックフレーム 1 つを消費する再帰で実装されている。線形連鎖(`n0→n1→…`)では
+/// 再帰深さがノード数とほぼ等しくなるため、ノード数がそのままスタック消費の上限になる。
+///
+/// テストスレッドの既定スタックは約 2 MB(本番メインスレッドは約 8 MB)と小さい。
+/// treemap がツリー深さを `DEFAULT_MAX_TREE_DEPTH = 50` で抑えてスタックを有界化する
+/// のと同じ理由で、sankey もノード数を抑えて最悪ケースの再帰深さを安全圏に保つ。
+/// この値は 2 MB スタックで線形連鎖をレンダリングしてもオーバーフローしないことを
+/// 経験的に検証して決めている(`tests/render_sankey.rs` のスタック安全テスト参照)。
+/// オーバーフローが起きる深さに対して十分なマージン(およそ 3 倍以上)を確保している。
+pub const MAX_SANKEY_NODES: usize = 2_000;
+
 /// 全系列の合計データ点数の上限(scatter/bubble 向け)。
 /// 合計で抑えることで series × points の積による爆発を防ぐ。
 pub const DEFAULT_MAX_TOTAL_DATA_POINTS: usize = 1_000_000;
@@ -305,12 +325,17 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         tree_points += validate_tree(&s.tree, 0, limits)?;
     }
 
+    // sankey のリンクもデータ点として合算する(各リンク=1 リボン)。これにより
+    // グローバルな max_total_data_points 上限が sankey にも効く。
+    let link_points: usize = spec.series.iter().map(|s| s.links.len()).sum();
+
     let total_points: usize = spec
         .series
         .iter()
         .map(|s| s.values.len().max(s.points.len()).max(s.box_points.len()))
         .sum::<usize>()
-        + tree_points;
+        + tree_points
+        + link_points;
     if total_points > limits.max_total_data_points {
         return Err(format!(
             "全系列のデータ点数合計 {} が上限 {} を超えています",
@@ -385,6 +410,43 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
                     e.size
                 ));
             }
+        }
+    }
+
+    // --- sankey リンク数・ノード数・ノードラベル長 ---
+    // リンク数はリボン(プリミティブ)数・パースコストを、ノード数はレイアウトの
+    // 再帰深さ(process_from/process_to/get_all_keys_forward)を抑える。MAX_SANKEY_NODES の
+    // 再帰スタック根拠は定数の doc コメント参照(treemap の深さ上限と同趣旨)。
+    if let crate::ir::ChartKind::Sankey { .. } = &spec.kind {
+        let links = spec.series.first().map(|s| s.links.len()).unwrap_or(0);
+        if links > MAX_SANKEY_LINKS {
+            return Err(format!(
+                "sankey のリンク数 {} が上限 {} を超えています",
+                links, MAX_SANKEY_LINKS,
+            ));
+        }
+        // ユニークノード集合を走査して数える(数えるだけなので順序は不問、HashSet で可)。
+        // 同時に各ノードキーのバイト長を検証する。
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        if let Some(s) = spec.series.first() {
+            for link in &s.links {
+                for key in [link.from.as_str(), link.to.as_str()] {
+                    if seen.insert(key) && key.len() > limits.max_label_bytes {
+                        return Err(format!(
+                            "sankey ノードラベルの長さ {} バイトが上限 {} を超えています",
+                            key.len(),
+                            limits.max_label_bytes,
+                        ));
+                    }
+                }
+            }
+        }
+        if seen.len() > MAX_SANKEY_NODES {
+            return Err(format!(
+                "sankey のノード数 {} が上限 {} を超えています",
+                seen.len(),
+                MAX_SANKEY_NODES,
+            ));
         }
     }
 
@@ -1027,6 +1089,78 @@ mod tests {
             ..base_spec()
         };
         assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    // ── sankey ガード ──
+
+    /// 最小の sankey spec を作り、リンク配列を差し替えるヘルパ。
+    fn sankey_spec_with_links(links: Vec<crate::ir::SankeyLink>) -> ChartSpec {
+        let mut s = chartjs::parse(
+            r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]}}"#,
+            false,
+        )
+        .unwrap();
+        s.series[0].links = links;
+        s
+    }
+
+    fn link(from: &str, to: &str) -> crate::ir::SankeyLink {
+        crate::ir::SankeyLink {
+            from: from.to_string(),
+            to: to.to_string(),
+            flow: 1.0,
+        }
+    }
+
+    #[test]
+    fn sankey_link_count_over_limit_rejected() {
+        // A→B を MAX_SANKEY_LINKS+1 本。ノードは 2 つだけなので link 数チェックを単離する。
+        let links = vec![link("A", "B"); MAX_SANKEY_LINKS + 1];
+        let spec = sankey_spec_with_links(links);
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn sankey_node_count_over_limit_rejected() {
+        // 自己ループ n_i→n_i を MAX_SANKEY_NODES+1 本。各リンク 1 ユニークキーで
+        // ノード数 = MAX_SANKEY_NODES+1、リンク数は MAX_SANKEY_LINKS 未満に収め node 数チェックを単離する。
+        let links: Vec<_> = (0..=MAX_SANKEY_NODES)
+            .map(|i| {
+                let key = format!("n{i}");
+                link(&key, &key)
+            })
+            .collect();
+        let spec = sankey_spec_with_links(links);
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn sankey_within_limits_ok() {
+        let links = vec![
+            link("A", "B"),
+            link("A", "C"),
+            link("B", "D"),
+            link("C", "D"),
+        ];
+        let spec = sankey_spec_with_links(links);
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn sankey_node_label_too_long_rejected() {
+        let long = "x".repeat(DEFAULT_MAX_LABEL_BYTES + 1);
+        let spec = sankey_spec_with_links(vec![link(&long, "B")]);
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn sankey_links_count_toward_total_points() {
+        let spec = sankey_spec_with_links(vec![link("A", "B"), link("B", "C"), link("C", "D")]);
+        let mut limits = default_limits();
+        limits.max_total_data_points = 2; // 3 リンク > 2
+        assert!(validate_spec(&spec, &limits).is_err());
+        limits.max_total_data_points = 3;
+        assert!(validate_spec(&spec, &limits).is_ok());
     }
 
     #[test]

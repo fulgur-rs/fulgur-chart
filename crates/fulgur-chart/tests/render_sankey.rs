@@ -1,6 +1,8 @@
 //! sankey チャートのエンドツーエンド描画テスト。
 
 use fulgur_chart::frontend::chartjs;
+use fulgur_chart::guard::{InputLimits, MAX_SANKEY_NODES, validate_spec};
+use fulgur_chart::ir::SankeyLink;
 use fulgur_chart::render::render_chart;
 
 fn render(json: &str) -> String {
@@ -105,4 +107,46 @@ fn sankey_empty_links_renders_without_panic() {
 #[test]
 fn sankey_snapshot() {
     insta::assert_snapshot!(render(ENERGY));
+}
+
+/// スタック安全テスト: ノード数上限ちょうどの線形連鎖を、guard が受理し、
+/// レイアウトの再帰(process_to / get_all_keys_forward が連鎖長ぶん深くなる)が
+/// スタックオーバーフローせず SVG を生成できることを検証する。
+///
+/// 既定のテストスレッドのスタックは RUST_MIN_STACK 等で増減し得るため、環境に
+/// 依存しないよう明示的に 2 MB スタックのスレッドで実行する(本番メインスレッドの
+/// 約 8 MB より厳しい、最悪ケースに近い条件)。MAX_SANKEY_NODES はこの 2 MB 条件で
+/// オーバーフローする連鎖長(経験的に約 6,100 ノード)に対し約 3 倍のマージンを持つ。
+#[test]
+fn sankey_at_cap_linear_chain_renders_without_stack_overflow() {
+    // N == MAX_SANKEY_NODES ノードの線形連鎖 n0→n1→…→n(N-1)(リンク N-1 本)。
+    let n = MAX_SANKEY_NODES;
+    let mut spec = chartjs::parse(
+        r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"n0","to":"n1","flow":1}]}]}}"#,
+        false,
+    )
+    .expect("parse error");
+    let links: Vec<SankeyLink> = (0..n - 1)
+        .map(|i| SankeyLink {
+            from: format!("n{i}"),
+            to: format!("n{}", i + 1),
+            flow: 1.0,
+        })
+        .collect();
+    spec.series[0].links = links;
+
+    // ノード数ちょうど上限 → guard は受理する。
+    assert!(
+        validate_spec(&spec, &InputLimits::default()).is_ok(),
+        "at-cap linear chain ({n} nodes) must pass guard"
+    );
+
+    // 2 MB スタックの専用スレッドで描画してオーバーフローしないことを確認する。
+    let handle = std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || render_chart(&spec))
+        .expect("spawn render thread");
+    let svg = handle.join().expect("render thread must not overflow");
+    assert!(svg.starts_with("<svg"));
+    assert!(!svg.contains("NaN"));
 }
