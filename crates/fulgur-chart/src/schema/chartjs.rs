@@ -967,32 +967,29 @@ pub struct SankeyDataset {
     pub color_from: Option<ColorString>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_to: Option<ColorString>,
-    /// "from" | "to" | "gradient"
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub color_mode: Option<String>,
+    pub color_mode: Option<SankeyColorModeOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_color: Option<ColorString>,
-    // 寸法は非負(parser が負値を拒否するのに合わせ schema も制約)。
+    // 寸法は [0, 32768](= DEFAULT_MAX_DIMENSION_PX)。parser の上限と一致させる。
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 0.0))]
+    #[schemars(range(min = 0.0, max = 32768.0))]
     pub border_width: Option<f64>,
     /// ノードラベル色
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<ColorString>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 0.0))]
+    #[schemars(range(min = 0.0, max = 32768.0))]
     pub node_width: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 0.0))]
+    #[schemars(range(min = 0.0, max = 32768.0))]
     pub node_padding: Option<f64>,
-    /// "edge" | "even"
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode_x: Option<String>,
-    /// "min" | "max"
+    pub mode_x: Option<SankeyModeXOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<String>,
+    pub size: Option<SankeySizeOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<std::collections::HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1009,6 +1006,32 @@ pub struct SankeyFlow {
     /// フロー量は非負(parser が flow < 0 を拒否するのに合わせる)。
     #[schemars(range(min = 0.0))]
     pub flow: f64,
+}
+
+/// sankey の colorMode。enum 化することで schema が値を列挙制約し、タイポ(例 "form")を
+/// schema・parser とも拒否できる(silent default を防ぐ)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SankeyColorModeOption {
+    From,
+    To,
+    Gradient,
+}
+
+/// sankey の modeX(列配置モード)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SankeyModeXOption {
+    Edge,
+    Even,
+}
+
+/// sankey の size(ノード高さの算出方式)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SankeySizeOption {
+    Min,
+    Max,
 }
 
 #[cfg(test)]
@@ -1034,6 +1057,11 @@ mod tests {
         assert!(
             json.contains("\"minimum\":0"),
             "sankey の寸法/flow に minimum:0 が必要"
+        );
+        // 寸法上限(parser の MAX_DIMENSION_PX と一致)が maximum として出ること。
+        assert!(
+            json.contains("\"maximum\":32768"),
+            "sankey の寸法に maximum:32768 が必要"
         );
     }
 }

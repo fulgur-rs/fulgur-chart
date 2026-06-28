@@ -1018,3 +1018,32 @@ fn sankey_preserves_dataset_label() {
     let spec = chartjs::parse(json, false).unwrap();
     assert_eq!(spec.series[0].name, "Energy");
 }
+
+#[test]
+fn sankey_rejects_unknown_enum_values() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    // colorMode/modeX/size のタイポは silent default にせず、schema・parser とも拒否する。
+    for (field, bad) in [("colorMode", "form"), ("modeX", "edeg"), ("size", "mn")] {
+        let json = format!(
+            r#"{{"type":"sankey","data":{{"datasets":[{{"{field}":"{bad}","data":[{{"from":"A","to":"B","flow":1}}]}}]}}}}"#
+        );
+        assert!(
+            serde_json::from_str::<ChartJsSpec>(&json).is_err(),
+            "schema should reject {field}={bad}"
+        );
+        assert!(
+            chartjs::parse(&json, false).is_err(),
+            "parser should reject {field}={bad}"
+        );
+    }
+}
+
+#[test]
+fn sankey_accepts_null_options() {
+    // schema は optional フィールドを nullable として描くため、parser も明示 null を
+    // 既定として受理し、schema-valid な spec が strict で落ちないようにする。
+    let null_opts = r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":null}"#;
+    assert!(chartjs::parse(null_opts, true).is_ok());
+    let null_plugins = r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":{"plugins":null}}"#;
+    assert!(chartjs::parse(null_plugins, true).is_ok());
+}

@@ -428,52 +428,48 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         let links = spec.series.first().map(|s| s.links.len()).unwrap_or(0);
         if links > MAX_SANKEY_LINKS {
             return Err(format!(
-                "sankey のリンク数 {} が上限 {} を超えています",
+                "sankey link count {} exceeds limit {}",
                 links, MAX_SANKEY_LINKS,
             ));
         }
-        // ユニークノード集合 + 各ノードキーのバイト長 + per-node フロー総和を一度に走査する。
+        // ユニークノード集合 + 各ノードキーのバイト長 + 全フロー合計を一度に走査する。
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        // key -> (in_flow 累計, out_flow 累計)。
-        let mut totals: std::collections::HashMap<&str, (f64, f64)> =
-            std::collections::HashMap::new();
+        let mut total_flow = 0.0_f64;
         if let Some(s) = spec.series.first() {
             for link in &s.links {
                 for key in [link.from.as_str(), link.to.as_str()] {
                     if seen.insert(key) && key.len() > limits.max_label_bytes {
                         return Err(format!(
-                            "sankey ノードラベルの長さ {} バイトが上限 {} を超えています",
+                            "sankey node label length {} bytes exceeds limit {}",
                             key.len(),
                             limits.max_label_bytes,
                         ));
                     }
                 }
-                totals.entry(link.from.as_str()).or_insert((0.0, 0.0)).1 += link.flow;
-                totals.entry(link.to.as_str()).or_insert((0.0, 0.0)).0 += link.flow;
+                total_flow += link.flow;
             }
         }
         if seen.len() > MAX_SANKEY_NODES {
             return Err(format!(
-                "sankey のノード数 {} が上限 {} を超えています",
+                "sankey node count {} exceeds limit {}",
                 seen.len(),
                 MAX_SANKEY_NODES,
             ));
         }
-        // 個々の flow は有限でも、合算でノード総和が ∞ に overflow しうる。非有限の総和は
-        // size(=正規化分母)を壊し、fmt_num が幾何を "0" に潰すため拒否する。
-        for (key, (in_flow, out_flow)) in &totals {
-            if !in_flow.is_finite() || !out_flow.is_finite() {
-                return Err(format!(
-                    "sankey ノード {} のフロー総和が非有限です(値が大きすぎます)",
-                    key,
-                ));
-            }
+        // 個々の flow が有限でも、合算で全フロー合計が ∞ に overflow すると、layout の
+        // 列内サイズ合計や max_y も ∞ になり py(inf)=0 で幾何が潰れる。逆に合計が有限なら、
+        // 各列のサイズ合計 ≈ 合計(保存則)も max_y も有限で、padding も(node_padding は上限済み)
+        // 有限に収まる。よって「合計が有限であること」だけを検証すればよい(per-node を包含)。
+        if !total_flow.is_finite() {
+            return Err(format!(
+                "sankey total flow is non-finite (values too large): {total_flow}"
+            ));
         }
         // labels 上書き値も描画される(幅測定 + SVG 出力)ため max_label_bytes で検証する。
         for (key, label) in labels {
             if label.len() > limits.max_label_bytes {
                 return Err(format!(
-                    "sankey ラベル上書き({})の長さ {} バイトが上限 {} を超えています",
+                    "sankey label override ({}) length {} bytes exceeds limit {}",
                     key,
                     label.len(),
                     limits.max_label_bytes,
@@ -485,7 +481,7 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         for (key, &col) in columns {
             if seen.contains(key.as_str()) && col >= MAX_SANKEY_NODES {
                 return Err(format!(
-                    "sankey の手動 column({})={} が上限 {} 以上です",
+                    "sankey manual column ({})={} must be below limit {}",
                     key, col, MAX_SANKEY_NODES,
                 ));
             }
@@ -1232,23 +1228,31 @@ mod tests {
         assert!(validate_spec(&spec, &default_limits()).is_err());
     }
 
+    fn flow_link(from: &str, to: &str, flow: f64) -> crate::ir::SankeyLink {
+        crate::ir::SankeyLink {
+            from: from.into(),
+            to: to.into(),
+            flow,
+        }
+    }
+
     #[test]
     fn sankey_non_finite_flow_total_rejected() {
-        // 同一ソースからの 2 本の 1e308 で out_flow が +inf に overflow → 拒否。
-        let links = vec![
-            crate::ir::SankeyLink {
-                from: "A".into(),
-                to: "B".into(),
-                flow: 1e308,
-            },
-            crate::ir::SankeyLink {
-                from: "A".into(),
-                to: "C".into(),
-                flow: 1e308,
-            },
-        ];
-        let spec = sankey_spec_with_links(links);
+        // 同一ソースからの 2 本の 1e308 で合計が +inf に overflow → 拒否。
+        let spec =
+            sankey_spec_with_links(vec![flow_link("A", "B", 1e308), flow_link("A", "C", 1e308)]);
         assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn sankey_aggregate_flow_overflow_rejected() {
+        // 別ソースの 2 本(各 1e308)でも合計が ∞ に overflow → 全フロー合計の有限性で弾く。
+        let spec =
+            sankey_spec_with_links(vec![flow_link("A", "B", 1e308), flow_link("C", "D", 1e308)]);
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+        // 単一の大きい有限 flow は合計も有限なので受理される(下流も保存則で有限に収まる)。
+        let ok = sankey_spec_with_links(vec![flow_link("A", "B", 1e308)]);
+        assert!(validate_spec(&ok, &default_limits()).is_ok());
     }
 
     #[test]

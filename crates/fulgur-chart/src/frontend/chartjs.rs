@@ -5,6 +5,17 @@ use crate::ir::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+/// Deserialize a field that may be explicitly `null`, treating `null` (and a missing
+/// field via `#[serde(default)]`) as `T::default()`. Keeps parser tolerance aligned with
+/// schemas that render optional fields as nullable.
+fn null_or_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 #[derive(Deserialize)]
 struct RawSpec {
     #[serde(rename = "type")]
@@ -18,7 +29,8 @@ struct RawSpec {
 struct RawOptions {
     #[serde(rename = "indexAxis")]
     index_axis: Option<String>,
-    #[serde(default)]
+    // Accept an explicit `options.plugins: null` as the default (schemas render it nullable).
+    #[serde(default, deserialize_with = "null_or_default")]
     plugins: RawPlugins,
     #[serde(default)]
     theme: Option<RawTheme>,
@@ -1718,7 +1730,8 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     #[derive(Deserialize)]
     struct W {
         data: D,
-        #[serde(default)]
+        // Accept an explicit `options: null` as the default (schema renders options nullable).
+        #[serde(default, deserialize_with = "null_or_default")]
         options: RawOptions,
     }
     #[derive(Deserialize)]
@@ -1768,7 +1781,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
 
     let raw: W = serde_json::from_str(json).map_err(|e| e.to_string())?;
     if raw.data.datasets.len() != 1 {
-        return Err("sankey チャートには dataset が 1 つ必要です".to_string());
+        return Err("sankey requires exactly one dataset".to_string());
     }
     let ds = raw.data.datasets.into_iter().next().unwrap();
 
@@ -1776,7 +1789,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     let mut links = Vec::with_capacity(ds.data.len());
     for f in ds.data {
         if !f.flow.is_finite() || f.flow < 0.0 {
-            return Err("sankey の flow は非負の有限数である必要があります".to_string());
+            return Err("sankey flow must be a non-negative finite number".to_string());
         }
         links.push(SankeyLink {
             from: f.from,
@@ -1815,10 +1828,12 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         .as_deref()
         .and_then(parse_color)
         .unwrap_or(green);
+    // 未知値(タイポ)は silent default にせず明示エラーにする(schema の enum 制約と一致)。
     let color_mode = match ds.color_mode.as_deref() {
+        None | Some("gradient") => SankeyColorMode::Gradient,
         Some("from") => SankeyColorMode::From,
         Some("to") => SankeyColorMode::To,
-        _ => SankeyColorMode::Gradient, // 既定 + "gradient"
+        Some(other) => return Err(format!("unsupported sankey colorMode: {other}")),
     };
     let alpha = ds.alpha.map(|a| a as f32).unwrap_or(0.5).clamp(0.0, 1.0);
     let border = ds
@@ -1841,17 +1856,19 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     ] {
         if !v.is_finite() || v < 0.0 || v > max_dim {
             return Err(format!(
-                "sankey の {name} は [0, {max_dim}] の範囲である必要があります(指定値 {v})"
+                "sankey {name} must be within [0, {max_dim}] (got {v})"
             ));
         }
     }
     let mode_x = match ds.mode_x.as_deref() {
+        None | Some("edge") => SankeyModeX::Edge,
         Some("even") => SankeyModeX::Even,
-        _ => SankeyModeX::Edge,
+        Some(other) => return Err(format!("unsupported sankey modeX: {other}")),
     };
     let size = match ds.size.as_deref() {
+        None | Some("max") => SankeySize::Max,
         Some("min") => SankeySize::Min,
-        _ => SankeySize::Max,
+        Some(other) => return Err(format!("unsupported sankey size: {other}")),
     };
     let labels = ds.labels.unwrap_or_default();
     let priority = ds.priority.unwrap_or_default();
