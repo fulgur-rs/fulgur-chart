@@ -78,11 +78,12 @@ export function render(specJson, format, options) {
     if (!r.ok) {
       throw makeError(r.code, r.message)
     }
-    // Read each field out of wasm memory once (a getter clones; the unused one is
-    // undefined). Exactly one of svg/png is set on success; png is a Uint8Array.
+    // Read each field out of wasm memory once (a getter clones; the unused ones are
+    // undefined). Exactly one of svg/png/webp is set on success; png/webp are Uint8Arrays.
     const svg = r.svg
     const png = r.png
-    return svg != null ? svg : png
+    const webp = r.webp
+    return svg != null ? svg : (png != null ? png : webp)
   } finally {
     r.free()
   }

@@ -33,6 +33,7 @@ pub struct RenderResult {
     pub ok: bool,
     pub svg: Option<String>,
     pub png: Option<Buffer>,
+    pub webp: Option<Buffer>,
     pub code: Option<String>,
     pub message: Option<String>,
 }
@@ -43,6 +44,7 @@ impl RenderResult {
             ok: true,
             svg: Some(s),
             png: None,
+            webp: None,
             code: None,
             message: None,
         }
@@ -52,6 +54,17 @@ impl RenderResult {
             ok: true,
             svg: None,
             png: Some(b.into()),
+            webp: None,
+            code: None,
+            message: None,
+        }
+    }
+    fn webp(b: Vec<u8>) -> Self {
+        Self {
+            ok: true,
+            svg: None,
+            png: None,
+            webp: Some(b.into()),
             code: None,
             message: None,
         }
@@ -61,6 +74,7 @@ impl RenderResult {
             ok: false,
             svg: None,
             png: None,
+            webp: None,
             code: Some(code.to_string()),
             message: Some(message),
         }
@@ -99,6 +113,7 @@ fn parse_spec(json: &str, dsl: &str, strict: bool) -> Result<fulgur_chart::ir::C
 enum Output {
     Svg(String),
     Png(Vec<u8>),
+    Webp(Vec<u8>),
 }
 
 /// Build + validate the IR, then render. Mirrors the Ruby binding's `build_ir` + format match.
@@ -167,9 +182,15 @@ fn render_inner(
                 .map_err(|e| (RENDER_ERROR, e))?;
             Ok(Output::Png(png))
         }
+        "webp" => {
+            let fb = font.unwrap_or(fulgur_chart::font::DEFAULT_FONT);
+            let webp = fulgur_chart::raster_direct::render_chart_to_webp(&ir, scale, fb)
+                .map_err(|e| (RENDER_ERROR, e))?;
+            Ok(Output::Webp(webp))
+        }
         other => Err((
             PARSE_ERROR,
-            format!("unsupported format '{other}' (supported: svg, png)"),
+            format!("unsupported format '{other}' (supported: svg, png, webp)"),
         )),
     }
 }
@@ -181,6 +202,7 @@ pub fn render(spec_json: String, format: String, options: Option<RenderOptions>)
     match render_inner(&spec_json, &format, options) {
         Ok(Output::Svg(s)) => RenderResult::svg(s),
         Ok(Output::Png(b)) => RenderResult::png(b),
+        Ok(Output::Webp(b)) => RenderResult::webp(b),
         Err((code, message)) => RenderResult::err(code, message),
     }
 }

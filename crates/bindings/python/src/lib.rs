@@ -111,17 +111,26 @@ fn render_image<'py>(
     dsl: Option<&str>,
     font: Option<&[u8]>,
 ) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
-    if format != "png" {
-        return Err(parse_error(format!(
-            "サポートされていないフォーマット: '{format}'"
-        )));
-    }
     let spec = build_ir(spec_json, width, height, strict, dsl)?;
     let font_bytes = font.unwrap_or(fulgur_core::font::DEFAULT_FONT);
-    // PNG パスの全エラー（フォントエラー含む）→ RenderError（binding-api-contract の非対称規約）
-    let png_data = fulgur_core::raster_direct::render_chart_to_png(&spec, scale as f32, font_bytes)
-        .map_err(render_error)?;
-    Ok(pyo3::types::PyBytes::new(py, &png_data))
+    match format {
+        "png" => {
+            // PNG パスの全エラー（フォントエラー含む）→ RenderError（binding-api-contract の非対称規約）
+            let png_data =
+                fulgur_core::raster_direct::render_chart_to_png(&spec, scale as f32, font_bytes)
+                    .map_err(render_error)?;
+            Ok(pyo3::types::PyBytes::new(py, &png_data))
+        }
+        "webp" => {
+            let webp_data =
+                fulgur_core::raster_direct::render_chart_to_webp(&spec, scale as f32, font_bytes)
+                    .map_err(render_error)?;
+            Ok(pyo3::types::PyBytes::new(py, &webp_data))
+        }
+        other => Err(parse_error(format!(
+            "サポートされていないフォーマット: '{other}' (supported: png, webp)"
+        ))),
+    }
 }
 
 #[pyfunction]

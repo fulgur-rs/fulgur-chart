@@ -231,6 +231,7 @@ where
 enum Rendered {
     Svg(String),
     Png(Vec<u8>),
+    Webp(Vec<u8>),
 }
 
 /// How a render failure is classified once back under the GVL. Mirrors the original
@@ -268,6 +269,13 @@ fn render_pure(
                 .map_err(RenderFail::Render)?;
             Ok(Rendered::Png(png))
         }
+        "webp" => {
+            let fb = font.unwrap_or(fulgur_chart::font::DEFAULT_FONT);
+            // Invalid font on the image path → RenderError (the SVG path maps this to ParseError).
+            let webp = fulgur_chart::raster_direct::render_chart_to_webp(ir, scale, fb)
+                .map_err(RenderFail::Render)?;
+            Ok(Rendered::Webp(webp))
+        }
         other => Err(RenderFail::UnsupportedFormat(other.to_string())),
     }
 }
@@ -303,11 +311,12 @@ fn render(ruby: &Ruby, args: &[Value]) -> Result<RString, Error> {
     match result {
         Ok(Rendered::Svg(svg)) => Ok(ruby.str_new(&svg)), // UTF-8 String
         Ok(Rendered::Png(png)) => Ok(ruby.str_from_slice(&png)), // ASCII-8BIT (BINARY) String
+        Ok(Rendered::Webp(webp)) => Ok(ruby.str_from_slice(&webp)), // ASCII-8BIT (BINARY) String
         Err(RenderFail::Parse(m)) => Err(parse_err(ruby, m)),
         Err(RenderFail::Render(m)) => Err(render_err(ruby, m)),
         Err(RenderFail::UnsupportedFormat(other)) => Err(parse_err(
             ruby,
-            format!("unsupported format '{other}' (supported: svg, png)"),
+            format!("unsupported format '{other}' (supported: svg, png, webp)"),
         )),
     }
 }

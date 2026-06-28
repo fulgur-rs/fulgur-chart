@@ -10,14 +10,15 @@ const PARSE_ERROR: &str = "PARSE_ERROR";
 const STRICT_ERROR: &str = "STRICT_ERROR";
 const RENDER_ERROR: &str = "RENDER_ERROR";
 
-/// Discriminated render result. Exactly one of (svg, png) is set when `ok`; otherwise
+/// Discriminated render result. Exactly one of (svg, png, webp) is set when `ok`; otherwise
 /// (code, message) describe the failure. Exposed to JS via explicit getters so that
-/// `png` surfaces as a `Uint8Array` (Vec<u8>) and the string fields as `string`.
+/// `png`/`webp` surfaces as a `Uint8Array` (Vec<u8>) and the string fields as `string`.
 #[wasm_bindgen]
 pub struct RenderResult {
     ok: bool,
     svg: Option<String>,
     png: Option<Vec<u8>>,
+    webp: Option<Vec<u8>>,
     code: Option<String>,
     message: Option<String>,
 }
@@ -37,6 +38,11 @@ impl RenderResult {
     pub fn png(&self) -> Option<Vec<u8>> {
         self.png.clone()
     }
+    /// `Uint8Array | undefined` on the JS side.
+    #[wasm_bindgen(getter)]
+    pub fn webp(&self) -> Option<Vec<u8>> {
+        self.webp.clone()
+    }
     #[wasm_bindgen(getter)]
     pub fn code(&self) -> Option<String> {
         self.code.clone()
@@ -53,6 +59,7 @@ impl RenderResult {
             ok: true,
             svg: Some(s),
             png: None,
+            webp: None,
             code: None,
             message: None,
         }
@@ -62,6 +69,17 @@ impl RenderResult {
             ok: true,
             svg: None,
             png: Some(b),
+            webp: None,
+            code: None,
+            message: None,
+        }
+    }
+    fn ok_webp(b: Vec<u8>) -> Self {
+        Self {
+            ok: true,
+            svg: None,
+            png: None,
+            webp: Some(b),
             code: None,
             message: None,
         }
@@ -71,6 +89,7 @@ impl RenderResult {
             ok: false,
             svg: None,
             png: None,
+            webp: None,
             code: Some(code.to_string()),
             message: Some(message),
         }
@@ -109,6 +128,7 @@ fn parse_spec(json: &str, dsl: &str, strict: bool) -> Result<fulgur_chart::ir::C
 enum Output {
     Svg(String),
     Png(Vec<u8>),
+    Webp(Vec<u8>),
 }
 
 /// Build + validate the IR, then render. Mirrors the Node binding's `render_inner`.
@@ -178,9 +198,15 @@ fn render_inner(
                 .map_err(|e| (RENDER_ERROR, e))?;
             Ok(Output::Png(png))
         }
+        "webp" => {
+            let fb: &[u8] = font.unwrap_or(fulgur_chart::font::DEFAULT_FONT);
+            let webp = fulgur_chart::raster_direct::render_chart_to_webp(&ir, scale, fb)
+                .map_err(|e| (RENDER_ERROR, e))?;
+            Ok(Output::Webp(webp))
+        }
         other => Err((
             PARSE_ERROR,
-            format!("unsupported format '{other}' (supported: svg, png)"),
+            format!("unsupported format '{other}' (supported: svg, png, webp)"),
         )),
     }
 }
@@ -213,6 +239,7 @@ pub fn render(
     ) {
         Ok(Output::Svg(s)) => RenderResult::ok_svg(s),
         Ok(Output::Png(b)) => RenderResult::ok_png(b),
+        Ok(Output::Webp(b)) => RenderResult::ok_webp(b),
         Err((code, message)) => RenderResult::err(code, message),
     }
 }

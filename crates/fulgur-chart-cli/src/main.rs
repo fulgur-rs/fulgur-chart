@@ -391,6 +391,7 @@ struct RenderArgs {
 enum Format {
     Svg,
     Png,
+    Webp,
 }
 
 fn main() {
@@ -601,6 +602,7 @@ fn run_batch(args: &RenderArgs, out_dir: &str, font_bytes: &Option<Vec<u8>>) {
     let ext = match format {
         Format::Svg => "svg",
         Format::Png => "png",
+        Format::Webp => "webp",
     };
 
     // Phase 1: validate and render all inputs before writing anything.
@@ -744,6 +746,13 @@ fn render_one(
             fulgur_chart::raster_direct::render_chart_to_png(&spec_ir, args.scale, fb)
                 .map_err(|e| (3, format!("error: PNG conversion failed: {e}")))
         }
+        Format::Webp => {
+            let fb = font_bytes
+                .as_deref()
+                .unwrap_or(fulgur_chart::font::DEFAULT_FONT);
+            fulgur_chart::raster_direct::render_chart_to_webp(&spec_ir, args.scale, fb)
+                .map_err(|e| (3, format!("error: WebP conversion failed: {e}")))
+        }
     }
 }
 
@@ -769,12 +778,14 @@ fn write_output(path: &str, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 fn detect_format(output: &str) -> Format {
-    if output != "-"
-        && std::path::Path::new(output)
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("png"))
-    {
+    if output == "-" {
+        return Format::Svg;
+    }
+    let ext = std::path::Path::new(output).extension();
+    if ext.is_some_and(|e| e.eq_ignore_ascii_case("png")) {
         Format::Png
+    } else if ext.is_some_and(|e| e.eq_ignore_ascii_case("webp")) {
+        Format::Webp
     } else {
         Format::Svg
     }

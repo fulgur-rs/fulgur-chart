@@ -15,6 +15,8 @@
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
+use image::codecs::webp::WebPEncoder;
+use image::{ExtendedColorType, ImageEncoder};
 use tiny_skia::{self, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 use ttf_parser::OutlineBuilder;
 
@@ -41,9 +43,9 @@ pub fn render_chart_to_png(
     font_bytes: &[u8],
 ) -> Result<Vec<u8>, String> {
     let face =
-        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("フォント解析失敗: {e}"))?;
-    let measurer =
-        crate::text::TextMeasurer::new(font_bytes).map_err(|e| format!("計測初期化失敗: {e}"))?;
+        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
+    let measurer = crate::text::TextMeasurer::new(font_bytes)
+        .map_err(|e| format!("text measurer init failed: {e}"))?;
     let scene = crate::layout::build_scene(spec, &measurer);
     scene_to_png_with_face(&scene, scale, &face)
 }
@@ -56,12 +58,58 @@ pub fn render_chart_to_png_default(
     render_chart_to_png(spec, scale, DEFAULT_FONT)
 }
 
+/// ChartSpec を WebP バイト列に直接ラスタライズする（ロスレス）。
+///
+/// SVG 文字列を経由しない。決定論性（同一入力 → 同一出力）を保証する。
+pub fn render_chart_to_webp(
+    spec: &crate::ir::ChartSpec,
+    scale: f32,
+    font_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    let face =
+        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
+    let measurer = crate::text::TextMeasurer::new(font_bytes)
+        .map_err(|e| format!("text measurer init failed: {e}"))?;
+    let scene = crate::layout::build_scene(spec, &measurer);
+    let pixmap = scene_to_pixmap(&scene, scale, &face)?;
+
+    // WebP lossless per-axis limit
+    const MAX_WEBP_AXIS: u32 = 16_384;
+    if pixmap.width() > MAX_WEBP_AXIS || pixmap.height() > MAX_WEBP_AXIS {
+        return Err(format!(
+            "WebP output {}×{} px exceeds the per-axis limit of {} px",
+            pixmap.width(),
+            pixmap.height(),
+            MAX_WEBP_AXIS
+        ));
+    }
+
+    // Demultiply premultiplied RGBA → straight RGBA before WebP encoding.
+    // tiny-skia stores pixels as premultiplied; WebPEncoder expects straight alpha.
+    let mut straight = Vec::with_capacity(pixmap.data().len());
+    for pixel in pixmap.pixels() {
+        let c = pixel.demultiply();
+        straight.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+    }
+
+    let mut buf = Vec::new();
+    WebPEncoder::new_lossless(&mut buf)
+        .write_image(
+            &straight,
+            pixmap.width(),
+            pixmap.height(),
+            ExtendedColorType::Rgba8,
+        )
+        .map_err(|e| format!("WebP encode failed: {e}"))?;
+    Ok(buf)
+}
+
 /// Scene を PNG バイト列に直接ラスタライズする。
 ///
 /// `scale` が 0 以下または非有限の場合は 1.0 にフォールバックする。
 pub fn scene_to_png(scene: &Scene, scale: f32, font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     let face =
-        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("フォント解析失敗: {e}"))?;
+        ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     scene_to_png_with_face(scene, scale, &face)
 }
 
@@ -69,11 +117,12 @@ pub fn scene_to_png(scene: &Scene, scale: f32, font_bytes: &[u8]) -> Result<Vec<
 // 内部実装
 // ---------------------------------------------------------------------------
 
-fn scene_to_png_with_face(
+/// Scene を RGBA Pixmap にラスタライズする（PNG/WebP 共通）。
+fn scene_to_pixmap(
     scene: &Scene,
     scale: f32,
     face: &ttf_parser::Face<'_>,
-) -> Result<Vec<u8>, String> {
+) -> Result<Pixmap, String> {
     let scale = if scale > 0.0 { scale } else { 1.0 };
 
     let w = (scene.width as f32 * scale).round().max(1.0) as u32;
@@ -82,12 +131,12 @@ fn scene_to_png_with_face(
     let area = w as u64 * h as u64;
     if area > MAX_PNG_AREA_PIXELS {
         return Err(format!(
-            "PNG 解像度 {w}×{h} px ({area} ピクセル) が上限 {MAX_PNG_AREA_PIXELS} px² を超えています"
+            "raster output {w}×{h} px ({area} pixels) exceeds the area limit of {MAX_PNG_AREA_PIXELS} px"
         ));
     }
 
-    let mut pixmap =
-        Pixmap::new(w, h).ok_or_else(|| format!("Pixmap 確保失敗: 寸法 {w}x{h} が無効です"))?;
+    let mut pixmap = Pixmap::new(w, h)
+        .ok_or_else(|| format!("Pixmap allocation failed: invalid dimensions {w}x{h}"))?;
 
     let transform = Transform::from_scale(scale, scale);
     let mut glyph_cache: HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>> = HashMap::new();
@@ -96,9 +145,18 @@ fn scene_to_png_with_face(
         render_prim(&mut pixmap, prim, transform, face, &mut glyph_cache);
     }
 
+    Ok(pixmap)
+}
+
+fn scene_to_png_with_face(
+    scene: &Scene,
+    scale: f32,
+    face: &ttf_parser::Face<'_>,
+) -> Result<Vec<u8>, String> {
+    let pixmap = scene_to_pixmap(scene, scale, face)?;
     pixmap
         .encode_png()
-        .map_err(|e| format!("PNG エンコード失敗: {e}"))
+        .map_err(|e| format!("PNG encode failed: {e}"))
 }
 
 fn render_prim(
@@ -652,7 +710,7 @@ mod tests {
         spec.height = 8001.0;
         let err = render_chart_to_png(&spec, 1.0, DEFAULT_FONT);
         assert!(err.is_err());
-        assert!(err.unwrap_err().contains("上限"));
+        assert!(err.unwrap_err().contains("exceeds"));
     }
 
     #[test]
@@ -713,6 +771,66 @@ mod tests {
             parse_path_data("M 0 0 Q 5 5 10 0").is_none(),
             "Q コマンドは非対応"
         );
+    }
+
+    #[test]
+    fn rasterizes_to_valid_webp() {
+        let webp = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
+        // WebP ファイルシグネチャ: "RIFF....WEBP"
+        assert_eq!(&webp[0..4], b"RIFF");
+        assert_eq!(&webp[8..12], b"WEBP");
+        assert!(webp.len() > 100);
+    }
+
+    #[test]
+    fn webp_scale_increases_size() {
+        let small = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
+        let large = render_chart_to_webp(&bar_spec(), 2.0, DEFAULT_FONT).unwrap();
+        assert!(large.len() > small.len());
+    }
+
+    #[test]
+    fn webp_is_byte_deterministic() {
+        let a = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
+        let b = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
+        assert_eq!(a, b, "WebP 出力は決定的でなければならない");
+    }
+
+    #[test]
+    fn webp_oversized_area_is_err() {
+        let mut spec = bar_spec();
+        spec.width = 8001.0;
+        spec.height = 8001.0;
+        let err = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("exceeds"));
+    }
+
+    #[test]
+    fn infinite_scale_is_err() {
+        // +Inf scale → w/h saturate to u32::MAX → area guard triggers RenderError.
+        // Bindings do not validate scale; +Inf must not silently succeed.
+        let err = render_chart_to_png(&bar_spec(), f32::INFINITY, DEFAULT_FONT);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("exceeds"));
+    }
+
+    #[test]
+    fn webp_infinite_scale_is_err() {
+        let err = render_chart_to_webp(&bar_spec(), f32::INFINITY, DEFAULT_FONT);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("exceeds"));
+    }
+
+    #[test]
+    fn webp_axis_limit_is_err() {
+        let mut spec = bar_spec();
+        // 20000×100 = 2M px (area 上限以下) だが WebP 軸制限 16384 を超える
+        spec.width = 20_000.0;
+        spec.height = 100.0;
+        let err = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("per-axis limit"));
     }
 
     #[test]
