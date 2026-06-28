@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [0.1.16](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.15...fulgur-chart-cli-v0.1.16) - 2026-06-28
+
+### Fixed
+
+- *(clippy)* allow mutable_key_type for FxHashSet<IStr> in stdlib patch
+- *(security)* address AI review feedback on Jsonnet sandbox
+
+### Security
+
+- *(cli)* sandbox Jsonnet imports and disable std.parseYaml
+
 ## [0.1.15](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.14...fulgur-chart-cli-v0.1.15) - 2026-06-28
 
 ### Added
