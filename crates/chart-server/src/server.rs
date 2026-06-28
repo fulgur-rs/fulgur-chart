@@ -3,13 +3,16 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    http::HeaderValue,
+    http::{HeaderValue, Method, header},
     routing::{get, post},
 };
 use tokio::sync::Semaphore;
 use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tower_http::{
-    compression::{CompressionLayer, predicate::DefaultPredicate},
+    compression::{
+        CompressionLayer,
+        predicate::{NotForContentType, Predicate, SizeAbove},
+    },
     cors::CorsLayer,
 };
 use utoipa::OpenApi;
@@ -39,7 +42,10 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
             .split(',')
             .filter_map(|s| s.trim().parse().ok())
             .collect();
-        CorsLayer::new().allow_origin(origins)
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
     };
 
     // レート制限: N req/分/IP
@@ -54,8 +60,12 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
             .expect("invalid governor config: check rate_limit setting"),
     );
 
-    // 圧縮: image/ (PNG, WebP 含む) は DefaultPredicate が除外する
-    let compression = CompressionLayer::new().compress_when(DefaultPredicate::new());
+    // 圧縮: PNG/WebP は既に圧縮済みのため除外。SVG は image/svg+xml だが圧縮効果が高い。
+    let compression = CompressionLayer::new().compress_when(
+        SizeAbove::new(32)
+            .and(NotForContentType::const_new("image/png"))
+            .and(NotForContentType::const_new("image/webp")),
+    );
 
     Router::new()
         .route("/health", get(meta::health))

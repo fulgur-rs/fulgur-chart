@@ -1,20 +1,27 @@
 use crate::render::{OutputFormat, RenderError};
 use axum::{
     Json,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderName, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-pub fn etag_value(spec_json: &str) -> String {
-    let hash = Sha256::digest(spec_json.as_bytes());
+pub fn etag_value(spec_json: &str, format: OutputFormat) -> String {
+    let fmt_str = match format {
+        OutputFormat::Svg | OutputFormat::DataUri => "svg",
+        OutputFormat::Png => "png",
+        OutputFormat::Webp => "webp",
+    };
+    let input = format!("{spec_json}\x00{fmt_str}");
+    let hash = Sha256::digest(input.as_bytes());
     let short = hex::encode(&hash[..8]);
     format!("\"{short}-v{ver}\"", ver = env!("CARGO_PKG_VERSION"))
 }
 
 pub fn cache_headers(etag: &str) -> HeaderMap {
+    static X_FULGUR_VERSION: HeaderName = HeaderName::from_static("x-fulgur-version");
     let mut h = HeaderMap::new();
     h.insert(
         header::CACHE_CONTROL,
@@ -22,7 +29,7 @@ pub fn cache_headers(etag: &str) -> HeaderMap {
     );
     h.insert(header::ETAG, etag.parse().unwrap());
     h.insert(
-        "X-Fulgur-Version",
+        X_FULGUR_VERSION.clone(),
         env!("CARGO_PKG_VERSION").parse().unwrap(),
     );
     h.insert(header::VARY, "Accept-Encoding".parse().unwrap());

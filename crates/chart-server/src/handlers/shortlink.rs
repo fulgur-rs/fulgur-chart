@@ -44,7 +44,15 @@ pub async fn post_create(
     Json(req): Json<CreateRequest>,
 ) -> Response {
     let json = req.chart.to_string();
-    let hash = Sha256::digest(json.as_bytes());
+    // ID はチャート JSON + レンダーパラメータ全体のハッシュ（同スペックで異なるサイズ/フォーマットは別リンク）
+    let id_input = format!(
+        "{json}\x00{}\x00{}\x00{}\x00{}",
+        req.format,
+        req.width.map_or(0, |v| v),
+        req.height.map_or(0, |v| v),
+        req.background_color.as_deref().unwrap_or(""),
+    );
+    let hash = Sha256::digest(id_input.as_bytes());
     let id = hex::encode(&hash[..4]);
 
     let query = build_query(

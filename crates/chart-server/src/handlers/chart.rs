@@ -101,12 +101,13 @@ pub async fn post_chart(
     headers: HeaderMap,
     Json(req): Json<ChartRequest>,
 ) -> Response {
-    let json = apply_overrides(
-        &req.chart.to_string(),
+    let json = apply_overrides_value(
+        req.chart,
         req.width,
         req.height,
         req.background_color.as_deref(),
-    );
+    )
+    .to_string();
     handle_render(json, req.format, req.dsl, headers, state).await
 }
 
@@ -117,7 +118,7 @@ async fn handle_render(
     headers: HeaderMap,
     state: AppState,
 ) -> Response {
-    let etag = etag_value(&json);
+    let etag = etag_value(&json, format);
 
     // 304 check (RFC 7232 compliant)
     if let Some(inm) = headers.get(axum::http::header::IF_NONE_MATCH)
@@ -181,10 +182,12 @@ async fn handle_render(
     }
 }
 
-fn apply_overrides(json: &str, w: Option<u32>, h: Option<u32>, bkg: Option<&str>) -> String {
-    let Ok(mut v) = serde_json::from_str::<Value>(json) else {
-        return json.to_string();
-    };
+pub(crate) fn apply_overrides_value(
+    mut v: Value,
+    w: Option<u32>,
+    h: Option<u32>,
+    bkg: Option<&str>,
+) -> Value {
     if let Some(obj) = v.as_object_mut() {
         if let Some(w) = w {
             obj.insert("width".into(), w.into());
@@ -195,11 +198,29 @@ fn apply_overrides(json: &str, w: Option<u32>, h: Option<u32>, bkg: Option<&str>
         if let Some(bkg) = bkg {
             let options = obj
                 .entry("options")
-                .or_insert(Value::Object(Default::default()));
+                .or_insert_with(|| Value::Object(Default::default()));
+            if !options.is_object() {
+                *options = Value::Object(Default::default());
+            }
             if let Some(opts_obj) = options.as_object_mut() {
-                opts_obj.insert("backgroundColor".into(), bkg.into());
+                let theme = opts_obj
+                    .entry("theme")
+                    .or_insert_with(|| Value::Object(Default::default()));
+                if !theme.is_object() {
+                    *theme = Value::Object(Default::default());
+                }
+                if let Some(theme_obj) = theme.as_object_mut() {
+                    theme_obj.insert("backgroundColor".into(), bkg.into());
+                }
             }
         }
     }
-    v.to_string()
+    v
+}
+
+fn apply_overrides(json: &str, w: Option<u32>, h: Option<u32>, bkg: Option<&str>) -> String {
+    let Ok(v) = serde_json::from_str::<Value>(json) else {
+        return json.to_string();
+    };
+    apply_overrides_value(v, w, h, bkg).to_string()
 }

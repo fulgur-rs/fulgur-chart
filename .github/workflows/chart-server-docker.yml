@@ -60,7 +60,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
-            type=semver,pattern={{version}},prefix=v,enable=${{ startsWith(github.ref, 'refs/tags/chart-server-v') }}
+            type=semver,pattern={{version}},match=^chart-server-v(.*),prefix=v,enable=${{ startsWith(github.ref, 'refs/tags/chart-server-v') }}
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
 
       - name: Build and push Docker image

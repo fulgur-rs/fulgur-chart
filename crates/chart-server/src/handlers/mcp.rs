@@ -164,20 +164,7 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
 
-    let json_str = if width.is_some() || height.is_some() {
-        let mut v = chart_spec.clone();
-        if let Some(obj) = v.as_object_mut() {
-            if let Some(w) = width {
-                obj.insert("width".into(), w.into());
-            }
-            if let Some(h) = height {
-                obj.insert("height".into(), h.into());
-            }
-        }
-        v.to_string()
-    } else {
-        chart_spec.to_string()
-    };
+    let json_str = super::chart::apply_overrides_value(chart_spec, width, height, None).to_string();
 
     let permit = state
         .semaphore
