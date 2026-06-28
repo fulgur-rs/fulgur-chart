@@ -1,12 +1,12 @@
-# @fulgur-rs/chart-node の マルチプラットフォーム prebuild と npm への自動配布。
+# @fulgur-rs/chart-node および @fulgur-rs/chart-wasm の npm への自動配布。
 # release-plz が fulgur-chart-v* タグを含む GitHub Release を publish したときに起動する。
 # OIDC Trusted Publishing を使用するため npm トークン不要。
 #
 # 手動セットアップ (一度だけ):
-#   npm の @fulgur-rs/chart-node* パッケージ群に Trusted Publisher を登録する。
+#   npm の各パッケージに Trusted Publisher を登録する。
 #   Owner: fulgur-rs, Repo: fulgur-chart, Workflow: node-npm-release.yml, Environment: npm
 #
-# 配布するパッケージ (7つ):
+# 配布するパッケージ (8つ):
 #   @fulgur-rs/chart-node-linux-x64-gnu
 #   @fulgur-rs/chart-node-linux-x64-musl
 #   @fulgur-rs/chart-node-linux-arm64-gnu
@@ -14,8 +14,9 @@
 #   @fulgur-rs/chart-node-darwin-x64
 #   @fulgur-rs/chart-node-win32-x64-msvc
 #   @fulgur-rs/chart-node (loader + JS wrapper)
+#   @fulgur-rs/chart-wasm (WebAssembly)
 
-name: Node.js NPM Release
+name: Node.js / WASM NPM Release
 
 on:
   release:
@@ -247,4 +248,79 @@ jobs:
           done
 
       - name: Publish main package (@fulgur-rs/chart-node)
+        run: npm publish --provenance --access public
+
+  publish-wasm:
+    name: Build WASM and publish to npm
+    needs: validate-release-tag
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@fulgur-rs/chart-wasm
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: crates/bindings/wasm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate-release-tag.outputs.sha }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/bindings/wasm
+          key: wasm-publish
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@wasm-pack
+
+      # setup-node MUST be >= v6.1.0 for OIDC trusted publishing: older versions
+      # write an .npmrc with `always-auth=true` + a placeholder _authToken, which
+      # npm uses instead of OIDC (publish 404s). v6.1.0 removed always-auth
+      # handling (actions/setup-node#1436). `registry-url` is required so npm
+      # engages the OIDC handshake against the registry; do NOT pass a token.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+        run: |
+          npm install -g npm@latest
+          node --version
+          npm --version
+
+      - name: Install npm deps
+        run: npm install
+
+      - name: Set package version from tag
+        env:
+          VERSION: ${{ needs.validate-release-tag.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = process.env.VERSION;
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.version = v;
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+
+      - name: Build WASM (regenerates pkg/)
+        run: npm run build
+
+      - name: Verify pkg/ was generated
+        run: |
+          test -f pkg/package.json || { echo "ERROR: pkg/package.json not found" >&2; exit 1; }
+          test -f pkg/fulgur_chart_wasm_bg.wasm || { echo "ERROR: .wasm not found in pkg/" >&2; exit 1; }
+          echo "pkg/ contents:"
+          ls -lh pkg/
+
+      - name: Publish @fulgur-rs/chart-wasm
         run: npm publish --provenance --access public
