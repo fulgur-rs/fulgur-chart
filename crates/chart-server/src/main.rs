@@ -1,3 +1,7 @@
+mod config;
+use clap::Parser;
+
 fn main() {
-    println!("chart-server");
+    let cfg = config::Config::parse();
+    println!("listening on {}:{}", cfg.host, cfg.port);
 }
