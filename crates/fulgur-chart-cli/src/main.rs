@@ -38,6 +38,9 @@ impl FulgurContextInitializer {
 
         let mut b = ObjValueBuilder::new();
         b.with_super(base_stdlib);
+        // IStr は interior mutability を持つが、インターン済みで実質不変。
+        // jrsonnet の with_fields_omitted は FxHashSet<IStr> を要求するため抑制する。
+        #[allow(clippy::mutable_key_type)]
         let mut omit = jrsonnet_evaluator::rustc_hash::FxHashSet::default();
         omit.insert(IStr::from("parseYaml"));
         b.with_fields_omitted(omit);
