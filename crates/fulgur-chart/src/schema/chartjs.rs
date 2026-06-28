@@ -46,6 +46,7 @@ pub enum ChartJsSpec {
     OutlabeledDoughnut(OutlabeledPieSpec),
     #[serde(rename = "wordCloud")]
     WordCloud(WordCloudSpec),
+    Sankey(SankeySpec),
 }
 
 // ────────────────────────────────────────────────
@@ -910,4 +911,73 @@ pub struct WordElementOptions {
 pub struct WordCloudPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
+}
+
+// ────────────────────────────────────────────────
+// Sankey chart (QuickChart / chartjs-chart-sankey)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SankeySpec {
+    pub data: SankeyData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<MatrixOptions>, // plugins(title/legend) + theme を共用
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SankeyData {
+    pub datasets: Vec<SankeyDataset>,
+    /// chart.js 互換のため受理するが sankey では未使用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SankeyDataset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub data: Vec<SankeyFlow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_from: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_to: Option<ColorString>,
+    /// "from" | "to" | "gradient"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_width: Option<f64>,
+    /// ノードラベル色
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_padding: Option<f64>,
+    /// "edge" | "even"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode_x: Option<String>,
+    /// "min" | "max"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<std::collections::HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<std::collections::HashMap<String, f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<std::collections::HashMap<String, u32>>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SankeyFlow {
+    pub from: String,
+    pub to: String,
+    pub flow: f64,
 }

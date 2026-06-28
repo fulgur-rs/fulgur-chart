@@ -734,3 +734,115 @@ fn strict_rejects_wordcloud_unknown_options_key() {
     let json = r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30.0]}]},"options":{"typo":1}}"#;
     assert!(chartjs::parse(json, true).is_err());
 }
+
+#[test]
+fn sankey_schema_roundtrip() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    let json = r##"{
+        "type": "sankey",
+        "data": { "datasets": [{
+            "label": "Energy",
+            "data": [
+                {"from": "A", "to": "B", "flow": 10},
+                {"from": "A", "to": "C", "flow": 5},
+                {"from": "B", "to": "C", "flow": 10}
+            ],
+            "colorFrom": "#36a2eb",
+            "colorTo": "#ff6384",
+            "colorMode": "gradient",
+            "labels": {"A": "Alpha"},
+            "priority": {"A": 0},
+            "column": {"A": 0}
+        }],
+        "labels": []
+        },
+        "options": { "plugins": { "title": {"display": true, "text": "T"} } }
+    }"##;
+    let spec: ChartJsSpec = serde_json::from_str(json).unwrap();
+    assert!(matches!(spec, ChartJsSpec::Sankey(_)));
+    // 同じ文書を strict パーサも受理すること(parser↔schema パリティ)。
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict parser should accept sankey"
+    );
+}
+
+#[test]
+fn sankey_basic_parse() {
+    let json = r#"{"type":"sankey","data":{"datasets":[{"data":[
+        {"from":"A","to":"B","flow":10},
+        {"from":"A","to":"C","flow":5},
+        {"from":"B","to":"C","flow":10},
+        {"from":"C","to":"D","flow":15}
+    ]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(matches!(
+        spec.kind,
+        fulgur_chart::ir::ChartKind::Sankey { .. }
+    ));
+    assert_eq!(spec.series.len(), 1);
+    assert_eq!(spec.series[0].links.len(), 4);
+    assert_eq!(spec.series[0].links[0].from, "A");
+    assert_eq!(spec.series[0].links[0].flow, 10.0);
+}
+
+#[test]
+fn sankey_defaults_match_chartjs() {
+    use fulgur_chart::ir::{ChartKind, Color, SankeyColorMode, SankeyModeX, SankeySize};
+    let json =
+        r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    let ChartKind::Sankey {
+        color_from,
+        color_to,
+        color_mode,
+        alpha,
+        node_width,
+        node_padding,
+        mode_x,
+        size,
+        border_width,
+        ..
+    } = spec.kind
+    else {
+        panic!()
+    };
+    assert_eq!(
+        color_from,
+        Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 1.0
+        }
+    ); // 'red'
+    assert_eq!(
+        color_to,
+        Color {
+            r: 0,
+            g: 128,
+            b: 0,
+            a: 1.0
+        }
+    ); // 'green'
+    assert_eq!(color_mode, SankeyColorMode::Gradient);
+    assert!((alpha - 0.5).abs() < 1e-9);
+    assert_eq!(node_width, 10.0);
+    assert_eq!(node_padding, 10.0);
+    assert_eq!(mode_x, SankeyModeX::Edge);
+    assert_eq!(size, SankeySize::Max);
+    assert_eq!(border_width, 1.0);
+}
+
+#[test]
+fn sankey_rejects_non_finite_flow() {
+    let json =
+        r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":"x"}]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+}
+
+#[test]
+fn sankey_strict_rejects_unknown_key() {
+    let json = r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}],"bogus":1}]}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}
