@@ -168,7 +168,7 @@ JSONNET INPUT:
     std.range(from, to)          integer range, e.g. std.range(0, 11) → [0..11]
     std.map(fn, arr)             transform array, e.g. std.map(std.toString, xs)
     std.filter(fn, arr)          keep elements matching a predicate
-    std.format(fmt, args)        string formatting, e.g. \"Q%d\" % quarter
+    std.format(fmt, args)        string formatting, e.g. std.format(\"Q%d\", quarter) or \"Q%d\" % quarter
     std.join(sep, arr)           join strings with a separator
     std.sort(arr)                sort an array
     std.length(arr)              length of array or string
@@ -179,7 +179,7 @@ JSONNET INPUT:
   Imports are resolved relative to the .jsonnet file's directory:
     import \"palette.libsonnet\"       # file in the same directory
     import \"shared/colors.libsonnet\" # relative subdirectory path
-  Note: imports are not available when reading from stdin.
+  Note: when reading from stdin, imports are resolved relative to the current working directory.
 
 EXIT CODES:
   0  Rendered successfully
