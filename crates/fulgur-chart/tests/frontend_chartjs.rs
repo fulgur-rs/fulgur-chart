@@ -973,3 +973,29 @@ fn sankey_schema_and_parser_both_reject_datalabels() {
     ));
     assert!(chartjs::parse(ok, true).is_ok());
 }
+
+#[test]
+fn sankey_schema_and_parser_both_reject_legend() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    // sankey は legend を描画しないため契約から外す。schema・strict パーサ双方が拒否し、
+    // 「strict が受理するのに描画では無視される」silent-drop を避ける。
+    let json = r##"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":{"plugins":{"legend":{"display":true}}}}"##;
+    assert!(
+        serde_json::from_str::<ChartJsSpec>(json).is_err(),
+        "schema は sankey の plugins.legend を拒否すべき"
+    );
+    assert!(
+        chartjs::parse(json, true).is_err(),
+        "strict パーサも plugins.legend を拒否すべき"
+    );
+}
+
+#[test]
+fn sankey_rejects_negative_node_width() {
+    // 負の nodeWidth は <rect width="-5"> 等の不正 SVG を生むため parse で弾く。
+    let json = r#"{"type":"sankey","data":{"datasets":[{"nodeWidth":-5,"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+    // 非有限も拒否。
+    let nan = r#"{"type":"sankey","data":{"datasets":[{"borderWidth":1e400,"data":[{"from":"A","to":"B","flow":1}]}]}}"#;
+    assert!(chartjs::parse(nan, false).is_err());
+}

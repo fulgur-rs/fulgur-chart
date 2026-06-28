@@ -937,19 +937,20 @@ pub struct SankeyOptions {
     pub theme: Option<ThemeOptions>,
 }
 
-/// sankey が受理する plugins(title / legend のみ)。datalabels は持たない。
+/// sankey が受理する plugins(title のみ)。legend は描画されないため契約から外す。
+/// datalabels も持たない(strict パーサと一致)。
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SankeyPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub legend: Option<LegendPlugin>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SankeyData {
+    /// sankey は dataset がちょうど 1 個(parser の契約と一致)。
+    #[schemars(length(min = 1, max = 1))]
     pub datasets: Vec<SankeyDataset>,
     /// chart.js 互換のため受理するが sankey では未使用。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1002,4 +1003,26 @@ pub struct SankeyFlow {
     pub from: String,
     pub to: String,
     pub flow: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChartJsSpec;
+
+    /// sankey の dataset 契約(ちょうど 1 個)が生成 JSON Schema に minItems/maxItems=1
+    /// として現れること。parser の `datasets.len() != 1` チェックと一致させ、schema 駆動の
+    /// クライアントが 0/複数 dataset を事前に弾けるようにする。
+    #[test]
+    fn sankey_datasets_constrained_to_one_in_schema() {
+        let schema = schemars::schema_for!(ChartJsSpec);
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(
+            json.contains("\"minItems\":1"),
+            "sankey datasets に minItems:1 が必要"
+        );
+        assert!(
+            json.contains("\"maxItems\":1"),
+            "sankey datasets に maxItems:1 が必要"
+        );
+    }
 }

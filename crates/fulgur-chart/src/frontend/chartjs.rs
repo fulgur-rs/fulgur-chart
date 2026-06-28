@@ -1045,7 +1045,8 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
     if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
         check_object(options, &["plugins", "theme"], "options")?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            check_object(plugins, &["title", "legend"], "options.plugins")?;
+            // sankey は legend を描画しないため title のみ受理する(schema と一致)。
+            check_object(plugins, &["title"], "options.plugins")?;
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
             check_object(
@@ -1827,6 +1828,18 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     let label_color = ds.color.as_deref().and_then(parse_color).unwrap_or(black);
     let node_width = ds.node_width.unwrap_or(10.0);
     let node_padding = ds.node_padding.unwrap_or(10.0);
+    // 寸法は非有限・負値を拒否する(負の nodeWidth は <rect width="-5"> 等の不正 SVG を生む)。
+    for (name, v) in [
+        ("nodeWidth", node_width),
+        ("nodePadding", node_padding),
+        ("borderWidth", border_width),
+    ] {
+        if !v.is_finite() || v < 0.0 {
+            return Err(format!(
+                "sankey の {name} は非負の有限数である必要があります(指定値 {v})"
+            ));
+        }
+    }
     let mode_x = match ds.mode_x.as_deref() {
         Some("even") => SankeyModeX::Even,
         _ => SankeyModeX::Edge,
