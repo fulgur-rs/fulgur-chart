@@ -1,4 +1,4 @@
 [deploy]
-startCommand = "chart-server"
+startCommand = "./target/release/chart-server"
 healthcheckPath = "/health"
 healthcheckTimeout = 10

@@ -3,10 +3,10 @@ use crate::{
     state::AppState,
 };
 use axum::{
-    Json,
+    body::Bytes,
     extract::State,
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Json, Response},
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -15,7 +15,7 @@ use serde_json::{Map, Value, json};
 #[derive(Serialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // id は null の場合も必ず出力する（JSON-RPC 2.0: error 時は "id": null が必須）。
     pub id: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
@@ -51,10 +51,20 @@ impl JsonRpcResponse {
 
 pub async fn mcp_handler(
     State(state): State<AppState>,
-    // Value で受け取り object / array（batch）を分岐する。
-    // Map<String, Value> では MCP 2025-03-26 で必須の JSON-RPC batch 配列を拒否してしまう。
-    Json(raw): Json<Value>,
+    // Bytes で受け取り自前でパースする。axum の Json<V> エクストラクタは malformed JSON を
+    // 422 で返してしまい JSON-RPC の -32700 Parse error を返せないため。
+    body: Bytes,
 ) -> Response {
+    let raw: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(JsonRpcResponse::error(None, -32700, "Parse error".into())),
+            )
+                .into_response();
+        }
+    };
     match raw {
         Value::Array(batch) => {
             // MCP 2025-03-26 Streamable HTTP: 全件 notification の batch → 202 Accepted。
@@ -91,7 +101,20 @@ pub async fn mcp_handler(
     }
 }
 
+/// valid な形式（string / 整数）の id を取り出す。invalid な型は None を返す。
+fn extract_valid_id(raw: &Map<String, Value>) -> Option<Value> {
+    match raw.get("id") {
+        Some(v @ Value::String(_)) => Some(v.clone()),
+        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => Some(Value::Number(n.clone())),
+        _ => None,
+    }
+}
+
 async fn handle_single(raw: Map<String, Value>, state: AppState) -> Response {
+    // valid な id を先に取り出す。early validation 失敗時のレスポンスにも echo back するため。
+    // JSON-RPC 2.0: クライアントはレスポンスの id でリクエストを照合する。
+    let early_id = extract_valid_id(&raw);
+
     // jsonrpc と method を先に検証してから notification / request を判定する。
     // malformed な object（{"foo":"bar"} 等）が notification として 202 になるのを防ぐ。
     let jsonrpc = raw.get("jsonrpc").and_then(|v| v.as_str()).unwrap_or("");
@@ -99,7 +122,7 @@ async fn handle_single(raw: Map<String, Value>, state: AppState) -> Response {
         return (
             StatusCode::BAD_REQUEST,
             Json(JsonRpcResponse::error(
-                None,
+                early_id,
                 -32600,
                 "Invalid Request".into(),
             )),
@@ -111,7 +134,7 @@ async fn handle_single(raw: Map<String, Value>, state: AppState) -> Response {
         return (
             StatusCode::BAD_REQUEST,
             Json(JsonRpcResponse::error(
-                None,
+                early_id,
                 -32600,
                 "Invalid Request".into(),
             )),
@@ -126,10 +149,9 @@ async fn handle_single(raw: Map<String, Value>, state: AppState) -> Response {
     }
 
     // MCP 2025-03-26: request id は string または整数のみ（小数/null/object/array/bool は不正）。
-    let id = match raw.get("id") {
-        Some(v @ Value::String(_)) => Some(v.clone()),
-        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => Some(Value::Number(n.clone())),
-        _ => {
+    let id = match extract_valid_id(&raw) {
+        Some(v) => Some(v),
+        None => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(JsonRpcResponse::error(
@@ -310,5 +332,135 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
                 ]
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::Request, routing::post};
+    use http_body_util::BodyExt;
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+    use tower::ServiceExt;
+
+    use crate::{state::AppState, store::ShortlinkStore};
+
+    fn test_app() -> axum::Router {
+        let state = AppState {
+            store: ShortlinkStore::new(100),
+            semaphore: Arc::new(Semaphore::new(1)),
+            render_timeout_ms: 1000,
+        };
+        axum::Router::new()
+            .route("/mcp", post(mcp_handler))
+            .with_state(state)
+    }
+
+    async fn post_mcp(
+        app: axum::Router,
+        body: &str,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[test]
+    fn jsonrpc_error_serializes_null_id() {
+        let resp = JsonRpcResponse::error(None, -32700, "Parse error".into());
+        let json = serde_json::to_value(&resp).unwrap();
+        // id: null は省略ではなく null として出力されること（JSON-RPC 2.0 仕様）
+        assert_eq!(json["id"], serde_json::Value::Null);
+        assert_eq!(json["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn extract_valid_id_accepts_string() {
+        let mut map = serde_json::Map::new();
+        map.insert("id".into(), serde_json::Value::String("abc".into()));
+        assert_eq!(
+            extract_valid_id(&map),
+            Some(serde_json::Value::String("abc".into()))
+        );
+    }
+
+    #[test]
+    fn extract_valid_id_accepts_integer() {
+        let mut map = serde_json::Map::new();
+        map.insert("id".into(), serde_json::json!(42));
+        assert_eq!(extract_valid_id(&map), Some(serde_json::json!(42)));
+    }
+
+    #[test]
+    fn extract_valid_id_rejects_float() {
+        let mut map = serde_json::Map::new();
+        map.insert("id".into(), serde_json::json!(1.5));
+        assert_eq!(extract_valid_id(&map), None);
+    }
+
+    #[test]
+    fn extract_valid_id_rejects_null() {
+        let mut map = serde_json::Map::new();
+        map.insert("id".into(), serde_json::Value::Null);
+        assert_eq!(extract_valid_id(&map), None);
+    }
+
+    #[test]
+    fn extract_valid_id_absent_returns_none() {
+        let map = serde_json::Map::new();
+        assert_eq!(extract_valid_id(&map), None);
+    }
+
+    #[tokio::test]
+    async fn malformed_json_returns_parse_error() {
+        let (status, json) = post_mcp(test_app(), "not json").await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(json["error"]["code"], -32700);
+        // id は null として出力されること
+        assert_eq!(json["id"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn notification_returns_202() {
+        let body = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        let (status, _) = post_mcp(test_app(), body).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn invalid_jsonrpc_echoes_valid_id() {
+        // jsonrpc が 2.0 以外でも valid な id があれば echo back する
+        let body = r#"{"jsonrpc":"1.0","id":99,"method":"tools/list"}"#;
+        let (status, json) = post_mcp(test_app(), body).await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(json["id"], 99);
+        assert_eq!(json["error"]["code"], -32600);
+    }
+
+    #[tokio::test]
+    async fn notification_batch_returns_202() {
+        let body = r#"[{"jsonrpc":"2.0","method":"notifications/initialized"}]"#;
+        let (status, _) = post_mcp(test_app(), body).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn empty_batch_returns_400() {
+        let (status, _) = post_mcp(test_app(), "[]").await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
     }
 }

@@ -25,6 +25,26 @@ pub struct CreateRequest {
     pub format: OutputFormat,
 }
 
+fn compute_id(
+    json: &str,
+    fmt: &str,
+    width: Option<u32>,
+    height: Option<u32>,
+    background_color: Option<&str>,
+) -> String {
+    // ID はチャート JSON + レンダーパラメータ全体のハッシュ（同スペックで異なるサイズ/フォーマットは別リンク）
+    // "_" を番兵として None と Some("") を区別する。
+    // ハッシュは 6 bytes（48bit）: 10000件時の誕生日衝突確率 < 0.001%。
+    let id_input = format!(
+        "{json}\x00{fmt}\x00{}\x00{}\x00{}",
+        width.map_or_else(|| "_".to_string(), |v| v.to_string()),
+        height.map_or_else(|| "_".to_string(), |v| v.to_string()),
+        background_color.unwrap_or("_"),
+    );
+    let hash = Sha256::digest(id_input.as_bytes());
+    hex::encode(&hash[..6])
+}
+
 #[utoipa::path(
     post,
     path = "/chart/create",
@@ -40,19 +60,14 @@ pub async fn post_create(
     Json(req): Json<CreateRequest>,
 ) -> Response {
     let json = req.chart.to_string();
-    // ID はチャート JSON + レンダーパラメータ全体のハッシュ（同スペックで異なるサイズ/フォーマットは別リンク）
-    // "_" を番兵として None と Some(0) を区別する。
-    // ハッシュは 6 bytes（48bit）: 10000件時の誕生日衝突確率 < 0.001%。
-    let id_input = format!(
-        "{json}\x00{}\x00{}\x00{}\x00{}",
+    let id = compute_id(
+        &json,
         req.format.as_str(),
-        req.width.map_or_else(|| "_".to_string(), |v| v.to_string()),
-        req.height
-            .map_or_else(|| "_".to_string(), |v| v.to_string()),
-        req.background_color.as_deref().unwrap_or(""),
+        req.width,
+        req.height,
+        // "_" を番兵として None と Some("") を区別する（Some("") は空文字列をそのまま使用）。
+        req.background_color.as_deref(),
     );
-    let hash = Sha256::digest(id_input.as_bytes());
-    let id = hex::encode(&hash[..6]);
 
     let query = build_query(
         &json,
@@ -111,4 +126,28 @@ fn build_query(
         q.push_str(&format!("&bkg={}", urlencoding::encode(bkg)));
     }
     q
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn none_and_empty_string_background_produce_different_ids() {
+        let json = r#"{"type":"bar"}"#;
+        let id_none = compute_id(json, "svg", None, None, None);
+        let id_empty = compute_id(json, "svg", None, None, Some(""));
+        assert_ne!(
+            id_none, id_empty,
+            "None と Some(\"\") は異なるハッシュになるべき"
+        );
+    }
+
+    #[test]
+    fn same_params_produce_same_id() {
+        let json = r#"{"type":"bar"}"#;
+        let id1 = compute_id(json, "svg", Some(800), Some(600), Some("white"));
+        let id2 = compute_id(json, "svg", Some(800), Some(600), Some("white"));
+        assert_eq!(id1, id2);
+    }
 }

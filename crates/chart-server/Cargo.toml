@@ -27,3 +27,7 @@ urlencoding = "2"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = "0.2"
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
