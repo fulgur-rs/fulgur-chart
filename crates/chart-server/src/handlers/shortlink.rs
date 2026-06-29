@@ -50,7 +50,7 @@ pub async fn post_create(
         req.height
             .map_or_else(|| "_".to_string(), |v| v.to_string()),
         // "_" を番兵として None と Some("") を区別する（Some("") は空文字列をそのまま使用）。
-        req.background_color.as_deref().map_or("_", |v| v),
+        req.background_color.as_deref().unwrap_or("_"),
     );
     let hash = Sha256::digest(id_input.as_bytes());
     let id = hex::encode(&hash[..6]);
