@@ -1047,3 +1047,96 @@ fn sankey_accepts_null_options() {
     let null_plugins = r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":1}]}]},"options":{"plugins":null}}"#;
     assert!(chartjs::parse(null_plugins, true).is_ok());
 }
+
+// ──────────────────────────────────────────────
+// fulgur-chart-tgb: top-level width/height は全チャート種別で
+// ChartSpec.width/height に反映される(ハードコード 800x450 の置換)。
+// ──────────────────────────────────────────────
+
+#[test]
+fn main_path_honors_top_level_width_height() {
+    let json = r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]},"width":640,"height":360}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert_eq!(spec.width, 640.0);
+    assert_eq!(spec.height, 360.0);
+}
+
+#[test]
+fn main_path_defaults_width_height_when_absent() {
+    let json = r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert_eq!(spec.width, 800.0);
+    assert_eq!(spec.height, 450.0);
+}
+
+#[test]
+fn strict_allows_top_level_width_height() {
+    let json = r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]},"width":640,"height":360}"#;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn special_paths_honor_top_level_width_height() {
+    // matrix/treemap/sankey/gauge は主要 parse とは別パス。progress は主要 parse 経由だが
+    // 専用 strict check を持つため strict 受理も併せて検証する。
+    let cases = [
+        r#"{"type":"matrix","data":{"datasets":[{"data":[{"x":"A","y":"X","v":1}]}]},"width":640,"height":360}"#,
+        r#"{"type":"treemap","data":{"datasets":[{"tree":[6,4,3,2,1]}]},"width":640,"height":360}"#,
+        r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":10}]}]},"width":640,"height":360}"#,
+        r#"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4,6],"backgroundColor":["green","yellow","red"]}]},"width":640,"height":360}"#,
+        r#"{"type":"progress","data":{"datasets":[{"data":[1]}]},"width":640,"height":360}"#,
+    ];
+    for json in cases {
+        let spec = chartjs::parse(json, false).unwrap();
+        assert_eq!(spec.width, 640.0, "non-strict width for {json}");
+        assert_eq!(spec.height, 360.0, "non-strict height for {json}");
+        assert!(
+            chartjs::parse(json, true).is_ok(),
+            "strict should accept top-level width/height for {json}"
+        );
+    }
+}
+
+#[test]
+fn schema_accepts_top_level_width_height_all_kinds() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    // 各 *Spec 構造体を最低 1 つカバーする(PieSpec=pie, OutlabeledPieSpec=outlabeledPie で代表)。
+    let cases = [
+        r#"{"type":"bar","data":{"datasets":[{"data":[1]}]},"width":640,"height":360}"#,
+        r#"{"type":"line","data":{"datasets":[{"data":[1]}]},"width":640,"height":360}"#,
+        r#"{"type":"pie","data":{"datasets":[{"data":[1]}]},"width":640,"height":360}"#,
+        r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2}]}]},"width":640,"height":360}"#,
+        r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2,"r":10}]}]},"width":640,"height":360}"#,
+        r#"{"type":"radar","data":{"labels":["A"],"datasets":[{"data":[1]}]},"width":640,"height":360}"#,
+        r#"{"type":"matrix","data":{"datasets":[{"data":[{"x":"A","y":"X","v":1}]}]},"width":640,"height":360}"#,
+        r#"{"type":"treemap","data":{"datasets":[{"tree":[6]}]},"width":640,"height":360}"#,
+        r#"{"type":"progress","data":{"datasets":[{"data":[1]}]},"width":640,"height":360}"#,
+        r#"{"type":"boxplot","data":{"labels":["A"],"datasets":[{"data":[[10,25,50,75,90]]}]},"width":640,"height":360}"#,
+        r#"{"type":"sparkline","data":{"datasets":[{"data":[3,1,4]}]},"width":640,"height":360}"#,
+        r#"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4,6]}]},"width":640,"height":360}"#,
+        r#"{"type":"radialGauge","data":{"datasets":[{"data":[70]}]},"width":640,"height":360}"#,
+        r#"{"type":"outlabeledPie","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},"width":640,"height":360}"#,
+        r#"{"type":"sankey","data":{"datasets":[{"data":[{"from":"A","to":"B","flow":10}]}]},"width":640,"height":360}"#,
+    ];
+    for json in cases {
+        let r: Result<ChartJsSpec, serde_json::Error> = serde_json::from_str(json);
+        assert!(
+            r.is_ok(),
+            "schema should accept top-level width/height for {json}: {:?}",
+            r.err()
+        );
+    }
+}
+
+#[test]
+fn rendered_svg_reflects_top_level_width_height() {
+    // JSON → ChartSpec.width/height → Scene → SVG ルート属性まで一貫してサイズが届くことを
+    // end-to-end で検証する(既定 800x450 ではなく指定値で描画される)。
+    use fulgur_chart::render::render_chart;
+    let json = r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]},"width":640,"height":360}"#;
+    let svg = render_chart(&chartjs::parse(json, false).unwrap());
+    assert!(svg.starts_with("<svg"), "{svg}");
+    assert!(svg.contains(r#"width="640""#), "{svg}");
+    assert!(svg.contains(r#"height="360""#), "{svg}");
+    assert!(svg.contains(r#"viewBox="0 0 640 360""#), "{svg}");
+}

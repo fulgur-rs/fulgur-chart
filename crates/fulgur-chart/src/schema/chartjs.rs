@@ -59,6 +59,12 @@ pub struct BarSpec {
     pub data: BarData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<BarOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -148,6 +154,12 @@ pub struct LineSpec {
     pub data: LineData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<LineOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -238,6 +250,12 @@ pub struct PieSpec {
     pub data: PieData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<PieOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -281,6 +299,12 @@ pub struct ScatterSpec {
     pub data: ScatterData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<XYOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -333,6 +357,12 @@ pub struct BubbleSpec {
     pub data: BubbleData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<XYOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -374,6 +404,12 @@ pub struct RadarSpec {
     pub data: RadarData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<RadarOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -420,6 +456,12 @@ pub struct MatrixSpec {
     pub data: MatrixData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<MatrixOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -469,6 +511,12 @@ pub struct TreemapSpec {
     pub data: TreemapData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<TreemapOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -533,6 +581,12 @@ pub struct ProgressSpec {
     pub data: ProgressData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<ProgressOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -574,6 +628,12 @@ pub struct BoxplotSpec {
     pub data: BoxplotData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<BoxplotOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -620,6 +680,12 @@ pub struct SparklineSpec {
     pub data: SparklineData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<SparklineOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -667,6 +733,12 @@ pub struct GaugeSpec {
     pub data: GaugeData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<GaugeOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -735,6 +807,12 @@ pub struct RadialGaugeSpec {
     pub data: RadialGaugeData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<RadialGaugeOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -793,6 +871,12 @@ pub struct OutlabeledPieSpec {
     pub data: PieData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<OutlabeledPieOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -923,6 +1007,12 @@ pub struct SankeySpec {
     pub data: SankeyData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<SankeyOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 /// sankey の options。`MatrixOptions` を流用すると `CommonPlugins` 経由で
