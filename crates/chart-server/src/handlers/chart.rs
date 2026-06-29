@@ -251,4 +251,15 @@ mod tests {
         let result = apply_overrides_value(spec, None, None, Some("white"));
         assert_eq!(result["options"]["theme"], "dark");
     }
+
+    #[test]
+    fn query_w_h_flow_through_to_spec_dimensions() {
+        // /chart?w=&h=: apply_overrides が top-level に注入 → chartjs parser が ChartSpec へ
+        // 反映する合成経路(issue fulgur-chart-tgb の受け入れ条件)を end-to-end で検証する。
+        let spec = json!({"type": "bar", "data": {"labels": ["A"], "datasets": [{"data": [1]}]}});
+        let v = apply_overrides_value(spec, Some(640), Some(360), None);
+        let parsed = render::parse_and_validate(&v.to_string(), "chartjs", false).unwrap();
+        assert_eq!(parsed.width, 640.0);
+        assert_eq!(parsed.height, 360.0);
+    }
 }

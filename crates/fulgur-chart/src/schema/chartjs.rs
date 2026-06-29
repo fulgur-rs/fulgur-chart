@@ -928,10 +928,10 @@ pub struct WordCloudSpec {
     pub data: WordCloudData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<WordCloudOptions>,
-    /// キャンバス幅 (px)。省略時は fulgur のデフォルト。
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<f64>,
-    /// キャンバス高さ (px)。省略時は fulgur のデフォルト。
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
 }
