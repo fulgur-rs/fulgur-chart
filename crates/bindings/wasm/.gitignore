@@ -1,8 +1,4 @@
 /target
 /node_modules
-# The crate path-depends on the in-repo core, whose version is bumped by release-plz on
-# every release; a committed lock would go stale (and break `--locked` CI). Let it regenerate.
-Cargo.lock
-
 # wasm-pack output (regenerated in build / CI / prepublish):
 /pkg
