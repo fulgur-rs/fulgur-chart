@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/fulgur-chart", "crates/fulgur-chart-cli"]
+members = ["crates/fulgur-chart", "crates/fulgur-chart-cli", "crates/chart-server"]
 exclude = ["crates/bindings"]
 
 [workspace.package]
@@ -12,7 +12,7 @@ repository = "https://github.com/fulgur-rs/fulgur-chart"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 tiny-skia = "0.11"
 ttf-parser = "0.25"
 insta = { version = "1", features = ["yaml"] }

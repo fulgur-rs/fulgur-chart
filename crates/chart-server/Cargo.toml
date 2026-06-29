@@ -1,0 +1,29 @@
+[package]
+name = "chart-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "chart-server"
+path = "src/main.rs"
+
+[dependencies]
+fulgur-chart = { path = "../fulgur-chart" }
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "compression-full", "limit"] }
+tower_governor = "0.6"
+dashmap = "6"
+sha2 = "0.10"
+hex = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+base64 = "0.22"
+urlencoding = "2"
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-axum = "0.2"
+utoipa-swagger-ui = { version = "9", features = ["axum"] }

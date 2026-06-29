@@ -1,0 +1,4 @@
+[deploy]
+startCommand = "chart-server"
+healthcheckPath = "/health"
+healthcheckTimeout = 10
