@@ -279,11 +279,23 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+      # npm OIDC trusted publishing requires npm CLI >= 11.5.1. We deliberately
+      # do NOT `npm install -g npm@latest` here (that would run unpinned registry
+      # code inside the id-token: write boundary). Node 24 bundles npm >= 11.5.1
+      # from v24.5.0 onward; setup-node resolves "24" to the latest patch, which
+      # satisfies this. Assert it so an unexpectedly old bundled npm fails fast
+      # with an actionable message instead of a confusing publish-time 404.
+      - name: Enforce npm OIDC minimum (>= 11.5.1)
         run: |
-          npm install -g npm@latest
           node --version
-          npm --version
+          npm_version="$(npm --version)"
+          required="11.5.1"
+          echo "npm $npm_version (required >= $required)"
+          if [ "$(printf '%s\n%s\n' "$required" "$npm_version" | sort -V | head -n1)" != "$required" ]; then
+            echo "ERROR: npm $npm_version is below the OIDC trusted publishing floor ($required)." >&2
+            echo "Bump node-version in this workflow to a release bundling npm >= $required (Node >= 24.5.0)." >&2
+            exit 1
+          fi
 
       - name: Download npm tarballs
         uses: actions/download-artifact@v4
@@ -300,16 +312,12 @@ jobs:
       - name: Publish main package (@fulgur-rs/chart-node)
         run: npm publish --provenance --access public --ignore-scripts npm-tarballs/fulgur-rs-chart-node-[0-9]*.tgz
 
-  publish-wasm:
-    name: Build WASM and publish to npm
+  build-wasm:
+    name: Build WASM npm package
     needs: validate-release-tag
     runs-on: ubuntu-latest
-    environment:
-      name: npm
-      url: https://www.npmjs.com/package/@fulgur-rs/chart-wasm
     permissions:
       contents: read
-      id-token: write
     defaults:
       run:
         working-directory: crates/bindings/wasm
@@ -326,28 +334,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates/bindings/wasm
-          key: wasm-publish
+          key: wasm-build
 
       - name: Install wasm-pack
         uses: taiki-e/install-action@wasm-pack
 
-      # setup-node MUST be >= v6.1.0 for OIDC trusted publishing: older versions
-      # write an .npmrc with `always-auth=true` + a placeholder _authToken, which
-      # npm uses instead of OIDC (publish 404s). v6.1.0 removed always-auth
-      # handling (actions/setup-node#1436). `registry-url` is required so npm
-      # engages the OIDC handshake against the registry; do NOT pass a token.
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
-
-      - name: Verify Node.js and npm versions
-        run: |
-          node --version
-          npm --version
 
       - name: Install npm deps
-        run: npm install
+        run: npm ci
 
       - name: Set package version from tag
         env:
@@ -360,10 +357,51 @@ jobs:
             pkg.version = v;
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
           '
-          sed -i 's/^version = "[^"]*"/version = "'"$VERSION"'"/' Cargo.toml
 
-      - name: Build WASM (regenerates pkg/)
+      # The committed Cargo.lock pins all external registry crates, but the
+      # fulgur-chart path dependency is version-bumped by release-plz on every
+      # release, leaving the lock stale at release time. Reconcile ONLY that
+      # path-dependency entry so the subsequent `--locked` build succeeds, then
+      # assert that no registry crate drifted from the reviewed, committed
+      # lockfile: the set of checksums (which only registry crates carry; path
+      # deps have none) must be byte-identical before and after. If any cargo
+      # version re-resolves a registry crate to a newer compatible version, the
+      # build fails loudly here instead of publishing un-audited dependency
+      # versions. Runs in build-wasm, which has no id-token: write.
+      - name: Reconcile fulgur-chart path dependency in Cargo.lock
+        run: |
+          before="$(grep '^checksum = ' Cargo.lock | sort)"
+          cargo update -p fulgur-chart
+          after="$(grep '^checksum = ' Cargo.lock | sort)"
+          if [ "$before" != "$after" ]; then
+            echo "ERROR: reconciling fulgur-chart drifted registry crates from the committed Cargo.lock." >&2
+            echo "Update crates/bindings/wasm/Cargo.lock in a reviewed commit instead." >&2
+            diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") >&2 || true
+            exit 1
+          fi
+
+      - name: Build WASM package with locked Rust dependencies
         run: npm run build
+
+      - name: Set version in wasm-pack generated pkg/package.json
+        env:
+          VERSION: ${{ needs.validate-release-tag.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = process.env.VERSION;
+            const pkg = JSON.parse(fs.readFileSync("pkg/package.json", "utf8"));
+            pkg.version = v;
+            fs.writeFileSync("pkg/package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+
+      # wasm-pack writes pkg/.gitignore containing `*`. npm honors a nested
+      # .gitignore when packing, so leaving it in place would exclude the entire
+      # pkg/ directory (including the .wasm) from the tarball -> a broken publish.
+      # The package's `prepack` script removes it, but we pack with
+      # --ignore-scripts (so no build/lifecycle code runs), so remove it here.
+      - name: Remove wasm-pack pkg/.gitignore so pkg/ is packed
+        run: rm -f pkg/.gitignore
 
       - name: Verify pkg/ was generated
         run: |
@@ -372,5 +410,83 @@ jobs:
           echo "pkg/ contents:"
           ls -lh pkg/
 
+      # Pack the exact tarball that will be published, with scripts disabled, in
+      # this unprivileged job. publish-wasm then publishes this immutable artifact
+      # verbatim -- it never checks out source or rebuilds, so there is no mixing
+      # of checked-out files with the built artifact in the OIDC publish job.
+      - name: Pack npm tarball without lifecycle scripts
+        run: |
+          mkdir -p packed
+          npm pack --ignore-scripts --pack-destination packed/ .
+          echo "Packed tarball contents:"
+          tar tzf packed/*.tgz
+
+      - name: Verify tarball includes the built .wasm
+        run: |
+          tar tzf packed/*.tgz | grep -q 'package/pkg/fulgur_chart_wasm_bg.wasm' \
+            || { echo "ERROR: packed tarball is missing pkg/fulgur_chart_wasm_bg.wasm" >&2; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chart-wasm-tarball
+          path: crates/bindings/wasm/packed/*.tgz
+          if-no-files-found: error
+
+  publish-wasm:
+    name: Publish WASM npm package
+    needs: [validate-release-tag, build-wasm]
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@fulgur-rs/chart-wasm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # No checkout: this job publishes only the prebuilt tarball artifact, so it
+      # never runs project build code or mixes source with the built package.
+      # setup-node MUST be >= v6.1.0 for OIDC trusted publishing: older versions
+      # write an .npmrc with `always-auth=true` + a placeholder _authToken, which
+      # npm uses instead of OIDC (publish 404s). v6.1.0 removed always-auth
+      # handling (actions/setup-node#1436). `registry-url` is required so npm
+      # engages the OIDC handshake against the registry; do NOT pass a token.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      # npm OIDC trusted publishing requires npm CLI >= 11.5.1. We deliberately
+      # do NOT `npm install -g npm@latest` here (that would run unpinned registry
+      # code inside the id-token: write boundary). Node 24 bundles npm >= 11.5.1
+      # from v24.5.0 onward; setup-node resolves "24" to the latest patch, which
+      # satisfies this. Assert it so an unexpectedly old bundled npm fails fast
+      # with an actionable message instead of a confusing publish-time 404.
+      - name: Enforce npm OIDC minimum (>= 11.5.1)
+        run: |
+          node --version
+          npm_version="$(npm --version)"
+          required="11.5.1"
+          echo "npm $npm_version (required >= $required)"
+          if [ "$(printf '%s\n%s\n' "$required" "$npm_version" | sort -V | head -n1)" != "$required" ]; then
+            echo "ERROR: npm $npm_version is below the OIDC trusted publishing floor ($required)." >&2
+            echo "Bump node-version in this workflow to a release bundling npm >= $required (Node >= 24.5.0)." >&2
+            exit 1
+          fi
+
+      - name: Download prebuilt WASM tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: chart-wasm-tarball
+          path: wasm-tarball
+
+      - name: Verify a single tarball was downloaded
+        run: |
+          count=$(ls wasm-tarball/*.tgz 2>/dev/null | wc -l)
+          if [ "$count" -ne 1 ]; then
+            echo "ERROR: expected exactly 1 tarball, found $count" >&2
+            ls -la wasm-tarball/ >&2 || true
+            exit 1
+          fi
+
       - name: Publish @fulgur-rs/chart-wasm
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --ignore-scripts wasm-tarball/*.tgz
