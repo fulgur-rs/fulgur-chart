@@ -279,10 +279,23 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Verify npm version (>= 11.5.1 required for OIDC trusted publishing)
+      # npm OIDC trusted publishing requires npm CLI >= 11.5.1. We deliberately
+      # do NOT `npm install -g npm@latest` here (that would run unpinned registry
+      # code inside the id-token: write boundary). Node 24 bundles npm >= 11.5.1
+      # from v24.5.0 onward; setup-node resolves "24" to the latest patch, which
+      # satisfies this. Assert it so an unexpectedly old bundled npm fails fast
+      # with an actionable message instead of a confusing publish-time 404.
+      - name: Enforce npm OIDC minimum (>= 11.5.1)
         run: |
           node --version
-          npm --version
+          npm_version="$(npm --version)"
+          required="11.5.1"
+          echo "npm $npm_version (required >= $required)"
+          if [ "$(printf '%s\n%s\n' "$required" "$npm_version" | sort -V | head -n1)" != "$required" ]; then
+            echo "ERROR: npm $npm_version is below the OIDC trusted publishing floor ($required)." >&2
+            echo "Bump node-version in this workflow to a release bundling npm >= $required (Node >= 24.5.0)." >&2
+            exit 1
+          fi
 
       - name: Download npm tarballs
         uses: actions/download-artifact@v4
@@ -345,6 +358,16 @@ jobs:
             fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
           '
 
+      # The committed Cargo.lock pins all external registry crates, but the
+      # fulgur-chart path dependency is version-bumped by release-plz on every
+      # release, leaving the lock stale at release time. Reconcile ONLY that
+      # path-dependency entry so `--locked` succeeds while every registry crate
+      # stays pinned at its committed version + checksum (scoping to
+      # `-p fulgur-chart` prevents an unpinned compatible upgrade of any other
+      # crate). This runs in build-wasm, which has no id-token: write.
+      - name: Reconcile fulgur-chart path dependency in Cargo.lock
+        run: cargo update -p fulgur-chart
+
       - name: Build WASM package with locked Rust dependencies
         run: npm run build
 
@@ -406,10 +429,23 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Verify npm version (>= 11.5.1 required for OIDC trusted publishing)
+      # npm OIDC trusted publishing requires npm CLI >= 11.5.1. We deliberately
+      # do NOT `npm install -g npm@latest` here (that would run unpinned registry
+      # code inside the id-token: write boundary). Node 24 bundles npm >= 11.5.1
+      # from v24.5.0 onward; setup-node resolves "24" to the latest patch, which
+      # satisfies this. Assert it so an unexpectedly old bundled npm fails fast
+      # with an actionable message instead of a confusing publish-time 404.
+      - name: Enforce npm OIDC minimum (>= 11.5.1)
         run: |
           node --version
-          npm --version
+          npm_version="$(npm --version)"
+          required="11.5.1"
+          echo "npm $npm_version (required >= $required)"
+          if [ "$(printf '%s\n%s\n' "$required" "$npm_version" | sort -V | head -n1)" != "$required" ]; then
+            echo "ERROR: npm $npm_version is below the OIDC trusted publishing floor ($required)." >&2
+            echo "Bump node-version in this workflow to a release bundling npm >= $required (Node >= 24.5.0)." >&2
+            exit 1
+          fi
 
       - name: Download prebuilt WASM package
         uses: actions/download-artifact@v4
