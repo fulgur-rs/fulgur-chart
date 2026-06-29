@@ -51,38 +51,91 @@ impl JsonRpcResponse {
 
 pub async fn mcp_handler(
     State(state): State<AppState>,
-    // Map<String, Value> で受け取り id キーの有無を保持する。
-    // Option<Value> では "id": null と id 省略がどちらも None になるため、
-    // JSON-RPC notification（id 省略）と id: null リクエストを区別できない。
-    Json(raw): Json<Map<String, Value>>,
+    // Value で受け取り object / array（batch）を分岐する。
+    // Map<String, Value> では MCP 2025-03-26 で必須の JSON-RPC batch 配列を拒否してしまう。
+    Json(raw): Json<Value>,
 ) -> Response {
-    // MCP notification は id フィールドが存在しない。
+    match raw {
+        Value::Array(batch) => {
+            // MCP 2025-03-26 Streamable HTTP: 全件 notification の batch → 202 Accepted。
+            // request を含む batch は未サポート（experimental）。
+            let all_notifications = batch
+                .iter()
+                .all(|item| item.as_object().is_some_and(|obj| !obj.contains_key("id")));
+            if all_notifications {
+                StatusCode::ACCEPTED.into_response()
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(JsonRpcResponse::error(
+                        None,
+                        -32600,
+                        "Batch requests are not supported".into(),
+                    )),
+                )
+                    .into_response()
+            }
+        }
+        Value::Object(obj) => handle_single(obj, state).await,
+        _ => (
+            StatusCode::BAD_REQUEST,
+            Json(JsonRpcResponse::error(None, -32700, "Parse error".into())),
+        )
+            .into_response(),
+    }
+}
+
+async fn handle_single(raw: Map<String, Value>, state: AppState) -> Response {
+    // jsonrpc と method を先に検証してから notification / request を判定する。
+    // malformed な object（{"foo":"bar"} 等）が notification として 202 になるのを防ぐ。
+    let jsonrpc = raw.get("jsonrpc").and_then(|v| v.as_str()).unwrap_or("");
+    if jsonrpc != "2.0" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(JsonRpcResponse::error(
+                None,
+                -32600,
+                "Invalid Request".into(),
+            )),
+        )
+            .into_response();
+    }
+
+    if raw.get("method").and_then(|v| v.as_str()).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(JsonRpcResponse::error(
+                None,
+                -32600,
+                "Invalid Request".into(),
+            )),
+        )
+            .into_response();
+    }
+
+    // notification: jsonrpc と method が有効で id キーが存在しない。
     // MCP 2025-03-26 Streamable HTTP: notification には 202 Accepted を返す。
     if !raw.contains_key("id") {
         return StatusCode::ACCEPTED.into_response();
     }
 
-    let id = raw.get("id").cloned();
-
-    let jsonrpc = raw.get("jsonrpc").and_then(|v| v.as_str()).unwrap_or("");
-    if jsonrpc != "2.0" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(JsonRpcResponse::error(id, -32600, "Invalid Request".into())),
-        )
-            .into_response();
-    }
-
-    let method = match raw.get("method").and_then(|v| v.as_str()) {
-        Some(m) => m,
-        None => {
+    // MCP 2025-03-26: request id は string または integer のみ（null/object/array/bool は不正）。
+    let id = match raw.get("id") {
+        Some(v @ Value::String(_)) | Some(v @ Value::Number(_)) => Some(v.clone()),
+        _ => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(JsonRpcResponse::error(id, -32600, "Invalid Request".into())),
+                Json(JsonRpcResponse::error(
+                    None,
+                    -32600,
+                    "Invalid Request: id must be string or integer".into(),
+                )),
             )
                 .into_response();
         }
     };
+
+    let method = raw.get("method").and_then(|v| v.as_str()).unwrap();
     let params = raw.get("params").cloned();
 
     let result = match method {
