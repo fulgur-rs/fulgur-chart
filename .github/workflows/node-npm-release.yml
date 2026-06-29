@@ -118,11 +118,12 @@ jobs:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.settings.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: crates/bindings/node
           key: ${{ matrix.settings.target }}
@@ -142,13 +143,15 @@ jobs:
       # workspace root". zigbuild runs on the host where the full tree is present.
       - name: Setup zig (zigbuild cross-compile toolchain)
         if: matrix.settings.use-cross
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: 0.13.0
 
       - name: Install cargo-zigbuild
         if: matrix.settings.use-cross
-        uses: taiki-e/install-action@cargo-zigbuild
+        uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+        with:
+          tool: cargo-zigbuild
 
       - name: Build native addon (cross-compile via zigbuild)
         if: matrix.settings.use-cross
@@ -179,9 +182,11 @@ jobs:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: crates/bindings/node
           key: package
@@ -327,17 +332,20 @@ jobs:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: crates/bindings/wasm
           key: wasm-build
 
       - name: Install wasm-pack
-        uses: taiki-e/install-action@wasm-pack
+        uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+        with:
+          tool: wasm-pack
 
       - uses: actions/setup-node@v6
         with:
