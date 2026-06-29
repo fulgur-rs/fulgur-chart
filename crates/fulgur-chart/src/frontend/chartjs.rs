@@ -5,6 +5,11 @@ use crate::ir::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+/// top-level `width`/`height` 省略時の既定キャンバスサイズ(px)。
+/// wordCloud のみ専用既定(500x300)を使うため、ここには含めない。
+const DEFAULT_CHART_WIDTH: f64 = 800.0;
+const DEFAULT_CHART_HEIGHT: f64 = 450.0;
+
 /// Deserialize a field that may be explicitly `null`, treating `null` (and a missing
 /// field via `#[serde(default)]`) as `T::default()`. Keeps parser tolerance aligned with
 /// schemas that render optional fields as nullable.
@@ -23,6 +28,11 @@ struct RawSpec {
     data: RawData,
     #[serde(default)]
     options: RawOptions,
+    // fulgur 拡張: トップレベル width/height(px)。省略時は既定 800x450。
+    #[serde(default)]
+    width: Option<f64>,
+    #[serde(default)]
+    height: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -664,8 +674,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             .title
             .filter(|t| t.display)
             .map(|t| t.text),
-        width: 800.0,
-        height: 450.0,
+        width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
+        height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels,
         theme,
     })
@@ -832,7 +842,7 @@ fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
         return Ok(()); // object でなければ後段パースに委ねる
     };
 
-    check_object(top, &["type", "data", "options"], "")?;
+    check_object(top, &["type", "data", "options", "width", "height"], "")?;
 
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
         check_object(data, &["labels", "datasets"], "data")?;
@@ -949,7 +959,7 @@ fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
-    check_object(top, &["type", "data", "options"], "")?;
+    check_object(top, &["type", "data", "options", "width", "height"], "")?;
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
         check_object(data, &["datasets"], "data")?;
         if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
@@ -1011,7 +1021,7 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
-    check_object(top, &["type", "data", "options"], "")?;
+    check_object(top, &["type", "data", "options", "width", "height"], "")?;
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
         check_object(data, &["datasets", "labels"], "data")?;
         if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
@@ -1090,7 +1100,7 @@ fn check_unknown_keys_gauge(json: &str) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
-    check_object(top, &["type", "data", "options"], "")?;
+    check_object(top, &["type", "data", "options", "width", "height"], "")?;
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
         check_object(data, &["datasets"], "data")?;
         if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
@@ -1189,7 +1199,7 @@ fn check_unknown_keys_progress(json: &str) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
-    check_object(top, &["type", "data", "options"], "")?;
+    check_object(top, &["type", "data", "options", "width", "height"], "")?;
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
         check_object(data, &["labels", "datasets"], "data")?;
         if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
@@ -1239,6 +1249,10 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         data: TreemapRawData,
         #[serde(default)]
         options: RawOptions,
+        #[serde(default)]
+        width: Option<f64>,
+        #[serde(default)]
+        height: Option<f64>,
     }
     #[derive(Deserialize)]
     struct TreemapRawData {
@@ -1363,8 +1377,8 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
             .title
             .filter(|t| t.display)
             .map(|t| t.text),
-        width: 800.0,
-        height: 450.0,
+        width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
+        height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
     })
@@ -1459,7 +1473,7 @@ fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
-    check_object(top, &["type", "data", "options"], "")?;
+    check_object(top, &["type", "data", "options", "width", "height"], "")?;
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
         check_object(data, &["datasets"], "data")?;
         if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
@@ -1562,6 +1576,10 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         data: MatrixRawData,
         #[serde(default)]
         options: RawOptions,
+        #[serde(default)]
+        width: Option<f64>,
+        #[serde(default)]
+        height: Option<f64>,
     }
 
     #[derive(Deserialize)]
@@ -1716,8 +1734,8 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             .title
             .filter(|t| t.display)
             .map(|t| t.text),
-        width: 800.0,
-        height: 450.0,
+        width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
+        height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
     })
@@ -1733,6 +1751,10 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         // Accept an explicit `options: null` as the default (schema renders options nullable).
         #[serde(default, deserialize_with = "null_or_default")]
         options: RawOptions,
+        #[serde(default)]
+        width: Option<f64>,
+        #[serde(default)]
+        height: Option<f64>,
     }
     #[derive(Deserialize)]
     struct D {
@@ -1924,8 +1946,8 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
             .title
             .filter(|t| t.display)
             .map(|t| t.text),
-        width: 800.0,
-        height: 450.0,
+        width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
+        height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
     })
@@ -1939,6 +1961,10 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         data: GaugeRawData,
         #[serde(default)]
         options: serde_json::Value,
+        #[serde(default)]
+        width: Option<f64>,
+        #[serde(default)]
+        height: Option<f64>,
     }
     #[derive(Deserialize)]
     struct GaugeRawData {
@@ -2142,8 +2168,8 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         y_axis: zero_axis(),
         legend: LegendPos::None,
         title,
-        width: 800.0,
-        height: 450.0,
+        width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
+        height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
     })
