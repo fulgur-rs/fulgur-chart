@@ -59,9 +59,15 @@ pub async fn mcp_handler(
         Value::Array(batch) => {
             // MCP 2025-03-26 Streamable HTTP: 全件 notification の batch → 202 Accepted。
             // request を含む batch は未サポート（experimental）。
-            let all_notifications = batch
-                .iter()
-                .all(|item| item.as_object().is_some_and(|obj| !obj.contains_key("id")));
+            // 各要素を単体リクエスト側と同様に検証してから notification と判定する。
+            let all_notifications = !batch.is_empty()
+                && batch.iter().all(|item| {
+                    item.as_object().is_some_and(|obj| {
+                        obj.get("jsonrpc").and_then(|v| v.as_str()) == Some("2.0")
+                            && obj.get("method").and_then(|v| v.as_str()).is_some()
+                            && !obj.contains_key("id")
+                    })
+                });
             if all_notifications {
                 StatusCode::ACCEPTED.into_response()
             } else {
@@ -119,9 +125,10 @@ async fn handle_single(raw: Map<String, Value>, state: AppState) -> Response {
         return StatusCode::ACCEPTED.into_response();
     }
 
-    // MCP 2025-03-26: request id は string または integer のみ（null/object/array/bool は不正）。
+    // MCP 2025-03-26: request id は string または整数のみ（小数/null/object/array/bool は不正）。
     let id = match raw.get("id") {
-        Some(v @ Value::String(_)) | Some(v @ Value::Number(_)) => Some(v.clone()),
+        Some(v @ Value::String(_)) => Some(v.clone()),
+        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => Some(Value::Number(n.clone())),
         _ => {
             return (
                 StatusCode::BAD_REQUEST,
