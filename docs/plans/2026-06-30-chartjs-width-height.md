@@ -16,6 +16,7 @@
 - `crates/fulgur-chart/src/frontend/chartjs.rs`(parser + strict check)
 - `crates/fulgur-chart/src/schema/chartjs.rs`(公開スキーマ)
 - `crates/fulgur-chart/tests/frontend_chartjs.rs`(テスト)
+- `crates/chart-server/src/handlers/chart.rs`(Task 4: `?w=&h=` 合成経路の検証テスト)
 
 ---
 

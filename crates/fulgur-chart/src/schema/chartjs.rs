@@ -61,9 +61,11 @@ pub struct BarSpec {
     pub options: Option<BarOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -156,9 +158,11 @@ pub struct LineSpec {
     pub options: Option<LineOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -252,9 +256,11 @@ pub struct PieSpec {
     pub options: Option<PieOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -301,9 +307,11 @@ pub struct ScatterSpec {
     pub options: Option<XYOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -359,9 +367,11 @@ pub struct BubbleSpec {
     pub options: Option<XYOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -406,9 +416,11 @@ pub struct RadarSpec {
     pub options: Option<RadarOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -458,9 +470,11 @@ pub struct MatrixSpec {
     pub options: Option<MatrixOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -513,9 +527,11 @@ pub struct TreemapSpec {
     pub options: Option<TreemapOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -583,9 +599,11 @@ pub struct ProgressSpec {
     pub options: Option<ProgressOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -630,9 +648,11 @@ pub struct BoxplotSpec {
     pub options: Option<BoxplotOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -682,9 +702,11 @@ pub struct SparklineSpec {
     pub options: Option<SparklineOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -735,9 +757,11 @@ pub struct GaugeSpec {
     pub options: Option<GaugeOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -809,9 +833,11 @@ pub struct RadialGaugeSpec {
     pub options: Option<RadialGaugeOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -873,9 +899,11 @@ pub struct OutlabeledPieSpec {
     pub options: Option<OutlabeledPieOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -930,9 +958,11 @@ pub struct WordCloudSpec {
     pub options: Option<WordCloudOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 
@@ -1009,9 +1039,11 @@ pub struct SankeySpec {
     pub options: Option<SankeyOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub width: Option<f64>,
     /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
     pub height: Option<f64>,
 }
 

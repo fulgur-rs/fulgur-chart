@@ -5,6 +5,11 @@ use crate::ir::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
+/// top-level `width`/`height` 省略時の既定キャンバスサイズ(px)。
+/// wordCloud のみ専用既定(500x300)を使うため、ここには含めない。
+const DEFAULT_CHART_WIDTH: f64 = 800.0;
+const DEFAULT_CHART_HEIGHT: f64 = 450.0;
+
 /// Deserialize a field that may be explicitly `null`, treating `null` (and a missing
 /// field via `#[serde(default)]`) as `T::default()`. Keeps parser tolerance aligned with
 /// schemas that render optional fields as nullable.
@@ -669,8 +674,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             .title
             .filter(|t| t.display)
             .map(|t| t.text),
-        width: raw.width.unwrap_or(800.0),
-        height: raw.height.unwrap_or(450.0),
+        width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
+        height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels,
         theme,
     })
@@ -1372,8 +1377,8 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
             .title
             .filter(|t| t.display)
             .map(|t| t.text),
-        width: raw.width.unwrap_or(800.0),
-        height: raw.height.unwrap_or(450.0),
+        width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
+        height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
     })
@@ -1729,8 +1734,8 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             .title
             .filter(|t| t.display)
             .map(|t| t.text),
-        width: raw.width.unwrap_or(800.0),
-        height: raw.height.unwrap_or(450.0),
+        width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
+        height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
     })
@@ -1941,8 +1946,8 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
             .title
             .filter(|t| t.display)
             .map(|t| t.text),
-        width: raw.width.unwrap_or(800.0),
-        height: raw.height.unwrap_or(450.0),
+        width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
+        height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
     })
@@ -2163,8 +2168,8 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         y_axis: zero_axis(),
         legend: LegendPos::None,
         title,
-        width: raw.width.unwrap_or(800.0),
-        height: raw.height.unwrap_or(450.0),
+        width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
+        height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
     })
