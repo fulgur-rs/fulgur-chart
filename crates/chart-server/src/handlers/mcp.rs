@@ -3,10 +3,10 @@ use crate::{
     state::AppState,
 };
 use axum::{
-    Json,
+    body::Bytes,
     extract::State,
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Json, Response},
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -15,7 +15,7 @@ use serde_json::{Map, Value, json};
 #[derive(Serialize)]
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // id は null の場合も必ず出力する（JSON-RPC 2.0: error 時は "id": null が必須）。
     pub id: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
@@ -51,10 +51,20 @@ impl JsonRpcResponse {
 
 pub async fn mcp_handler(
     State(state): State<AppState>,
-    // Value で受け取り object / array（batch）を分岐する。
-    // Map<String, Value> では MCP 2025-03-26 で必須の JSON-RPC batch 配列を拒否してしまう。
-    Json(raw): Json<Value>,
+    // Bytes で受け取り自前でパースする。axum の Json<V> エクストラクタは malformed JSON を
+    // 422 で返してしまい JSON-RPC の -32700 Parse error を返せないため。
+    body: Bytes,
 ) -> Response {
+    let raw: Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(JsonRpcResponse::error(None, -32700, "Parse error".into())),
+            )
+                .into_response();
+        }
+    };
     match raw {
         Value::Array(batch) => {
             // MCP 2025-03-26 Streamable HTTP: 全件 notification の batch → 202 Accepted。
@@ -91,7 +101,20 @@ pub async fn mcp_handler(
     }
 }
 
+/// valid な形式（string / 整数）の id を取り出す。invalid な型は None を返す。
+fn extract_valid_id(raw: &Map<String, Value>) -> Option<Value> {
+    match raw.get("id") {
+        Some(v @ Value::String(_)) => Some(v.clone()),
+        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => Some(Value::Number(n.clone())),
+        _ => None,
+    }
+}
+
 async fn handle_single(raw: Map<String, Value>, state: AppState) -> Response {
+    // valid な id を先に取り出す。early validation 失敗時のレスポンスにも echo back するため。
+    // JSON-RPC 2.0: クライアントはレスポンスの id でリクエストを照合する。
+    let early_id = extract_valid_id(&raw);
+
     // jsonrpc と method を先に検証してから notification / request を判定する。
     // malformed な object（{"foo":"bar"} 等）が notification として 202 になるのを防ぐ。
     let jsonrpc = raw.get("jsonrpc").and_then(|v| v.as_str()).unwrap_or("");
@@ -99,7 +122,7 @@ async fn handle_single(raw: Map<String, Value>, state: AppState) -> Response {
         return (
             StatusCode::BAD_REQUEST,
             Json(JsonRpcResponse::error(
-                None,
+                early_id,
                 -32600,
                 "Invalid Request".into(),
             )),
@@ -111,7 +134,7 @@ async fn handle_single(raw: Map<String, Value>, state: AppState) -> Response {
         return (
             StatusCode::BAD_REQUEST,
             Json(JsonRpcResponse::error(
-                None,
+                early_id,
                 -32600,
                 "Invalid Request".into(),
             )),
@@ -126,10 +149,9 @@ async fn handle_single(raw: Map<String, Value>, state: AppState) -> Response {
     }
 
     // MCP 2025-03-26: request id は string または整数のみ（小数/null/object/array/bool は不正）。
-    let id = match raw.get("id") {
-        Some(v @ Value::String(_)) => Some(v.clone()),
-        Some(Value::Number(n)) if n.is_i64() || n.is_u64() => Some(Value::Number(n.clone())),
-        _ => {
+    let id = match extract_valid_id(&raw) {
+        Some(v) => Some(v),
+        None => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(JsonRpcResponse::error(

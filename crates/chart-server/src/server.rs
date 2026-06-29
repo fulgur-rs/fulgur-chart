@@ -46,7 +46,12 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
         CorsLayer::new()
             .allow_origin(origins)
             .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::ACCEPT])
+            .allow_headers([
+                header::CONTENT_TYPE,
+                header::AUTHORIZATION,
+                header::ACCEPT,
+                header::IF_NONE_MATCH,
+            ])
     };
 
     // 圧縮: PNG/WebP は既に圧縮済みのため除外。SVG は image/svg+xml だが圧縮効果が高い。

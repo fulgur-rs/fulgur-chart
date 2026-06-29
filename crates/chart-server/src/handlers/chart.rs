@@ -202,10 +202,14 @@ pub(crate) fn apply_overrides_value(
                 .entry("options")
                 .or_insert_with(|| Value::Object(Default::default()));
             if let Some(opts_obj) = options.as_object_mut() {
-                // theme が非オブジェクト値の場合も注入をスキップし、パーサーに拒否させる。
                 let theme = opts_obj
                     .entry("theme")
                     .or_insert_with(|| Value::Object(Default::default()));
+                // null は absent と同等（Chart.js パーサーは null theme を省略と同様に扱う）。
+                // 非オブジェクト・非 null の値（文字列等）は invalid なので注入をスキップする。
+                if theme.is_null() {
+                    *theme = Value::Object(Default::default());
+                }
                 if let Some(theme_obj) = theme.as_object_mut() {
                     theme_obj.insert("backgroundColor".into(), bkg.into());
                 }
