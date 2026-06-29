@@ -1,5 +1,5 @@
 use crate::{
-    render::{self, OutputFormat, RenderError},
+    render::{self, Compression, OutputFormat, RenderError},
     response::{cache_headers, error_response, etag_value, render_response},
     state::AppState,
 };
@@ -25,6 +25,9 @@ pub struct ChartQuery {
     /// Output format: `svg`, `png`, `webp`, `data-uri`
     #[serde(default)]
     pub f: OutputFormat,
+    /// PNG compression: `fast`, `balanced`, `high` (default `balanced`; PNG only)
+    #[serde(default)]
+    pub compression: Compression,
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -42,6 +45,9 @@ pub struct ChartRequest {
     /// Output format: `svg`, `png`, `webp`, `data-uri`
     #[serde(default)]
     pub format: OutputFormat,
+    /// PNG compression: `fast`, `balanced`, `high` (default `balanced`; PNG only)
+    #[serde(default)]
+    pub compression: Compression,
     /// DSL frontend (default: `chartjs`)
     #[serde(default = "default_dsl")]
     pub dsl: String,
@@ -80,7 +86,15 @@ pub async fn get_chart(
             .into_response();
     };
     let json = apply_overrides(&c, q.w, q.h, q.bkg.as_deref());
-    handle_render(json, q.f, "chartjs".to_string(), headers, state).await
+    handle_render(
+        json,
+        q.f,
+        q.compression,
+        "chartjs".to_string(),
+        headers,
+        state,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -108,17 +122,18 @@ pub async fn post_chart(
         req.background_color.as_deref(),
     )
     .to_string();
-    handle_render(json, req.format, req.dsl, headers, state).await
+    handle_render(json, req.format, req.compression, req.dsl, headers, state).await
 }
 
 async fn handle_render(
     json: String,
     format: OutputFormat,
+    compression: Compression,
     dsl: String,
     headers: HeaderMap,
     state: AppState,
 ) -> Response {
-    let etag = etag_value(&json, format);
+    let etag = etag_value(&json, format, compression);
 
     // 304 check (RFC 7232 compliant)
     if let Some(inm) = headers.get(axum::http::header::IF_NONE_MATCH)
@@ -159,7 +174,7 @@ async fn handle_render(
         tokio::task::spawn_blocking(move || {
             let _permit = permit; // クロージャ完了まで permit を保持して Semaphore を正しく解放
             let spec = render::parse_and_validate(&json, &dsl, false)?;
-            render::render(&spec, format, 1.0)
+            render::render(&spec, format, 1.0, compression)
         }),
     )
     .await;

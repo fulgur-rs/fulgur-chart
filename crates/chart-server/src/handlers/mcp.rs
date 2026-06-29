@@ -287,7 +287,8 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let spec = render::parse_and_validate(&json_str, "chartjs", false)?;
-            render::render(&spec, format, 1.0)
+            // MCP は圧縮プリセット未指定のため chart-server の既定(Balanced)を用いる。
+            render::render(&spec, format, 1.0, render::Compression::default())
         }),
     )
     .await;

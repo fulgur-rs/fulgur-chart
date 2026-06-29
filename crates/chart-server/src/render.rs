@@ -8,7 +8,8 @@ use fulgur_chart::{
     frontend,
     guard::{self, InputLimits},
     ir::ChartSpec,
-    raster_direct, render,
+    raster_direct::{self, PngCompression},
+    render,
 };
 
 // ---------------------------------------------------------------------------
@@ -36,6 +37,37 @@ impl OutputFormat {
             Self::Png => "png",
             Self::Webp => "webp",
             Self::DataUri => "data-uri",
+        }
+    }
+}
+
+/// PNG 圧縮プリセット。サイズと速度のトレードオフ（PNG のみ有効）。
+///
+/// `fast` は最速・最大サイズ、`high` は最小サイズ・最も遅い。
+/// 既定は `balanced`（高速のままサイズを大幅削減）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Compression {
+    Fast,
+    #[default]
+    Balanced,
+    High,
+}
+
+impl Compression {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Fast => "fast",
+            Self::Balanced => "balanced",
+            Self::High => "high",
+        }
+    }
+
+    fn to_png(self) -> PngCompression {
+        match self {
+            Self::Fast => PngCompression::Fast,
+            Self::Balanced => PngCompression::Balanced,
+            Self::High => PngCompression::High,
         }
     }
 }
@@ -99,15 +131,23 @@ pub fn parse_and_validate(json: &str, dsl: &str, strict: bool) -> Result<ChartSp
 ///
 /// `DataUri` の場合は SVG bytes を返す（data URI への変換は呼び出し元が行う）。
 /// `scale` は PNG/WebP のみ有効。SVG では無視される。
-pub fn render(spec: &ChartSpec, format: OutputFormat, scale: f32) -> Result<Vec<u8>, RenderError> {
+/// `compression` は PNG のみ有効（WebP は lossless、SVG はテキストのため無視）。
+pub fn render(
+    spec: &ChartSpec,
+    format: OutputFormat,
+    scale: f32,
+    compression: Compression,
+) -> Result<Vec<u8>, RenderError> {
     match format {
         OutputFormat::Svg | OutputFormat::DataUri => {
             // render_chart は Result を返さない（パニックしない）。
             let svg = render::render_chart(spec);
             Ok(svg.into_bytes())
         }
-        OutputFormat::Png => raster_direct::render_chart_to_png(spec, scale, DEFAULT_FONT)
-            .map_err(RenderError::Render),
+        OutputFormat::Png => {
+            raster_direct::render_chart_to_png_with(spec, scale, DEFAULT_FONT, compression.to_png())
+                .map_err(RenderError::Render)
+        }
         OutputFormat::Webp => raster_direct::render_chart_to_webp(spec, scale, DEFAULT_FONT)
             .map_err(RenderError::Render),
     }

@@ -14,6 +14,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive", "env"] }
 tiny-skia = "0.11"
+# tiny-skia の encode_png() は内部の全画素 demultiply が支配的なため、
+# fdeflate 圧縮を直接呼ぶ自前パスで置換する。tiny-skia と同一バージョンに
+# 解決され、同設定(Fast+Sub)で出力バイト一致を保つ。
+png = "0.17"
 ttf-parser = "0.25"
 insta = { version = "1", features = ["yaml"] }
 schemars = { version = "1.2", features = ["preserve_order"] }

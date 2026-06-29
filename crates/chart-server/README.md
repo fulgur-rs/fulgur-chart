@@ -43,6 +43,7 @@ curl -X POST http://localhost:3000/chart \
 | `w` | integer | — | Width (px) |
 | `h` | integer | — | Height (px) |
 | `bkg` | string | transparent | Background color |
+| `compression` | `fast` \| `balanced` \| `high` | `balanced` | PNG size/speed tradeoff (PNG only) |
 
 ### POST /chart
 
@@ -53,6 +54,7 @@ curl -X POST http://localhost:3000/chart \
   "width": 800,
   "height": 400,
   "backgroundColor": "white",
+  "compression": "balanced",
   "dsl": "chartjs"
 }
 ```
@@ -65,6 +67,20 @@ curl -X POST http://localhost:3000/chart \
 | `svg` | `image/svg+xml` | Inline SVG |
 | `webp` | `image/webp` | Binary WebP |
 | `data-uri` | `text/plain` | `data:image/svg+xml;base64,…` |
+
+## PNG compression
+
+The `compression` parameter trades encode speed for file size (PNG only; WebP is
+lossless and SVG is text). All presets produce pixel-identical, deterministic output.
+
+| Preset | Filter / deflate | Speed | Size |
+|--------|------------------|-------|------|
+| `fast` | Sub + fdeflate | fastest | largest |
+| `balanced` (default) | adaptive + fdeflate | fast | small |
+| `high` | adaptive + zlib L6 | slowest | smallest |
+
+`balanced` keeps most of `fast`'s speed with a large size reduction; `high` minimizes
+size further at a higher encode cost. Pixels are identical across all presets.
 
 ## Configuration
 

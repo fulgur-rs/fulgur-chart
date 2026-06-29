@@ -33,21 +33,61 @@ const MAX_PNG_AREA_PIXELS: u64 = 64_000_000;
 // 公開エントリポイント
 // ---------------------------------------------------------------------------
 
+/// PNG エンコードの圧縮プリセット。速度↔サイズのトレードオフを選ぶ。
+///
+/// いずれも可逆(同一ピクセル)・決定的。`Fast` は tiny-skia の `encode_png()` と
+/// バイト一致する既定値で、`render_chart_to_png` はこれを使う(出力不変)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PngCompression {
+    /// fdeflate(Fast) + Sub フィルタ。最速・最大サイズ。tiny-skia 既定と同一出力。
+    #[default]
+    Fast,
+    /// fdeflate(Fast) + 適応フィルタ。高速のままサイズを大幅に削減する。
+    Balanced,
+    /// zlib(Level 6) + 適応フィルタ。最小サイズ。最も遅い。
+    High,
+}
+
+impl PngCompression {
+    /// `(png 圧縮レベル, 基本フィルタ, 適応フィルタ有効)` へ落とす。
+    fn params(self) -> (png::Compression, png::FilterType, bool) {
+        match self {
+            Self::Fast => (png::Compression::Fast, png::FilterType::Sub, false),
+            Self::Balanced => (png::Compression::Fast, png::FilterType::Paeth, true),
+            Self::High => (png::Compression::Default, png::FilterType::Paeth, true),
+        }
+    }
+}
+
 /// ChartSpec を PNG バイト列に直接ラスタライズする。
 ///
 /// SVG 文字列を経由しないため、SVG 経由と画素単位では一致しない。
-/// 決定論性（同一入力 → 同一出力）は保証する。
+/// 決定論性（同一入力 → 同一出力）は保証する。圧縮は [`PngCompression::Fast`]
+/// 固定で、出力は従来どおり tiny-skia `encode_png()` とバイト一致する。
+/// 圧縮を選びたい場合は [`render_chart_to_png_with`] を使う。
 pub fn render_chart_to_png(
     spec: &crate::ir::ChartSpec,
     scale: f32,
     font_bytes: &[u8],
+) -> Result<Vec<u8>, String> {
+    render_chart_to_png_with(spec, scale, font_bytes, PngCompression::Fast)
+}
+
+/// 圧縮プリセットを指定して ChartSpec を PNG バイト列にラスタライズする。
+///
+/// 全プリセットで描画ピクセルは同一(可逆)・決定的。サイズと速度のみ異なる。
+pub fn render_chart_to_png_with(
+    spec: &crate::ir::ChartSpec,
+    scale: f32,
+    font_bytes: &[u8],
+    compression: PngCompression,
 ) -> Result<Vec<u8>, String> {
     let face =
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
     let scene = crate::layout::build_scene(spec, &measurer);
-    scene_to_png_with_face(&scene, scale, &face)
+    scene_to_png_with_face(&scene, scale, &face, compression)
 }
 
 /// ChartSpec を PNG バイト列に直接ラスタライズする（デフォルトフォント）。
@@ -86,11 +126,8 @@ pub fn render_chart_to_webp(
 
     // Demultiply premultiplied RGBA → straight RGBA before WebP encoding.
     // tiny-skia stores pixels as premultiplied; WebPEncoder expects straight alpha.
-    let mut straight = Vec::with_capacity(pixmap.data().len());
-    for pixel in pixmap.pixels() {
-        let c = pixel.demultiply();
-        straight.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
-    }
+    // 共有ヘルパは α==255/α==0 を除算なしで処理するため、従来ループとバイト一致かつ高速。
+    let straight = premultiplied_to_straight_rgba(&pixmap);
 
     let mut buf = Vec::new();
     WebPEncoder::new_lossless(&mut buf)
@@ -110,7 +147,7 @@ pub fn render_chart_to_webp(
 pub fn scene_to_png(scene: &Scene, scale: f32, font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     let face =
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
-    scene_to_png_with_face(scene, scale, &face)
+    scene_to_png_with_face(scene, scale, &face, PngCompression::Fast)
 }
 
 // ---------------------------------------------------------------------------
@@ -152,11 +189,79 @@ fn scene_to_png_with_face(
     scene: &Scene,
     scale: f32,
     face: &ttf_parser::Face<'_>,
+    compression: PngCompression,
 ) -> Result<Vec<u8>, String> {
     let pixmap = scene_to_pixmap(scene, scale, face)?;
-    pixmap
-        .encode_png()
+    encode_png_fast(&pixmap, compression)
+}
+
+/// premultiplied RGBA な Pixmap を straight(非 premultiplied) RGBA バイト列へ変換する。
+///
+/// tiny-skia の `Pixmap::encode_png()` と WebP 経路は全画素を `demultiply()` するが、
+/// その除算が PNG エンコード時間の大半(計測で ~95%)を占める。premultiplied の不変条件
+/// (各チャンネル ≤ α)より、α==255(不透明)・α==0(透明)の画素は premultiplied 値が
+/// そのまま straight 値に一致するため、これらは除算なしのコピーで済む。除算が要るのは
+/// AA 縁などの部分α画素のみ。出力は「全画素 demultiply」とバイト単位で一致する
+/// (`demultiply()` は α==255 で恒等、α==0 で 0 を返すため)。
+fn premultiplied_to_straight_rgba(pixmap: &Pixmap) -> Vec<u8> {
+    // 大半の画素(α==255/α==0)は premultiplied==straight なので、まず生バイトを
+    // 一括コピー(ベクトル化された memcpy)し、部分α画素(AA縁)の RGB だけを
+    // demultiply で上書きする。散発的な per-pixel 書き込みより速い。α は
+    // コピー済みでそのまま正しい。
+    let mut out = pixmap.data().to_vec();
+    for (px, chunk) in pixmap.pixels().iter().zip(out.chunks_exact_mut(4)) {
+        let a = px.alpha();
+        if a != 0 && a != 255 {
+            // 部分αのみ tiny-skia と同一の demultiply で straight 化（丸めも一致）。
+            let c = px.demultiply();
+            chunk[0] = c.red();
+            chunk[1] = c.green();
+            chunk[2] = c.blue();
+        }
+    }
+    out
+}
+
+/// Pixmap を PNG バイト列にエンコードする（tiny-skia `encode_png()` の高速等価版）。
+///
+/// 圧縮 `Compression::Fast`(fdeflate)・フィルタ `Sub` は tiny-skia が用いる png の
+/// デフォルトと同値。straight 変換を高速化した点だけが異なり、出力は tiny-skia
+/// `encode_png()` とバイト単位で一致する（回帰: `encode_png_fast_matches_tiny_skia_byte_for_byte`）。
+fn encode_png_fast(pixmap: &Pixmap, compression: PngCompression) -> Result<Vec<u8>, String> {
+    let straight = premultiplied_to_straight_rgba(pixmap);
+    encode_rgba_png(&straight, pixmap.width(), pixmap.height(), compression)
         .map_err(|e| format!("PNG encode failed: {e}"))
+}
+
+/// straight RGBA8 バイト列を PNG にエンコードする。
+///
+/// `PngCompression::Fast` の (`Compression::Fast`(fdeflate) + `FilterType::Sub`) は
+/// tiny-skia が用いる png のデフォルトと同値で、出力バイト一致を保つ。Balanced/High は
+/// 適応フィルタ・より高い圧縮でサイズを縮める(可逆=同一ピクセル)。エラーは png 由来の
+/// 型で返し、整形は呼び出し元の `encode_png_fast` に一本化する。
+fn encode_rgba_png(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    compression: PngCompression,
+) -> Result<Vec<u8>, png::EncodingError> {
+    let (comp, filter, adaptive) = compression.params();
+    let mut data = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut data, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(comp);
+        encoder.set_filter(filter);
+        if adaptive {
+            encoder.set_adaptive_filter(png::AdaptiveFilterType::Adaptive);
+        }
+        // writer は data を可変借用する。ブロック末尾で drop し IDAT/IEND を
+        // 確定させてから data を返す（tiny-skia の encode_png と同じ構造）。
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(rgba)?;
+    }
+    Ok(data)
 }
 
 fn render_prim(
@@ -733,6 +838,97 @@ mod tests {
         let a = render_chart_to_png(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
         let b = render_chart_to_png(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
         assert_eq!(a, b, "直接描画の出力は決定的でなければならない");
+    }
+
+    /// 自前の高速 PNG エンコードは、tiny-skia の `encode_png()` と
+    /// バイト単位で完全一致しなければならない（部分α=AA縁を含む実チャートで検証）。
+    /// 一致しないと golden 回帰・公開出力変化を招く。
+    #[test]
+    fn encode_png_fast_matches_tiny_skia_byte_for_byte() {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let measurer = crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = crate::layout::build_scene(&bar_spec(), &measurer);
+        let pixmap = scene_to_pixmap(&scene, 1.0, &face).unwrap();
+
+        // tiny-skia の参照出力（premultiplied→straight を全画素 demultiply）。
+        let expected = pixmap.encode_png().unwrap();
+        // 自前パス（a==255/a==0 は分岐コピー、部分αのみ demultiply）。Fast は tiny-skia 同設定。
+        let actual = encode_png_fast(&pixmap, PngCompression::Fast).unwrap();
+
+        assert_eq!(
+            actual, expected,
+            "fast PNG encode は tiny-skia encode_png とバイト一致でなければならない"
+        );
+    }
+
+    /// バッファ長が寸法と矛盾する場合、エンコードはエラーを返さなければならない
+    /// (パニックや不正 PNG にしない)。
+    #[test]
+    fn encode_rgba_png_rejects_mismatched_buffer() {
+        // 10×10 RGBA は 400 バイト必要。4 バイトしか渡さなければ Err。
+        let result = encode_rgba_png(&[0u8; 4], 10, 10, PngCompression::Fast);
+        assert!(result.is_err());
+    }
+
+    /// 圧縮プリセットは可逆でなければならない(全モードが同一ピクセルへデコード)。
+    /// かつ High/Balanced は Fast よりサイズが小さくなければならない(本機能の目的)。
+    #[test]
+    fn compression_modes_are_pixel_identical_and_smaller() {
+        let spec = bar_spec();
+        let fast =
+            render_chart_to_png_with(&spec, 1.0, DEFAULT_FONT, PngCompression::Fast).unwrap();
+        let balanced =
+            render_chart_to_png_with(&spec, 1.0, DEFAULT_FONT, PngCompression::Balanced).unwrap();
+        let high =
+            render_chart_to_png_with(&spec, 1.0, DEFAULT_FONT, PngCompression::High).unwrap();
+
+        // 可逆: 全モードが同一ピクセルへデコードされる。
+        let pf = Pixmap::decode_png(&fast).unwrap();
+        let pb = Pixmap::decode_png(&balanced).unwrap();
+        let ph = Pixmap::decode_png(&high).unwrap();
+        assert_eq!(
+            pf.data(),
+            pb.data(),
+            "Balanced は Fast とピクセル一致でなければならない"
+        );
+        assert_eq!(
+            pf.data(),
+            ph.data(),
+            "High は Fast とピクセル一致でなければならない"
+        );
+
+        // 目的: より強い圧縮はより小さい出力。
+        assert!(
+            balanced.len() < fast.len(),
+            "Balanced は Fast より小さいはず"
+        );
+        assert!(high.len() < fast.len(), "High は Fast より小さいはず");
+    }
+
+    /// 既定の `render_chart_to_png` は Fast(=tiny-skia 同一出力)を維持し、出力不変であること。
+    /// バインディング/CLI への波及を防ぐ回帰。
+    #[test]
+    fn default_render_is_fast_compression() {
+        let spec = bar_spec();
+        let default = render_chart_to_png(&spec, 1.0, DEFAULT_FONT).unwrap();
+        let fast =
+            render_chart_to_png_with(&spec, 1.0, DEFAULT_FONT, PngCompression::Fast).unwrap();
+        assert_eq!(default, fast, "既定は Fast とバイト一致でなければならない");
+    }
+
+    /// 各モードは決定的(同一入力→同一バイト)でなければならない。
+    #[test]
+    fn compression_modes_are_deterministic() {
+        let spec = bar_spec();
+        for c in [
+            PngCompression::Fast,
+            PngCompression::Balanced,
+            PngCompression::High,
+        ] {
+            let a = render_chart_to_png_with(&spec, 1.0, DEFAULT_FONT, c).unwrap();
+            let b = render_chart_to_png_with(&spec, 1.0, DEFAULT_FONT, c).unwrap();
+            assert_eq!(a, b, "{c:?} は決定的でなければならない");
+        }
     }
 
     #[test]
