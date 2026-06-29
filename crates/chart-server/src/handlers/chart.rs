@@ -225,3 +225,30 @@ fn apply_overrides(json: &str, w: Option<u32>, h: Option<u32>, bkg: Option<&str>
     };
     apply_overrides_value(v, w, h, bkg).to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn apply_overrides_theme_null_injects_background() {
+        let spec = json!({"type": "bar", "options": {"theme": null}});
+        let result = apply_overrides_value(spec, None, None, Some("white"));
+        assert_eq!(result["options"]["theme"]["backgroundColor"], "white");
+    }
+
+    #[test]
+    fn apply_overrides_theme_absent_injects_background() {
+        let spec = json!({"type": "bar"});
+        let result = apply_overrides_value(spec, None, None, Some("red"));
+        assert_eq!(result["options"]["theme"]["backgroundColor"], "red");
+    }
+
+    #[test]
+    fn apply_overrides_theme_string_skips_injection() {
+        let spec = json!({"type": "bar", "options": {"theme": "dark"}});
+        let result = apply_overrides_value(spec, None, None, Some("white"));
+        assert_eq!(result["options"]["theme"], "dark");
+    }
+}

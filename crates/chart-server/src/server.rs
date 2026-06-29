@@ -96,3 +96,55 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
     // ブラウザが CORS エラーを報告してしまう。
     router.layer(cors)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::ShortlinkStore;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    fn restricted_cors_router() -> Router {
+        let cfg = Config {
+            host: "0.0.0.0".into(),
+            port: 3000,
+            max_concurrent: 1,
+            max_body_size: 102_400,
+            render_timeout_ms: 1000,
+            shortlink_limit: 100,
+            cors_origins: "https://example.com".into(),
+            rate_limit: 0,
+            log_level: "info".into(),
+        };
+        build_router(&cfg, ShortlinkStore::new(100))
+    }
+
+    #[tokio::test]
+    async fn restricted_cors_allows_if_none_match_preflight() {
+        let resp = restricted_cors_router()
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/chart")
+                    .header("origin", "https://example.com")
+                    .header("access-control-request-method", "GET")
+                    .header("access-control-request-headers", "if-none-match")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // 制限 CORS でも If-None-Match が許可されていれば OPTIONS 200/204 が返る
+        let allowed = resp
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_ascii_lowercase().contains("if-none-match"))
+            .unwrap_or(false);
+        assert!(
+            allowed,
+            "access-control-allow-headers に if-none-match が含まれていない: {:?}",
+            resp.headers()
+        );
+    }
+}

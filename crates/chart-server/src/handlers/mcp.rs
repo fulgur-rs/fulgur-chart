@@ -334,3 +334,133 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::Request, routing::post};
+    use http_body_util::BodyExt;
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+    use tower::ServiceExt;
+
+    use crate::{state::AppState, store::ShortlinkStore};
+
+    fn test_app() -> axum::Router {
+        let state = AppState {
+            store: ShortlinkStore::new(100),
+            semaphore: Arc::new(Semaphore::new(1)),
+            render_timeout_ms: 1000,
+        };
+        axum::Router::new()
+            .route("/mcp", post(mcp_handler))
+            .with_state(state)
+    }
+
+    async fn post_mcp(
+        app: axum::Router,
+        body: &str,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    #[test]
+    fn jsonrpc_error_serializes_null_id() {
+        let resp = JsonRpcResponse::error(None, -32700, "Parse error".into());
+        let json = serde_json::to_value(&resp).unwrap();
+        // id: null は省略ではなく null として出力されること（JSON-RPC 2.0 仕様）
+        assert_eq!(json["id"], serde_json::Value::Null);
+        assert_eq!(json["error"]["code"], -32700);
+    }
+
+    #[test]
+    fn extract_valid_id_accepts_string() {
+        let mut map = serde_json::Map::new();
+        map.insert("id".into(), serde_json::Value::String("abc".into()));
+        assert_eq!(
+            extract_valid_id(&map),
+            Some(serde_json::Value::String("abc".into()))
+        );
+    }
+
+    #[test]
+    fn extract_valid_id_accepts_integer() {
+        let mut map = serde_json::Map::new();
+        map.insert("id".into(), serde_json::json!(42));
+        assert_eq!(extract_valid_id(&map), Some(serde_json::json!(42)));
+    }
+
+    #[test]
+    fn extract_valid_id_rejects_float() {
+        let mut map = serde_json::Map::new();
+        map.insert("id".into(), serde_json::json!(1.5));
+        assert_eq!(extract_valid_id(&map), None);
+    }
+
+    #[test]
+    fn extract_valid_id_rejects_null() {
+        let mut map = serde_json::Map::new();
+        map.insert("id".into(), serde_json::Value::Null);
+        assert_eq!(extract_valid_id(&map), None);
+    }
+
+    #[test]
+    fn extract_valid_id_absent_returns_none() {
+        let map = serde_json::Map::new();
+        assert_eq!(extract_valid_id(&map), None);
+    }
+
+    #[tokio::test]
+    async fn malformed_json_returns_parse_error() {
+        let (status, json) = post_mcp(test_app(), "not json").await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(json["error"]["code"], -32700);
+        // id は null として出力されること
+        assert_eq!(json["id"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn notification_returns_202() {
+        let body = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
+        let (status, _) = post_mcp(test_app(), body).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn invalid_jsonrpc_echoes_valid_id() {
+        // jsonrpc が 2.0 以外でも valid な id があれば echo back する
+        let body = r#"{"jsonrpc":"1.0","id":99,"method":"tools/list"}"#;
+        let (status, json) = post_mcp(test_app(), body).await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+        assert_eq!(json["id"], 99);
+        assert_eq!(json["error"]["code"], -32600);
+    }
+
+    #[tokio::test]
+    async fn notification_batch_returns_202() {
+        let body = r#"[{"jsonrpc":"2.0","method":"notifications/initialized"}]"#;
+        let (status, _) = post_mcp(test_app(), body).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn empty_batch_returns_400() {
+        let (status, _) = post_mcp(test_app(), "[]").await;
+        assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    }
+}
