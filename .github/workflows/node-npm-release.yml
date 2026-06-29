@@ -164,16 +164,12 @@ jobs:
           path: crates/bindings/node/*.node
           if-no-files-found: error
 
-  publish-packages:
-    name: Publish npm packages
+  package-npm-tarballs:
+    name: Package npm tarballs
     needs: [validate-release-tag, build-native]
     runs-on: ubuntu-latest
-    environment:
-      name: npm
-      url: https://www.npmjs.com/package/@fulgur-rs/chart-node
     permissions:
       contents: read
-      id-token: write
     defaults:
       run:
         working-directory: crates/bindings/node
@@ -188,20 +184,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates/bindings/node
-          key: publish
+          key: package
 
-      # setup-node MUST be >= v6.1.0 for OIDC trusted publishing: older versions
-      # write an .npmrc with `always-auth=true` + a placeholder _authToken, which
-      # npm uses instead of OIDC (publish 404s). v6.1.0 removed always-auth
-      # handling (actions/setup-node#1436). `registry-url` is required so npm
-      # engages the OIDC handshake against the registry; do NOT pass a token.
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
 
-      - name: Verify Node.js and npm versions
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
         run: |
+          npm install -g npm@latest
           node --version
           npm --version
 
@@ -252,14 +243,62 @@ jobs:
             }
           '
 
+      - name: Pack npm tarballs without lifecycle scripts
+        run: |
+          mkdir -p packed
+          for platform in linux-x64-gnu linux-x64-musl linux-arm64-gnu darwin-arm64 darwin-x64 win32-x64-msvc; do
+            npm pack --ignore-scripts --pack-destination packed/ npm/$platform/
+          done
+          npm pack --ignore-scripts --pack-destination packed/ .
+
+      - name: Upload npm tarballs
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarballs
+          path: crates/bindings/node/packed/*.tgz
+          if-no-files-found: error
+
+  publish-packages:
+    name: Publish npm packages
+    needs: [validate-release-tag, package-npm-tarballs]
+    runs-on: ubuntu-latest
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@fulgur-rs/chart-node
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # setup-node MUST be >= v6.1.0 for OIDC trusted publishing: older versions
+      # write an .npmrc with `always-auth=true` + a placeholder _authToken, which
+      # npm uses instead of OIDC (publish 404s). v6.1.0 removed always-auth
+      # handling (actions/setup-node#1436). `registry-url` is required so npm
+      # engages the OIDC handshake against the registry; do NOT pass a token.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+        run: |
+          npm install -g npm@latest
+          node --version
+          npm --version
+
+      - name: Download npm tarballs
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-tarballs
+          path: npm-tarballs
+
       - name: Publish platform packages
         run: |
           for platform in linux-x64-gnu linux-x64-musl linux-arm64-gnu darwin-arm64 darwin-x64 win32-x64-msvc; do
-            npm publish --provenance --access public npm/$platform/
+            npm publish --provenance --access public --ignore-scripts npm-tarballs/fulgur-rs-chart-node-$platform-*.tgz
           done
 
       - name: Publish main package (@fulgur-rs/chart-node)
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --ignore-scripts npm-tarballs/fulgur-rs-chart-node-[0-9]*.tgz
 
   publish-wasm:
     name: Build WASM and publish to npm
