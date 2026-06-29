@@ -78,11 +78,15 @@ curl -X POST http://localhost:3000/chart \
 | `FULGUR_RENDER_TIMEOUT_MS` | `1000` | Render timeout (milliseconds) |
 | `FULGUR_SHORTLINK_LIMIT` | `10000` | Maximum number of stored short links |
 | `FULGUR_CORS_ORIGINS` | `*` | Allowed CORS origins (comma-separated) |
-| `FULGUR_RATE_LIMIT` | `60` | Rate limit (requests/minute/IP) |
+| `FULGUR_RATE_LIMIT` | `0` | Rate limit (requests/minute/IP). `0` disables rate limiting (default) |
 
 ## Docker
 
+The Dockerfile expects a pre-built binary. Build from the repository root:
+
 ```bash
+cargo build --release -p chart-server
+cp target/release/chart-server chart-server-bin
 docker build -f crates/chart-server/Dockerfile -t chart-server .
 docker run -p 3000:3000 chart-server
 ```

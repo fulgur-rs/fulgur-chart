@@ -8,17 +8,8 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-
-// JSON-RPC 2.0 リクエスト
-#[derive(Deserialize)]
-pub struct JsonRpcRequest {
-    pub jsonrpc: String,
-    pub id: Option<Value>,
-    pub method: String,
-    pub params: Option<Value>,
-}
+use serde::Serialize;
+use serde_json::{Map, Value, json};
 
 // JSON-RPC 2.0 レスポンス
 #[derive(Serialize)]
@@ -60,40 +51,52 @@ impl JsonRpcResponse {
 
 pub async fn mcp_handler(
     State(state): State<AppState>,
-    Json(req): Json<JsonRpcRequest>,
+    // Map<String, Value> で受け取り id キーの有無を保持する。
+    // Option<Value> では "id": null と id 省略がどちらも None になるため、
+    // JSON-RPC notification（id 省略）と id: null リクエストを区別できない。
+    Json(raw): Json<Map<String, Value>>,
 ) -> Response {
-    // MCP notification は id フィールドが存在しない（JSON デシリアライズ後 None）。
-    // 仕様上 notification への返信は禁止されているため 200 empty を返す。
-    if req.id.is_none() {
-        return StatusCode::OK.into_response();
+    // MCP notification は id フィールドが存在しない。
+    // MCP 2025-03-26 Streamable HTTP: notification には 202 Accepted を返す。
+    if !raw.contains_key("id") {
+        return StatusCode::ACCEPTED.into_response();
     }
 
-    if req.jsonrpc != "2.0" {
+    let id = raw.get("id").cloned();
+
+    let jsonrpc = raw.get("jsonrpc").and_then(|v| v.as_str()).unwrap_or("");
+    if jsonrpc != "2.0" {
         return (
             StatusCode::BAD_REQUEST,
-            Json(JsonRpcResponse::error(
-                req.id,
-                -32600,
-                "Invalid Request".into(),
-            )),
+            Json(JsonRpcResponse::error(id, -32600, "Invalid Request".into())),
         )
             .into_response();
     }
 
-    let result = match req.method.as_str() {
+    let method = match raw.get("method").and_then(|v| v.as_str()) {
+        Some(m) => m,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(JsonRpcResponse::error(id, -32600, "Invalid Request".into())),
+            )
+                .into_response();
+        }
+    };
+    let params = raw.get("params").cloned();
+
+    let result = match method {
         "initialize" => handle_initialize(),
         "tools/list" => handle_tools_list(),
-        "tools/call" => handle_tools_call(req.params, state).await,
+        "tools/call" => handle_tools_call(params, state).await,
         _ => Err((-32601, "Method not found".to_string())),
     };
 
     match result {
-        Ok(v) => (StatusCode::OK, Json(JsonRpcResponse::success(req.id, v))).into_response(),
-        Err((code, msg)) => (
-            StatusCode::OK,
-            Json(JsonRpcResponse::error(req.id, code, msg)),
-        )
-            .into_response(),
+        Ok(v) => (StatusCode::OK, Json(JsonRpcResponse::success(id, v))).into_response(),
+        Err((code, msg)) => {
+            (StatusCode::OK, Json(JsonRpcResponse::error(id, code, msg))).into_response()
+        }
     }
 }
 
