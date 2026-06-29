@@ -69,10 +69,11 @@ const SVG_HASH: u64 = 0x3af5_841b_b6bb_3b8e;
 
 // PNG の exact 期待値は「同一プラットフォーム(linux-x86_64)」専用。wasm 限定テストでのみ使う。
 // native ビルドでは未使用になるため cfg で除外する(dead_code 警告回避)。
+// 既定圧縮 Balanced(fdeflate + 適応フィルタ)での値。Fast/High に既定を変えた場合は再生成すること。
 #[cfg(target_arch = "wasm32")]
-const PNG_LEN_LINUX_X86: usize = 78577;
+const PNG_LEN_LINUX_X86: usize = 42630;
 #[cfg(target_arch = "wasm32")]
-const PNG_HASH_LINUX_X86: u64 = 0xdd0d_bfd9_22d8_f3d3;
+const PNG_HASH_LINUX_X86: u64 = 0x6ee4_ac9e_6d16_b2e2;
 
 /// SVG: 全プラットフォーム共通で exact byte 一致を検証(cross-platform 決定的)。
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]

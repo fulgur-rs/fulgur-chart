@@ -35,14 +35,15 @@ const MAX_PNG_AREA_PIXELS: u64 = 64_000_000;
 
 /// PNG エンコードの圧縮プリセット。速度↔サイズのトレードオフを選ぶ。
 ///
-/// いずれも可逆(同一ピクセル)・決定的。`Fast` は tiny-skia の `encode_png()` と
-/// バイト一致する既定値で、`render_chart_to_png` はこれを使う(出力不変)。
+/// いずれも可逆(同一ピクセル)・決定的。既定は `Balanced`(高速のままサイズを大幅削減)で、
+/// `render_chart_to_png` はこれを使う。`Fast` は tiny-skia の `encode_png()` と
+/// バイト一致する最速プリセット。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PngCompression {
     /// fdeflate(Fast) + Sub フィルタ。最速・最大サイズ。tiny-skia 既定と同一出力。
-    #[default]
     Fast,
-    /// fdeflate(Fast) + 適応フィルタ。高速のままサイズを大幅に削減する。
+    /// fdeflate(Fast) + 適応フィルタ。高速のままサイズを大幅に削減する(既定)。
+    #[default]
     Balanced,
     /// zlib(Level 6) + 適応フィルタ。最小サイズ。最も遅い。
     High,
@@ -62,15 +63,16 @@ impl PngCompression {
 /// ChartSpec を PNG バイト列に直接ラスタライズする。
 ///
 /// SVG 文字列を経由しないため、SVG 経由と画素単位では一致しない。
-/// 決定論性（同一入力 → 同一出力）は保証する。圧縮は [`PngCompression::Fast`]
-/// 固定で、出力は従来どおり tiny-skia `encode_png()` とバイト一致する。
-/// 圧縮を選びたい場合は [`render_chart_to_png_with`] を使う。
+/// 決定論性（同一入力 → 同一出力）は保証する。圧縮は既定の
+/// [`PngCompression::Balanced`]（高速のままサイズを大幅削減、ロスレス）。
+/// 最速の `Fast` や最小サイズの `High` を選びたい場合は
+/// [`render_chart_to_png_with`] を使う。
 pub fn render_chart_to_png(
     spec: &crate::ir::ChartSpec,
     scale: f32,
     font_bytes: &[u8],
 ) -> Result<Vec<u8>, String> {
-    render_chart_to_png_with(spec, scale, font_bytes, PngCompression::Fast)
+    render_chart_to_png_with(spec, scale, font_bytes, PngCompression::default())
 }
 
 /// 圧縮プリセットを指定して ChartSpec を PNG バイト列にラスタライズする。
@@ -147,7 +149,7 @@ pub fn render_chart_to_webp(
 pub fn scene_to_png(scene: &Scene, scale: f32, font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     let face =
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
-    scene_to_png_with_face(scene, scale, &face, PngCompression::Fast)
+    scene_to_png_with_face(scene, scale, &face, PngCompression::default())
 }
 
 // ---------------------------------------------------------------------------
@@ -905,15 +907,19 @@ mod tests {
         assert!(high.len() < fast.len(), "High は Fast より小さいはず");
     }
 
-    /// 既定の `render_chart_to_png` は Fast(=tiny-skia 同一出力)を維持し、出力不変であること。
-    /// バインディング/CLI への波及を防ぐ回帰。
+    /// 既定の `render_chart_to_png` は Balanced を使う(ライブラリ全体で一貫した既定)。
+    /// CLI・各バインディング・直接 API がすべて同一の既定出力になることの回帰。
     #[test]
-    fn default_render_is_fast_compression() {
+    fn default_render_is_balanced_compression() {
         let spec = bar_spec();
         let default = render_chart_to_png(&spec, 1.0, DEFAULT_FONT).unwrap();
-        let fast =
-            render_chart_to_png_with(&spec, 1.0, DEFAULT_FONT, PngCompression::Fast).unwrap();
-        assert_eq!(default, fast, "既定は Fast とバイト一致でなければならない");
+        let balanced =
+            render_chart_to_png_with(&spec, 1.0, DEFAULT_FONT, PngCompression::Balanced).unwrap();
+        assert_eq!(
+            default, balanced,
+            "既定は Balanced とバイト一致でなければならない"
+        );
+        assert_eq!(PngCompression::default(), PngCompression::Balanced);
     }
 
     /// 各モードは決定的(同一入力→同一バイト)でなければならない。
