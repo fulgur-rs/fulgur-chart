@@ -355,14 +355,34 @@ jobs:
 
       - uses: taiki-e/install-action@wasm-pack
 
-      # The native crate is excluded from the root workspace, so the root fmt/clippy jobs
-      # don't cover it — gate it here. No --locked: the crate's Cargo.lock is gitignored
-      # (the path-dependent core version is bumped by release-plz each release).
+      # The committed Cargo.lock pins all external registry crates, but the
+      # fulgur-chart path dependency is version-bumped by release-plz each
+      # release, so on a release PR the lock is stale and every --locked cargo
+      # command below (and `wasm-pack build --locked` via `npm run build`) would
+      # fail with "cannot update the lock file because --locked was passed".
+      # Reconcile ONLY that path-dependency entry, then assert no registry crate
+      # drifted from the committed lock (checksum set must be unchanged) so CI
+      # keeps testing the exact pinned versions that get published.
+      - name: Reconcile fulgur-chart path dependency in Cargo.lock
+        run: |
+          before="$(grep '^checksum = ' Cargo.lock | sort)"
+          cargo update -p fulgur-chart
+          after="$(grep '^checksum = ' Cargo.lock | sort)"
+          if [ "$before" != "$after" ]; then
+            echo "ERROR: reconciling fulgur-chart drifted registry crates from the committed Cargo.lock." >&2
+            echo "Update crates/bindings/wasm/Cargo.lock in a reviewed commit instead." >&2
+            diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") >&2 || true
+            exit 1
+          fi
+
+      # The native crate is excluded from the root workspace, so the root fmt/clippy
+      # jobs don't cover it — gate it here. --locked everywhere (the reconcile step
+      # above keeps the committed lock consistent) so CI exercises the pinned deps.
       - name: Format check
         run: cargo fmt --manifest-path Cargo.toml -- --check
 
       - name: Clippy
-        run: cargo clippy --manifest-path Cargo.toml --target wasm32-unknown-unknown --all-targets -- -D warnings
+        run: cargo clippy --manifest-path Cargo.toml --target wasm32-unknown-unknown --all-targets --locked -- -D warnings
 
       - name: Install npm deps
         run: npm install

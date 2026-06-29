@@ -361,12 +361,24 @@ jobs:
       # The committed Cargo.lock pins all external registry crates, but the
       # fulgur-chart path dependency is version-bumped by release-plz on every
       # release, leaving the lock stale at release time. Reconcile ONLY that
-      # path-dependency entry so `--locked` succeeds while every registry crate
-      # stays pinned at its committed version + checksum (scoping to
-      # `-p fulgur-chart` prevents an unpinned compatible upgrade of any other
-      # crate). This runs in build-wasm, which has no id-token: write.
+      # path-dependency entry so the subsequent `--locked` build succeeds, then
+      # assert that no registry crate drifted from the reviewed, committed
+      # lockfile: the set of checksums (which only registry crates carry; path
+      # deps have none) must be byte-identical before and after. If any cargo
+      # version re-resolves a registry crate to a newer compatible version, the
+      # build fails loudly here instead of publishing un-audited dependency
+      # versions. Runs in build-wasm, which has no id-token: write.
       - name: Reconcile fulgur-chart path dependency in Cargo.lock
-        run: cargo update -p fulgur-chart
+        run: |
+          before="$(grep '^checksum = ' Cargo.lock | sort)"
+          cargo update -p fulgur-chart
+          after="$(grep '^checksum = ' Cargo.lock | sort)"
+          if [ "$before" != "$after" ]; then
+            echo "ERROR: reconciling fulgur-chart drifted registry crates from the committed Cargo.lock." >&2
+            echo "Update crates/bindings/wasm/Cargo.lock in a reviewed commit instead." >&2
+            diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") >&2 || true
+            exit 1
+          fi
 
       - name: Build WASM package with locked Rust dependencies
         run: npm run build
@@ -383,6 +395,14 @@ jobs:
             fs.writeFileSync("pkg/package.json", JSON.stringify(pkg, null, 2) + "\n");
           '
 
+      # wasm-pack writes pkg/.gitignore containing `*`. npm honors a nested
+      # .gitignore when packing, so leaving it in place would exclude the entire
+      # pkg/ directory (including the .wasm) from the tarball -> a broken publish.
+      # The package's `prepack` script removes it, but we pack with
+      # --ignore-scripts (so no build/lifecycle code runs), so remove it here.
+      - name: Remove wasm-pack pkg/.gitignore so pkg/ is packed
+        run: rm -f pkg/.gitignore
+
       - name: Verify pkg/ was generated
         run: |
           test -f pkg/package.json || { echo "ERROR: pkg/package.json not found" >&2; exit 1; }
@@ -390,14 +410,26 @@ jobs:
           echo "pkg/ contents:"
           ls -lh pkg/
 
+      # Pack the exact tarball that will be published, with scripts disabled, in
+      # this unprivileged job. publish-wasm then publishes this immutable artifact
+      # verbatim -- it never checks out source or rebuilds, so there is no mixing
+      # of checked-out files with the built artifact in the OIDC publish job.
+      - name: Pack npm tarball without lifecycle scripts
+        run: |
+          mkdir -p packed
+          npm pack --ignore-scripts --pack-destination packed/ .
+          echo "Packed tarball contents:"
+          tar tzf packed/*.tgz
+
+      - name: Verify tarball includes the built .wasm
+        run: |
+          tar tzf packed/*.tgz | grep -q 'package/pkg/fulgur_chart_wasm_bg.wasm' \
+            || { echo "ERROR: packed tarball is missing pkg/fulgur_chart_wasm_bg.wasm" >&2; exit 1; }
+
       - uses: actions/upload-artifact@v4
         with:
-          name: chart-wasm-package
-          path: |
-            crates/bindings/wasm/package.json
-            crates/bindings/wasm/index.js
-            crates/bindings/wasm/index.d.ts
-            crates/bindings/wasm/pkg/
+          name: chart-wasm-tarball
+          path: crates/bindings/wasm/packed/*.tgz
           if-no-files-found: error
 
   publish-wasm:
@@ -410,15 +442,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    defaults:
-      run:
-        working-directory: crates/bindings/wasm
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.validate-release-tag.outputs.sha }}
-          persist-credentials: false
-
+      # No checkout: this job publishes only the prebuilt tarball artifact, so it
+      # never runs project build code or mixes source with the built package.
       # setup-node MUST be >= v6.1.0 for OIDC trusted publishing: older versions
       # write an .npmrc with `always-auth=true` + a placeholder _authToken, which
       # npm uses instead of OIDC (publish 404s). v6.1.0 removed always-auth
@@ -447,19 +473,20 @@ jobs:
             exit 1
           fi
 
-      - name: Download prebuilt WASM package
+      - name: Download prebuilt WASM tarball
         uses: actions/download-artifact@v4
         with:
-          name: chart-wasm-package
-          path: crates/bindings/wasm
+          name: chart-wasm-tarball
+          path: wasm-tarball
 
-      - name: Verify prebuilt package artifact
+      - name: Verify a single tarball was downloaded
         run: |
-          test -f package.json || { echo "ERROR: package.json not found" >&2; exit 1; }
-          test -f index.js || { echo "ERROR: index.js not found" >&2; exit 1; }
-          test -f index.d.ts || { echo "ERROR: index.d.ts not found" >&2; exit 1; }
-          test -f pkg/package.json || { echo "ERROR: pkg/package.json not found" >&2; exit 1; }
-          test -f pkg/fulgur_chart_wasm_bg.wasm || { echo "ERROR: .wasm not found in pkg/" >&2; exit 1; }
+          count=$(ls wasm-tarball/*.tgz 2>/dev/null | wc -l)
+          if [ "$count" -ne 1 ]; then
+            echo "ERROR: expected exactly 1 tarball, found $count" >&2
+            ls -la wasm-tarball/ >&2 || true
+            exit 1
+          fi
 
       - name: Publish @fulgur-rs/chart-wasm
-        run: npm publish --provenance --access public --ignore-scripts
+        run: npm publish --provenance --access public --ignore-scripts wasm-tarball/*.tgz
