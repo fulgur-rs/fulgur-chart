@@ -5,8 +5,8 @@
 //! exposes only the data and options fields that are valid for it.
 
 use super::common::{
-    AxisOptions, ColorString, DataLabelsPlugin, LegendPlugin, ScalarOrArray, ThemeOptions,
-    TitlePlugin,
+    AxisOptions, ColorString, DataLabelsPlugin, DecimationPlugin, LegendPlugin, ScalarOrArray,
+    ThemeOptions, TitlePlugin,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -135,6 +135,8 @@ pub struct BarPlugins {
     pub legend: Option<LegendPlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datalabels: Option<DataLabelsPlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimation: Option<DecimationPlugin>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
@@ -223,6 +225,8 @@ pub struct CommonPlugins {
     pub legend: Option<LegendPlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datalabels: Option<DataLabelsPlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimation: Option<DecimationPlugin>,
 }
 
 /// gauge / radialGauge が受け付ける plugins(title のみ)。

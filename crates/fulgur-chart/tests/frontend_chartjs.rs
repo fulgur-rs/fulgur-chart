@@ -1191,3 +1191,21 @@ fn strict_rejects_unknown_decimation_subkey() {
         "options":{"plugins":{"decimation":{"bogus":1}}}}"#;
     assert!(chartjs::parse(json, true).is_err());
 }
+
+#[test]
+fn schema_strict_parity_decimation_line() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"decimation":{"enabled":true,"algorithm":"lttb","samples":50,"threshold":200}}}}"#;
+    // strict side: 厳格パーサも受理する。
+    assert!(chartjs::parse(json, true).is_ok());
+    // schema side: ChartJsSpec(internally tagged, deny_unknown_fields)でも受理されること。
+    let spec: fulgur_chart::schema::ChartJsSpec = serde_json::from_str(json).unwrap();
+    let decimation = match spec {
+        fulgur_chart::schema::ChartJsSpec::Line(line) => line
+            .options
+            .and_then(|o| o.plugins)
+            .and_then(|p| p.decimation),
+        _ => panic!("expected line variant"),
+    };
+    assert!(decimation.is_some());
+}
