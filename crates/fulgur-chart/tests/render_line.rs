@@ -126,3 +126,59 @@ fn small_line_polyline_unchanged() {
     );
     assert_eq!(pts, 3);
 }
+
+/// scene 内の Circle（マーカー）数。
+fn circle_count(json: &str) -> usize {
+    let spec = chartjs::parse(json, false).unwrap();
+    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let scene = line::build(&spec, &m);
+    scene
+        .items
+        .iter()
+        .filter(|p| matches!(p, Prim::Circle { .. }))
+        .count()
+}
+
+#[test]
+fn large_line_suppresses_markers_by_default() {
+    let n = 5000;
+    let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
+    let data: Vec<String> = (0..n).map(|i| format!("{}", i % 50)).collect();
+    let json = format!(
+        r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"data":[{}]}}]}}}}"#,
+        labels.join(","),
+        data.join(",")
+    );
+    assert_eq!(
+        circle_count(&json),
+        0,
+        "large line should suppress markers by default"
+    );
+}
+
+#[test]
+fn large_line_keeps_markers_when_pointradius_set() {
+    let n = 5000;
+    let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
+    let data: Vec<String> = (0..n).map(|i| format!("{}", i % 50)).collect();
+    let json = format!(
+        r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"data":[{}],"pointRadius":2}}]}}}}"#,
+        labels.join(","),
+        data.join(",")
+    );
+    assert!(
+        circle_count(&json) > 0,
+        "explicit pointRadius should keep markers"
+    );
+}
+
+#[test]
+fn small_line_markers_unchanged() {
+    // 3点 → markers drawn as before (radius 3, not suppressed)。
+    assert_eq!(
+        circle_count(
+            r#"{"type":"line","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]}}"#
+        ),
+        3
+    );
+}

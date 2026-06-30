@@ -82,7 +82,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // 各セグメントを個別に間引き、line はその結果から直接描く（再分割しない）。
         let plot_width = frame.plot_right - frame.plot_left;
         let dec = crate::layout::decimate::resolve(&spec.decimation, plot_width, valid.len());
-        let _decimated = dec.is_some();
+        let decimated = dec.is_some();
         let segments: Vec<Vec<(f64, f64, usize)>> = if let Some((algo, samples)) = dec {
             segments
                 .iter()
@@ -147,16 +147,24 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
         }
 
-        // マーカー。
-        for &(cx, cy, _) in &valid {
-            items.push(Prim::Circle {
-                cx,
-                cy,
-                r: MARKER_R,
-                fill: ser.stroke_at(0),
-                stroke: ser.stroke_at(0),
-                stroke_width: 0.0,
-            });
+        // マーカー。threshold 超過で間引いた場合は既定で抑制（pointRadius 明示時のみ描画）。
+        let marker_r = match (decimated, ser.point_radius) {
+            (true, None) => None,
+            (true, Some(r)) if r > 0.0 => Some(r),
+            (true, Some(_)) => None,
+            (false, _) => Some(MARKER_R),
+        };
+        if let Some(r) = marker_r {
+            for &(cx, cy, _) in &valid {
+                items.push(Prim::Circle {
+                    cx,
+                    cy,
+                    r,
+                    fill: ser.stroke_at(0),
+                    stroke: ser.stroke_at(0),
+                    stroke_width: 0.0,
+                });
+            }
         }
 
         // データラベル(点の上、マーカー半径ぶん+余白だけ上)。
