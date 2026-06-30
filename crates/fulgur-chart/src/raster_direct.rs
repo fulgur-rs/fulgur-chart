@@ -573,20 +573,22 @@ fn blit_stamp(pm: &mut Pixmap, set: &StampSet, cx_dev: f32, cy_dev: f32) {
     let stamp = &set.stamps[idx];
     let ss = stamp.width() as i32;
     let src = stamp.data();
-    let ox = ix - set.pad;
-    let oy = iy - set.pad;
+    // 位置は i64 で計算する。巨大な有限座標(例 cx=1e38)で ix/iy が i32::MAX に飽和すると
+    // `oy + sy` が i32 で桁あふれし、クリップ判定前に debug panic する(codex 指摘)。
+    let ox = ix as i64 - set.pad as i64;
+    let oy = iy as i64 - set.pad as i64;
     // pm.data_mut() で借用する前に寸法を確定させる。
-    let w = pm.width() as i32;
-    let h = pm.height() as i32;
+    let w = pm.width() as i64;
+    let h = pm.height() as i64;
     let dst = pm.data_mut();
 
     for sy in 0..ss {
-        let dy = oy + sy;
+        let dy = oy + sy as i64;
         if dy < 0 || dy >= h {
             continue;
         }
         for sx in 0..ss {
-            let dx = ox + sx;
+            let dx = ox + sx as i64;
             if dx < 0 || dx >= w {
                 continue;
             }
@@ -2095,7 +2097,14 @@ mod tests {
         blit_stamp(&mut pm, &set, f32::NAN, 20.0);
         blit_stamp(&mut pm, &set, 20.0, f32::INFINITY);
         blit_stamp(&mut pm, &set, f32::NEG_INFINITY, f32::NAN);
-        assert_eq!(pm.data(), &before[..], "非有限座標は何も描画しないはず");
+        // 巨大な有限座標(ix/iy が i32 飽和)でも桁あふれ panic しない(完全に画面外)。
+        blit_stamp(&mut pm, &set, 1.0e38, 1.0e38);
+        blit_stamp(&mut pm, &set, -1.0e38, 5.0);
+        assert_eq!(
+            pm.data(),
+            &before[..],
+            "非有限/巨大座標は何も描画しないはず"
+        );
     }
 
     /// 巨大な有限座標でも pick_stamp の idx は stamps の範囲内(クランプで OOB 回避)。
