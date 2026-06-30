@@ -1140,3 +1140,40 @@ fn rendered_svg_reflects_top_level_width_height() {
     assert!(svg.contains(r#"height="360""#), "{svg}");
     assert!(svg.contains(r#"viewBox="0 0 640 360""#), "{svg}");
 }
+
+// ── decimation (options.plugins.decimation) ──
+
+#[test]
+fn decimation_defaults_to_enabled_minmax_when_absent() {
+    let spec = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#,
+        false,
+    )
+    .unwrap();
+    assert!(spec.decimation.enabled);
+    assert_eq!(
+        spec.decimation.algorithm,
+        fulgur_chart::ir::DecimationAlgorithm::MinMax
+    );
+}
+
+#[test]
+fn decimation_explicit_disable_and_lttb() {
+    let json = r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+        "options":{"plugins":{"decimation":{"enabled":false,"algorithm":"lttb","samples":300,"threshold":1000}}}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(!spec.decimation.enabled);
+    assert_eq!(
+        spec.decimation.algorithm,
+        fulgur_chart::ir::DecimationAlgorithm::Lttb
+    );
+    assert_eq!(spec.decimation.samples, Some(300.0));
+    assert_eq!(spec.decimation.threshold, Some(1000.0));
+}
+
+#[test]
+fn decimation_invalid_algorithm_errors() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"decimation":{"algorithm":"bogus"}}}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+}

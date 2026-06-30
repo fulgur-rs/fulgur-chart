@@ -70,12 +70,21 @@ struct RawPlugins {
     legend: Option<RawLegend>,
     datalabels: Option<RawDataLabels>,
     outlabels: Option<RawOutlabels>,
+    decimation: Option<RawDecimation>,
 }
 
 #[derive(Deserialize)]
 struct RawDataLabels {
     #[serde(default)]
     display: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct RawDecimation {
+    enabled: Option<bool>,
+    algorithm: Option<String>,
+    samples: Option<f64>,
+    threshold: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -446,6 +455,26 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         (None, _) => false,
     };
 
+    // decimation: options.plugins.decimation を IR へ解決する。未指定は既定(自動オン)。
+    let decimation = match &raw.options.plugins.decimation {
+        Some(d) => {
+            let algorithm = match d.algorithm.as_deref() {
+                None | Some("min-max") => DecimationAlgorithm::MinMax,
+                Some("lttb") => DecimationAlgorithm::Lttb,
+                Some(other) => {
+                    return Err(format!("未対応の decimation algorithm: {other}"));
+                }
+            };
+            Decimation {
+                enabled: d.enabled.unwrap_or(true),
+                algorithm,
+                samples: d.samples,
+                threshold: d.threshold,
+            }
+        }
+        None => Decimation::default(),
+    };
+
     // テーマ解決(配色に使うため色解決より先に行う)。
     let theme = build_theme(raw.options.theme);
 
@@ -678,6 +707,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels,
         theme,
+        decimation,
     })
 }
 
@@ -1381,6 +1411,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 
@@ -1738,6 +1769,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 
@@ -1950,6 +1982,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 
@@ -2172,6 +2205,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 
@@ -2333,6 +2367,7 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(300.0),
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 

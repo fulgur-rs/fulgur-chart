@@ -375,6 +375,8 @@ pub struct ChartSpec {
     pub data_labels: bool,
     /// 視覚トークンのテーマ(frontend で解決済み)。
     pub theme: Theme,
+    /// line/area 用デシメーション設定(frontend で解決済み)。
+    pub decimation: Decimation,
 }
 
 #[cfg(test)]

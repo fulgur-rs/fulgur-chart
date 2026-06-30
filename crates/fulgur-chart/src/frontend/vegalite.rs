@@ -183,6 +183,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         height,
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 

@@ -586,6 +586,7 @@ mod tests {
             height: 400.0,
             data_labels: false,
             theme: crate::ir::Theme::default(),
+            decimation: crate::ir::Decimation::default(),
         }
     }
 
