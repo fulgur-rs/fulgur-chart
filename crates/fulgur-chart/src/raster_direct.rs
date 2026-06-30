@@ -269,6 +269,50 @@ fn encode_rgba_png(
     Ok(data)
 }
 
+/// items[start] から始まる、同一 appearance(r/fill/stroke/stroke_width) の
+/// 連続 Prim::Circle の個数を返す。items[start] が Circle でなければ 0。
+///
+/// # 事前条件
+/// `start < items.len()` でなければならない（`items[start]` を直接添字するため）。
+/// 防御的な境界チェックは置かない: 唯一の呼び出し元（後続タスクの描画ループ）が
+/// in-bounds を保証する。
+// 後続タスクで scene_to_pixmap の描画ループ(stamp-blit)に組み込むまで未使用。
+#[allow(dead_code)]
+fn uniform_circle_run_len(items: &[Prim], start: usize) -> usize {
+    let Prim::Circle {
+        r,
+        fill,
+        stroke,
+        stroke_width,
+        ..
+    } = &items[start]
+    else {
+        return 0;
+    };
+    let mut n = 0;
+    for it in &items[start..] {
+        match it {
+            Prim::Circle {
+                r: r2,
+                fill: f2,
+                stroke: s2,
+                stroke_width: w2,
+                ..
+            }
+                // r2 == r / w2 == stroke_width は f64 の厳密等価。これらは未加工の
+                // レイアウト定数（演算結果ではない）なので、ビット単位一致こそが
+                // 「同じ見た目」の正しい意味論であり、意図どおり。clippy::float_cmp は
+                // 発火しない。
+                if r2 == r && f2 == fill && s2 == stroke && w2 == stroke_width =>
+            {
+                n += 1
+            }
+            _ => break,
+        }
+    }
+    n
+}
+
 fn render_prim(
     pixmap: &mut Pixmap,
     prim: &Prim,
@@ -1091,5 +1135,138 @@ mod tests {
         );
         b.close();
         assert!(b.finish().is_some(), "360° 円は有効パス");
+    }
+
+    fn circle(cx: f64, cy: f64, r: f64, fill: Color) -> Prim {
+        Prim::Circle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+            stroke_width: 1.0,
+        }
+    }
+
+    const RED: Color = Color {
+        r: 255,
+        g: 0,
+        b: 0,
+        a: 1.0,
+    };
+    const BLUE: Color = Color {
+        r: 0,
+        g: 0,
+        b: 255,
+        a: 1.0,
+    };
+
+    #[test]
+    fn uniform_circle_run_len_counts_consecutive_same_appearance() {
+        // 同一 appearance(r=3.0/fill=RED)の円が 3 個続き、4 個目は r が異なる。
+        // cx/cy が違っても appearance が同じなら 1 つの run に数える。
+        let items = [
+            circle(0.0, 0.0, 3.0, RED),
+            circle(10.0, 0.0, 3.0, RED),
+            circle(20.0, 0.0, 3.0, RED),
+            circle(30.0, 0.0, 5.0, RED), // r が異なる → run を切る
+        ];
+        assert_eq!(uniform_circle_run_len(&items, 0), 3);
+    }
+
+    #[test]
+    fn uniform_circle_run_len_from_break_point_returns_one() {
+        // run を切る 4 個目から開始すると、その円 1 個だけが数えられる。
+        let items = [
+            circle(0.0, 0.0, 3.0, RED),
+            circle(10.0, 0.0, 3.0, RED),
+            circle(20.0, 0.0, 3.0, RED),
+            circle(30.0, 0.0, 5.0, RED),
+        ];
+        assert_eq!(uniform_circle_run_len(&items, 3), 1);
+    }
+
+    #[test]
+    fn uniform_circle_run_len_breaks_on_differing_fill() {
+        // fill が違えば appearance が異なるため run が切れる。
+        let items = [
+            circle(0.0, 0.0, 3.0, RED),
+            circle(10.0, 0.0, 3.0, RED),
+            circle(20.0, 0.0, 3.0, BLUE), // fill が異なる → run を切る
+        ];
+        assert_eq!(uniform_circle_run_len(&items, 0), 2);
+    }
+
+    #[test]
+    fn uniform_circle_run_len_breaks_on_differing_stroke() {
+        // r/fill/stroke_width が同一でも stroke 色が違えば appearance が異なり run が切れる。
+        let red_stroke = Prim::Circle {
+            cx: 0.0,
+            cy: 0.0,
+            r: 3.0,
+            fill: RED,
+            stroke: RED,
+            stroke_width: 1.0,
+        };
+        let blue_stroke = Prim::Circle {
+            cx: 20.0,
+            cy: 0.0,
+            r: 3.0,
+            fill: RED,
+            stroke: BLUE, // stroke 色のみ異なる → run を切る
+            stroke_width: 1.0,
+        };
+        let items = [red_stroke.clone(), red_stroke, blue_stroke];
+        assert_eq!(uniform_circle_run_len(&items, 0), 2);
+    }
+
+    #[test]
+    fn uniform_circle_run_len_breaks_on_differing_stroke_width() {
+        // r/fill/stroke が同一でも stroke_width が違えば appearance が異なり run が切れる。
+        let stroke = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        };
+        let thin = Prim::Circle {
+            cx: 0.0,
+            cy: 0.0,
+            r: 3.0,
+            fill: RED,
+            stroke,
+            stroke_width: 1.0,
+        };
+        let thick = Prim::Circle {
+            cx: 10.0,
+            cy: 0.0,
+            r: 3.0,
+            fill: RED,
+            stroke,
+            stroke_width: 2.0, // stroke_width のみ異なる → run を切る
+        };
+        let items = [thin.clone(), thin, thick];
+        assert_eq!(uniform_circle_run_len(&items, 0), 2);
+    }
+
+    #[test]
+    fn uniform_circle_run_len_zero_for_non_circle_start() {
+        // 開始要素が Circle でなければ 0。
+        let items = [
+            Prim::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 5.0,
+                h: 5.0,
+                fill: RED,
+            },
+            circle(10.0, 0.0, 3.0, RED),
+        ];
+        assert_eq!(uniform_circle_run_len(&items, 0), 0);
     }
 }
