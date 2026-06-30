@@ -388,6 +388,78 @@ fn build_stamp_set(key: &MarkerKey, scale: f32) -> StampSet {
     }
 }
 
+/// device 座標 (cx_dev,cy_dev) に対し、整数描画位置 (ix,iy) と
+/// 選択するサブピクセル stamp の添字 idx を返す。
+///
+/// 小数部を B 段階に量子化して stamp を選ぶ。量子化が B に丸まった場合は
+/// 次の整数画素に繰り上げる(kx==B → kx=0, ix+=1)。`blit_stamp` と
+/// byte-identity テストの双方がこの pick を共有し、選択ロジックの一致を保証する。
+// 後続タスクで scene_to_pixmap の描画ループに配線
+#[allow(dead_code)]
+fn pick_stamp(set: &StampSet, cx_dev: f32, cy_dev: f32) -> (i32, i32, usize) {
+    let mut ix = cx_dev.floor() as i32;
+    let mut kx = ((cx_dev - ix as f32) * set.b as f32).round() as i32;
+    if kx as u32 == set.b {
+        kx = 0;
+        ix += 1;
+    }
+    let mut iy = cy_dev.floor() as i32;
+    let mut ky = ((cy_dev - iy as f32) * set.b as f32).round() as i32;
+    if ky as u32 == set.b {
+        ky = 0;
+        iy += 1;
+    }
+    let idx = (ky as u32 * set.b + kx as u32) as usize;
+    (ix, iy, idx)
+}
+
+/// device 座標 (cx_dev,cy_dev) のマーカーを、サブピクセル stamp を選び整数位置に
+/// premultiplied source-over で blit する。canvas 外はピクセル単位でクリップする。
+///
+/// `draw_pixmap`(identity + Nearest + SourceOver) とバイト一致するが、Pattern
+/// シェーダ/パイプラインの再構築を避けるため手書きする(計測で ~7 倍速)。
+/// premultiplied 同士の source-over: `out_c = s_c + (d_c*(255 - s_a) + 127) / 255`。
+/// s_a==0 の画素はスキップ(恒等変換)。
+// 後続タスクで scene_to_pixmap の描画ループに配線
+#[allow(dead_code)]
+fn blit_stamp(pm: &mut Pixmap, set: &StampSet, cx_dev: f32, cy_dev: f32) {
+    let (ix, iy, idx) = pick_stamp(set, cx_dev, cy_dev);
+    let stamp = &set.stamps[idx];
+    let ss = stamp.width() as i32;
+    let src = stamp.data();
+    let ox = ix - set.pad;
+    let oy = iy - set.pad;
+    // pm.data_mut() で借用する前に寸法を確定させる。
+    let w = pm.width() as i32;
+    let h = pm.height() as i32;
+    let dst = pm.data_mut();
+
+    for sy in 0..ss {
+        let dy = oy + sy;
+        if dy < 0 || dy >= h {
+            continue;
+        }
+        for sx in 0..ss {
+            let dx = ox + sx;
+            if dx < 0 || dx >= w {
+                continue;
+            }
+            let si = ((sy * ss + sx) * 4) as usize;
+            let s_a = src[si + 3];
+            if s_a == 0 {
+                continue;
+            }
+            let di = ((dy * w + dx) * 4) as usize;
+            let inv = 255 - s_a as u32;
+            for c in 0..4 {
+                let s_c = src[si + c] as u32;
+                let d_c = dst[di + c] as u32;
+                dst[di + c] = (s_c + (d_c * inv + 127) / 255) as u8;
+            }
+        }
+    }
+}
+
 fn render_prim(
     pixmap: &mut Pixmap,
     prim: &Prim,
@@ -1518,5 +1590,142 @@ mod tests {
         let set = build_stamp_set(&stamp_key(3.0, 1.0), 1.0);
         assert_eq!(set.pad, 6);
         assert_eq!(set.stamps[0].width(), 14);
+    }
+
+    // --- blit_stamp (手書き premultiplied source-over blit) --------------------
+
+    /// 半透明 fill のマーカーキー（stroke なし）。
+    fn stamp_key_semi(stroke_width: f64) -> MarkerKey {
+        MarkerKey {
+            r: 3.0,
+            fill: Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 0.5,
+            },
+            stroke: BLUE,
+            stroke_width,
+        }
+    }
+
+    /// `blit_stamp` と、その pick を再現した `draw_pixmap` が
+    /// 非空（半透明背景）の dest 上でバイト一致することを検証する。
+    /// これが本機能の correctness lock。
+    fn assert_blit_matches_draw_pixmap(key: &MarkerKey, cx: f32, cy: f32) {
+        let set = build_stamp_set(key, 1.0);
+        let (w, h) = (40u32, 40u32);
+        // 半透明背景（premultiplied で格納）→ source-over を非空 dest 上で行使する。
+        let bg = tiny_skia::Color::from_rgba8(0, 128, 0, 128);
+
+        let mut pm_a = Pixmap::new(w, h).unwrap();
+        pm_a.fill(bg);
+        blit_stamp(&mut pm_a, &set, cx, cy);
+
+        let mut pm_b = Pixmap::new(w, h).unwrap();
+        pm_b.fill(bg);
+        // blit_stamp 自身の pick を再現して draw_pixmap に与える。
+        let (ix, iy, idx) = pick_stamp(&set, cx, cy);
+        pm_b.draw_pixmap(
+            ix - set.pad,
+            iy - set.pad,
+            set.stamps[idx].as_ref(),
+            &tiny_skia::PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+
+        assert_eq!(
+            pm_a.data(),
+            pm_b.data(),
+            "blit_stamp は draw_pixmap とバイト一致でなければならない (key.r={}, cx={cx}, cy={cy})",
+            key.r
+        );
+    }
+
+    #[test]
+    fn blit_stamp_byte_identical_to_draw_pixmap_opaque_integer() {
+        // 不透明 fill・整数位置。
+        assert_blit_matches_draw_pixmap(&stamp_key(3.0, 1.0), 20.0, 20.0);
+    }
+
+    #[test]
+    fn blit_stamp_byte_identical_to_draw_pixmap_semi_fractional() {
+        // 半透明 fill・小数位置（サブピクセル stamp が選ばれる）。
+        assert_blit_matches_draw_pixmap(&stamp_key_semi(1.0), 20.3, 20.7);
+    }
+
+    #[test]
+    fn blit_stamp_byte_identical_to_draw_pixmap_opaque_fractional() {
+        // 不透明 fill・小数位置でも一致する。
+        assert_blit_matches_draw_pixmap(&stamp_key(3.0, 1.0), 18.6, 21.4);
+    }
+
+    #[test]
+    fn blit_stamp_byte_identical_to_draw_pixmap_carry_to_next_pixel() {
+        // 小数部が B に丸まる位置（round(0.95*8)=8）。pick_stamp の繰り上げ
+        // 分岐(k==b → k=0, i+=1)を通っても draw_pixmap と一致する。
+        assert_blit_matches_draw_pixmap(&stamp_key(3.0, 1.0), 20.95, 20.95);
+    }
+
+    #[test]
+    fn blit_stamp_overlap_composites_not_overwrites() {
+        // 半透明 stamp を重ねて blit すると、重なり画素は単独より不透明になる
+        // (source-over の累積であって上書きコピーではない)。
+        let key = stamp_key_semi(0.0); // stroke なし → 中心は純 fill
+        let set = build_stamp_set(&key, 1.0);
+        let (w, h) = (40u32, 40u32);
+
+        // 単独 blit。
+        let mut single = Pixmap::new(w, h).unwrap();
+        blit_stamp(&mut single, &set, 20.0, 20.0);
+
+        // 2 つを重ねて blit（x を 2px ずらす → 中心付近で重なる）。
+        let mut overlap = Pixmap::new(w, h).unwrap();
+        blit_stamp(&mut overlap, &set, 20.0, 20.0);
+        blit_stamp(&mut overlap, &set, 22.0, 20.0);
+
+        // 両 stamp が覆う内部画素 (20,20) の alpha を比較する。
+        let alpha_at =
+            |pm: &Pixmap, x: u32, y: u32| -> u8 { pm.data()[((y * w + x) * 4 + 3) as usize] };
+        let single_a = alpha_at(&single, 20, 20);
+        let overlap_a = alpha_at(&overlap, 20, 20);
+
+        assert!(single_a > 0, "単独 blit で (20,20) は描画されているはず");
+        assert!(
+            overlap_a > single_a,
+            "重なり画素 alpha({overlap_a}) は単独 alpha({single_a}) より大きい(累積)はず"
+        );
+    }
+
+    #[test]
+    fn blit_stamp_off_canvas_clips_without_panic() {
+        let set = build_stamp_set(&stamp_key(3.0, 1.0), 1.0);
+
+        // 左上にはみ出す（ox/oy が負）→ panic せず、内側の画素は描かれる。
+        let mut pm_tl = Pixmap::new(10, 10).unwrap();
+        blit_stamp(&mut pm_tl, &set, 0.0, 0.0);
+        assert!(
+            nonzero_alpha_count(&pm_tl) > 0,
+            "一部内側のはみ出しでも in-bounds 画素は描かれるはず"
+        );
+
+        // 右下に w/h を超えてはみ出す → panic せず、内側の画素は描かれる。
+        let mut pm_br = Pixmap::new(10, 10).unwrap();
+        blit_stamp(&mut pm_br, &set, 10.0, 10.0);
+        assert!(
+            nonzero_alpha_count(&pm_br) > 0,
+            "右下はみ出しでも in-bounds 画素は描かれるはず"
+        );
+
+        // 完全に外側 → dest は不変（全透明のまま）。
+        let mut pm_out = Pixmap::new(10, 10).unwrap();
+        blit_stamp(&mut pm_out, &set, -100.0, -100.0);
+        let untouched = Pixmap::new(10, 10).unwrap();
+        assert_eq!(
+            pm_out.data(),
+            untouched.data(),
+            "完全に外側なら dest は不変のはず"
+        );
     }
 }
