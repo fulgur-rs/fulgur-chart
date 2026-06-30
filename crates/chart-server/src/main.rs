@@ -1,19 +1,12 @@
-mod config;
-mod handlers;
-mod render;
-mod response;
-mod server;
-mod state;
-mod store;
-
 use std::net::SocketAddr;
 
+use chart_server::{Config, ShortlinkStore, build_router};
 use clap::Parser;
 
 #[tokio::main]
 async fn main() {
-    let cfg = config::Config::parse();
-    let store = store::ShortlinkStore::new(
+    let cfg = Config::parse();
+    let store = ShortlinkStore::new(
         cfg.shortlink_limit,
         cfg.shortlink_max_bytes,
         cfg.shortlink_entry_bytes,
@@ -30,7 +23,7 @@ async fn main() {
     println!("chart-server listening on {}:{}", cfg.host, port);
     axum::serve(
         listener,
-        server::build_router(&cfg, store).into_make_service_with_connect_info::<SocketAddr>(),
+        build_router(&cfg, store).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await
     .unwrap();
