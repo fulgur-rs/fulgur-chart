@@ -33,12 +33,22 @@ const MAX_PNG_AREA_PIXELS: u64 = 64_000_000;
 
 /// WebP 出力の最大ピクセル面積(幅 × 高さ)。
 ///
-/// WebP は pixmap(in-place demultiply 済み)に加えて、`image_webp` のロスレス
-/// エンコーダがエンコード時にフルフレーム相当の内部バッファをもう 1 枚確保する
-/// (= 実ピークは pixmap の約 2 倍)。PNG と同じ面積上限を許すと約 256 MB の
-/// 予算を超えるため、WebP は面積上限を PNG の半分にして pixmap + エンコーダ
-/// 内部バッファの合計を約 256 MB に収める。32M px ≒ 5657×5657。
-const MAX_WEBP_AREA_PIXELS: u64 = MAX_PNG_AREA_PIXELS / 2;
+/// WebP ロスレスのエンコードは、pixmap(in-place demultiply 済み, area×4)を生かした
+/// まま `image_webp` 0.2.4 が次の 2 つをさらに確保するため、ピークは raw フレームの
+/// 約 3 倍になりうる:
+/// 1. 入力の可変複製 — `encode_frame` が `data.to_vec()` してロスレス変換を
+///    in-place で行う(encoder.rs:443)。area×4。
+/// 2. エンコード出力 — RIFF はチャンクサイズをデータの前に書くため、VP8L チャンク
+///    全体を内部 Vec に貯めてから writer へ出す(encoder.rs:674-686)。圧縮しにくい
+///    コンテンツでは output ≈ 入力サイズに迫る。最悪 area×4。
+///
+/// 実測(圧縮不能 RGBA): area=32M で約 369 MB。約 256 MB 予算に収めるには面積上限を
+/// PNG の 1/3 にする(pixmap + 入力複製 + 出力 ≈ 3×area×4 ≦ 256 MB)。
+/// 実測: area=21.3M で約 247 MB。21.3M px ≒ 4618×4618。
+///
+/// これはライブラリ既定の hard backstop。サーバ等が独自の(より厳しい)面積予算を
+/// 設定する際の基準値として参照できるよう公開する。
+pub const MAX_WEBP_AREA_PIXELS: u64 = MAX_PNG_AREA_PIXELS / 3;
 
 /// WebP lossless の軸ごとの上限。
 const MAX_WEBP_AXIS: u32 = 16_384;
@@ -1139,11 +1149,12 @@ mod tests {
 
     #[test]
     fn webp_rejects_area_over_webp_budget_within_png_limit() {
-        // 軸上限(16384)も PNG 面積上限(64M)も満たすが、WebP 専用の面積上限(32M)で
-        // pixmap 確保前に拒否しなければならない(根拠は MAX_WEBP_AREA_PIXELS を参照)。
+        // 軸上限(16384)も PNG 面積上限(64M)も満たすが、WebP 専用の面積上限
+        // (PNG の 1/3 ≈ 21.3M)で pixmap 確保前に拒否しなければならない
+        // (根拠は MAX_WEBP_AREA_PIXELS を参照)。
         let mut spec = bar_spec();
         spec.width = 16_001.0; // 軸 ≤ 16384
-        spec.height = 2_049.0; // 16001×2049 = 32,786,049 > 32M かつ ≤ 64M
+        spec.height = 2_049.0; // 16001×2049 = 32,786,049 > 21.3M かつ ≤ 64M
         let err = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT);
         assert!(err.is_err(), "WebP 面積予算超過は Err でなければならない");
         let msg = err.unwrap_err();
