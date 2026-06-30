@@ -156,11 +156,28 @@ pub fn scene_to_png(scene: &Scene, scale: f32, font_bytes: &[u8]) -> Result<Vec<
 // 内部実装
 // ---------------------------------------------------------------------------
 
+/// stamp cache を使う最小連続マーカー数。これ未満の uniform circle run は
+/// per-prim 描画にフォールバックする。実測 break-even ~66(stroke込み)、tunable、
+/// bench で再確認(Task 6)。`usize::MAX` で stamping を無効化(= pure fill_path)できる。
+const STAMP_MIN_RUN: usize = 128;
+
 /// Scene を RGBA Pixmap にラスタライズする（PNG/WebP 共通）。
 fn scene_to_pixmap(
     scene: &Scene,
     scale: f32,
     face: &ttf_parser::Face<'_>,
+) -> Result<Pixmap, String> {
+    scene_to_pixmap_with(scene, scale, face, STAMP_MIN_RUN)
+}
+
+/// `scene_to_pixmap` の本体。`min_run` で stamp cache を使う最小 run 長を指定する。
+/// `min_run = usize::MAX` で stamping を無効化し、全マーカーを per-prim
+/// (`render_prim` → `fill_path`/`stroke_path`)で描く。テストはこれを参照出力に使う。
+fn scene_to_pixmap_with(
+    scene: &Scene,
+    scale: f32,
+    face: &ttf_parser::Face<'_>,
+    min_run: usize,
 ) -> Result<Pixmap, String> {
     let scale = if scale > 0.0 { scale } else { 1.0 };
 
@@ -180,8 +197,45 @@ fn scene_to_pixmap(
     let transform = Transform::from_scale(scale, scale);
     let mut glyph_cache: HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>> = HashMap::new();
 
-    for prim in &scene.items {
-        render_prim(&mut pixmap, prim, transform, face, &mut glyph_cache);
+    let mut i = 0;
+    while i < scene.items.len() {
+        let run = uniform_circle_run_len(&scene.items, i);
+        // 正半径の同一 appearance circle が長く続く run のみ stamp する。それ以外は per-prim。
+        let stampable =
+            run >= min_run && matches!(&scene.items[i], Prim::Circle { r, .. } if *r > 0.0);
+        if stampable {
+            if let Prim::Circle {
+                r,
+                fill,
+                stroke,
+                stroke_width,
+                ..
+            } = &scene.items[i]
+            {
+                let key = MarkerKey {
+                    r: *r,
+                    fill: *fill,
+                    stroke: *stroke,
+                    stroke_width: *stroke_width,
+                };
+                let set = build_stamp_set(&key, scale);
+                for it in &scene.items[i..i + run] {
+                    if let Prim::Circle { cx, cy, .. } = it {
+                        blit_stamp(&mut pixmap, &set, *cx as f32 * scale, *cy as f32 * scale);
+                    }
+                }
+            }
+            i += run;
+        } else {
+            render_prim(
+                &mut pixmap,
+                &scene.items[i],
+                transform,
+                face,
+                &mut glyph_cache,
+            );
+            i += 1;
+        }
     }
 
     Ok(pixmap)
@@ -276,8 +330,6 @@ fn encode_rgba_png(
 /// `start < items.len()` でなければならない（`items[start]` を直接添字するため）。
 /// 防御的な境界チェックは置かない: 唯一の呼び出し元（後続タスクの描画ループ）が
 /// in-bounds を保証する。
-// 後続タスクで scene_to_pixmap の描画ループ(stamp-blit)に組み込むまで未使用。
-#[allow(dead_code)]
 fn uniform_circle_run_len(items: &[Prim], start: usize) -> usize {
     let Prim::Circle {
         r,
@@ -316,8 +368,6 @@ fn uniform_circle_run_len(items: &[Prim], start: usize) -> usize {
 const STAMP_B: u32 = 8; // サブピクセル分解能 (8x8=64 stamps/key)
 
 /// stamp キャッシュのキー。マーカーの見た目(半径・塗り・線色・線幅)を表す。
-// 後続タスクで scene_to_pixmap に配線
-#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq)]
 struct MarkerKey {
     r: f64,
@@ -327,8 +377,6 @@ struct MarkerKey {
 }
 
 /// 1 つの `MarkerKey` に対する B×B 個のサブピクセル stamp 集合。
-// 後続タスクで scene_to_pixmap に配線
-#[allow(dead_code)]
 struct StampSet {
     stamps: Vec<Pixmap>,
     pad: i32,
@@ -338,8 +386,6 @@ struct StampSet {
 /// key のマーカーを device 空間で B×B サブピクセル位置に焼いた stamp 集合を作る。
 /// 各 stamp は per-point 描画(`Prim::Circle` arm)と同一エンジン:
 /// `fill_path`(+ `stroke_width > 0` なら `stroke_path`)で焼く。
-// 後続タスクで scene_to_pixmap に配線
-#[allow(dead_code)]
 fn build_stamp_set(key: &MarkerKey, scale: f32) -> StampSet {
     let r_dev = key.r as f32 * scale;
     let stroke_dev = key.stroke_width as f32 * scale;
@@ -394,8 +440,6 @@ fn build_stamp_set(key: &MarkerKey, scale: f32) -> StampSet {
 /// 小数部を B 段階に量子化して stamp を選ぶ。量子化が B に丸まった場合は
 /// 次の整数画素に繰り上げる(kx==B → kx=0, ix+=1)。`blit_stamp` と
 /// byte-identity テストの双方がこの pick を共有し、選択ロジックの一致を保証する。
-// 後続タスクで scene_to_pixmap の描画ループに配線
-#[allow(dead_code)]
 fn pick_stamp(set: &StampSet, cx_dev: f32, cy_dev: f32) -> (i32, i32, usize) {
     let mut ix = cx_dev.floor() as i32;
     let mut kx = ((cx_dev - ix as f32) * set.b as f32).round() as i32;
@@ -420,8 +464,6 @@ fn pick_stamp(set: &StampSet, cx_dev: f32, cy_dev: f32) -> (i32, i32, usize) {
 /// シェーダ/パイプラインの再構築を避けるため手書きする(計測で ~7 倍速)。
 /// premultiplied 同士の source-over: `out_c = s_c + (d_c*(255 - s_a) + 127) / 255`。
 /// s_a==0 の画素はスキップ(恒等変換)。
-// 後続タスクで scene_to_pixmap の描画ループに配線
-#[allow(dead_code)]
 fn blit_stamp(pm: &mut Pixmap, set: &StampSet, cx_dev: f32, cy_dev: f32) {
     let (ix, iy, idx) = pick_stamp(set, cx_dev, cy_dev);
     let stamp = &set.stamps[idx];
@@ -1726,6 +1768,176 @@ mod tests {
             pm_out.data(),
             untouched.data(),
             "完全に外側なら dest は不変のはず"
+        );
+    }
+
+    // --- scene_to_pixmap_with: stamp cache 配線 + フォールバック ----------------
+
+    /// JSON spec を build_scene パイプライン(parse → measurer → scene)に通す。
+    fn scene_for(json: &str) -> Scene {
+        let spec = crate::frontend::chartjs::parse(json, false).unwrap();
+        let m = crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap();
+        crate::layout::build_scene(&spec, &m)
+    }
+
+    fn face() -> ttf_parser::Face<'static> {
+        ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap()
+    }
+
+    /// いずれかのチャンネル絶対差が 4 を超えるピクセルの割合
+    /// (`tests/golden_png.rs` と同一指標)。u8 同士の減算は debug で
+    /// アンダーフロー panic するため i16 にキャストする。
+    fn diff_fraction(a: &Pixmap, b: &Pixmap) -> f64 {
+        let diff = a
+            .data()
+            .chunks_exact(4)
+            .zip(b.data().chunks_exact(4))
+            .filter(|(x, y)| {
+                x.iter()
+                    .zip(y.iter())
+                    .any(|(xc, yc)| (*xc as i16 - *yc as i16).abs() > 4)
+            })
+            .count();
+        let total = (a.width() as u64 * a.height() as u64) as f64;
+        diff as f64 / total
+    }
+
+    /// n 点の uniform scatter(単色・既定 pointRadius)。stamp path を踏む形。
+    fn uniform_scatter_json(n: usize) -> String {
+        let pts = (0..n)
+            .map(|i| format!(r#"{{"x":{i},"y":{}}}"#, (i * 37 + 13) % 100))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(r#"{{"type":"scatter","data":{{"datasets":[{{"label":"d","data":[{pts}]}}]}}}}"#)
+    }
+
+    /// per-point カラー(backgroundColor 配列)で塗りが点ごとに変わる scatter。
+    /// `fill_at` が cyclic に色を引くため隣接点で fill が異なり run が切れる。
+    fn percolor_scatter_json(n: usize) -> String {
+        let pts = (0..n)
+            .map(|i| format!(r#"{{"x":{i},"y":{}}}"#, (i * 37 + 13) % 100))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            r##"{{"type":"scatter","data":{{"datasets":[{{"label":"d","backgroundColor":["#ff0000","#0000ff"],"data":[{pts}]}}]}}}}"##
+        )
+    }
+
+    /// per-point 半径(point.r)で半径が点ごとに変わる bubble。隣接点で r が異なり
+    /// run が切れる。r は常に正(2..=10)。
+    fn bubble_json(n: usize) -> String {
+        let pts = (0..n)
+            .map(|i| {
+                format!(
+                    r#"{{"x":{i},"y":{},"r":{}}}"#,
+                    (i * 37 + 13) % 100,
+                    2 + i % 9
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(r#"{{"type":"bubble","data":{{"datasets":[{{"label":"d","data":[{pts}]}}]}}}}"#)
+    }
+
+    /// per-point カラー scatter(>=128 点)は stamp path を踏まずフォールバックする。
+    /// `min_run=STAMP_MIN_RUN` と `min_run=usize::MAX`(stamping 無効=純 fill_path)が
+    /// バイト一致することで、色の変化が run を 128 未満に切ったことを自己検証する。
+    #[test]
+    fn fallback_per_point_color_is_byte_identical() {
+        let scene = scene_for(&percolor_scatter_json(200));
+        let f = face();
+        let stamp = scene_to_pixmap_with(&scene, 1.0, &f, STAMP_MIN_RUN).unwrap();
+        let reference = scene_to_pixmap_with(&scene, 1.0, &f, usize::MAX).unwrap();
+        assert_eq!(
+            stamp.data(),
+            reference.data(),
+            "per-point カラーは stamp path を踏まずバイト一致のはず"
+        );
+    }
+
+    /// per-point 半径 bubble(>=128 点)は stamp path を踏まずフォールバックする。
+    /// 半径の変化が run を切ることをバイト一致で自己検証する(定数 r なら run が
+    /// 128 以上のまま stamp され、ここが失敗する)。
+    #[test]
+    fn fallback_bubble_per_point_radius_is_byte_identical() {
+        let scene = scene_for(&bubble_json(200));
+        let f = face();
+        let stamp = scene_to_pixmap_with(&scene, 1.0, &f, STAMP_MIN_RUN).unwrap();
+        let reference = scene_to_pixmap_with(&scene, 1.0, &f, usize::MAX).unwrap();
+        assert_eq!(
+            stamp.data(),
+            reference.data(),
+            "per-point 半径は stamp path を踏まずバイト一致のはず"
+        );
+    }
+
+    /// 128 点未満の uniform scatter は run < min_run でフォールバックする。
+    #[test]
+    fn fallback_short_uniform_run_is_byte_identical() {
+        let scene = scene_for(&uniform_scatter_json(100));
+        let f = face();
+        let stamp = scene_to_pixmap_with(&scene, 1.0, &f, STAMP_MIN_RUN).unwrap();
+        let reference = scene_to_pixmap_with(&scene, 1.0, &f, usize::MAX).unwrap();
+        assert_eq!(
+            stamp.data(),
+            reference.data(),
+            "短い run(100 < 128)は stamp path を踏まずバイト一致のはず"
+        );
+    }
+
+    /// 128 点以上の uniform scatter は stamp path を踏む。stamp 出力(fill+stroke)は
+    /// 参照(per-prim fill_path)と視覚的に同等(差分画素 2% 未満)で、かつバイト一致
+    /// ではない(stamp path が実際に走ったことの証明)。差分が 2% を大きく超えるなら
+    /// 位置/座標バグ。
+    #[test]
+    fn stamp_uniform_scatter_within_tolerance() {
+        let scene = scene_for(&uniform_scatter_json(200));
+        let f = face();
+        let stamp = scene_to_pixmap_with(&scene, 1.0, &f, STAMP_MIN_RUN).unwrap();
+        let reference = scene_to_pixmap_with(&scene, 1.0, &f, usize::MAX).unwrap();
+
+        assert_ne!(
+            stamp.data(),
+            reference.data(),
+            "uniform scatter(200 点)は stamp path を踏むはず(バイト一致ではない)"
+        );
+
+        let frac = diff_fraction(&stamp, &reference);
+        assert!(
+            frac < 0.02,
+            "stamp 出力は参照と視覚的に同等(差分 {frac:.6} < 0.02)のはず"
+        );
+    }
+
+    /// 128 点以上の line チャート(マーカー = 一様な fill-only circle)も stamp path を
+    /// 踏み、参照と視覚的に同等(差分 2% 未満)。
+    #[test]
+    fn stamp_line_markers_within_tolerance() {
+        let pts = (0..200)
+            .map(|i| ((i * 37 + 13) % 100).to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let labels = (0..200)
+            .map(|i| format!("\"L{i}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let json = format!(
+            r#"{{"type":"line","data":{{"labels":[{labels}],"datasets":[{{"label":"d","data":[{pts}]}}]}}}}"#
+        );
+        let scene = scene_for(&json);
+        let f = face();
+        let stamp = scene_to_pixmap_with(&scene, 1.0, &f, STAMP_MIN_RUN).unwrap();
+        let reference = scene_to_pixmap_with(&scene, 1.0, &f, usize::MAX).unwrap();
+
+        assert_ne!(
+            stamp.data(),
+            reference.data(),
+            "line マーカー(200 点)は stamp path を踏むはず"
+        );
+        let frac = diff_fraction(&stamp, &reference);
+        assert!(
+            frac < 0.02,
+            "line マーカーの stamp 出力は参照と視覚的に同等(差分 {frac:.6} < 0.02)のはず"
         );
     }
 }
