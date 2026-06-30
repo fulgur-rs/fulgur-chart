@@ -123,16 +123,17 @@ jobs:
             target: x86_64-pc-windows-msvc
             os: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           key: ${{ matrix.target }}
 
@@ -142,7 +143,9 @@ jobs:
 
       - name: Install cross
         if: matrix.platform == 'linux-arm64'
-        uses: taiki-e/install-action@cross
+        uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+        with:
+          tool: cross
 
       - name: Build binary (native)
         if: matrix.platform != 'linux-arm64'
@@ -163,7 +166,7 @@ jobs:
           fi
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: chart-cli-${{ matrix.platform }}
           path: target/${{ matrix.target }}/release/${{ steps.binary.outputs.name }}
@@ -182,7 +185,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
@@ -192,7 +195,7 @@ jobs:
       # npm uses instead of OIDC (publish 404s). v6.1.0 removed always-auth
       # handling (actions/setup-node#1436). `registry-url` is required so npm
       # engages the OIDC handshake against the registry; do NOT pass a token.
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
@@ -209,7 +212,7 @@ jobs:
         run: echo "VERSION=$VALIDATED_VERSION" >> "$GITHUB_ENV"
 
       - name: Download all binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: chart-cli-*
           path: artifacts/
