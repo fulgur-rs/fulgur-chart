@@ -119,6 +119,8 @@ mod tests {
             max_body_size: 102_400,
             render_timeout_ms: 1000,
             shortlink_limit: 100,
+            shortlink_max_bytes: 128 * 1024 * 1024,
+            shortlink_entry_bytes: 512 * 1024,
             cors_origins: "https://example.com".into(),
             rate_limit: 0,
             log_level: "info".into(),
@@ -126,7 +128,10 @@ mod tests {
             webp_enabled: false,
             max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
         };
-        build_router(&cfg, ShortlinkStore::new(100))
+        build_router(
+            &cfg,
+            ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024),
+        )
     }
 
     fn router_with_compression(compression: Compression) -> Router {
@@ -137,6 +142,8 @@ mod tests {
             max_body_size: 102_400,
             render_timeout_ms: 5000,
             shortlink_limit: 100,
+            shortlink_max_bytes: 128 * 1024 * 1024,
+            shortlink_entry_bytes: 512 * 1024,
             cors_origins: "*".into(),
             rate_limit: 0,
             log_level: "info".into(),
@@ -144,7 +151,10 @@ mod tests {
             webp_enabled: false,
             max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
         };
-        build_router(&cfg, ShortlinkStore::new(100))
+        build_router(
+            &cfg,
+            ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024),
+        )
     }
 
     /// 指定した起動時設定 `png_compression` の下で PNG をレンダーし、バイト長を返す。

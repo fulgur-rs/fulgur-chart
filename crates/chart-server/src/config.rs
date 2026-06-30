@@ -23,6 +23,17 @@ pub struct Config {
     #[arg(long, env = "FULGUR_SHORTLINK_LIMIT", default_value_t = 10_000)]
     pub shortlink_limit: usize,
 
+    /// shortlink ストア全体で保持する query 文字列の合計バイト上限（OOM 防止）。
+    /// 既定 128 MiB。worst case = min(shortlink_limit × entry_bytes, この値)。
+    #[arg(long, env = "FULGUR_SHORTLINK_MAX_BYTES", default_value_t = 128 * 1024 * 1024)]
+    pub shortlink_max_bytes: usize,
+
+    /// shortlink 単一エントリ（保存される query 文字列）のバイト上限。
+    /// 既定 512 KiB。URL エンコードで最大 3 倍に膨らむため body 上限より大きめに取る。
+    /// 超過リクエストは 413 で拒否する。
+    #[arg(long, env = "FULGUR_SHORTLINK_ENTRY_BYTES", default_value_t = 512 * 1024)]
+    pub shortlink_entry_bytes: usize,
+
     #[arg(long, env = "FULGUR_CORS_ORIGINS", default_value = "*")]
     pub cors_origins: String,
 
