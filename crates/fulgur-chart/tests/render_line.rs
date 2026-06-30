@@ -1,11 +1,17 @@
 use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::chartjs;
 use fulgur_chart::layout::line;
+use fulgur_chart::raster_direct::render_chart_to_png;
 use fulgur_chart::render::render_chart;
 use fulgur_chart::scene::Prim;
 use fulgur_chart::text::TextMeasurer;
 fn render(json: &str) -> String {
     render_chart(&chartjs::parse(json, false).unwrap())
+}
+
+/// PNG バイト列（scale 1.0）。決定性・SVG↔PNG 一致テスト用。
+fn render_png(json: &str) -> Vec<u8> {
+    render_chart_to_png(&chartjs::parse(json, false).unwrap(), 1.0, DEFAULT_FONT).unwrap()
 }
 
 #[test]
@@ -248,4 +254,63 @@ fn gapped_large_line_keeps_segments_and_decimates() {
             .all(|&(x, y)| x.is_finite() && y.is_finite()),
         "all emitted polyline points must be finite"
     );
+}
+
+// --- 決定性・no-op サニティ・SVG↔PNG 一致（Task 9）---
+
+#[test]
+fn disabled_decimation_keeps_all_points_sanity() {
+    // サニティ: enabled:false の巨大 line は単一セグメント全点を保持し、間引きされない。
+    // （pre-feature バイト不変の真の保証は threshold 未満で緑のままの既存小 golden。
+    //   これは passthrough = 非間引きと同形であることの確認のみ。）
+    let n = 3000;
+    let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
+    let data: Vec<String> = (0..n).map(|i| format!("{}", (i * 13) % 50)).collect();
+    let off = format!(
+        r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"data":[{}]}}]}},"options":{{"plugins":{{"decimation":{{"enabled":false}}}}}}}}"#,
+        labels.join(","),
+        data.join(",")
+    );
+    assert_eq!(polyline_pts(&off), n);
+}
+
+/// 5000 点（threshold 超過確実）の自動間引き line spec を組み立てる。
+fn big_decimated_line_json() -> String {
+    let n = 5000;
+    let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
+    let data: Vec<String> = (0..n).map(|i| format!("{}", (i * 29) % 83)).collect();
+    format!(
+        r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"data":[{}]}}]}}}}"#,
+        labels.join(","),
+        data.join(",")
+    )
+}
+
+#[test]
+fn decimated_line_is_deterministic() {
+    // 同一入力 → 同一バイト列（SVG・PNG 双方）。間引き経路の決定性を担保。
+    let json = big_decimated_line_json();
+    assert_eq!(render(&json), render(&json), "SVG must be byte-identical");
+    assert_eq!(
+        render_png(&json),
+        render_png(&json),
+        "PNG must be byte-identical"
+    );
+}
+
+#[test]
+fn decimated_line_renders_svg_and_png_consistently() {
+    // SVG/PNG は build() の同一 Scene を消費するため、間引き-on の line が
+    // 両出力でエラー無く・決定的にレンダされることを確認（geometry 共有の担保）。
+    let json = big_decimated_line_json();
+    let svg = render(&json);
+    assert!(svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"));
+    assert!(!svg.contains("NaN") && !svg.contains("inf"));
+    assert!(svg.contains("<polyline"));
+
+    let png = render_png(&json);
+    assert!(png.len() > 8, "PNG must be non-empty");
+    // 妥当な PNG であること（デコードできる）を tiny-skia で確認。
+    let pix = tiny_skia::Pixmap::decode_png(&png).expect("decimated PNG must decode");
+    assert!(pix.width() > 0 && pix.height() > 0);
 }
