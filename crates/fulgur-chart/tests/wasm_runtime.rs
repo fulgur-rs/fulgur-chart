@@ -23,8 +23,9 @@
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test;
 
+use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::chartjs;
-use fulgur_chart::raster_direct::render_chart_to_png_default;
+use fulgur_chart::raster_direct::{render_chart_to_png_default, render_chart_to_webp};
 use fulgur_chart::render::render_chart;
 
 /// 依存なしの決定論的ハッシュ(FNV-1a 64bit)。
@@ -121,5 +122,98 @@ fn png_is_byte_identical_to_linux_x86_native() {
         fnv1a(&png),
         PNG_HASH_LINUX_X86,
         "PNG byte が linux-x86 native と不一致"
+    );
+}
+
+/// stamp cache 経路(>=128 均一マーカー)を通す非自明な scatter spec(200 点)。
+/// per-point 色/半径を持たないため全マーカーが stamp 化される(run=200 >= 閾値 128)。
+fn sample_stamp_spec() -> fulgur_chart::ir::ChartSpec {
+    let pts: Vec<String> = (0..200)
+        .map(|i| format!(r#"{{"x":{},"y":{}}}"#, i, (i * 37 + 13) % 100))
+        .collect();
+    let json = format!(
+        r#"{{"type":"scatter","data":{{"datasets":[{{"label":"d","data":[{}]}}]}}}}"#,
+        pts.join(",")
+    );
+    chartjs::parse(&json, false).expect("stamp spec parses")
+}
+
+/// stamp 経路の PNG: 全プラットフォーム共通の不変条件。wasm でラスタライズが panic せず
+/// 完走し、有効な PNG・期待寸法を返し、かつ同一入力で 2 回 byte 一致(決定的)であること。
+/// stamp build は既存 fill_path と同エンジン、blit は整数演算なので決定論は保たれる。
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn stamp_png_renders_validly_and_deterministically() {
+    let spec = sample_stamp_spec();
+    let png = render_chart_to_png_default(&spec, PNG_SCALE).expect("stamp PNG 生成成功");
+    let png2 = render_chart_to_png_default(&spec, PNG_SCALE).expect("stamp PNG 生成成功(2回目)");
+    assert_eq!(
+        png, png2,
+        "stamp 経路 PNG が決定的でない(同一入力で byte 不一致)"
+    );
+    assert_eq!(&png[..8], PNG_SIGNATURE, "PNG シグネチャ不正");
+    let pix = tiny_skia::Pixmap::decode_png(&png).expect("生成 PNG がデコード可能");
+    assert_eq!(
+        (pix.width(), pix.height()),
+        (PNG_WIDTH, PNG_HEIGHT),
+        "stamp PNG 寸法が期待値と不一致"
+    );
+}
+
+// stamp 経路 PNG の linux-x86 native 期待値(既存 PNG_*_LINUX_X86 と同じ理由で wasm 限定)。
+// linux-x86_64 native で生成。既定圧縮 Balanced。圧縮設定や stamp 既定(B/閾値)を変えたら再生成。
+#[cfg(target_arch = "wasm32")]
+const STAMP_PNG_LEN_LINUX_X86: usize = 133447;
+#[cfg(target_arch = "wasm32")]
+const STAMP_PNG_HASH_LINUX_X86: u64 = 0x96f2_1e67_6ffb_146d;
+
+/// stamp 経路の PNG が linux-x86 native と byte 一致(wasm=ubuntu と native の決定論)。
+/// stamp build(fill_path) + 整数 blit が wasm でも native と同一ビットを生むことを担保する。
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen_test]
+fn stamp_png_byte_identical_to_linux_x86_native() {
+    let png =
+        render_chart_to_png_default(&sample_stamp_spec(), PNG_SCALE).expect("stamp PNG 生成成功");
+    assert_eq!(
+        png.len(),
+        STAMP_PNG_LEN_LINUX_X86,
+        "stamp PNG 長が linux-x86 native と不一致"
+    );
+    assert_eq!(
+        fnv1a(&png),
+        STAMP_PNG_HASH_LINUX_X86,
+        "stamp PNG byte が linux-x86 native と不一致"
+    );
+}
+
+/// stamp 経路は WebP でも踏まれる(`render_chart_to_webp` も `scene_to_pixmap` を共有)。
+/// WebP の stamp 出力が wasm で panic せず完走し、有効な WebP を返し、かつ同一入力で
+/// 2 回 byte 一致(決定的)であることを検証する。WebP の cross-platform byte 一致は
+/// PNG 同様 OS 跨ぎでは成立しない(別途 golden が担保)ため、ここでは同一プラットフォーム
+/// 上の決定性に絞る。
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn stamp_webp_renders_validly_and_deterministically() {
+    let spec = sample_stamp_spec();
+    let a = render_chart_to_webp(&spec, PNG_SCALE, DEFAULT_FONT).expect("stamp WebP 生成成功");
+    let b =
+        render_chart_to_webp(&spec, PNG_SCALE, DEFAULT_FONT).expect("stamp WebP 生成成功(2回目)");
+    assert_eq!(
+        a, b,
+        "stamp 経路 WebP が決定的でない(同一入力で byte 不一致)"
+    );
+    // RIFF コンテナ + WEBP fourcc は予備チェック。
+    assert!(a.len() > 12, "WebP が短すぎる");
+    assert_eq!(&a[0..4], b"RIFF", "WebP RIFF ヘッダ不正");
+    assert_eq!(&a[8..12], b"WEBP", "WebP fourcc 不正");
+    // 実デコードまで行い、ヘッダだけ正しい壊れた WebP を弾く
+    // (png_renders_validly_on_every_platform と同様の round-trip 検証)。
+    let img = image::load_from_memory_with_format(&a, image::ImageFormat::WebP)
+        .expect("生成 WebP がデコード可能")
+        .to_rgba8();
+    assert_eq!(
+        (img.width(), img.height()),
+        (PNG_WIDTH, PNG_HEIGHT),
+        "WebP 寸法が期待値と不一致"
     );
 }
