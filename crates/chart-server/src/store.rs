@@ -148,4 +148,38 @@ mod tests {
         assert_eq!(store.insert("b".into(), "5678".into()), Ok(()));
         assert!(store.get("b").is_some());
     }
+
+    #[test]
+    fn overwriting_with_invalid_query_retains_old_value() {
+        // 上書き失敗時に古い値が保持され、バイト会計がロールバックされること
+        // （TooLarge / Full 双方）を検証する。
+        let store = ShortlinkStore::new(10, 8, 5);
+        assert_eq!(store.insert("a".into(), "1234".into()), Ok(()));
+
+        // 1. per-entry 上限超過による上書き失敗 (TooLarge) → 古い値を保持。
+        assert_eq!(
+            store.insert("a".into(), "123456".into()),
+            Err(InsertError::TooLarge)
+        );
+        assert_eq!(store.get("a"), Some("1234".into()));
+
+        // 2. 正常な上書き（5 バイト）。
+        assert_eq!(store.insert("a".into(), "12345".into()), Ok(()));
+        assert_eq!(store.get("a"), Some("12345".into()));
+
+        // 別エントリ "b" を 3 バイトで挿入 → 合計 8 バイトで満杯。
+        assert_eq!(store.insert("b".into(), "123".into()), Ok(()));
+
+        // 3. 集約上限超過による上書き失敗 (Full) → 古い値を保持。
+        assert_eq!(
+            store.insert("b".into(), "1234".into()),
+            Err(InsertError::Full)
+        );
+        assert_eq!(store.get("b"), Some("123".into()));
+
+        // ロールバックが正しく行われ、バイトがリークしていないこと
+        // （より小さい値での上書きが通る）を検証。
+        assert_eq!(store.insert("b".into(), "12".into()), Ok(()));
+        assert_eq!(store.get("b"), Some("12".into()));
+    }
 }
