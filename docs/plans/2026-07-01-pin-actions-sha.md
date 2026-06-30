@@ -75,11 +75,17 @@ declare -A MAP=(
   ["dtolnay/rust-toolchain@stable"]="dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable"
   ["dtolnay/rust-toolchain@1.89"]="dtolnay/rust-toolchain@193d6aa1dbbc28bd2c0a6b0e327cfdce68baaf6e # 1.89.0"
 )
+# Escape regex metachars in the search key (notably the '.' in "1.89"). Using
+# '|' as the sed delimiter means slashes in owner/repo need NO escaping — do NOT
+# escape them (e.g. ${old//\//\\/}) or sed writes literal backslashes into the
+# files, corrupting the workflows.
+esc() { printf '%s' "$1" | sed -e 's/[.[\*^$]/\\&/g'; }
 for f in chart-cli-npm-release.yml ruby-gem-release.yml chart-server-docker.yml ci.yml chart-server-ci.yml node-npm-release.yml; do
   for old in "${!MAP[@]}"; do
     new="${MAP[$old]}"
-    # match "uses: <old>" only at end-of-token (followed by EOL) so SHAs/comments aren't touched
-    sed -i -E "s#(uses: )${old//\//\\/}\$#\1${new//\//\\/}#" "$f"
+    pat="$(esc "$old")"
+    # match "uses: <old>" only at end-of-line so SHAs/comments aren't touched
+    sed -i -E "s|(uses: )${pat}[[:space:]]*\$|\1${new}|" "$f"
   done
 done
 ```
@@ -87,7 +93,7 @@ done
 **Step 2 (verify):** every targeted ref is gone; expect 0 matches.
 
 ```bash
-grep -rnE "uses: (actions/(checkout|setup-node|upload-artifact|download-artifact|cache|setup-python)|Swatinem/rust-cache|codecov/codecov-action|docker/(login|metadata|build-push)-action|oxidize-rb/actions/[a-z-]+|ruby/setup-ruby|rubygems/configure-rubygems-credentials|dtolnay/rust-toolchain)@(v[0-9.]+|stable|1\.89)\s*\$" .github/workflows/
+grep -rnE 'uses: (actions/(checkout|setup-node|upload-artifact|download-artifact|cache|setup-python)|Swatinem/rust-cache|codecov/codecov-action|docker/(login|metadata|build-push)-action|oxidize-rb/actions/[a-z-]+|ruby/setup-ruby|rubygems/configure-rubygems-credentials|dtolnay/rust-toolchain)@(v[0-9.]+|stable|1\.89)[[:space:]]*$' .github/workflows/
 ```
 Expected: no output.
 
