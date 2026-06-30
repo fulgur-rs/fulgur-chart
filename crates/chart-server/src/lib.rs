@@ -5,6 +5,7 @@
 //! 依存し、`ShortlinkBackend` を実装した durable backend を `build_router` に
 //! inject できる。
 
+mod backend;
 mod config;
 mod handlers;
 mod render;
@@ -13,6 +14,7 @@ mod server;
 mod state;
 mod store;
 
+pub use backend::{BackendError, ShortlinkBackend};
 pub use config::Config;
 pub use server::build_router;
 pub use store::ShortlinkStore;
