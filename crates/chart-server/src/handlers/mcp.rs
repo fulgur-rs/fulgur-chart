@@ -283,13 +283,14 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         .map_err(|_| (-32000, "Server busy".to_string()))?;
 
     let compression = state.png_compression;
+    let webp = state.webp;
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(state.render_timeout_ms),
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let spec = render::parse_and_validate(&json_str, "chartjs", false)?;
-            // 圧縮はサーバ起動時設定を用いる（MCP も per-request 指定なし）。
-            render::render(&spec, format, 1.0, compression)
+            // 圧縮・WebP ポリシーはサーバ起動時設定を用いる（MCP も per-request 指定なし）。
+            render::render(&spec, format, 1.0, compression, webp)
         }),
     )
     .await;
@@ -304,7 +305,9 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
                 // chart spec のパース失敗はツール引数の問題なので -32602。
                 render::RenderError::Parse(_) => -32602, // Invalid params
                 render::RenderError::Validate(_) => -32602, // Invalid params
-                render::RenderError::Render(_) => -32603, // Internal error
+                // WebP 無効など、要求フォーマットが受け付けられない場合もツール引数の問題。
+                render::RenderError::Unsupported(_) => -32602, // Invalid params
+                render::RenderError::Render(_) => -32603,      // Internal error
             };
             Err((code, e.message().to_string()))
         }
@@ -354,6 +357,11 @@ mod tests {
             semaphore: Arc::new(Semaphore::new(1)),
             render_timeout_ms: 1000,
             png_compression: crate::render::Compression::default(),
+            // テストでは WebP を有効化（既定 disable とは別に、既存挙動を維持）。
+            webp: crate::render::WebpPolicy {
+                enabled: true,
+                max_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
+            },
         };
         axum::Router::new()
             .route("/mcp", post(mcp_handler))

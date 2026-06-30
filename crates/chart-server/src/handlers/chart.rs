@@ -118,6 +118,15 @@ async fn handle_render(
     headers: HeaderMap,
     state: AppState,
 ) -> Response {
+    // WebP が無効なら 304 短絡や描画より前に 415 で拒否する。フォーマット可用性は
+    // 条件付きリクエスト（古い ETag を持つクライアント）にも一貫して効かせる。
+    // 面積予算は描画コスト制御であり、描画を伴わない 304 には適用不要なので enabled のみ判定。
+    if format == OutputFormat::Webp
+        && let Err(e) = state.webp.check_enabled()
+    {
+        return error_response(StatusCode::UNSUPPORTED_MEDIA_TYPE, &e);
+    }
+
     let etag = etag_value(&json, format);
 
     // 304 check (RFC 7232 compliant)
@@ -153,8 +162,9 @@ async fn handle_render(
         }
     };
 
-    // 圧縮はサーバ起動時設定（per-request ではない）。
+    // 圧縮・WebP ポリシーはサーバ起動時設定（per-request ではない）。
     let compression = state.png_compression;
+    let webp = state.webp;
 
     // タイムアウト付きレンダリング
     let result = tokio::time::timeout(
@@ -162,7 +172,7 @@ async fn handle_render(
         tokio::task::spawn_blocking(move || {
             let _permit = permit; // クロージャ完了まで permit を保持して Semaphore を正しく解放
             let spec = render::parse_and_validate(&json, &dsl, false)?;
-            render::render(&spec, format, 1.0, compression)
+            render::render(&spec, format, 1.0, compression, webp)
         }),
     )
     .await;
@@ -176,6 +186,10 @@ async fn handle_render(
         Ok(Ok(Ok(bytes))) => render_response(bytes, format, &etag),
         Ok(Ok(Err(e @ RenderError::Parse(_)))) => error_response(StatusCode::BAD_REQUEST, &e),
         Ok(Ok(Err(e @ RenderError::Validate(_)))) => error_response(StatusCode::BAD_REQUEST, &e),
+        // WebP 無効など、要求フォーマットがサーバ設定で受け付けられない場合は 415。
+        Ok(Ok(Err(e @ RenderError::Unsupported(_)))) => {
+            error_response(StatusCode::UNSUPPORTED_MEDIA_TYPE, &e)
+        }
         Ok(Ok(Err(e @ RenderError::Render(_)))) => {
             error_response(StatusCode::INTERNAL_SERVER_ERROR, &e)
         }

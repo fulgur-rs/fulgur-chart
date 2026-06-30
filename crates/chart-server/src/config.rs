@@ -42,6 +42,24 @@ pub struct Config {
         default_value = "balanced"
     )]
     pub png_compression: Compression,
+
+    /// WebP 出力を許可するか。既定は **無効**（opt-in）。
+    ///
+    /// WebP ロスレスは pixmap + 入力複製 + 出力 Vec で最大 3 フレーム分のメモリを要し、
+    /// untrusted spec を受けるサーバでは OOM 経路になりうるため、明示的に有効化した
+    /// 場合のみ受け付ける。無効時は format=webp を 415 で拒否する。
+    #[arg(long, env = "FULGUR_WEBP_ENABLED", default_value_t = false)]
+    pub webp_enabled: bool,
+
+    /// WebP 出力の最大ピクセル面積（scale 適用後）。既定はライブラリの hard backstop
+    /// と同値。ピークメモリ ≈ 面積 × 4B × 3。メモリの厳しい環境ではこれを下げて
+    /// WebP のピークを絞れる（上げてもライブラリ上限で頭打ち）。
+    #[arg(
+        long,
+        env = "FULGUR_MAX_WEBP_AREA",
+        default_value_t = fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS
+    )]
+    pub max_webp_area: u64,
 }
 
 fn num_cpus() -> usize {
