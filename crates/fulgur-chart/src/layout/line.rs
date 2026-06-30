@@ -10,7 +10,9 @@ use std::fmt::Write;
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
 
-/// line チャートの全マーカー点（renderer とモデルの単一の真実源）。
+/// line チャートのモデル幾何用の全マーカー点（`model::build_model` が参照）。
+/// レンダリング経路の `build()` は点を独立に計算しデシメーションするため、巨大データでは
+/// この全点列と実際の描画点は乖離する（モデルは chart.js 数値照合用＝間引きなしが正しい）。
 /// カテゴリごとに `line_category_x + ys.map` で計算し、欠損値は 0.0 扱い。
 pub fn line_points(
     spec: &crate::ir::ChartSpec,
