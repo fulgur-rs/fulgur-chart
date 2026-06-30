@@ -161,6 +161,12 @@ pub fn scene_to_png(scene: &Scene, scale: f32, font_bytes: &[u8]) -> Result<Vec<
 /// bench で再確認(Task 6)。`usize::MAX` で stamping を無効化(= pure fill_path)できる。
 const STAMP_MIN_RUN: usize = 128;
 
+/// stamp 化するマーカーの device 半径上限(px)。これを超える大きなマーカーは stamp 1 枚が
+/// 巨大化して OOM/`Pixmap::new` 失敗を招くため per-prim にフォールバックする(per-prim は
+/// 円をキャンバスにクリップして描くので安全)。通常マーカー(r_dev 3〜6)には無影響で、
+/// 病的な巨大半径/スケールのみガードする。
+const STAMP_MAX_DEVICE_R: f64 = 64.0;
+
 /// Scene を RGBA Pixmap にラスタライズする（PNG/WebP 共通）。
 fn scene_to_pixmap(
     scene: &Scene,
@@ -200,9 +206,16 @@ fn scene_to_pixmap_with(
     let mut i = 0;
     while i < scene.items.len() {
         let run = uniform_circle_run_len(&scene.items, i);
-        // 正半径の同一 appearance circle が長く続く run のみ stamp する。それ以外は per-prim。
-        let stampable =
-            run >= min_run && matches!(&scene.items[i], Prim::Circle { r, .. } if *r > 0.0);
+        // 正半径かつ device サイズが上限内の同一 appearance circle が長く続く run のみ
+        // stamp する。それ以外(閾値未満/巨大半径/非円)は per-prim。負の stroke は描画
+        // されない(下の stroke_width>0 ガード)ので、サイズ判定では max(0) でクランプする。
+        let stampable = run >= min_run
+            && matches!(
+                &scene.items[i],
+                Prim::Circle { r, stroke_width, .. }
+                    if *r > 0.0
+                        && (*r + stroke_width.max(0.0) / 2.0) * scale as f64 <= STAMP_MAX_DEVICE_R
+            );
         if stampable {
             if let Prim::Circle {
                 r,
@@ -224,6 +237,14 @@ fn scene_to_pixmap_with(
                         blit_stamp(&mut pixmap, &set, *cx as f32 * scale, *cy as f32 * scale);
                     }
                 }
+            }
+            i += run;
+        } else if run > 0 {
+            // stamp しない uniform circle run(閾値未満/巨大半径/r<=0)も run 全体を
+            // まとめて描画して i += run で進める。1 要素ずつ進めると毎回フルスキャンが
+            // 走り O(n^2) になる(閾値直下の均一 scatter で顕著)。
+            for prim in &scene.items[i..i + run] {
+                render_prim(&mut pixmap, prim, transform, face, &mut glyph_cache);
             }
             i += run;
         } else {
@@ -389,8 +410,11 @@ struct StampSet {
 fn build_stamp_set(key: &MarkerKey, scale: f32) -> StampSet {
     let r_dev = key.r as f32 * scale;
     let stroke_dev = key.stroke_width as f32 * scale;
-    // stroke は r+sw/2 まで張り出す + AA/サブピクセル余白。
-    let pad = (r_dev + stroke_dev / 2.0).ceil() as i32 + 2;
+    // pad は描画範囲(stroke は r+sw/2 まで張り出す)+ AA/サブピクセル余白。負の r/stroke は
+    // 描画されない(from_circle が r<0 で None、stroke は下で stroke_width>0 ガード)ので、
+    // サイズ計算では max(0) でクランプし、pad>=2(size>=6 で Pixmap::new は常に Some)を保証する。
+    // r_dev 自体は from_circle にそのまま渡す(r<0→None=透明 を per-point と一致させる)。
+    let pad = ((r_dev.max(0.0) + stroke_dev.max(0.0) / 2.0).ceil() as i32 + 2).max(2);
     let size = (2 * pad + 2) as u32;
     let anchor = pad as f32;
 
@@ -453,6 +477,10 @@ fn pick_stamp(set: &StampSet, cx_dev: f32, cy_dev: f32) -> (i32, i32, usize) {
         ky = 0;
         iy += 1;
     }
+    // 通常の carry 後は [0, b-1] に収まるが、巨大/異常座標での丸め飽和に備えて
+    // クランプし、idx が必ず stamps(長さ b*b) の範囲内になるようにする。
+    let kx = kx.clamp(0, set.b as i32 - 1);
+    let ky = ky.clamp(0, set.b as i32 - 1);
     let idx = (ky as u32 * set.b + kx as u32) as usize;
     (ix, iy, idx)
 }
@@ -465,6 +493,11 @@ fn pick_stamp(set: &StampSet, cx_dev: f32, cy_dev: f32) -> (i32, i32, usize) {
 /// premultiplied 同士の source-over: `out_c = s_c + (d_c*(255 - s_a) + 127) / 255`。
 /// s_a==0 の画素はスキップ(恒等変換)。
 fn blit_stamp(pm: &mut Pixmap, set: &StampSet, cx_dev: f32, cy_dev: f32) {
+    // 非有限座標(NaN/±Inf)は描画しない。per-point の from_circle が非有限円を弾くのと
+    // 同じ挙動に揃え、i32 への飽和キャストによる OOB index も防ぐ。
+    if !cx_dev.is_finite() || !cy_dev.is_finite() {
+        return;
+    }
     let (ix, iy, idx) = pick_stamp(set, cx_dev, cy_dev);
     let stamp = &set.stamps[idx];
     let ss = stamp.width() as i32;
@@ -1930,6 +1963,62 @@ mod tests {
         assert!(
             frac < 0.02,
             "scale=2 の stamp 出力は参照と視覚的に同等(差分 {frac:.6} < 0.02)のはず"
+        );
+    }
+
+    /// device 半径が STAMP_MAX_DEVICE_R を超える巨大マーカーは stamp せず per-prim に
+    /// フォールバックする(stamp 1 枚巨大化による OOM/panic 回避)。出力は fill_path 参照と
+    /// バイト一致する(= 確かにフォールバックしている)。
+    #[test]
+    fn huge_radius_markers_fall_back_to_fillpath() {
+        // pointRadius=70 → device 半径 70 > 64(上限)。130 点で run>=128 だが stamp しない。
+        let pts = (0..130)
+            .map(|i| format!(r#"{{"x":{},"y":{}}}"#, i, (i * 37 + 13) % 100))
+            .collect::<Vec<_>>()
+            .join(",");
+        let json = format!(
+            r#"{{"type":"scatter","data":{{"datasets":[{{"label":"d","pointRadius":70,"data":[{pts}]}}]}}}}"#
+        );
+        let scene = scene_for(&json);
+        let f = face();
+        let stamp = scene_to_pixmap_with(&scene, 1.0, &f, STAMP_MIN_RUN).unwrap();
+        let reference = scene_to_pixmap_with(&scene, 1.0, &f, usize::MAX).unwrap();
+        assert_eq!(
+            stamp.data(),
+            reference.data(),
+            "巨大半径マーカーは per-prim フォールバックで出力不変のはず"
+        );
+    }
+
+    /// 負の stroke_width でも build_stamp_set は panic しない(pad を max(0) でクランプ)。
+    #[test]
+    fn build_stamp_set_negative_stroke_no_panic() {
+        let set = build_stamp_set(&stamp_key(3.0, -1000.0), 1.0);
+        assert_eq!(set.stamps.len(), (STAMP_B * STAMP_B) as usize);
+        assert!(set.pad >= 2, "pad は 2 以上にクランプされるはず");
+    }
+
+    /// 非有限座標(NaN/±Inf)の blit は何も描画せず panic しない
+    /// (per-point の from_circle が非有限円を弾くのと同じ挙動)。
+    #[test]
+    fn blit_stamp_non_finite_coords_no_panic() {
+        let set = build_stamp_set(&stamp_key(3.0, 1.0), 1.0);
+        let mut pm = Pixmap::new(40, 40).unwrap();
+        let before = pm.data().to_vec();
+        blit_stamp(&mut pm, &set, f32::NAN, 20.0);
+        blit_stamp(&mut pm, &set, 20.0, f32::INFINITY);
+        blit_stamp(&mut pm, &set, f32::NEG_INFINITY, f32::NAN);
+        assert_eq!(pm.data(), &before[..], "非有限座標は何も描画しないはず");
+    }
+
+    /// 巨大な有限座標でも pick_stamp の idx は stamps の範囲内(クランプで OOB 回避)。
+    #[test]
+    fn pick_stamp_huge_coords_index_in_range() {
+        let set = build_stamp_set(&stamp_key(3.0, 1.0), 1.0);
+        let (_, _, idx) = pick_stamp(&set, 1.0e9, 1.0e9);
+        assert!(
+            idx < (STAMP_B * STAMP_B) as usize,
+            "idx は stamps(長さ b*b) の範囲内のはず"
         );
     }
 
