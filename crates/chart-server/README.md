@@ -63,7 +63,7 @@ curl -X POST http://localhost:3000/chart \
 |-------|-------------|-------------|
 | `png` | `image/png` | Binary PNG (default) |
 | `svg` | `image/svg+xml` | Inline SVG |
-| `webp` | `image/webp` | Binary WebP |
+| `webp` | `image/webp` | Binary WebP — **disabled by default** (opt-in, see below) |
 | `data-uri` | `text/plain` | `data:image/svg+xml;base64,…` |
 
 ## PNG compression
@@ -82,6 +82,17 @@ so the setting only affects PNG. All presets produce pixel-identical, determinis
 `balanced` keeps most of `fast`'s speed with a large size reduction; `high` minimizes
 size further at a higher encode cost. Pixels are identical across all presets.
 
+## WebP output (opt-in)
+
+WebP lossless encoding holds up to **three** full-frame buffers at peak (the pixmap,
+the encoder's mutable input copy, and the encoded VP8L chunk, each up to `area × 4`
+bytes for poorly-compressible content). For an untrusted-input server this is an
+OOM vector, so WebP is **disabled by default** and must be enabled with
+`FULGUR_WEBP_ENABLED=true`. When enabled, `FULGUR_MAX_WEBP_AREA` caps the post-scale
+pixel area (peak memory ≈ `area × 4 × 3`); lower it to fit a tight memory budget.
+The default equals the library's hard limit, which the renderer also enforces.
+With WebP disabled, `format=webp` returns `415 Unsupported Media Type`.
+
 ## Configuration
 
 | Variable | Default | Description |
@@ -96,6 +107,8 @@ size further at a higher encode cost. Pixels are identical across all presets.
 | `FULGUR_CORS_ORIGINS` | `*` | Allowed CORS origins (comma-separated) |
 | `FULGUR_RATE_LIMIT` | `0` | Rate limit (requests/minute/IP). `0` disables rate limiting (default) |
 | `FULGUR_PNG_COMPRESSION` | `balanced` | PNG compression preset: `fast` / `balanced` / `high` (PNG only) |
+| `FULGUR_WEBP_ENABLED` | `false` | Allow `format=webp`. Off by default (WebP has a higher peak-memory cost; opt-in) |
+| `FULGUR_MAX_WEBP_AREA` | library limit (~21.3M) | Max post-scale pixel area for WebP. Peak memory ≈ `area × 4 × 3`; lower to tighten |
 
 ## Docker
 
@@ -116,6 +129,7 @@ docker run -p 3000:3000 chart-server
 | 400 | `VALIDATE_ERROR` | Input limit validation failed |
 | 400 | `MISSING_PARAM` | Required parameter missing |
 | 404 | `NOT_FOUND` | Short link not found |
+| 415 | `UNSUPPORTED_FORMAT` | Format disabled by server policy (e.g. WebP opt-in off) |
 | 429 | — | Rate limit exceeded |
 | 503 | `BUSY` | Concurrent render limit exceeded |
 | 504 | `TIMEOUT` | Render timed out |
