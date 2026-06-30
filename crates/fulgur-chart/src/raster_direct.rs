@@ -27,7 +27,22 @@ use crate::scene::{Anchor, Prim, Scene};
 /// PNG 出力の最大ピクセル面積(幅 × 高さ)。
 /// scale 適用後のピクセル数がこれを超えると OOM のリスクがあるため Err とする。
 /// 64M px ≒ 8000×8000 → raw RGBA で約 256 MB。
+///
+/// demultiply は pixmap バッファへ in-place で行い straight RGBA のフルフレーム
+/// コピーを確保しないため、PNG 経路のピークは pixmap 1 枚分(≈256 MB)に収まる。
 const MAX_PNG_AREA_PIXELS: u64 = 64_000_000;
+
+/// WebP 出力の最大ピクセル面積(幅 × 高さ)。
+///
+/// WebP は pixmap(in-place demultiply 済み)に加えて、`image_webp` のロスレス
+/// エンコーダがエンコード時にフルフレーム相当の内部バッファをもう 1 枚確保する
+/// (= 実ピークは pixmap の約 2 倍)。PNG と同じ面積上限を許すと約 256 MB の
+/// 予算を超えるため、WebP は面積上限を PNG の半分にして pixmap + エンコーダ
+/// 内部バッファの合計を約 256 MB に収める。32M px ≒ 5657×5657。
+const MAX_WEBP_AREA_PIXELS: u64 = MAX_PNG_AREA_PIXELS / 2;
+
+/// WebP lossless の軸ごとの上限。
+const MAX_WEBP_AXIS: u32 = 16_384;
 
 // ---------------------------------------------------------------------------
 // 公開エントリポイント
@@ -113,28 +128,22 @@ pub fn render_chart_to_webp(
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
     let scene = crate::layout::build_scene(spec, &measurer);
-    let pixmap = scene_to_pixmap(&scene, scale, &face)?;
+    // pixmap を確保する前に WebP 専用の上限(軸・面積)を検証する。エンコーダの
+    // 内部フルフレームバッファを考慮した面積上限を超える要求は、256 MB の
+    // pixmap を確保する前に拒否して OOM を防ぐ。
+    validate_webp_dimensions(&scene, scale)?;
+    let mut pixmap = scene_to_pixmap(&scene, scale, &face)?;
 
-    // WebP lossless per-axis limit
-    const MAX_WEBP_AXIS: u32 = 16_384;
-    if pixmap.width() > MAX_WEBP_AXIS || pixmap.height() > MAX_WEBP_AXIS {
-        return Err(format!(
-            "WebP output {}×{} px exceeds the per-axis limit of {} px",
-            pixmap.width(),
-            pixmap.height(),
-            MAX_WEBP_AXIS
-        ));
-    }
-
-    // Demultiply premultiplied RGBA → straight RGBA before WebP encoding.
-    // tiny-skia stores pixels as premultiplied; WebPEncoder expects straight alpha.
-    // 共有ヘルパは α==255/α==0 を除算なしで処理するため、従来ループとバイト一致かつ高速。
-    let straight = premultiplied_to_straight_rgba(&pixmap);
+    // premultiplied RGBA → straight RGBA を pixmap バッファへ in-place 変換する。
+    // tiny-skia は premultiplied で格納するが WebPEncoder は straight alpha を要求する。
+    // straight のフルフレームコピーを別途確保しないことで、ピークメモリを
+    // pixmap + エンコーダ内部バッファに抑える。出力は従来とバイト一致。
+    demultiply_in_place(&mut pixmap);
 
     let mut buf = Vec::new();
     WebPEncoder::new_lossless(&mut buf)
         .write_image(
-            &straight,
+            pixmap.data(),
             pixmap.width(),
             pixmap.height(),
             ExtendedColorType::Rgba8,
@@ -162,12 +171,7 @@ fn scene_to_pixmap(
     scale: f32,
     face: &ttf_parser::Face<'_>,
 ) -> Result<Pixmap, String> {
-    let scale = if scale > 0.0 { scale } else { 1.0 };
-
-    let w = (scene.width as f32 * scale).round().max(1.0) as u32;
-    let h = (scene.height as f32 * scale).round().max(1.0) as u32;
-
-    let area = w as u64 * h as u64;
+    let (w, h, area, scale) = raster_dimensions(scene, scale);
     if area > MAX_PNG_AREA_PIXELS {
         return Err(format!(
             "raster output {w}×{h} px ({area} pixels) exceeds the area limit of {MAX_PNG_AREA_PIXELS} px"
@@ -187,36 +191,78 @@ fn scene_to_pixmap(
     Ok(pixmap)
 }
 
+/// scale 適用後の出力寸法 `(w, h, area, scale)` を求める。
+///
+/// `scale` が 0 以下または非有限の場合は 1.0 にフォールバックする。w/h は最低 1 px、
+/// `+Inf` scale 等は u32 で飽和し、後段の面積/軸チェックで弾く。PNG/WebP の上限判定が
+/// 同一の寸法計算を共有するためのヘルパ。
+fn raster_dimensions(scene: &Scene, scale: f32) -> (u32, u32, u64, f32) {
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+
+    let w = (scene.width as f32 * scale).round().max(1.0) as u32;
+    let h = (scene.height as f32 * scale).round().max(1.0) as u32;
+    let area = w as u64 * h as u64;
+
+    (w, h, area, scale)
+}
+
+/// WebP 出力寸法を pixmap 確保前に検証する。
+///
+/// WebP は pixmap に加えてエンコーダ内部のフルフレームバッファも要するため、
+/// 軸上限([`MAX_WEBP_AXIS`])に加えて PNG より厳しい面積上限
+/// ([`MAX_WEBP_AREA_PIXELS`])で弾く。256 MB の pixmap を確保する前に拒否することで
+/// OOM を防ぐ。エラーメッセージは "WebP output" を含み、PNG 経路と区別できる。
+fn validate_webp_dimensions(scene: &Scene, scale: f32) -> Result<(), String> {
+    let (w, h, area, _) = raster_dimensions(scene, scale);
+
+    if w > MAX_WEBP_AXIS || h > MAX_WEBP_AXIS {
+        return Err(format!(
+            "WebP output {w}×{h} px exceeds the per-axis limit of {MAX_WEBP_AXIS} px"
+        ));
+    }
+
+    if area > MAX_WEBP_AREA_PIXELS {
+        return Err(format!(
+            "WebP output {w}×{h} px ({area} pixels) exceeds the area limit of {MAX_WEBP_AREA_PIXELS} px"
+        ));
+    }
+
+    Ok(())
+}
+
 fn scene_to_png_with_face(
     scene: &Scene,
     scale: f32,
     face: &ttf_parser::Face<'_>,
     compression: PngCompression,
 ) -> Result<Vec<u8>, String> {
-    let pixmap = scene_to_pixmap(scene, scale, face)?;
-    encode_png_fast(&pixmap, compression)
+    let mut pixmap = scene_to_pixmap(scene, scale, face)?;
+    encode_png_fast(&mut pixmap, compression)
 }
 
-/// premultiplied RGBA な Pixmap を straight(非 premultiplied) RGBA バイト列へ変換する。
+/// premultiplied RGBA な Pixmap を straight(非 premultiplied) RGBA へ **in-place** 変換する。
 ///
 /// tiny-skia の `Pixmap::encode_png()` と WebP 経路は全画素を `demultiply()` するが、
 /// その除算が PNG エンコード時間の大半(計測で ~95%)を占める。premultiplied の不変条件
 /// (各チャンネル ≤ α)より、α==255(不透明)・α==0(透明)の画素は premultiplied 値が
-/// そのまま straight 値に一致するため、これらは除算なしのコピーで済む。除算が要るのは
-/// AA 縁などの部分α画素のみ。出力は「全画素 demultiply」とバイト単位で一致する
-/// (`demultiply()` は α==255 で恒等、α==0 で 0 を返すため)。
-fn premultiplied_to_straight_rgba(pixmap: &Pixmap) -> Vec<u8> {
-    // 大半の画素(α==255/α==0)は premultiplied==straight なので、まず生バイトを
-    // 一括コピー(ベクトル化された memcpy)し、部分α画素(AA縁)の RGB だけを
-    // demultiply で上書きする。散発的な per-pixel 書き込みより速い。α は
-    // コピー済みでそのまま正しい。
-    let mut out = pixmap.data().to_vec();
-    for (px, chunk) in pixmap.pixels().iter().zip(out.chunks_exact_mut(4)) {
-        let a = px.alpha();
+/// そのまま straight 値に一致するため、これらは書き換え不要。除算が要るのは
+/// AA 縁などの部分α画素のみで、それらの RGB だけを上書きする。出力は「全画素
+/// demultiply」とバイト単位で一致する(`demultiply()` は α==255 で恒等、α==0 で 0)。
+///
+/// pixmap の buffer をそのまま書き換えるため、straight RGBA のフルフレームコピーを
+/// 別途確保しない(OOM 対策: ピークメモリを 1 フレーム削減する)。変換後の pixmap は
+/// premultiplied 不変条件を満たさなくなるが、本経路では encode 直前の最終処理であり
+/// 以降 `pixels()` で読み直さないため問題ない。
+fn demultiply_in_place(pixmap: &mut Pixmap) {
+    // 部分α画素(AA縁)のみ raw バイトから premultiplied 値を復元して demultiply し、
+    // 同じ 4 バイトへ書き戻す。α==255/α==0 はそのままで straight に一致するため触れない。
+    for chunk in pixmap.data_mut().chunks_exact_mut(4) {
+        let a = chunk[3];
         if a != 0 && a != 255 {
-            // 部分αのみ tiny-skia と同一の demultiply で straight 化（丸めも一致）。
-            // α(=c.alpha()) はコピー済み値と同一だが、4 バイト連続で書くことで
-            // コンパイラが単一の 32-bit ストアにまとめやすくする。
+            // pixmap data は常に有効な premultiplied(各チャンネル ≤ α)なので from_rgba は Some。
+            let px = tiny_skia::PremultipliedColorU8::from_rgba(chunk[0], chunk[1], chunk[2], a)
+                .expect("pixmap data is always valid premultiplied RGBA");
+            // tiny-skia と同一の demultiply で straight 化（丸めも一致）。
             let c = px.demultiply();
             chunk[0] = c.red();
             chunk[1] = c.green();
@@ -224,7 +270,6 @@ fn premultiplied_to_straight_rgba(pixmap: &Pixmap) -> Vec<u8> {
             chunk[3] = c.alpha();
         }
     }
-    out
 }
 
 /// Pixmap を PNG バイト列にエンコードする（tiny-skia `encode_png()` の高速等価版）。
@@ -232,9 +277,13 @@ fn premultiplied_to_straight_rgba(pixmap: &Pixmap) -> Vec<u8> {
 /// 圧縮 `Compression::Fast`(fdeflate)・フィルタ `Sub` は tiny-skia が用いる png の
 /// デフォルトと同値。straight 変換を高速化した点だけが異なり、出力は tiny-skia
 /// `encode_png()` とバイト単位で一致する（回帰: `encode_png_fast_matches_tiny_skia_byte_for_byte`）。
-fn encode_png_fast(pixmap: &Pixmap, compression: PngCompression) -> Result<Vec<u8>, String> {
-    let straight = premultiplied_to_straight_rgba(pixmap);
-    encode_rgba_png(&straight, pixmap.width(), pixmap.height(), compression)
+///
+/// `pixmap` を in-place で straight 化するため `&mut` を取る(呼び出し元はこの直後に
+/// pixmap を捨てる前提)。これにより straight のフルフレームコピーを確保しない。
+fn encode_png_fast(pixmap: &mut Pixmap, compression: PngCompression) -> Result<Vec<u8>, String> {
+    let (width, height) = (pixmap.width(), pixmap.height());
+    demultiply_in_place(pixmap);
+    encode_rgba_png(pixmap.data(), width, height, compression)
         .map_err(|e| format!("PNG encode failed: {e}"))
 }
 
@@ -853,12 +902,13 @@ mod tests {
         let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
         let measurer = crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = crate::layout::build_scene(&bar_spec(), &measurer);
-        let pixmap = scene_to_pixmap(&scene, 1.0, &face).unwrap();
+        let mut pixmap = scene_to_pixmap(&scene, 1.0, &face).unwrap();
 
         // tiny-skia の参照出力（premultiplied→straight を全画素 demultiply）。
+        // encode_png_fast は pixmap を in-place で straight 化するため、参照出力を先に取る。
         let expected = pixmap.encode_png().unwrap();
-        // 自前パス（a==255/a==0 は分岐コピー、部分αのみ demultiply）。Fast は tiny-skia 同設定。
-        let actual = encode_png_fast(&pixmap, PngCompression::Fast).unwrap();
+        // 自前パス（a==255/a==0 は据え置き、部分αのみ in-place demultiply）。Fast は tiny-skia 同設定。
+        let actual = encode_png_fast(&mut pixmap, PngCompression::Fast).unwrap();
 
         assert_eq!(
             actual, expected,
@@ -1074,6 +1124,22 @@ mod tests {
         let err = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT);
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("per-axis limit"));
+    }
+
+    #[test]
+    fn webp_rejects_area_over_webp_budget_within_png_limit() {
+        // 軸上限(16384)も PNG 面積上限(64M)も満たすが、WebP は pixmap に加えて
+        // エンコーダ内部のフルフレームバッファも要するため、WebP 専用の面積上限
+        // (32M)で拒否しなければならない。finding 該当ケース 16384×3906(≒64M)も
+        // 同様に拒否される。pixmap を確保する前に拒否することで OOM を防ぐ。
+        let mut spec = bar_spec();
+        spec.width = 16_001.0; // 軸 ≤ 16384
+        spec.height = 2_049.0; // 16001×2049 = 32,786,049 > 32M かつ ≤ 64M
+        let err = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT);
+        assert!(err.is_err(), "WebP 面積予算超過は Err でなければならない");
+        let msg = err.unwrap_err();
+        assert!(msg.contains("WebP output"), "msg: {msg}");
+        assert!(msg.contains("area limit"), "msg: {msg}");
     }
 
     #[test]
