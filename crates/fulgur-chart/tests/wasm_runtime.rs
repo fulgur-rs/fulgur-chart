@@ -202,8 +202,18 @@ fn stamp_webp_renders_validly_and_deterministically() {
         a, b,
         "stamp 経路 WebP が決定的でない(同一入力で byte 不一致)"
     );
-    // RIFF コンテナ + WEBP fourcc。
+    // RIFF コンテナ + WEBP fourcc は予備チェック。
     assert!(a.len() > 12, "WebP が短すぎる");
     assert_eq!(&a[0..4], b"RIFF", "WebP RIFF ヘッダ不正");
     assert_eq!(&a[8..12], b"WEBP", "WebP fourcc 不正");
+    // 実デコードまで行い、ヘッダだけ正しい壊れた WebP を弾く
+    // (png_renders_validly_on_every_platform と同様の round-trip 検証)。
+    let img = image::load_from_memory_with_format(&a, image::ImageFormat::WebP)
+        .expect("生成 WebP がデコード可能")
+        .to_rgba8();
+    assert_eq!(
+        (img.width(), img.height()),
+        (PNG_WIDTH, PNG_HEIGHT),
+        "WebP 寸法が期待値と不一致"
+    );
 }
