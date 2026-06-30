@@ -1,6 +1,15 @@
 //! line/area 用デシメーション（Chart.js options.plugins.decimation 互換）。
 //! 論理ピクセル空間の点列 (x, y, cat) を間引く。x は index 単調を前提とする。
 
+// 本モジュールの公開関数は後続グループ（Task 4 の line.rs 配線）で使用される。
+// 配線前は lib ビルドから未使用に見えるため、モジュール限定で dead_code を許可する。
+#![allow(dead_code)]
+
+use crate::ir::{Decimation, DecimationAlgorithm};
+
+/// threshold 既定 = 論理プロット幅px × この係数（Chart.js 準拠）。
+const DECIMATION_THRESHOLD_FACTOR: f64 = 4.0;
+
 /// 列ごと min/max デシメーション。floor(x) を列キーにバケツ化し、各占有列で
 /// start / min / max / end の最大4点を index 順に残す（Chart.js minMaxDecimation 準拠）。
 /// 簡略化: Chart.js は min/max を列平均x に置くが、本実装は元 x を保つ（同一列内なのでサブピクセル差）。
@@ -51,6 +60,8 @@ pub fn min_max(points: &[(f64, f64, usize)]) -> Vec<(f64, f64, usize)> {
 
 /// LTTB (Largest Triangle Three Buckets)。視覚形状を保ちつつ samples 点へ間引く。
 /// 三角形面積は論理ピクセル空間で計算するため視覚的に正しい。count <= samples なら原データ返却。
+// バケツ境界の index 計算が本質のため、index ベースのループを意図的に用いる。
+#[allow(clippy::needless_range_loop)]
 pub fn lttb(points: &[(f64, f64, usize)], samples: usize) -> Vec<(f64, f64, usize)> {
     let n = points.len();
     if samples < 3 || n <= samples {
@@ -95,6 +106,38 @@ pub fn lttb(points: &[(f64, f64, usize)], samples: usize) -> Vec<(f64, f64, usiz
     }
     out.push(points[n - 1]);
     out
+}
+
+/// 間引きを発動すべきか判定。発動するなら (algorithm, samples) を返す。
+/// enabled=false / threshold 未満なら None。判定は系列全体の点数で（Chart.js セマンティクス）。
+pub fn resolve(
+    cfg: &Decimation,
+    plot_width: f64,
+    total_points: usize,
+) -> Option<(DecimationAlgorithm, usize)> {
+    if !cfg.enabled {
+        return None;
+    }
+    let threshold = cfg
+        .threshold
+        .unwrap_or(plot_width.max(1.0) * DECIMATION_THRESHOLD_FACTOR);
+    if (total_points as f64) <= threshold {
+        return None;
+    }
+    let samples = cfg.samples.unwrap_or(plot_width.max(1.0)).max(3.0) as usize;
+    Some((cfg.algorithm, samples))
+}
+
+/// 単一セグメント（gap を含まない連続点列）を間引く。gap 分割は呼び出し側の責務。
+pub fn decimate_one(
+    seg: &[(f64, f64, usize)],
+    algo: DecimationAlgorithm,
+    samples: usize,
+) -> Vec<(f64, f64, usize)> {
+    match algo {
+        DecimationAlgorithm::MinMax => min_max(seg),
+        DecimationAlgorithm::Lttb => lttb(seg, samples),
+    }
 }
 
 #[cfg(test)]
@@ -178,5 +221,39 @@ mod tests {
             .map(|i| (i as f64, ((i * 13) % 29) as f64, i))
             .collect();
         assert_eq!(lttb(&pts, 80), lttb(&pts, 80));
+    }
+
+    #[test]
+    fn resolve_none_below_threshold() {
+        use crate::ir::Decimation;
+        let cfg = Decimation::default();
+        assert!(resolve(&cfg, 100.0, 50).is_none());
+    }
+
+    #[test]
+    fn resolve_some_above_threshold() {
+        use crate::ir::Decimation;
+        let cfg = Decimation::default();
+        assert!(resolve(&cfg, 100.0, 1000).is_some());
+    }
+
+    #[test]
+    fn resolve_none_when_disabled() {
+        use crate::ir::Decimation;
+        let cfg = Decimation {
+            enabled: false,
+            ..Decimation::default()
+        };
+        assert!(resolve(&cfg, 100.0, 1000).is_none());
+    }
+
+    #[test]
+    fn decimate_one_dispatches_min_max() {
+        use crate::ir::DecimationAlgorithm;
+        let pts: Vec<(f64, f64, usize)> = (0..1000)
+            .map(|i| (i as f64 * 0.1, (i % 7) as f64, i))
+            .collect();
+        let out = decimate_one(&pts, DecimationAlgorithm::MinMax, 100);
+        assert!(out.len() < pts.len());
     }
 }
