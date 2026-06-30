@@ -26,10 +26,9 @@ use crate::scene::{Anchor, Prim, Scene};
 
 /// PNG 出力の最大ピクセル面積(幅 × 高さ)。
 /// scale 適用後のピクセル数がこれを超えると OOM のリスクがあるため Err とする。
-/// 64M px ≒ 8000×8000 → raw RGBA で約 256 MB。
-///
-/// demultiply は pixmap バッファへ in-place で行い straight RGBA のフルフレーム
-/// コピーを確保しないため、PNG 経路のピークは pixmap 1 枚分(≈256 MB)に収まる。
+/// 64M px ≒ 8000×8000 → raw RGBA で約 256 MB。PNG は demultiply を in-place で行い
+/// 別バッファを確保しないため、ピークは pixmap 1 枚分(≈256 MB)に収まる
+/// (→ [`demultiply_in_place`])。
 const MAX_PNG_AREA_PIXELS: u64 = 64_000_000;
 
 /// WebP 出力の最大ピクセル面積(幅 × 高さ)。
@@ -43,6 +42,56 @@ const MAX_WEBP_AREA_PIXELS: u64 = MAX_PNG_AREA_PIXELS / 2;
 
 /// WebP lossless の軸ごとの上限。
 const MAX_WEBP_AXIS: u32 = 16_384;
+
+/// ラスタ出力の上限(面積・軸)とエラーメッセージ接頭辞をフォーマットごとに束ねる。
+///
+/// PNG と WebP では許容できる面積予算が異なる(WebP はエンコーダ内部バッファぶん
+/// 厳しい)。フォーマット固有の検証関数を別に持つとガードが 2 箇所に分かれてドリフト
+/// するため、上限値をデータとして [`scene_to_pixmap`] の単一ガードへ渡し、pixmap
+/// 確保前に同一ロジックで弾く。
+struct RasterLimits {
+    /// scale 適用後の最大ピクセル面積。
+    max_area: u64,
+    /// 軸ごとの最大ピクセル数。`None` なら軸チェックなし(PNG)。
+    max_axis: Option<u32>,
+    /// エラーメッセージ接頭辞("raster" / "WebP")。PNG/WebP 経路を区別する。
+    output: &'static str,
+}
+
+/// PNG 経路の上限。軸制約はなく、面積のみ [`MAX_PNG_AREA_PIXELS`] で弾く。
+const PNG_LIMITS: RasterLimits = RasterLimits {
+    max_area: MAX_PNG_AREA_PIXELS,
+    max_axis: None,
+    output: "raster",
+};
+
+/// WebP 経路の上限。軸 [`MAX_WEBP_AXIS`]・面積 [`MAX_WEBP_AREA_PIXELS`] の両方で弾く。
+const WEBP_LIMITS: RasterLimits = RasterLimits {
+    max_area: MAX_WEBP_AREA_PIXELS,
+    max_axis: Some(MAX_WEBP_AXIS),
+    output: "WebP",
+};
+
+impl RasterLimits {
+    /// scale 適用後の寸法を pixmap 確保前に検証する(軸 → 面積の順)。
+    fn check(&self, w: u32, h: u32, area: u64) -> Result<(), String> {
+        if let Some(max_axis) = self.max_axis
+            && (w > max_axis || h > max_axis)
+        {
+            return Err(format!(
+                "{} output {w}×{h} px exceeds the per-axis limit of {max_axis} px",
+                self.output
+            ));
+        }
+        if area > self.max_area {
+            return Err(format!(
+                "{} output {w}×{h} px ({area} pixels) exceeds the area limit of {} px",
+                self.output, self.max_area
+            ));
+        }
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 公開エントリポイント
@@ -128,16 +177,11 @@ pub fn render_chart_to_webp(
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
     let scene = crate::layout::build_scene(spec, &measurer);
-    // pixmap を確保する前に WebP 専用の上限(軸・面積)を検証する。エンコーダの
-    // 内部フルフレームバッファを考慮した面積上限を超える要求は、256 MB の
-    // pixmap を確保する前に拒否して OOM を防ぐ。
-    validate_webp_dimensions(&scene, scale)?;
-    let mut pixmap = scene_to_pixmap(&scene, scale, &face)?;
+    // WebP 専用の上限(軸・面積)で pixmap 確保前に弾き OOM を防ぐ(→ WEBP_LIMITS)。
+    let mut pixmap = scene_to_pixmap(&scene, scale, &face, &WEBP_LIMITS)?;
 
-    // premultiplied RGBA → straight RGBA を pixmap バッファへ in-place 変換する。
-    // tiny-skia は premultiplied で格納するが WebPEncoder は straight alpha を要求する。
-    // straight のフルフレームコピーを別途確保しないことで、ピークメモリを
-    // pixmap + エンコーダ内部バッファに抑える。出力は従来とバイト一致。
+    // pixmap バッファを in-place で straight 化する(別バッファを確保しない。
+    // WebPEncoder は premultiplied ではなく straight alpha を要求する → demultiply_in_place)。
     demultiply_in_place(&mut pixmap);
 
     let mut buf = Vec::new();
@@ -170,13 +214,15 @@ fn scene_to_pixmap(
     scene: &Scene,
     scale: f32,
     face: &ttf_parser::Face<'_>,
+    limits: &RasterLimits,
 ) -> Result<Pixmap, String> {
-    let (w, h, area, scale) = raster_dimensions(scene, scale);
-    if area > MAX_PNG_AREA_PIXELS {
-        return Err(format!(
-            "raster output {w}×{h} px ({area} pixels) exceeds the area limit of {MAX_PNG_AREA_PIXELS} px"
-        ));
-    }
+    // scale が 0 以下/非有限なら 1.0 にフォールバック。+Inf 等は u32 で飽和し、
+    // 続く limits.check が pixmap を確保する前に弾く。
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let w = (scene.width as f32 * scale).round().max(1.0) as u32;
+    let h = (scene.height as f32 * scale).round().max(1.0) as u32;
+    let area = w as u64 * h as u64;
+    limits.check(w, h, area)?;
 
     let mut pixmap = Pixmap::new(w, h)
         .ok_or_else(|| format!("Pixmap allocation failed: invalid dimensions {w}x{h}"))?;
@@ -191,52 +237,13 @@ fn scene_to_pixmap(
     Ok(pixmap)
 }
 
-/// scale 適用後の出力寸法 `(w, h, area, scale)` を求める。
-///
-/// `scale` が 0 以下または非有限の場合は 1.0 にフォールバックする。w/h は最低 1 px、
-/// `+Inf` scale 等は u32 で飽和し、後段の面積/軸チェックで弾く。PNG/WebP の上限判定が
-/// 同一の寸法計算を共有するためのヘルパ。
-fn raster_dimensions(scene: &Scene, scale: f32) -> (u32, u32, u64, f32) {
-    let scale = if scale > 0.0 { scale } else { 1.0 };
-
-    let w = (scene.width as f32 * scale).round().max(1.0) as u32;
-    let h = (scene.height as f32 * scale).round().max(1.0) as u32;
-    let area = w as u64 * h as u64;
-
-    (w, h, area, scale)
-}
-
-/// WebP 出力寸法を pixmap 確保前に検証する。
-///
-/// WebP は pixmap に加えてエンコーダ内部のフルフレームバッファも要するため、
-/// 軸上限([`MAX_WEBP_AXIS`])に加えて PNG より厳しい面積上限
-/// ([`MAX_WEBP_AREA_PIXELS`])で弾く。256 MB の pixmap を確保する前に拒否することで
-/// OOM を防ぐ。エラーメッセージは "WebP output" を含み、PNG 経路と区別できる。
-fn validate_webp_dimensions(scene: &Scene, scale: f32) -> Result<(), String> {
-    let (w, h, area, _) = raster_dimensions(scene, scale);
-
-    if w > MAX_WEBP_AXIS || h > MAX_WEBP_AXIS {
-        return Err(format!(
-            "WebP output {w}×{h} px exceeds the per-axis limit of {MAX_WEBP_AXIS} px"
-        ));
-    }
-
-    if area > MAX_WEBP_AREA_PIXELS {
-        return Err(format!(
-            "WebP output {w}×{h} px ({area} pixels) exceeds the area limit of {MAX_WEBP_AREA_PIXELS} px"
-        ));
-    }
-
-    Ok(())
-}
-
 fn scene_to_png_with_face(
     scene: &Scene,
     scale: f32,
     face: &ttf_parser::Face<'_>,
     compression: PngCompression,
 ) -> Result<Vec<u8>, String> {
-    let mut pixmap = scene_to_pixmap(scene, scale, face)?;
+    let mut pixmap = scene_to_pixmap(scene, scale, face, &PNG_LIMITS)?;
     encode_png_fast(&mut pixmap, compression)
 }
 
@@ -281,9 +288,8 @@ fn demultiply_in_place(pixmap: &mut Pixmap) {
 /// `pixmap` を in-place で straight 化するため `&mut` を取る(呼び出し元はこの直後に
 /// pixmap を捨てる前提)。これにより straight のフルフレームコピーを確保しない。
 fn encode_png_fast(pixmap: &mut Pixmap, compression: PngCompression) -> Result<Vec<u8>, String> {
-    let (width, height) = (pixmap.width(), pixmap.height());
     demultiply_in_place(pixmap);
-    encode_rgba_png(pixmap.data(), width, height, compression)
+    encode_rgba_png(pixmap.data(), pixmap.width(), pixmap.height(), compression)
         .map_err(|e| format!("PNG encode failed: {e}"))
 }
 
@@ -902,7 +908,7 @@ mod tests {
         let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
         let measurer = crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = crate::layout::build_scene(&bar_spec(), &measurer);
-        let mut pixmap = scene_to_pixmap(&scene, 1.0, &face).unwrap();
+        let mut pixmap = scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap();
 
         // tiny-skia の参照出力（premultiplied→straight を全画素 demultiply）。
         // encode_png_fast は pixmap を in-place で straight 化するため、参照出力を先に取る。
@@ -1128,10 +1134,8 @@ mod tests {
 
     #[test]
     fn webp_rejects_area_over_webp_budget_within_png_limit() {
-        // 軸上限(16384)も PNG 面積上限(64M)も満たすが、WebP は pixmap に加えて
-        // エンコーダ内部のフルフレームバッファも要するため、WebP 専用の面積上限
-        // (32M)で拒否しなければならない。finding 該当ケース 16384×3906(≒64M)も
-        // 同様に拒否される。pixmap を確保する前に拒否することで OOM を防ぐ。
+        // 軸上限(16384)も PNG 面積上限(64M)も満たすが、WebP 専用の面積上限(32M)で
+        // pixmap 確保前に拒否しなければならない(根拠は MAX_WEBP_AREA_PIXELS を参照)。
         let mut spec = bar_spec();
         spec.width = 16_001.0; // 軸 ≤ 16384
         spec.height = 2_049.0; // 16001×2049 = 32,786,049 > 32M かつ ≤ 64M
