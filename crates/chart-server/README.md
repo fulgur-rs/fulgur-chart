@@ -129,6 +129,7 @@ docker run -p 3000:3000 chart-server
 | 400 | `VALIDATE_ERROR` | Input limit validation failed |
 | 400 | `MISSING_PARAM` | Required parameter missing |
 | 404 | `NOT_FOUND` | Short link not found |
+| 415 | `UNSUPPORTED_FORMAT` | Format disabled by server policy (e.g. WebP opt-in off) |
 | 429 | — | Rate limit exceeded |
 | 503 | `BUSY` | Concurrent render limit exceeded |
 | 504 | `TIMEOUT` | Render timed out |
