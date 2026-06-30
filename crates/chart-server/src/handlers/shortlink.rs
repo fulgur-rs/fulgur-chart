@@ -1,4 +1,4 @@
-use crate::{render::OutputFormat, state::AppState};
+use crate::{render::OutputFormat, state::AppState, store::InsertError};
 use axum::{
     Json,
     extract::{Path, State},
@@ -51,6 +51,7 @@ fn compute_id(
     request_body = CreateRequest,
     responses(
         (status = 200, description = "Short link created"),
+        (status = 413, description = "Chart payload is too large for a short link"),
         (status = 503, description = "Shortlink store is full"),
     ),
     tag = "chart"
@@ -78,17 +79,26 @@ pub async fn post_create(
     );
     let url = format!("/chart/s/{id}");
 
-    if state.store.insert(id, query) {
-        (StatusCode::OK, Json(json!({"url": url}))).into_response()
-    } else {
-        (
+    match state.store.insert(id, query) {
+        Ok(()) => (StatusCode::OK, Json(json!({"url": url}))).into_response(),
+        // 単一ペイロードが per-entry 上限超過: 再送しても無駄なので 413。
+        Err(InsertError::TooLarge) => (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({
+                "error": "chart payload is too large for a short link",
+                "code": "PAYLOAD_TOO_LARGE"
+            })),
+        )
+            .into_response(),
+        // 件数 or 集約バイトが満杯: 一時的な拒否なので 503。
+        Err(InsertError::Full) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "error": "shortlink store is full",
                 "code": "STORE_FULL"
             })),
         )
-            .into_response()
+            .into_response(),
     }
 }
 
@@ -149,5 +159,112 @@ mod tests {
         let id1 = compute_id(json, "svg", Some(800), Some(600), Some("white"));
         let id2 = compute_id(json, "svg", Some(800), Some(600), Some("white"));
         assert_eq!(id1, id2);
+    }
+}
+
+/// HTTP レベルの統合テスト: `/chart/create` の handler→store マッピング
+/// （200 / 413 PAYLOAD_TOO_LARGE / 503 STORE_FULL）が配線として壊れないことを保証する。
+#[cfg(test)]
+mod http_tests {
+    use crate::config::Config;
+    use crate::render::Compression;
+    use crate::server::build_router;
+    use crate::store::ShortlinkStore;
+    use axum::{
+        Router,
+        body::Body,
+        http::{Request, StatusCode},
+        response::Response,
+    };
+    use tower::ServiceExt;
+
+    /// 指定したストア上限で `/chart/create` を叩ける router を組む。
+    /// バイト/件数上限のテストのため store だけ呼び出し側で構成する。
+    fn router_with_store(store: ShortlinkStore) -> Router {
+        let cfg = Config {
+            host: "0.0.0.0".into(),
+            port: 3000,
+            max_concurrent: 4,
+            max_body_size: 102_400,
+            render_timeout_ms: 1000,
+            shortlink_limit: 100,
+            shortlink_max_bytes: 128 * 1024 * 1024,
+            shortlink_entry_bytes: 512 * 1024,
+            cors_origins: "*".into(),
+            rate_limit: 0,
+            log_level: "info".into(),
+            png_compression: Compression::default(),
+            webp_enabled: false,
+            max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
+        };
+        build_router(&cfg, store)
+    }
+
+    fn create_request(body: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/chart/create")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    async fn status_and_body(resp: Response) -> (StatusCode, String) {
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// per-entry バイト上限を超える保存は 413 PAYLOAD_TOO_LARGE（DefaultBodyLimit ではなく
+    /// store 由来であることをコードで確認）。
+    #[tokio::test]
+    async fn create_rejects_oversized_entry_with_413() {
+        // entry_bytes=10。小さな valid body でも query が 10B を超えるため store が拒否。
+        // body は 100KiB の DefaultBodyLimit を下回るので 413 は store 由来。
+        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 10);
+        let body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
+        let resp = router_with_store(store)
+            .oneshot(create_request(body))
+            .await
+            .unwrap();
+        let (status, body) = status_and_body(resp).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "body={body}");
+        assert!(body.contains("PAYLOAD_TOO_LARGE"), "body={body}");
+    }
+
+    /// 件数上限に達したら以後の create は 503 STORE_FULL。
+    #[tokio::test]
+    async fn create_returns_503_when_store_full() {
+        let store = ShortlinkStore::new(1, 128 * 1024 * 1024, 512 * 1024);
+        let router = router_with_store(store);
+
+        let body1 = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
+        let (status1, b1) =
+            status_and_body(router.clone().oneshot(create_request(body1)).await.unwrap()).await;
+        assert_eq!(status1, StatusCode::OK, "body={b1}");
+
+        // 別スペック → 別 id → 新規挿入だが件数上限(1)に達しているため 503。
+        let body2 =
+            r#"{"chart":{"type":"line","data":{"labels":["B"],"datasets":[{"data":[2]}]}}}"#;
+        let (status2, b2) =
+            status_and_body(router.oneshot(create_request(body2)).await.unwrap()).await;
+        assert_eq!(status2, StatusCode::SERVICE_UNAVAILABLE, "body={b2}");
+        assert!(b2.contains("STORE_FULL"), "body={b2}");
+    }
+
+    /// 上限内なら 200 で /chart/s/{id} を返す。
+    #[tokio::test]
+    async fn create_succeeds_within_limits() {
+        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
+        let body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
+        let resp = router_with_store(store)
+            .oneshot(create_request(body))
+            .await
+            .unwrap();
+        let (status, body) = status_and_body(resp).await;
+        assert_eq!(status, StatusCode::OK, "body={body}");
+        assert!(body.contains("/chart/s/"), "body={body}");
     }
 }
