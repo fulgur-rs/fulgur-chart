@@ -1909,6 +1909,30 @@ mod tests {
         );
     }
 
+    /// scale != 1 (retina) でも stamp 出力が fill_path 参照の許容内であること。
+    /// stamp は `from_circle(r*scale)` を identity で焼く一方、参照は `from_circle(r)` を
+    /// `transform=scale` で変換するため、ベジェ近似の差で scale=1 より乖離し得る。device
+    /// 幾何は一致するので差は小さいはずだが、retina PNG/WebP の視覚回帰をガードする。
+    #[test]
+    fn stamp_uniform_scatter_within_tolerance_at_scale_2() {
+        let scene = scene_for(&uniform_scatter_json(200));
+        let f = face();
+        let stamp = scene_to_pixmap_with(&scene, 2.0, &f, STAMP_MIN_RUN).unwrap();
+        let reference = scene_to_pixmap_with(&scene, 2.0, &f, usize::MAX).unwrap();
+
+        assert_ne!(
+            stamp.data(),
+            reference.data(),
+            "scale=2 でも uniform scatter(200 点)は stamp path を踏むはず"
+        );
+
+        let frac = diff_fraction(&stamp, &reference);
+        assert!(
+            frac < 0.02,
+            "scale=2 の stamp 出力は参照と視覚的に同等(差分 {frac:.6} < 0.02)のはず"
+        );
+    }
+
     /// 128 点以上の line チャート(マーカー = 一様な fill-only circle)も stamp path を
     /// 踏み、参照と視覚的に同等(差分 2% 未満)。
     #[test]

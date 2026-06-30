@@ -23,8 +23,9 @@
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_test::wasm_bindgen_test;
 
+use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::chartjs;
-use fulgur_chart::raster_direct::render_chart_to_png_default;
+use fulgur_chart::raster_direct::{render_chart_to_png_default, render_chart_to_webp};
 use fulgur_chart::render::render_chart;
 
 /// 依存なしの決定論的ハッシュ(FNV-1a 64bit)。
@@ -183,4 +184,26 @@ fn stamp_png_byte_identical_to_linux_x86_native() {
         STAMP_PNG_HASH_LINUX_X86,
         "stamp PNG byte が linux-x86 native と不一致"
     );
+}
+
+/// stamp 経路は WebP でも踏まれる(`render_chart_to_webp` も `scene_to_pixmap` を共有)。
+/// WebP の stamp 出力が wasm で panic せず完走し、有効な WebP を返し、かつ同一入力で
+/// 2 回 byte 一致(決定的)であることを検証する。WebP の cross-platform byte 一致は
+/// PNG 同様 OS 跨ぎでは成立しない(別途 golden が担保)ため、ここでは同一プラットフォーム
+/// 上の決定性に絞る。
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn stamp_webp_renders_validly_and_deterministically() {
+    let spec = sample_stamp_spec();
+    let a = render_chart_to_webp(&spec, PNG_SCALE, DEFAULT_FONT).expect("stamp WebP 生成成功");
+    let b =
+        render_chart_to_webp(&spec, PNG_SCALE, DEFAULT_FONT).expect("stamp WebP 生成成功(2回目)");
+    assert_eq!(
+        a, b,
+        "stamp 経路 WebP が決定的でない(同一入力で byte 不一致)"
+    );
+    // RIFF コンテナ + WEBP fourcc。
+    assert!(a.len() > 12, "WebP が短すぎる");
+    assert_eq!(&a[0..4], b"RIFF", "WebP RIFF ヘッダ不正");
+    assert_eq!(&a[8..12], b"WEBP", "WebP fourcc 不正");
 }
