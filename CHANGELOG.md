@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- PNG: 大データのマーカー描画を高速化。同一 appearance の円マーカーが 128 点以上連続する場合、マーカーを一度だけラスタライズした stamp を各点へ手書き source-over blit で転写する（`scatter_large` 実測 ~4.9× 高速化、`line_large` もマーカー分高速化）。
+  - 出力は視覚的に同等（サブピクセル位置量子化 ≤1/8px、tiny-skia と byte 一致の合成）だが、**128 点以上のマーカー図では PNG の byte 出力が変わり得る**（出力をハッシュ/ピン留めしている場合は再生成が必要）。chart.js 互換性（意味モデル・SVG・色）と native↔wasm 決定性は維持。
+  - マーカー 128 点未満のチャート・bubble（点ごと半径）・点ごとに色が変わるチャートは従来どおり `fill_path` で描画され、出力は不変。
+
 ## [0.1.17](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.16...fulgur-chart-cli-v0.1.17) - 2026-06-28
 
 ### Other
