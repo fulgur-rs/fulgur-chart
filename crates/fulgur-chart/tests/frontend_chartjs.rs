@@ -1177,3 +1177,17 @@ fn decimation_invalid_algorithm_errors() {
         "options":{"plugins":{"decimation":{"algorithm":"bogus"}}}}"#;
     assert!(chartjs::parse(json, false).is_err());
 }
+
+#[test]
+fn strict_accepts_decimation_keys() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"decimation":{"enabled":true,"algorithm":"min-max","samples":100,"threshold":500}}}}"#;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn strict_rejects_unknown_decimation_subkey() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"decimation":{"bogus":1}}}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}

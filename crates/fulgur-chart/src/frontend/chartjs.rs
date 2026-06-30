@@ -920,13 +920,20 @@ fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
         )?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             let allowed_plugins: &[&str] = if allow_outlabels {
-                &["title", "legend", "datalabels", "outlabels"]
+                &["title", "legend", "datalabels", "outlabels", "decimation"]
             } else {
-                &["title", "legend", "datalabels"]
+                &["title", "legend", "datalabels", "decimation"]
             };
             check_object(plugins, allowed_plugins, "options.plugins")?;
             if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
                 check_object(dl, &["display"], "options.plugins.datalabels")?;
+            }
+            if let Some(dec) = plugins.get("decimation").and_then(|v| v.as_object()) {
+                check_object(
+                    dec,
+                    &["enabled", "algorithm", "samples", "threshold"],
+                    "options.plugins.decimation",
+                )?;
             }
             if allow_outlabels
                 && let Some(ol) = plugins.get("outlabels").and_then(|v| v.as_object())
