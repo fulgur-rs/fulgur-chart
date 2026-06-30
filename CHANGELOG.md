@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- line/area: 巨大データ（点数 > プロット幅×4）を既定で自動デシメーション（min-max）＋
+  マーカー抑制。Chart.js は decimation を既定無効にするため出力が異なる（意図的な互換性乖離）。
+  無効化は `options.plugins.decimation.enabled=false`、マーカー復活は `pointRadius` 明示。
+  `algorithm` は `min-max`（既定）/ `lttb`。
+
 ## [0.1.17](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.16...fulgur-chart-cli-v0.1.17) - 2026-06-28
 
 ### Other
