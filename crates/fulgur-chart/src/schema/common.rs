@@ -73,13 +73,20 @@ pub struct DataLabelsPlugin {
 pub struct DecimationPlugin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
-    /// "min-max" | "lttb"
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub algorithm: Option<String>,
+    pub algorithm: Option<DecimationAlgorithmName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub threshold: Option<f64>,
+}
+
+/// decimation algorithm 名（Chart.js: "min-max" | "lttb"）。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum DecimationAlgorithmName {
+    MinMax,
+    Lttb,
 }
 
 /// Axis options for options.scales.x / options.scales.y.

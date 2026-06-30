@@ -1209,3 +1209,14 @@ fn schema_strict_parity_decimation_line() {
     };
     assert!(decimation.is_some());
 }
+
+#[test]
+fn schema_rejects_unknown_decimation_algorithm() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"decimation":{"algorithm":"bogus"}}}}"#;
+    // strict side は不正 algorithm を拒否する。
+    assert!(chartjs::parse(json, true).is_err());
+    // schema side も enum 制約で拒否すること（value レベルの parity）。
+    let v: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert!(serde_json::from_value::<fulgur_chart::schema::ChartJsSpec>(v).is_err());
+}
