@@ -33,6 +33,10 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
         semaphore,
         render_timeout_ms: cfg.render_timeout_ms,
         png_compression: cfg.png_compression,
+        webp: crate::render::WebpPolicy {
+            enabled: cfg.webp_enabled,
+            max_area: cfg.max_webp_area,
+        },
     };
 
     // CORS
@@ -119,6 +123,8 @@ mod tests {
             rate_limit: 0,
             log_level: "info".into(),
             png_compression: Compression::default(),
+            webp_enabled: false,
+            max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
         };
         build_router(&cfg, ShortlinkStore::new(100))
     }
@@ -135,6 +141,8 @@ mod tests {
             rate_limit: 0,
             log_level: "info".into(),
             png_compression: compression,
+            webp_enabled: false,
+            max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
         };
         build_router(&cfg, ShortlinkStore::new(100))
     }
