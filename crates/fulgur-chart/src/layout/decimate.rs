@@ -1,10 +1,6 @@
 //! line/area 用デシメーション（Chart.js options.plugins.decimation 互換）。
 //! 論理ピクセル空間の点列 (x, y, cat) を間引く。x は index 単調を前提とする。
 
-// 本モジュールの公開関数は後続グループ（Task 4 の line.rs 配線）で使用される。
-// 配線前は lib ビルドから未使用に見えるため、モジュール限定で dead_code を許可する。
-#![allow(dead_code)]
-
 use crate::ir::{Decimation, DecimationAlgorithm};
 
 /// threshold 既定 = 論理プロット幅px × この係数（Chart.js 準拠）。

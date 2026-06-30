@@ -59,15 +59,17 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
         // 元インデックスが連続しない箇所でセグメントを分割する。
         // chart.js の spanGaps=false デフォルトと同じ「欠損で線が途切れる」挙動。
-        let segments: Vec<Vec<(f64, f64)>> = {
-            let mut segs: Vec<Vec<(f64, f64)>> = Vec::new();
-            let mut cur: Vec<(f64, f64)> = Vec::new();
+        // 間引きは cat を保持したまま各セグメントへ適用するため、cat を含めて分割する
+        // （間引き後に cat で再分割すると全点が gap 扱いになり線が消えるため、再分割しない）。
+        let segments: Vec<Vec<(f64, f64, usize)>> = {
+            let mut segs: Vec<Vec<(f64, f64, usize)>> = Vec::new();
+            let mut cur: Vec<(f64, f64, usize)> = Vec::new();
             let mut prev_cat: Option<usize> = None;
             for &(x, y, cat) in &valid {
                 if prev_cat.is_some_and(|pc| cat != pc + 1) && !cur.is_empty() {
                     segs.push(std::mem::take(&mut cur));
                 }
-                cur.push((x, y));
+                cur.push((x, y, cat));
                 prev_cat = Some(cat);
             }
             if !cur.is_empty() {
@@ -75,6 +77,23 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
             segs
         };
+
+        // デシメーション判定は系列全体の点数で（gap 分割の前後で一貫）。
+        // 各セグメントを個別に間引き、line はその結果から直接描く（再分割しない）。
+        let plot_width = frame.plot_right - frame.plot_left;
+        let dec = crate::layout::decimate::resolve(&spec.decimation, plot_width, valid.len());
+        let _decimated = dec.is_some();
+        let segments: Vec<Vec<(f64, f64, usize)>> = if let Some((algo, samples)) = dec {
+            segments
+                .iter()
+                .map(|s| crate::layout::decimate::decimate_one(s, algo, samples))
+                .collect()
+        } else {
+            segments
+        };
+        // area/marker/label 用に間引き後の点列へ差し替え（Chart.js dataset.data 差し替えモデル）。
+        // cat は維持するため、ラベルの ser.values[cat] 参照は引き続き正しい。
+        let valid: Vec<(f64, f64, usize)> = segments.iter().flatten().copied().collect();
 
         // area（背面）: 有効点全体でひとつの閉多角形を描く。
         if ser.area && !valid.is_empty() {
@@ -105,19 +124,20 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             });
         }
 
-        // 線: セグメントごとに描く(gap で線が途切れる)。
+        // 線: セグメントごとに描く(gap で線が途切れる)。間引き済みセグメントから直接描画する。
         for seg in &segments {
             if seg.len() < 2 {
                 continue;
             }
+            let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
             if ser.tension <= 0.0 {
                 items.push(Prim::Polyline {
-                    points: seg.clone(),
+                    points: xy,
                     stroke: ser.stroke_at(0),
                     stroke_width: ser.stroke_width,
                 });
             } else {
-                let d = catmull_rom_path(seg, ser.tension);
+                let d = catmull_rom_path(&xy, ser.tension);
                 items.push(Prim::Path {
                     d,
                     fill: None,
