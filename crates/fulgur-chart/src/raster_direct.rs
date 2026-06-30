@@ -266,15 +266,20 @@ fn demultiply_in_place(pixmap: &mut Pixmap) {
     for chunk in pixmap.data_mut().chunks_exact_mut(4) {
         let a = chunk[3];
         if a != 0 && a != 255 {
-            // pixmap data は常に有効な premultiplied(各チャンネル ≤ α)なので from_rgba は Some。
-            let px = tiny_skia::PremultipliedColorU8::from_rgba(chunk[0], chunk[1], chunk[2], a)
-                .expect("pixmap data is always valid premultiplied RGBA");
-            // tiny-skia と同一の demultiply で straight 化（丸めも一致）。
-            let c = px.demultiply();
-            chunk[0] = c.red();
-            chunk[1] = c.green();
-            chunk[2] = c.blue();
-            chunk[3] = c.alpha();
+            // pixmap data は常に有効な premultiplied(各チャンネル ≤ α)。万一不正
+            // (r/g/b > a)なら from_rgba が None を返すが、その画素は据え置く。
+            // .expect でパニックさせると本修正が塞ぐはずの DoS(プロセス終了)を逆に
+            // 招くため、防御的に if let で握りクラッシュさせない。
+            if let Some(px) =
+                tiny_skia::PremultipliedColorU8::from_rgba(chunk[0], chunk[1], chunk[2], a)
+            {
+                // tiny-skia と同一の demultiply で straight 化（丸めも一致）。
+                let c = px.demultiply();
+                chunk[0] = c.red();
+                chunk[1] = c.green();
+                chunk[2] = c.blue();
+                chunk[3] = c.alpha();
+            }
         }
     }
 }
