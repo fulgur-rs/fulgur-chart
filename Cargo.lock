@@ -920,6 +920,7 @@ dependencies = [
  "dhat",
  "image",
  "insta",
+ "png",
  "schemars",
  "serde",
  "serde_json",

@@ -153,13 +153,16 @@ async fn handle_render(
         }
     };
 
+    // 圧縮はサーバ起動時設定（per-request ではない）。
+    let compression = state.png_compression;
+
     // タイムアウト付きレンダリング
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(state.render_timeout_ms),
         tokio::task::spawn_blocking(move || {
             let _permit = permit; // クロージャ完了まで permit を保持して Semaphore を正しく解放
             let spec = render::parse_and_validate(&json, &dsl, false)?;
-            render::render(&spec, format, 1.0)
+            render::render(&spec, format, 1.0, compression)
         }),
     )
     .await;

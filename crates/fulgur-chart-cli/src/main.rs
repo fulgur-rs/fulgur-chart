@@ -740,6 +740,7 @@ fn render_one(
         }
         Format::Png => {
             // PNG は SVG 文字列を経由しない直接描画（メモリ効率・速度向上）。
+            // 圧縮はライブラリ既定（Balanced: 高速のままサイズを大幅削減、ロスレス）。
             let fb = font_bytes
                 .as_deref()
                 .unwrap_or(fulgur_chart::font::DEFAULT_FONT);
