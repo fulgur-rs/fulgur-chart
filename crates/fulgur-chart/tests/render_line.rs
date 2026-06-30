@@ -182,3 +182,70 @@ fn small_line_markers_unchanged() {
         3
     );
 }
+
+/// scene 内の各 Polyline の点列を順に返す（セグメント数・各セグメント点数・座標有限性の検証用）。
+fn polylines(spec: &fulgur_chart::ir::ChartSpec) -> Vec<Vec<(f64, f64)>> {
+    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let scene = line::build(spec, &m);
+    scene
+        .items
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Polyline { points, .. } => Some(points.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn gapped_large_line_keeps_segments_and_decimates() {
+    // segment-first 設計の回帰テスト: gap のある巨大系列が、間引き後も
+    //   (a) セグメント融合せず ≥2 本の Polyline を保ち、
+    //   (b) 間引きが効いて総点数が大幅に減り、
+    //   (c) どのセグメントも崩壊・消失しない
+    // ことを保証する。素朴な「間引き後に cat で再分割」実装ではここで全点が gap 扱いになり
+    // 各点が長さ1セグメントへ割れて Polyline が 0 本になる（(a) が FAIL する）。
+    //
+    // JSON の data は untagged `Nums(Vec<f64>)` で非有限値を表現できないため（null も 1e400 も
+    // parse エラー）、parse 後に中央へ NaN を注入して gap を作る。これは line の gap 分割が
+    // 認識する表現そのもの（`valid` フィルタが非有限値を落とし cat 不連続を生む）。
+    let n = 8000;
+    let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
+    let data: Vec<String> = (0..n).map(|i| format!("{}", (i * 37) % 101)).collect();
+    let json = format!(
+        r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"data":[{}]}}]}}}}"#,
+        labels.join(","),
+        data.join(",")
+    );
+    let mut spec = chartjs::parse(&json, false).unwrap();
+    spec.series[0].values[n / 2] = f64::NAN; // 中央に gap を作る
+
+    let polys = polylines(&spec);
+    let counts: Vec<usize> = polys.iter().map(|p| p.len()).collect();
+
+    // (a) gap が保たれ 2 セグメント以上（gap をまたいで融合していない／線が消えていない）。
+    assert!(
+        counts.len() >= 2,
+        "gap must yield >=2 polylines, got {}: {counts:?}",
+        counts.len()
+    );
+    // (c) どのセグメントも 2 点以上（崩壊・消失していない）。
+    assert!(
+        counts.iter().all(|&c| c >= 2),
+        "every polyline must have >=2 points: {counts:?}"
+    );
+    // (b) 間引きが効いて総点数が大幅に減る（gap で 1 点落ちた n-1 ではなく、明確に半分未満）。
+    let total: usize = counts.iter().sum();
+    assert!(
+        total < n / 2,
+        "decimation must substantially reduce total points: {total} vs n={n}"
+    );
+    // 念のため: y スケールが NaN 汚染されておらず、出力座標がすべて有限。
+    assert!(
+        polys
+            .iter()
+            .flatten()
+            .all(|&(x, y)| x.is_finite() && y.is_finite()),
+        "all emitted polyline points must be finite"
+    );
+}

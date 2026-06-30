@@ -86,6 +86,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let segments: Vec<Vec<(f64, f64, usize)>> = if let Some((algo, samples)) = dec {
             segments
                 .iter()
+                // samples はセグメント単位で適用される。LTTB の場合、マルチセグメント系列では
+                // 最大 samples × セグメント数 点になりうる（min-max は占有ピクセル列数で自己制限）。
                 .map(|s| crate::layout::decimate::decimate_one(s, algo, samples))
                 .collect()
         } else {
