@@ -11,7 +11,11 @@ use sha2::{Digest, Sha256};
 pub fn etag_value(spec_json: &str, format: OutputFormat) -> String {
     // format.as_str() を使い、各フォーマット（"svg"/"png"/"webp"/"data-uri"）を区別する。
     // DataUri と Svg で同一 ETag になると、片方のキャッシュで誤った 304 が返る。
-    // 圧縮プリセットはサーバ全体の起動時設定で per-request に変わらないため鍵に含めない。
+    //
+    // 圧縮プリセット（FULGUR_PNG_COMPRESSION）は鍵に含めない。ETag は「論理的な
+    // 表現」(spec + format)を識別するもので、全プリセットはピクセル同一(ロスレス)。
+    // プリセット変更後に stale な 304 で古いバイトを返しても視覚的には正しく、
+    // 低カーディナリティ値を鍵に混ぜて validator を複雑化する利点がない。
     let input = format!("{spec_json}\x00{}", format.as_str());
     let hash = Sha256::digest(input.as_bytes());
     let short = hex::encode(&hash[..8]);
