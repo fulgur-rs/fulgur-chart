@@ -45,8 +45,10 @@ impl OutputFormat {
 ///
 /// `fast` は最速・最大サイズ、`high` は最小サイズ・最も遅い。
 /// 既定は `balanced`（高速のままサイズを大幅削減）。
-#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Deserialize, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
+///
+/// クライアントが per-request で選ぶ値ではなく、**サーバ起動時オプション**
+/// (`--png-compression` / `FULGUR_PNG_COMPRESSION`) で運用者が一度決める設定。
+#[derive(Debug, Clone, Copy, Default, PartialEq, clap::ValueEnum)]
 pub enum Compression {
     Fast,
     #[default]
@@ -55,14 +57,6 @@ pub enum Compression {
 }
 
 impl Compression {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Fast => "fast",
-            Self::Balanced => "balanced",
-            Self::High => "high",
-        }
-    }
-
     fn to_png(self) -> PngCompression {
         match self {
             Self::Fast => PngCompression::Fast,

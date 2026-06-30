@@ -1,5 +1,7 @@
 use clap::Parser;
 
+use crate::render::Compression;
+
 #[derive(Parser, Debug, Clone)]
 #[command(name = "chart-server", about = "fulgur-chart HTTP rendering server")]
 pub struct Config {
@@ -30,6 +32,16 @@ pub struct Config {
 
     #[arg(long, env = "FULGUR_LOG_LEVEL", default_value = "info")]
     pub log_level: String,
+
+    /// PNG 圧縮プリセット（PNG 出力のみ。`fast`=最速/最大, `balanced`=既定, `high`=最小/最遅）。
+    /// クライアント指定ではなくサーバ全体に適用する起動時設定。
+    #[arg(
+        long,
+        env = "FULGUR_PNG_COMPRESSION",
+        value_enum,
+        default_value = "balanced"
+    )]
+    pub png_compression: Compression,
 }
 
 fn num_cpus() -> usize {

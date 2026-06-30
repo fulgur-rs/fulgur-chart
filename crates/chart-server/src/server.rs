@@ -32,6 +32,7 @@ pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
         store,
         semaphore,
         render_timeout_ms: cfg.render_timeout_ms,
+        png_compression: cfg.png_compression,
     };
 
     // CORS
@@ -104,6 +105,8 @@ mod tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
+    use crate::render::Compression;
+
     fn restricted_cors_router() -> Router {
         let cfg = Config {
             host: "0.0.0.0".into(),
@@ -115,11 +118,12 @@ mod tests {
             cors_origins: "https://example.com".into(),
             rate_limit: 0,
             log_level: "info".into(),
+            png_compression: Compression::default(),
         };
         build_router(&cfg, ShortlinkStore::new(100))
     }
 
-    fn test_router() -> Router {
+    fn router_with_compression(compression: Compression) -> Router {
         let cfg = Config {
             host: "0.0.0.0".into(),
             port: 3000,
@@ -130,15 +134,16 @@ mod tests {
             cors_origins: "*".into(),
             rate_limit: 0,
             log_level: "info".into(),
+            png_compression: compression,
         };
         build_router(&cfg, ShortlinkStore::new(100))
     }
 
-    async fn post_png_len(compression: &str) -> usize {
-        let body = format!(
-            r#"{{"chart":{{"type":"bar","data":{{"labels":["A","B","C","D"],"datasets":[{{"data":[12,19,3,5]}}]}}}},"format":"png","compression":"{compression}"}}"#
-        );
-        let resp = test_router()
+    /// 指定した起動時設定 `png_compression` の下で PNG をレンダーし、バイト長を返す。
+    /// 圧縮は per-request ではなくサーバ設定なので、リクエスト body には compression を付けない。
+    async fn png_len_for_config(compression: Compression) -> usize {
+        let body = r#"{"chart":{"type":"bar","data":{"labels":["A","B","C","D"],"datasets":[{"data":[12,19,3,5]}]}},"format":"png"}"#;
+        let resp = router_with_compression(compression)
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -149,11 +154,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            resp.status(),
-            200,
-            "compression={compression} は 200 を返すべき"
-        );
+        assert_eq!(resp.status(), 200, "{compression:?} は 200 を返すべき");
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -161,45 +162,26 @@ mod tests {
         bytes.len()
     }
 
-    /// compression パラメータがエンドツーエンドで効くこと。
-    /// high は fast より小さい PNG を返さなければならない(本機能の目的)。
+    /// 起動時設定 png_compression がエンドツーエンドで効くこと。
+    /// High は Fast より小さい PNG を返さなければならない(本機能の目的)。
     #[tokio::test]
-    async fn compression_high_yields_smaller_png_than_fast() {
-        let fast = post_png_len("fast").await;
-        let high = post_png_len("high").await;
+    async fn compression_config_high_yields_smaller_png_than_fast() {
+        let fast = png_len_for_config(Compression::Fast).await;
+        let high = png_len_for_config(Compression::High).await;
         assert!(
             high < fast,
-            "compression=high ({high}B) は fast ({fast}B) より小さい PNG を返すべき"
+            "High ({high}B) は Fast ({fast}B) より小さい PNG を返すべき"
         );
     }
 
-    /// compression 未指定時は既定の balanced が使われ(fast より小さい)、
-    /// 不正値はパースエラー(400)になること。
+    /// 既定の起動時設定は Balanced であり、Fast 以下のサイズになること。
+    /// (`#[serde(default)]` ではなく clap の既定値 + enum 既定が真実源)
     #[tokio::test]
-    async fn compression_default_is_balanced_and_invalid_is_rejected() {
-        let fast = post_png_len("fast").await;
-        let default = post_png_len("balanced").await;
-        assert!(default <= fast, "既定(balanced) は fast 以下のサイズ");
-
-        // 不正な compression 値は 400(deserialize 失敗)。
-        let resp = test_router()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/chart")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}},"format":"png","compression":"bogus"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            resp.status().is_client_error(),
-            "不正な compression はクライアントエラー(4xx)を返すべき: {}",
-            resp.status()
-        );
+    async fn default_compression_config_is_balanced() {
+        assert_eq!(Compression::default(), Compression::Balanced);
+        let fast = png_len_for_config(Compression::Fast).await;
+        let default = png_len_for_config(Compression::default()).await;
+        assert!(default <= fast, "既定(Balanced) は Fast 以下のサイズ");
     }
 
     #[tokio::test]

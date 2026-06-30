@@ -43,7 +43,6 @@ curl -X POST http://localhost:3000/chart \
 | `w` | integer | — | Width (px) |
 | `h` | integer | — | Height (px) |
 | `bkg` | string | transparent | Background color |
-| `compression` | `fast` \| `balanced` \| `high` | `balanced` | PNG size/speed tradeoff (PNG only) |
 
 ### POST /chart
 
@@ -54,7 +53,6 @@ curl -X POST http://localhost:3000/chart \
   "width": 800,
   "height": 400,
   "backgroundColor": "white",
-  "compression": "balanced",
   "dsl": "chartjs"
 }
 ```
@@ -70,8 +68,10 @@ curl -X POST http://localhost:3000/chart \
 
 ## PNG compression
 
-The `compression` parameter trades encode speed for file size (PNG only; WebP is
-lossless and SVG is text). All presets produce pixel-identical, deterministic output.
+PNG encode trades speed for file size. This is a **server-wide startup setting**
+(`FULGUR_PNG_COMPRESSION` / `--png-compression`), not a per-request parameter —
+the operator picks one preset for the deployment. WebP is lossless and SVG is text,
+so the setting only affects PNG. All presets produce pixel-identical, deterministic output.
 
 | Preset | Filter / deflate | Speed | Size |
 |--------|------------------|-------|------|
@@ -95,6 +95,7 @@ size further at a higher encode cost. Pixels are identical across all presets.
 | `FULGUR_SHORTLINK_LIMIT` | `10000` | Maximum number of stored short links |
 | `FULGUR_CORS_ORIGINS` | `*` | Allowed CORS origins (comma-separated) |
 | `FULGUR_RATE_LIMIT` | `0` | Rate limit (requests/minute/IP). `0` disables rate limiting (default) |
+| `FULGUR_PNG_COMPRESSION` | `balanced` | PNG compression preset: `fast` / `balanced` / `high` (PNG only) |
 
 ## Docker
 

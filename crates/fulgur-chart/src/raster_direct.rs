@@ -215,10 +215,13 @@ fn premultiplied_to_straight_rgba(pixmap: &Pixmap) -> Vec<u8> {
         let a = px.alpha();
         if a != 0 && a != 255 {
             // 部分αのみ tiny-skia と同一の demultiply で straight 化（丸めも一致）。
+            // α(=c.alpha()) はコピー済み値と同一だが、4 バイト連続で書くことで
+            // コンパイラが単一の 32-bit ストアにまとめやすくする。
             let c = px.demultiply();
             chunk[0] = c.red();
             chunk[1] = c.green();
             chunk[2] = c.blue();
+            chunk[3] = c.alpha();
         }
     }
     out

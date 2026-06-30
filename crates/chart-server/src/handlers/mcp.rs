@@ -282,13 +282,14 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         .try_acquire_owned()
         .map_err(|_| (-32000, "Server busy".to_string()))?;
 
+    let compression = state.png_compression;
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(state.render_timeout_ms),
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let spec = render::parse_and_validate(&json_str, "chartjs", false)?;
-            // MCP は圧縮プリセット未指定のため chart-server の既定(Balanced)を用いる。
-            render::render(&spec, format, 1.0, render::Compression::default())
+            // 圧縮はサーバ起動時設定を用いる（MCP も per-request 指定なし）。
+            render::render(&spec, format, 1.0, compression)
         }),
     )
     .await;
@@ -352,6 +353,7 @@ mod tests {
             store: ShortlinkStore::new(100),
             semaphore: Arc::new(Semaphore::new(1)),
             render_timeout_ms: 1000,
+            png_compression: crate::render::Compression::default(),
         };
         axum::Router::new()
             .route("/mcp", post(mcp_handler))

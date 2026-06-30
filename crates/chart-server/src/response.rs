@@ -1,4 +1,4 @@
-use crate::render::{Compression, OutputFormat, RenderError};
+use crate::render::{OutputFormat, RenderError};
 use axum::{
     Json,
     http::{HeaderMap, HeaderName, StatusCode, header},
@@ -8,15 +8,11 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-pub fn etag_value(spec_json: &str, format: OutputFormat, compression: Compression) -> String {
-    // format と compression を鍵に含める。圧縮プリセットが異なると PNG バイトも
-    // 異なるため、これを区別しないと別プリセットのキャッシュで誤った 304 が返る。
-    // (compression は PNG のみ有効だが、鍵に常に含めても衝突は起きない)
-    let input = format!(
-        "{spec_json}\x00{}\x00{}",
-        format.as_str(),
-        compression.as_str()
-    );
+pub fn etag_value(spec_json: &str, format: OutputFormat) -> String {
+    // format.as_str() を使い、各フォーマット（"svg"/"png"/"webp"/"data-uri"）を区別する。
+    // DataUri と Svg で同一 ETag になると、片方のキャッシュで誤った 304 が返る。
+    // 圧縮プリセットはサーバ全体の起動時設定で per-request に変わらないため鍵に含めない。
+    let input = format!("{spec_json}\x00{}", format.as_str());
     let hash = Sha256::digest(input.as_bytes());
     let short = hex::encode(&hash[..8]);
     format!("\"{short}-v{ver}\"", ver = env!("CARGO_PKG_VERSION"))
