@@ -313,6 +313,81 @@ fn uniform_circle_run_len(items: &[Prim], start: usize) -> usize {
     n
 }
 
+const STAMP_B: u32 = 8; // サブピクセル分解能 (8x8=64 stamps/key)
+
+/// stamp キャッシュのキー。マーカーの見た目(半径・塗り・線色・線幅)を表す。
+// 後続タスクで scene_to_pixmap に配線
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq)]
+struct MarkerKey {
+    r: f64,
+    fill: Color,
+    stroke: Color,
+    stroke_width: f64,
+}
+
+/// 1 つの `MarkerKey` に対する B×B 個のサブピクセル stamp 集合。
+// 後続タスクで scene_to_pixmap に配線
+#[allow(dead_code)]
+struct StampSet {
+    stamps: Vec<Pixmap>,
+    pad: i32,
+    b: u32,
+}
+
+/// key のマーカーを device 空間で B×B サブピクセル位置に焼いた stamp 集合を作る。
+/// 各 stamp は per-point 描画(`Prim::Circle` arm)と同一エンジン:
+/// `fill_path`(+ `stroke_width > 0` なら `stroke_path`)で焼く。
+// 後続タスクで scene_to_pixmap に配線
+#[allow(dead_code)]
+fn build_stamp_set(key: &MarkerKey, scale: f32) -> StampSet {
+    let r_dev = key.r as f32 * scale;
+    let stroke_dev = key.stroke_width as f32 * scale;
+    // stroke は r+sw/2 まで張り出す + AA/サブピクセル余白。
+    let pad = (r_dev + stroke_dev / 2.0).ceil() as i32 + 2;
+    let size = (2 * pad + 2) as u32;
+    let anchor = pad as f32;
+
+    let mut stamps = Vec::with_capacity((STAMP_B * STAMP_B) as usize);
+    for sy in 0..STAMP_B {
+        for sx in 0..STAMP_B {
+            // pad >= 2 のため size >= 6 で Pixmap::new は常に Some。
+            let mut pm = Pixmap::new(size, size).expect("stamp pixmap サイズは正");
+            let cx = anchor + sx as f32 / STAMP_B as f32;
+            let cy = anchor + sy as f32 / STAMP_B as f32;
+            // per-point の Prim::Circle arm と同一に処理する。from_circle は
+            // r_dev<0 でのみ None(負半径=不正→何も焼かず完全透明)。r_dev==0 は
+            // 退化円の Some(fill は面積0で無描画、stroke は微小点) を返す。
+            // None のとき stamp は完全透明のまま push する(.expect() の panic 回避)。
+            if let Some(path) = PathBuilder::from_circle(cx, cy, r_dev) {
+                pm.fill_path(
+                    &path,
+                    &solid_paint(key.fill),
+                    FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+                if key.stroke_width > 0.0 {
+                    pm.stroke_path(
+                        &path,
+                        &solid_paint(key.stroke),
+                        &make_stroke(key.stroke_width * scale as f64),
+                        Transform::identity(),
+                        None,
+                    );
+                }
+            }
+            stamps.push(pm);
+        }
+    }
+
+    StampSet {
+        stamps,
+        pad,
+        b: STAMP_B,
+    }
+}
+
 fn render_prim(
     pixmap: &mut Pixmap,
     prim: &Prim,
@@ -1268,5 +1343,180 @@ mod tests {
             circle(10.0, 0.0, 3.0, RED),
         ];
         assert_eq!(uniform_circle_run_len(&items, 0), 0);
+    }
+
+    // --- build_stamp_set (B=8 サブピクセル stamp ビルダ) -----------------------
+
+    /// 非透明(alpha>0)画素数を数える。RGBA8 の 4 バイト目が alpha。
+    fn nonzero_alpha_count(pm: &Pixmap) -> usize {
+        pm.data().chunks_exact(4).filter(|px| px[3] > 0).count()
+    }
+
+    fn stamp_key(r: f64, stroke_width: f64) -> MarkerKey {
+        MarkerKey {
+            r,
+            fill: RED,
+            stroke: BLUE,
+            stroke_width,
+        }
+    }
+
+    #[test]
+    fn build_stamp_set_count_and_size() {
+        let key = stamp_key(3.0, 1.0);
+        let scale = 1.0_f32;
+        let set = build_stamp_set(&key, scale);
+
+        // B×B = 64 stamps。
+        assert_eq!(set.b, STAMP_B);
+        assert_eq!(set.stamps.len(), (STAMP_B * STAMP_B) as usize);
+
+        // pad / size の期待値を仕様どおり再計算。
+        let r_dev = key.r as f32 * scale;
+        let stroke_dev = key.stroke_width as f32 * scale;
+        let expected_pad = (r_dev + stroke_dev / 2.0).ceil() as i32 + 2;
+        let expected_size = (2 * expected_pad + 2) as u32;
+        assert_eq!(set.pad, expected_pad);
+
+        for pm in &set.stamps {
+            assert_eq!(pm.width(), expected_size);
+            assert_eq!(pm.height(), expected_size);
+        }
+    }
+
+    /// (sx=0,sy=0) stamp は、同一エンジンで pad 位置に手で焼いた Pixmap と
+    /// バイト一致する。pad/center/順序(fill→stroke)が正しいことを保証する。
+    fn assert_zero_offset_byte_identity(key: &MarkerKey, scale: f32) {
+        let set = build_stamp_set(key, scale);
+        let zero = &set.stamps[0]; // sy*B + sx = 0
+
+        let r_dev = key.r as f32 * scale;
+        let stroke_dev = key.stroke_width as f32 * scale;
+        let pad = (r_dev + stroke_dev / 2.0).ceil() as i32 + 2;
+        let size = (2 * pad + 2) as u32;
+        let anchor = pad as f32;
+
+        let mut expected = Pixmap::new(size, size).unwrap();
+        let path = PathBuilder::from_circle(anchor, anchor, r_dev).unwrap();
+        expected.fill_path(
+            &path,
+            &solid_paint(key.fill),
+            FillRule::Winding,
+            Transform::identity(),
+            None,
+        );
+        if key.stroke_width > 0.0 {
+            expected.stroke_path(
+                &path,
+                &solid_paint(key.stroke),
+                &make_stroke(key.stroke_width * scale as f64),
+                Transform::identity(),
+                None,
+            );
+        }
+
+        assert_eq!(zero.data(), expected.data());
+    }
+
+    #[test]
+    fn build_stamp_set_zero_offset_byte_identical_with_stroke() {
+        assert_zero_offset_byte_identity(&stamp_key(3.0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn build_stamp_set_zero_offset_byte_identical_no_stroke() {
+        assert_zero_offset_byte_identity(&stamp_key(3.0, 0.0), 1.0);
+    }
+
+    #[test]
+    fn build_stamp_set_bakes_stroke() {
+        // stroke 色(BLUE, 不透明) != fill。stroke 有りは無しより非透明画素が多い。
+        let with_stroke = build_stamp_set(&stamp_key(3.0, 1.0), 1.0);
+        let without_stroke = build_stamp_set(&stamp_key(3.0, 0.0), 1.0);
+
+        let with_count: usize = nonzero_alpha_count(&with_stroke.stamps[0]);
+        let without_count: usize = nonzero_alpha_count(&without_stroke.stamps[0]);
+
+        assert!(
+            with_count > without_count,
+            "stroke 有り({with_count}) は無し({without_count}) より非透明画素が多いはず"
+        );
+    }
+
+    #[test]
+    fn build_stamp_set_subpixel_stamps_differ() {
+        // (sx=0,sy=0)=index 0 と (sx=7,sy=0)=index 7 はサブピクセル位置が違うため
+        // AA 結果(.data())が異なる。
+        let set = build_stamp_set(&stamp_key(3.0, 1.0), 1.0);
+        let idx_00 = 0; // sy*B + sx = 0
+        let idx_70 = 7; // sy=0, sx=7 → 0*B + 7
+        assert_ne!(set.stamps[idx_00].data(), set.stamps[idx_70].data());
+    }
+
+    #[test]
+    fn build_stamp_set_zero_radius_no_panic() {
+        // .expect() を置き換えた fix の確認。tiny-skia の from_circle は
+        // r<0 で None(描画なし)、r==0 では Some(退化パス) を返すため、
+        // r=0 では fill は面積0で何も描かないが stroke は微小な点を焼く
+        // (per-point Circle arm と同一挙動)。よって「panic しない」ことと
+        // 「stamp が per-point 描画とバイト一致する」ことを確認する。
+        let key = stamp_key(0.0, 1.0); // r=0, stroke_width=1.0
+        let set = build_stamp_set(&key, 1.0);
+        assert_eq!(set.stamps.len(), (STAMP_B * STAMP_B) as usize);
+
+        // sx=sy=0 stamp は per-point の Prim::Circle arm 出力とバイト一致。
+        // r=0 でも from_circle=Some なので退化円が焼かれる(stroke の微小点)。
+        let pad = set.pad;
+        let size = set.stamps[0].width();
+        let anchor = pad as f32;
+        let mut expected = Pixmap::new(size, size).unwrap();
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let mut cache = HashMap::new();
+        render_prim(
+            &mut expected,
+            &Prim::Circle {
+                cx: anchor as f64,
+                cy: anchor as f64,
+                r: 0.0,
+                fill: key.fill,
+                stroke: key.stroke,
+                stroke_width: key.stroke_width,
+            },
+            Transform::identity(),
+            &face,
+            &mut cache,
+        );
+        assert_eq!(set.stamps[0].data(), expected.data());
+
+        // r<0 は from_circle=None → 完全透明(描画なし)。
+        let neg = build_stamp_set(&stamp_key(-1.0, 1.0), 1.0);
+        assert_eq!(neg.stamps.len(), (STAMP_B * STAMP_B) as usize);
+        for pm in &neg.stamps {
+            assert_eq!(nonzero_alpha_count(pm), 0, "r<0 stamp は完全透明のはず");
+        }
+    }
+
+    #[test]
+    fn build_stamp_set_scale_two() {
+        // scale=2 で半径・線幅が device 空間で 2 倍になり pad/size に反映される。
+        // r_dev=6, stroke_dev=2 → pad = ceil(6 + 2/2) + 2 = ceil(7) + 2 = 9,
+        // size = 2*9 + 2 = 20。radius/stroke への * scale 取りこぼしを検出する。
+        let set = build_stamp_set(&stamp_key(3.0, 1.0), 2.0);
+        assert_eq!(set.stamps.len(), (STAMP_B * STAMP_B) as usize);
+        assert_eq!(set.pad, 9);
+        assert_eq!(set.stamps[0].width(), 20);
+        assert_eq!(set.stamps[0].height(), 20);
+        // サブピクセル stamp は scale 適用後も互いに異なる。
+        assert_ne!(set.stamps[0].data(), set.stamps[7].data());
+    }
+
+    #[test]
+    fn build_stamp_set_pad_size_literal() {
+        // pad/size の式をリテラルでピン留めする(既存テストは式を再計算するため
+        // 式変更に追従してしまう)。r=3, stroke=1, scale=1 →
+        // pad = ceil(3 + 1/2) + 2 = ceil(3.5) + 2 = 4 + 2 = 6, size = 2*6 + 2 = 14。
+        let set = build_stamp_set(&stamp_key(3.0, 1.0), 1.0);
+        assert_eq!(set.pad, 6);
+        assert_eq!(set.stamps[0].width(), 14);
     }
 }
