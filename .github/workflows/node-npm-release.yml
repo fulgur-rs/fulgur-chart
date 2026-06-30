@@ -113,7 +113,7 @@ jobs:
       run:
         working-directory: crates/bindings/node
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
@@ -128,7 +128,7 @@ jobs:
           workspaces: crates/bindings/node
           key: ${{ matrix.settings.target }}
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "24"
 
@@ -161,7 +161,7 @@ jobs:
         if: '!matrix.settings.use-cross'
         run: npx napi build --platform --release --strip --target ${{ matrix.settings.target }}
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bindings-${{ matrix.settings.target }}
           path: crates/bindings/node/*.node
@@ -177,7 +177,7 @@ jobs:
       run:
         working-directory: crates/bindings/node
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
@@ -205,7 +205,7 @@ jobs:
         run: npm install
 
       - name: Download all .node artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: bindings-*
           path: crates/bindings/node/artifacts/
@@ -257,7 +257,7 @@ jobs:
           npm pack --ignore-scripts --pack-destination packed/ .
 
       - name: Upload npm tarballs
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: npm-tarballs
           path: crates/bindings/node/packed/*.tgz
@@ -303,7 +303,7 @@ jobs:
           fi
 
       - name: Download npm tarballs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npm-tarballs
           path: npm-tarballs
@@ -327,7 +327,7 @@ jobs:
       run:
         working-directory: crates/bindings/wasm
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
@@ -434,7 +434,7 @@ jobs:
           tar tzf packed/*.tgz | grep -q 'package/pkg/fulgur_chart_wasm_bg.wasm' \
             || { echo "ERROR: packed tarball is missing pkg/fulgur_chart_wasm_bg.wasm" >&2; exit 1; }
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: chart-wasm-tarball
           path: crates/bindings/wasm/packed/*.tgz
@@ -482,7 +482,7 @@ jobs:
           fi
 
       - name: Download prebuilt WASM tarball
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: chart-wasm-tarball
           path: wasm-tarball

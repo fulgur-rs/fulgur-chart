@@ -123,7 +123,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             os: windows-latest
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
@@ -166,7 +166,7 @@ jobs:
           fi
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: chart-cli-${{ matrix.platform }}
           path: target/${{ matrix.target }}/release/${{ steps.binary.outputs.name }}
@@ -185,7 +185,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.validate-release-tag.outputs.sha }}
           persist-credentials: false
@@ -212,7 +212,7 @@ jobs:
         run: echo "VERSION=$VALIDATED_VERSION" >> "$GITHUB_ENV"
 
       - name: Download all binary artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: chart-cli-*
           path: artifacts/
