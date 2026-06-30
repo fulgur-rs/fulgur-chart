@@ -70,8 +70,9 @@ pub fn lttb(points: &[(f64, f64, usize)], samples: usize) -> Vec<(f64, f64, usiz
     let mut out: Vec<(f64, f64, usize)> = Vec::with_capacity(samples);
     let bucket_width = (n - 2) as f64 / (samples - 2) as f64;
     out.push(points[0]);
-    let mut a = 0usize;
+    let mut a = 0usize; // 直前に採用した点の index
     for i in 0..(samples - 2) {
+        // 次バケツの平均点（三角形の第3点）
         let mut avg_start = ((i + 1) as f64 * bucket_width).floor() as usize + 1;
         let mut avg_end = ((i + 2) as f64 * bucket_width).floor() as usize + 1;
         avg_start = avg_start.min(n - 1);
@@ -88,6 +89,7 @@ pub fn lttb(points: &[(f64, f64, usize)], samples: usize) -> Vec<(f64, f64, usiz
         let cnt = (avg_end - avg_start) as f64;
         avg_x /= cnt;
         avg_y /= cnt;
+        // 候補バケツ
         let range_start = (i as f64 * bucket_width).floor() as usize + 1;
         let range_end = ((i + 1) as f64 * bucket_width).floor() as usize + 1;
         let (ax, ay) = (points[a].0, points[a].1);
@@ -232,9 +234,59 @@ mod tests {
 
     #[test]
     fn resolve_some_above_threshold() {
-        use crate::ir::Decimation;
+        use crate::ir::{Decimation, DecimationAlgorithm};
         let cfg = Decimation::default();
-        assert!(resolve(&cfg, 100.0, 1000).is_some());
+        // 既定: algorithm=MinMax, samples=floor(plot_width)=100, threshold=plot_width*4=400。
+        assert_eq!(
+            resolve(&cfg, 100.0, 1000),
+            Some((DecimationAlgorithm::MinMax, 100))
+        );
+    }
+
+    #[test]
+    fn resolve_uses_explicit_samples() {
+        use crate::ir::Decimation;
+        let cfg = Decimation {
+            samples: Some(50.0),
+            ..Decimation::default()
+        };
+        let (_, samples) = resolve(&cfg, 100.0, 1000).unwrap();
+        assert_eq!(samples, 50);
+    }
+
+    #[test]
+    fn resolve_floors_samples_to_three() {
+        use crate::ir::Decimation;
+        let cfg = Decimation {
+            samples: Some(1.0),
+            ..Decimation::default()
+        };
+        // .max(3.0) で最低3に切り上げられる。
+        let (_, samples) = resolve(&cfg, 100.0, 1000).unwrap();
+        assert_eq!(samples, 3);
+    }
+
+    #[test]
+    fn resolve_threshold_boundary_is_exclusive() {
+        use crate::ir::Decimation;
+        let cfg = Decimation {
+            threshold: Some(1000.0),
+            ..Decimation::default()
+        };
+        // total == threshold は発動しない（<= 判定）。total > threshold で発動。
+        assert!(resolve(&cfg, 100.0, 1000).is_none());
+        assert!(resolve(&cfg, 100.0, 1001).is_some());
+    }
+
+    #[test]
+    fn resolve_returns_configured_algorithm() {
+        use crate::ir::{Decimation, DecimationAlgorithm};
+        let cfg = Decimation {
+            algorithm: DecimationAlgorithm::Lttb,
+            ..Decimation::default()
+        };
+        let (algo, _) = resolve(&cfg, 100.0, 1000).unwrap();
+        assert_eq!(algo, DecimationAlgorithm::Lttb);
     }
 
     #[test]
@@ -255,5 +307,15 @@ mod tests {
             .collect();
         let out = decimate_one(&pts, DecimationAlgorithm::MinMax, 100);
         assert!(out.len() < pts.len());
+    }
+
+    #[test]
+    fn decimate_one_dispatches_lttb() {
+        use crate::ir::DecimationAlgorithm;
+        let pts: Vec<(f64, f64, usize)> = (0..1000)
+            .map(|i| (i as f64, ((i * 31) % 97) as f64, i))
+            .collect();
+        let out = decimate_one(&pts, DecimationAlgorithm::Lttb, 100);
+        assert_eq!(out.len(), 100);
     }
 }
