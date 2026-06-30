@@ -49,6 +49,54 @@ pub fn min_max(points: &[(f64, f64, usize)]) -> Vec<(f64, f64, usize)> {
     out
 }
 
+/// LTTB (Largest Triangle Three Buckets)。視覚形状を保ちつつ samples 点へ間引く。
+/// 三角形面積は論理ピクセル空間で計算するため視覚的に正しい。count <= samples なら原データ返却。
+pub fn lttb(points: &[(f64, f64, usize)], samples: usize) -> Vec<(f64, f64, usize)> {
+    let n = points.len();
+    if samples < 3 || n <= samples {
+        return points.to_vec();
+    }
+    let mut out: Vec<(f64, f64, usize)> = Vec::with_capacity(samples);
+    let bucket_width = (n - 2) as f64 / (samples - 2) as f64;
+    out.push(points[0]);
+    let mut a = 0usize;
+    for i in 0..(samples - 2) {
+        let mut avg_start = ((i + 1) as f64 * bucket_width).floor() as usize + 1;
+        let mut avg_end = ((i + 2) as f64 * bucket_width).floor() as usize + 1;
+        avg_start = avg_start.min(n - 1);
+        avg_end = avg_end.min(n);
+        if avg_end <= avg_start {
+            avg_end = avg_start + 1;
+        }
+        let mut avg_x = 0.0;
+        let mut avg_y = 0.0;
+        for j in avg_start..avg_end {
+            avg_x += points[j].0;
+            avg_y += points[j].1;
+        }
+        let cnt = (avg_end - avg_start) as f64;
+        avg_x /= cnt;
+        avg_y /= cnt;
+        let range_start = (i as f64 * bucket_width).floor() as usize + 1;
+        let range_end = ((i + 1) as f64 * bucket_width).floor() as usize + 1;
+        let (ax, ay) = (points[a].0, points[a].1);
+        let mut max_area = -1.0_f64;
+        let mut next_a = range_start.min(n - 1);
+        for j in range_start..range_end.min(n) {
+            let area =
+                ((ax - avg_x) * (points[j].1 - ay) - (ax - points[j].0) * (avg_y - ay)).abs() * 0.5;
+            if area > max_area {
+                max_area = area;
+                next_a = j;
+            }
+        }
+        out.push(points[next_a]);
+        a = next_a;
+    }
+    out.push(points[n - 1]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +146,37 @@ mod tests {
             .map(|i| (i as f64 * 0.05, (i % 17) as f64, i))
             .collect();
         assert_eq!(min_max(&pts), min_max(&pts));
+    }
+
+    #[test]
+    fn lttb_hits_target_sample_count() {
+        let pts: Vec<(f64, f64, usize)> = (0..1000)
+            .map(|i| (i as f64, ((i * 31) % 97) as f64, i))
+            .collect();
+        let out = lttb(&pts, 100);
+        assert_eq!(out.len(), 100);
+    }
+
+    #[test]
+    fn lttb_keeps_first_and_last() {
+        let pts: Vec<(f64, f64, usize)> =
+            (0..500).map(|i| (i as f64, (i % 11) as f64, i)).collect();
+        let out = lttb(&pts, 50);
+        assert_eq!(out.first().unwrap().2, 0);
+        assert_eq!(out.last().unwrap().2, 499);
+    }
+
+    #[test]
+    fn lttb_passthrough_when_count_le_samples() {
+        let pts: Vec<(f64, f64, usize)> = (0..30).map(|i| (i as f64, 1.0, i)).collect();
+        assert_eq!(lttb(&pts, 50), pts);
+    }
+
+    #[test]
+    fn lttb_is_deterministic() {
+        let pts: Vec<(f64, f64, usize)> = (0..800)
+            .map(|i| (i as f64, ((i * 13) % 29) as f64, i))
+            .collect();
+        assert_eq!(lttb(&pts, 80), lttb(&pts, 80));
     }
 }
