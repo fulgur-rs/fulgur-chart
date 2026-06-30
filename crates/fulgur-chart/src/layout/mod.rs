@@ -3,6 +3,7 @@
 pub mod bar;
 pub mod boxplot;
 pub mod common;
+mod decimate;
 pub mod gauge;
 pub mod line;
 pub mod matrix;
