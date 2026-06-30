@@ -220,4 +220,45 @@ mod tests {
             resp.headers()
         );
     }
+
+    /// WebP 無効サーバでは、ETag にマッチする条件付き要求でも 304 ではなく 415 を返す
+    /// （フォーマット可用性は描画を伴わない 304 短絡より優先。Codex review 対応）。
+    /// 同条件の PNG は precheck 対象外で 304 のままになることも確認する。
+    #[tokio::test]
+    async fn webp_disabled_returns_415_even_with_matching_etag() {
+        let mk = |fmt: &str| {
+            let body = format!(
+                r#"{{"chart":{{"type":"bar","data":{{"labels":["A"],"datasets":[{{"data":[1]}}]}}}},"format":"{fmt}"}}"#
+            );
+            Request::builder()
+                .method("POST")
+                .uri("/chart")
+                .header("content-type", "application/json")
+                .header("if-none-match", "*") // どの ETag にもマッチ → 304 経路を強制
+                .body(Body::from(body))
+                .unwrap()
+        };
+
+        // router_with_compression は webp_enabled=false（既定 disable）。
+        let webp = router_with_compression(Compression::default())
+            .oneshot(mk("webp"))
+            .await
+            .unwrap();
+        assert_eq!(
+            webp.status(),
+            415,
+            "WebP 無効時は 304 でなく 415 を返すべき"
+        );
+
+        // PNG は precheck 対象外なので If-None-Match:* で従来どおり 304。
+        let png = router_with_compression(Compression::default())
+            .oneshot(mk("png"))
+            .await
+            .unwrap();
+        assert_eq!(
+            png.status(),
+            304,
+            "PNG は If-None-Match:* で 304 を返すべき"
+        );
+    }
 }

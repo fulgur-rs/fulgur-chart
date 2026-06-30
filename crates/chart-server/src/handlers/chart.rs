@@ -118,6 +118,15 @@ async fn handle_render(
     headers: HeaderMap,
     state: AppState,
 ) -> Response {
+    // WebP が無効なら 304 短絡や描画より前に 415 で拒否する。フォーマット可用性は
+    // 条件付きリクエスト（古い ETag を持つクライアント）にも一貫して効かせる。
+    // 面積予算は描画コスト制御であり、描画を伴わない 304 には適用不要なので enabled のみ判定。
+    if format == OutputFormat::Webp
+        && let Err(e) = state.webp.check_enabled()
+    {
+        return error_response(StatusCode::UNSUPPORTED_MEDIA_TYPE, &e);
+    }
+
     let etag = etag_value(&json, format);
 
     // 304 check (RFC 7232 compliant)

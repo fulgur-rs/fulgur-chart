@@ -86,6 +86,29 @@ pub struct WebpPolicy {
     pub max_area: u64,
 }
 
+impl WebpPolicy {
+    /// WebP が無効なら `Unsupported` を返す。`render` の本処理に加えて、ハンドラが
+    /// 304 短絡より前にフォーマット可用性を判定するためにも使う（描画を伴わない 304 でも
+    /// 無効フォーマットは一貫して拒否する）。
+    pub fn check_enabled(&self) -> Result<(), RenderError> {
+        if self.enabled {
+            Ok(())
+        } else {
+            Err(RenderError::Unsupported(
+                "WebP output is disabled on this server (set FULGUR_WEBP_ENABLED=true to enable)"
+                    .to_string(),
+            ))
+        }
+    }
+
+    /// 実効的な面積上限。運用ノブ `max_area` をライブラリの hard limit に丸めるので、
+    /// hard limit 超の設定値があっても renderer 呼び出し前に `Validate` で弾ける
+    /// （= ライブラリ側の `Render` エラー→500 ではなく 400 になる）。
+    fn effective_max_area(&self) -> u64 {
+        self.max_area.min(raster_direct::MAX_WEBP_AREA_PIXELS)
+    }
+}
+
 /// レンダリングパイプラインで発生するエラー。
 #[derive(Debug)]
 pub enum RenderError {
@@ -165,19 +188,15 @@ pub fn render(
                 .map_err(RenderError::Render)
         }
         OutputFormat::Webp => {
-            if !webp.enabled {
-                return Err(RenderError::Unsupported(
-                    "WebP output is disabled on this server (set FULGUR_WEBP_ENABLED=true to enable)"
-                        .to_string(),
-                ));
-            }
-            // pixmap(256MB 級)を確保する前に、サーバの面積予算で弾く。
-            // ライブラリの MAX_WEBP_AREA_PIXELS も hard backstop として効く。
+            webp.check_enabled()?;
+            // pixmap(256MB 級)を確保する前に、サーバの面積予算で弾く。予算は
+            // ライブラリの hard limit に丸めるので、hard limit 超の面積は renderer
+            // 呼び出し前に Validate(400) で弾く（ライブラリの Render→500 にしない）。
+            let max_area = webp.effective_max_area();
             let area = webp_output_area(spec, scale);
-            if area > webp.max_area {
+            if area > max_area {
                 return Err(RenderError::Validate(format!(
-                    "WebP output area {area} px exceeds the server limit of {} px",
-                    webp.max_area
+                    "WebP output area {area} px exceeds the server limit of {max_area} px"
                 )));
             }
             raster_direct::render_chart_to_webp(spec, scale, DEFAULT_FONT)
@@ -249,6 +268,28 @@ mod tests {
         .unwrap();
         assert_eq!(&bytes[0..4], b"RIFF");
         assert_eq!(&bytes[8..12], b"WEBP");
+    }
+
+    /// サーバ予算を無制限にしても、ライブラリ hard limit 超の面積は Validate(→400)で
+    /// 弾く（renderer の Render(→500)にしない）。effective_max_area のクランプを検証。
+    #[test]
+    fn webp_over_library_hard_limit_is_validate_not_render() {
+        let mut spec = bar_spec();
+        // 5000×5000 = 25,000,000 > ライブラリ cap(≈21.3M)。
+        spec.width = 5000.0;
+        spec.height = 5000.0;
+        let err = render(
+            &spec,
+            OutputFormat::Webp,
+            1.0,
+            Compression::default(),
+            webp_on(u64::MAX),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, RenderError::Validate(_)),
+            "got {err:?}, want Validate"
+        );
     }
 
     /// サーバ面積予算を超える要求は pixmap 確保前に Validate（→ 400）で拒否する。
