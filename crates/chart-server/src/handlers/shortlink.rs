@@ -1,4 +1,4 @@
-use crate::{render::OutputFormat, state::AppState, store::InsertError};
+use crate::{backend::BackendError, render::OutputFormat, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
@@ -79,10 +79,10 @@ pub async fn post_create(
     );
     let url = format!("/chart/s/{id}");
 
-    match state.store.insert(id, query) {
+    match state.store.insert(id, query).await {
         Ok(()) => (StatusCode::OK, Json(json!({"url": url}))).into_response(),
         // 単一ペイロードが per-entry 上限超過: 再送しても無駄なので 413。
-        Err(InsertError::TooLarge) => (
+        Err(BackendError::TooLarge) => (
             StatusCode::PAYLOAD_TOO_LARGE,
             Json(json!({
                 "error": "chart payload is too large for a short link",
@@ -91,7 +91,7 @@ pub async fn post_create(
         )
             .into_response(),
         // 件数 or 集約バイトが満杯: 一時的な拒否なので 503。
-        Err(InsertError::Full) => (
+        Err(BackendError::Full) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
                 "error": "shortlink store is full",
@@ -99,17 +99,35 @@ pub async fn post_create(
             })),
         )
             .into_response(),
+        // durable backend の一時障害: 503（in-memory では発生しない）。
+        Err(BackendError::Unavailable(_)) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "shortlink backend unavailable",
+                "code": "BACKEND_UNAVAILABLE"
+            })),
+        )
+            .into_response(),
     }
 }
 
 pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>) -> Response {
-    match state.store.get(&id) {
-        Some(query) => Redirect::temporary(&format!("/chart?{query}")).into_response(),
-        None => (
+    match state.store.get(&id).await {
+        Ok(Some(query)) => Redirect::temporary(&format!("/chart?{query}")).into_response(),
+        Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({
                 "error": "short link not found",
                 "code": "NOT_FOUND"
+            })),
+        )
+            .into_response(),
+        // durable backend の一時障害: 503（in-memory では発生しない）。
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "shortlink backend unavailable",
+                "code": "BACKEND_UNAVAILABLE"
             })),
         )
             .into_response(),
@@ -176,6 +194,7 @@ mod http_tests {
         http::{Request, StatusCode},
         response::Response,
     };
+    use std::sync::Arc;
     use tower::ServiceExt;
 
     /// 指定したストア上限で `/chart/create` を叩ける router を組む。
@@ -197,7 +216,7 @@ mod http_tests {
             webp_enabled: false,
             max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
         };
-        build_router(&cfg, store)
+        build_router(&cfg, Arc::new(store))
     }
 
     fn create_request(body: &str) -> Request<Body> {

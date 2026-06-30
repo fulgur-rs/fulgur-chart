@@ -1,8 +1,11 @@
+use async_trait::async_trait;
 use dashmap::DashMap;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+
+use crate::backend::{BackendError, ShortlinkBackend};
 
 #[derive(Clone)]
 pub struct ShortlinkStore {
@@ -18,15 +21,6 @@ pub struct ShortlinkStore {
     entry_bytes: usize,
 }
 
-/// `ShortlinkStore::insert` の失敗理由。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InsertError {
-    /// 単一エントリが per-entry バイト上限を超過。再送しても通らない（→ 413）。
-    TooLarge,
-    /// ストアが満杯（件数上限 or 集約バイト上限）。一時的な拒否（→ 503）。
-    Full,
-}
-
 impl ShortlinkStore {
     pub fn new(entry_limit: usize, max_bytes: usize, entry_bytes: usize) -> Self {
         Self {
@@ -38,12 +32,15 @@ impl ShortlinkStore {
             entry_bytes,
         }
     }
+}
 
-    pub fn insert(&self, id: String, query: String) -> Result<(), InsertError> {
+#[async_trait]
+impl ShortlinkBackend for ShortlinkStore {
+    async fn insert(&self, id: String, query: String) -> Result<(), BackendError> {
         let query_len = query.len();
         // per-entry 上限: このペイロード単体が大きすぎる。再送しても無駄なので即拒否。
         if query_len > self.entry_bytes {
-            return Err(InsertError::TooLarge);
+            return Err(BackendError::TooLarge);
         }
 
         // 集約バイト/件数は global atomic で会計する。entry() は当該キーの shard を
@@ -60,7 +57,7 @@ impl ShortlinkStore {
                     let prev = self.bytes.fetch_add(additional, Ordering::AcqRel);
                     if prev.saturating_add(additional) > self.max_bytes {
                         self.bytes.fetch_sub(additional, Ordering::AcqRel);
-                        return Err(InsertError::Full);
+                        return Err(BackendError::Full);
                     }
                 }
                 // 上書き（件数変化なし）
@@ -75,14 +72,14 @@ impl ShortlinkStore {
                 let prev_bytes = self.bytes.fetch_add(query_len, Ordering::AcqRel);
                 if prev_bytes.saturating_add(query_len) > self.max_bytes {
                     self.bytes.fetch_sub(query_len, Ordering::AcqRel);
-                    return Err(InsertError::Full);
+                    return Err(BackendError::Full);
                 }
                 // 次に件数を予約し、超えたらバイトと件数の両方を戻す。
                 let prev = self.count.fetch_add(1, Ordering::AcqRel);
                 if prev >= self.entry_limit {
                     self.count.fetch_sub(1, Ordering::AcqRel);
                     self.bytes.fetch_sub(query_len, Ordering::AcqRel);
-                    Err(InsertError::Full)
+                    Err(BackendError::Full)
                 } else {
                     entry.insert(query);
                     Ok(())
@@ -91,95 +88,102 @@ impl ShortlinkStore {
         }
     }
 
-    pub fn get(&self, id: &str) -> Option<String> {
-        self.map.get(id).map(|v| v.clone())
+    async fn get(&self, id: &str) -> Result<Option<String>, BackendError> {
+        Ok(self.map.get(id).map(|v| v.clone()))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{InsertError, ShortlinkStore};
+    use super::ShortlinkStore;
+    use crate::backend::{BackendError, ShortlinkBackend};
 
-    #[test]
-    fn accepts_entry_within_limits() {
+    #[tokio::test]
+    async fn accepts_entry_within_limits() {
         let store = ShortlinkStore::new(10, 1000, 100);
         let val = "x".repeat(50);
-        assert_eq!(store.insert("a".into(), val.clone()), Ok(()));
-        assert_eq!(store.get("a"), Some(val));
+        assert!(store.insert("a".into(), val.clone()).await.is_ok());
+        assert_eq!(store.get("a").await.unwrap(), Some(val));
     }
 
-    #[test]
-    fn rejects_entry_exceeding_per_entry_byte_limit() {
+    #[tokio::test]
+    async fn rejects_entry_exceeding_per_entry_byte_limit() {
         let store = ShortlinkStore::new(10, 10_000, 4);
-        assert_eq!(
-            store.insert("big".into(), "12345".into()),
-            Err(InsertError::TooLarge)
-        );
-        assert!(store.get("big").is_none());
+        assert!(matches!(
+            store.insert("big".into(), "12345".into()).await,
+            Err(BackendError::TooLarge)
+        ));
+        assert!(store.get("big").await.unwrap().is_none());
     }
 
-    #[test]
-    fn rejects_when_aggregate_byte_budget_is_full() {
+    #[tokio::test]
+    async fn rejects_when_aggregate_byte_budget_is_full() {
         // entry_bytes は十分大きく、max_bytes=8 → 合計 8 バイトまで。
         let store = ShortlinkStore::new(10, 8, 1000);
-        assert_eq!(store.insert("a".into(), "1234".into()), Ok(()));
-        assert_eq!(store.insert("b".into(), "5678".into()), Ok(()));
-        assert_eq!(store.insert("c".into(), "9".into()), Err(InsertError::Full));
-        assert!(store.get("c").is_none());
+        assert!(store.insert("a".into(), "1234".into()).await.is_ok());
+        assert!(store.insert("b".into(), "5678".into()).await.is_ok());
+        assert!(matches!(
+            store.insert("c".into(), "9".into()).await,
+            Err(BackendError::Full)
+        ));
+        assert!(store.get("c").await.unwrap().is_none());
     }
 
-    #[test]
-    fn rejects_when_entry_count_is_full() {
+    #[tokio::test]
+    async fn rejects_when_entry_count_is_full() {
         // 件数上限 2、バイトは余裕。
         let store = ShortlinkStore::new(2, 10_000, 1000);
-        assert_eq!(store.insert("a".into(), "x".into()), Ok(()));
-        assert_eq!(store.insert("b".into(), "y".into()), Ok(()));
-        assert_eq!(store.insert("c".into(), "z".into()), Err(InsertError::Full));
-        assert!(store.get("c").is_none());
+        assert!(store.insert("a".into(), "x".into()).await.is_ok());
+        assert!(store.insert("b".into(), "y".into()).await.is_ok());
+        assert!(matches!(
+            store.insert("c".into(), "z".into()).await,
+            Err(BackendError::Full)
+        ));
+        assert!(store.get("c").await.unwrap().is_none());
     }
 
-    #[test]
-    fn overwriting_same_id_does_not_double_count_bytes() {
+    #[tokio::test]
+    async fn overwriting_same_id_does_not_double_count_bytes() {
         // max_bytes=8。同じ id に 4 バイトを 2 回入れても合計は 4 のまま。
         // その後 別 id に 4 バイトを入れても 8 に収まる。
         let store = ShortlinkStore::new(10, 8, 1000);
-        assert_eq!(store.insert("a".into(), "1234".into()), Ok(()));
-        assert_eq!(store.insert("a".into(), "1234".into()), Ok(()));
-        assert_eq!(store.insert("b".into(), "5678".into()), Ok(()));
-        assert!(store.get("b").is_some());
+        assert!(store.insert("a".into(), "1234".into()).await.is_ok());
+        assert!(store.insert("a".into(), "1234".into()).await.is_ok());
+        assert!(store.insert("b".into(), "5678".into()).await.is_ok());
+        assert!(store.get("b").await.unwrap().is_some());
     }
 
-    #[test]
-    fn overwriting_with_invalid_query_retains_old_value() {
+    #[tokio::test]
+    async fn overwriting_with_invalid_query_retains_old_value() {
         // 上書き失敗時に古い値が保持され、バイト会計がロールバックされること
         // （TooLarge / Full 双方）を検証する。
         let store = ShortlinkStore::new(10, 8, 5);
-        assert_eq!(store.insert("a".into(), "1234".into()), Ok(()));
+        assert!(store.insert("a".into(), "1234".into()).await.is_ok());
 
         // 1. per-entry 上限超過による上書き失敗 (TooLarge) → 古い値を保持。
-        assert_eq!(
-            store.insert("a".into(), "123456".into()),
-            Err(InsertError::TooLarge)
-        );
-        assert_eq!(store.get("a"), Some("1234".into()));
+        assert!(matches!(
+            store.insert("a".into(), "123456".into()).await,
+            Err(BackendError::TooLarge)
+        ));
+        assert_eq!(store.get("a").await.unwrap(), Some("1234".into()));
 
         // 2. 正常な上書き（5 バイト）。
-        assert_eq!(store.insert("a".into(), "12345".into()), Ok(()));
-        assert_eq!(store.get("a"), Some("12345".into()));
+        assert!(store.insert("a".into(), "12345".into()).await.is_ok());
+        assert_eq!(store.get("a").await.unwrap(), Some("12345".into()));
 
         // 別エントリ "b" を 3 バイトで挿入 → 合計 8 バイトで満杯。
-        assert_eq!(store.insert("b".into(), "123".into()), Ok(()));
+        assert!(store.insert("b".into(), "123".into()).await.is_ok());
 
         // 3. 集約上限超過による上書き失敗 (Full) → 古い値を保持。
-        assert_eq!(
-            store.insert("b".into(), "1234".into()),
-            Err(InsertError::Full)
-        );
-        assert_eq!(store.get("b"), Some("123".into()));
+        assert!(matches!(
+            store.insert("b".into(), "1234".into()).await,
+            Err(BackendError::Full)
+        ));
+        assert_eq!(store.get("b").await.unwrap(), Some("123".into()));
 
         // ロールバックが正しく行われ、バイトがリークしていないこと
         // （より小さい値での上書きが通る）を検証。
-        assert_eq!(store.insert("b".into(), "12".into()), Ok(()));
-        assert_eq!(store.get("b"), Some("12".into()));
+        assert!(store.insert("b".into(), "12".into()).await.is_ok());
+        assert_eq!(store.get("b").await.unwrap(), Some("12".into()));
     }
 }

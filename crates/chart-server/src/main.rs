@@ -6,11 +6,11 @@ use clap::Parser;
 #[tokio::main]
 async fn main() {
     let cfg = Config::parse();
-    let store = ShortlinkStore::new(
+    let store = std::sync::Arc::new(ShortlinkStore::new(
         cfg.shortlink_limit,
         cfg.shortlink_max_bytes,
         cfg.shortlink_entry_bytes,
-    );
+    ));
     // Railway は $PORT を inject する。FULGUR_PORT より優先して読む。
     let port = std::env::var("PORT")
         .ok()

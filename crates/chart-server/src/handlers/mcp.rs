@@ -353,7 +353,7 @@ mod tests {
 
     fn test_app() -> axum::Router {
         let state = AppState {
-            store: ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024),
+            store: Arc::new(ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024)),
             semaphore: Arc::new(Semaphore::new(1)),
             render_timeout_ms: 1000,
             png_compression: crate::render::Compression::default(),
