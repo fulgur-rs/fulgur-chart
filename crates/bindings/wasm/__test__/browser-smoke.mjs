@@ -12,6 +12,7 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { chromium } from 'playwright'
+import { BAR, PNG_MAGIC } from './fixtures.mjs'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -42,37 +43,39 @@ function startServer() {
       res.end()
     }
   })
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
     server.listen(0, '127.0.0.1', () => resolve(server))
   })
 }
 
-const BAR = '{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}'
-
 test('browser (chromium): fetch()-based init() + render() smoke', async () => {
   const server = await startServer()
-  const { port } = server.address()
-  const browser = await chromium.launch()
   try {
-    const page = await browser.newPage()
-    await page.goto(`http://127.0.0.1:${port}/`)
-    const result = await page.evaluate(async (spec) => {
-      const mod = await import('/index.js')
-      await mod.default() // init(): no args -> browser fetch() path
-      const svg = mod.build(spec).render('svg')
-      const png = mod.render(spec, 'png')
-      return {
-        version: mod.version(),
-        svgPrefix: svg.slice(0, 5),
-        pngMagic: Array.from(png.subarray(0, 4)),
-      }
-    }, BAR)
+    const { port } = server.address()
+    const browser = await chromium.launch()
+    try {
+      const page = await browser.newPage()
+      await page.goto(`http://127.0.0.1:${port}/`)
+      const result = await page.evaluate(async (spec) => {
+        const mod = await import('/index.js')
+        await mod.default() // init(): no args -> browser fetch() path
+        const svg = mod.build(spec).render('svg')
+        const png = mod.render(spec, 'png')
+        return {
+          version: mod.version(),
+          svgPrefix: svg.slice(0, 5),
+          pngMagic: Array.from(png.subarray(0, 4)),
+        }
+      }, BAR)
 
-    assert.match(result.version, /^\d+\.\d+\.\d+/)
-    assert.equal(result.svgPrefix, '<svg ')
-    assert.deepEqual(result.pngMagic, [0x89, 0x50, 0x4e, 0x47])
+      assert.match(result.version, /^\d+\.\d+\.\d+/)
+      assert.equal(result.svgPrefix, '<svg ')
+      assert.deepEqual(result.pngMagic, Array.from(PNG_MAGIC))
+    } finally {
+      await browser.close()
+    }
   } finally {
-    await browser.close()
     await new Promise((resolve) => server.close(resolve))
   }
 })
