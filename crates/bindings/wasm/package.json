@@ -18,6 +18,7 @@
   "scripts": {
     "build": "wasm-pack build --target web --release --locked",
     "test": "node --test",
+    "test:browser": "node --test __test__/browser-smoke.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepack": "npm run build && rm -f pkg/.gitignore"
   },
