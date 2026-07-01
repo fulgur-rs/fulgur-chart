@@ -99,14 +99,19 @@ pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>
             );
             resp
         }
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": "short link not found",
-                "code": "NOT_FOUND"
-            })),
-        )
-            .into_response(),
+        Ok(None) => {
+            let mut resp = (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": "short link not found",
+                    "code": "NOT_FOUND"
+                })),
+            )
+                .into_response();
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+            resp
+        }
         // durable backend の一時障害: 503（in-memory では発生しない）。
         Err(err) => {
             eprintln!("Shortlink backend unavailable (resolve): {err}");
@@ -369,5 +374,27 @@ mod http_tests {
             resp.headers().get("cache-control").unwrap(),
             "public, max-age=3600"
         );
+    }
+
+    /// 未検出(404)は Cache-Control: no-store。前段CDNのnegative-cacheが
+    /// LBハズレ由来の一時的な404を永続化させないようにするため。
+    #[tokio::test]
+    async fn resolve_not_found_sets_no_store_cache_control() {
+        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
+        let router = router_with_store(store);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/chart/s/does-not-exist")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
     }
 }
