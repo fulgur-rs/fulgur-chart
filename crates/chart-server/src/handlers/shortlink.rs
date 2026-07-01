@@ -2,7 +2,7 @@ use crate::{backend::BackendError, render::OutputFormat, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
-    http::StatusCode,
+    http::{StatusCode, header},
     response::{IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
@@ -89,7 +89,16 @@ pub async fn post_create(
 
 pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>) -> Response {
     match state.store.get(&id).await {
-        Ok(Some(query)) => Redirect::temporary(&format!("/chart?{query}")).into_response(),
+        Ok(Some(query)) => {
+            let mut resp = Redirect::temporary(&format!("/chart?{query}")).into_response();
+            resp.headers_mut().insert(
+                header::CACHE_CONTROL,
+                format!("public, max-age={}", state.shortlink_ttl_seconds)
+                    .parse()
+                    .unwrap(),
+            );
+            resp
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -165,6 +174,29 @@ mod http_tests {
             shortlink_max_bytes: 128 * 1024 * 1024,
             shortlink_entry_bytes: 512 * 1024,
             shortlink_ttl_seconds: 86_400,
+            cors_origins: "*".into(),
+            rate_limit: 0,
+            log_level: "info".into(),
+            png_compression: Compression::default(),
+            webp_enabled: false,
+            max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
+        };
+        build_router(&cfg, Arc::new(store))
+    }
+
+    /// shortlink_ttl_seconds を明示的に指定できる router ヘルパー
+    /// (config駆動であることをdefault値(86400)と異なる値で検証するため)。
+    fn router_with_store_and_ttl(store: ShortlinkStore, ttl: u64) -> Router {
+        let cfg = Config {
+            host: "0.0.0.0".into(),
+            port: 3000,
+            max_concurrent: 4,
+            max_body_size: 102_400,
+            render_timeout_ms: 1000,
+            shortlink_limit: 100,
+            shortlink_max_bytes: 128 * 1024 * 1024,
+            shortlink_entry_bytes: 512 * 1024,
+            shortlink_ttl_seconds: ttl,
             cors_origins: "*".into(),
             rate_limit: 0,
             log_level: "info".into(),
@@ -291,6 +323,51 @@ mod http_tests {
             id.chars()
                 .all(|c| "0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(c.to_ascii_uppercase())),
             "id should be valid Crockford base32: {id}"
+        );
+    }
+
+    /// resolve成功時は Cache-Control: public, max-age=<config値> が付く。
+    /// default(86400)と異なる値(3600)を使い、handlerがハードコードでなく
+    /// config駆動であることを検証する。
+    #[tokio::test]
+    async fn resolve_success_sets_cache_control_from_config_ttl() {
+        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
+        let router = router_with_store_and_ttl(store, 3600);
+
+        let create_body =
+            r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
+        let (status, body) = status_and_body(
+            router
+                .clone()
+                .oneshot(create_request(create_body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body={body}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let url = json["url"].as_str().unwrap().to_string();
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::TEMPORARY_REDIRECT,
+            "headers={:?}",
+            resp.headers()
+        );
+        assert_eq!(
+            resp.headers().get("cache-control").unwrap(),
+            "public, max-age=3600"
         );
     }
 }
