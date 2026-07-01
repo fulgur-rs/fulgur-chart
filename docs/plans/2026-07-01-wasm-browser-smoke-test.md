@@ -82,7 +82,10 @@ function startServer() {
   const server = createServer(async (req, res) => {
     const reqPath = decodeURIComponent(new URL(req.url, 'http://localhost').pathname)
     const filePath = path.join(PKG_ROOT, reqPath === '/' ? 'index.js' : reqPath)
-    if (!filePath.startsWith(PKG_ROOT)) {
+    // path.relative (not filePath.startsWith(PKG_ROOT)) so a sibling directory that merely
+    // shares PKG_ROOT's name as a prefix (e.g. `wasm-secrets` next to `wasm`) can't spoof containment.
+    const relative = path.relative(PKG_ROOT, filePath)
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
       res.writeHead(403)
       res.end()
       return
