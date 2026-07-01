@@ -106,6 +106,7 @@ With WebP disabled, `format=webp` returns `415 Unsupported Media Type`.
 | `FULGUR_SHORTLINK_LIMIT` | `10000` | Maximum number of stored short links |
 | `FULGUR_SHORTLINK_MAX_BYTES` | `134217728` (128 MiB) | Aggregate byte budget across all stored short links (bounds memory; oldest is **not** evicted — see below) |
 | `FULGUR_SHORTLINK_ENTRY_BYTES` | `524288` (512 KiB) | Per-entry byte cap for a stored short link. Oversized requests are rejected with `413 PAYLOAD_TOO_LARGE`. The stored value is the URL-encoded chart JSON (up to ~3× the raw body), so keep this ≳ `3 × FULGUR_MAX_BODY_SIZE`; raising `FULGUR_MAX_BODY_SIZE` without raising this will 413 legitimate large charts |
+| `FULGUR_SHORTLINK_TTL_SECONDS` | `86400` (24h) | Guaranteed minimum resolvable lifetime for a short link, as a floor guarantee (the underlying data isn't necessarily deleted at exactly this time). Used as the `Cache-Control: max-age` on successful `/chart/s/{id}` resolutions so upstream CDNs don't serve stale resolutions past the guarantee window |
 | `FULGUR_CORS_ORIGINS` | `*` | Allowed CORS origins (comma-separated) |
 | `FULGUR_RATE_LIMIT` | `0` | Rate limit (requests/minute/IP). `0` disables rate limiting (default) |
 | `FULGUR_PNG_COMPRESSION` | `balanced` | PNG compression preset: `fast` / `balanced` / `high` (PNG only) |
