@@ -426,6 +426,12 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser smoke test (Chromium headless)
+        run: npm run test:browser
+
   perf:
     name: Perf (memory gate + speed report)
     runs-on: ubuntu-latest
