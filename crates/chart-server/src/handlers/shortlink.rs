@@ -2,7 +2,7 @@ use crate::{backend::BackendError, render::OutputFormat, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
@@ -87,6 +87,13 @@ pub async fn post_create(
     }
 }
 
+/// negative-cache 無効化用の `Cache-Control: no-store`。
+/// 404/503 いずれも一時的・可変な状態を表すため、前段 CDN に
+/// キャッシュさせてはならない。
+fn no_store_cache_control() -> HeaderValue {
+    HeaderValue::from_static("no-store")
+}
+
 pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>) -> Response {
     match state.store.get(&id).await {
         Ok(Some(query)) => {
@@ -109,20 +116,23 @@ pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>
             )
                 .into_response();
             resp.headers_mut()
-                .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+                .insert(header::CACHE_CONTROL, no_store_cache_control());
             resp
         }
         // durable backend の一時障害: 503（in-memory では発生しない）。
         Err(err) => {
             eprintln!("Shortlink backend unavailable (resolve): {err}");
-            (
+            let mut resp = (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(json!({
                     "error": "shortlink backend unavailable",
                     "code": "BACKEND_UNAVAILABLE"
                 })),
             )
-                .into_response()
+                .into_response();
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, no_store_cache_control());
+            resp
         }
     }
 }
