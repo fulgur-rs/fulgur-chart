@@ -100,14 +100,17 @@ pub async fn post_create(
         )
             .into_response(),
         // durable backend の一時障害: 503（in-memory では発生しない）。
-        Err(BackendError::Unavailable(_)) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "error": "shortlink backend unavailable",
-                "code": "BACKEND_UNAVAILABLE"
-            })),
-        )
-            .into_response(),
+        Err(BackendError::Unavailable(err)) => {
+            eprintln!("Shortlink backend unavailable (create): {err}");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "error": "shortlink backend unavailable",
+                    "code": "BACKEND_UNAVAILABLE"
+                })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -123,14 +126,17 @@ pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>
         )
             .into_response(),
         // durable backend の一時障害: 503（in-memory では発生しない）。
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "error": "shortlink backend unavailable",
-                "code": "BACKEND_UNAVAILABLE"
-            })),
-        )
-            .into_response(),
+        Err(err) => {
+            eprintln!("Shortlink backend unavailable (resolve): {err}");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "error": "shortlink backend unavailable",
+                    "code": "BACKEND_UNAVAILABLE"
+                })),
+            )
+                .into_response()
+        }
     }
 }
 

@@ -9,6 +9,7 @@ use async_trait::async_trait;
 /// 決して `Unavailable` を返さないが、durable adapter(8tr.6 等)が trait
 /// シグネチャを変えずに使えるよう、最初からこの variant を含めておく。
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum BackendError {
     /// 単一エントリが per-entry バイト上限を超過（→ 413）。
     TooLarge,
