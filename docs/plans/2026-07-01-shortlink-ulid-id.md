@@ -12,7 +12,7 @@
 
 ---
 
-### Task 1: Add the `ulid` dependency
+## Task 1: Add the `ulid` dependency
 
 **Files:**
 - Modify: `crates/chart-server/Cargo.toml`
@@ -42,7 +42,7 @@ git commit -m "chore(chart-server): add ulid dependency"
 
 ---
 
-### Task 2: Replace `compute_id` with ULID generation (TDD)
+## Task 2: Replace `compute_id` with ULID generation (TDD)
 
 **Files:**
 - Modify: `crates/chart-server/src/handlers/shortlink.rs`
@@ -106,7 +106,8 @@ Note: `http_tests` already imports `serde_json` transitively is NOT guaranteed â
 
 **Step 2: Run tests to verify the new two fail, everything else still passes**
 
-Run: `cargo test -p chart-server create_generates_distinct_ids_for_identical_specs create_returns_url_with_26_char_ulid_id`
+Run: `cargo test -p chart-server create_generates_distinct_ids_for_identical_specs`
+Run: `cargo test -p chart-server create_returns_url_with_26_char_ulid_id`
 Expected: both FAIL â€”
 - `create_generates_distinct_ids_for_identical_specs`: fails at `assert_ne!(b1, b2, ...)` because the current hash-based id is identical for identical bodies (dedup still active).
 - `create_returns_url_with_26_char_ulid_id`: fails at `assert_eq!(id.len(), 26, ...)` because the current id is 12 hex chars.
@@ -167,7 +168,7 @@ git commit -m "feat(chart-server): generate shortlink ids as ULIDs instead of co
 
 ---
 
-### Task 3: Update the stale determinism comment in `store.rs`
+## Task 3: Update the stale determinism comment in `store.rs`
 
 **Files:**
 - Modify: `crates/chart-server/src/store.rs:56`
@@ -201,7 +202,7 @@ git commit -m "docs(chart-server): update stale determinism comment in Shortlink
 
 ---
 
-### Task 4: Full verification sweep
+## Task 4: Full verification sweep
 
 **Files:** none (verification only)
 
