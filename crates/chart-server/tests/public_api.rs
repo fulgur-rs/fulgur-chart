@@ -93,3 +93,19 @@ async fn resolve_returns_503_backend_unavailable_when_backend_errors() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body={body}");
     assert!(body.contains("BACKEND_UNAVAILABLE"), "body={body}");
 }
+
+/// backend が `Unavailable` を返すときの 503 応答は Cache-Control: no-store
+/// (一時障害を前段CDNに誤ってキャッシュさせないため)。
+#[tokio::test]
+async fn resolve_returns_no_store_cache_control_when_backend_unavailable() {
+    let cfg = default_config();
+    let router = build_router(&cfg, Arc::new(UnavailableBackend));
+    let req = Request::builder()
+        .method("GET")
+        .uri("/chart/s/deadbeef")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+}

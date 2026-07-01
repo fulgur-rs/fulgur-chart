@@ -37,6 +37,11 @@ pub fn build_router(cfg: &Config, store: Arc<dyn ShortlinkBackend>) -> Router {
             enabled: cfg.webp_enabled,
             max_area: cfg.max_webp_area,
         },
+        // resolve はホットパスなので、Cache-Control ヘッダ値を起動時に一度だけ構築する。
+        // `max-age=<u64>` は常に有効な ASCII ヘッダ値なので parse は失敗しない。
+        shortlink_cache_control: format!("public, max-age={}", cfg.shortlink_ttl_seconds)
+            .parse()
+            .expect("shortlink cache-control header value is always valid"),
     };
 
     // CORS
@@ -121,6 +126,7 @@ mod tests {
             shortlink_limit: 100,
             shortlink_max_bytes: 128 * 1024 * 1024,
             shortlink_entry_bytes: 512 * 1024,
+            shortlink_ttl_seconds: 86_400,
             cors_origins: "https://example.com".into(),
             rate_limit: 0,
             log_level: "info".into(),
@@ -144,6 +150,7 @@ mod tests {
             shortlink_limit: 100,
             shortlink_max_bytes: 128 * 1024 * 1024,
             shortlink_entry_bytes: 512 * 1024,
+            shortlink_ttl_seconds: 86_400,
             cors_origins: "*".into(),
             rate_limit: 0,
             log_level: "info".into(),

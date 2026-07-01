@@ -2,7 +2,7 @@ use crate::{backend::BackendError, render::OutputFormat, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
@@ -87,28 +87,50 @@ pub async fn post_create(
     }
 }
 
+/// negative-cache 無効化用の `Cache-Control: no-store`。
+/// 404/503 いずれも一時的・可変な状態を表すため、前段 CDN に
+/// キャッシュさせてはならない。
+fn no_store_cache_control() -> HeaderValue {
+    HeaderValue::from_static("no-store")
+}
+
 pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>) -> Response {
     match state.store.get(&id).await {
-        Ok(Some(query)) => Redirect::temporary(&format!("/chart?{query}")).into_response(),
-        Ok(None) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({
-                "error": "short link not found",
-                "code": "NOT_FOUND"
-            })),
-        )
-            .into_response(),
+        Ok(Some(query)) => {
+            let mut resp = Redirect::temporary(&format!("/chart?{query}")).into_response();
+            // 起動時に構築済みの値を clone（HeaderValue の clone は Bytes 参照カウントのみで
+            // アロケーションを伴わない）。ホットパスでの format!＋パースを避ける。
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, state.shortlink_cache_control.clone());
+            resp
+        }
+        Ok(None) => {
+            let mut resp = (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": "short link not found",
+                    "code": "NOT_FOUND"
+                })),
+            )
+                .into_response();
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, no_store_cache_control());
+            resp
+        }
         // durable backend の一時障害: 503（in-memory では発生しない）。
         Err(err) => {
             eprintln!("Shortlink backend unavailable (resolve): {err}");
-            (
+            let mut resp = (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(json!({
                     "error": "shortlink backend unavailable",
                     "code": "BACKEND_UNAVAILABLE"
                 })),
             )
-                .into_response()
+                .into_response();
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, no_store_cache_control());
+            resp
         }
     }
 }
@@ -164,6 +186,30 @@ mod http_tests {
             shortlink_limit: 100,
             shortlink_max_bytes: 128 * 1024 * 1024,
             shortlink_entry_bytes: 512 * 1024,
+            shortlink_ttl_seconds: 86_400,
+            cors_origins: "*".into(),
+            rate_limit: 0,
+            log_level: "info".into(),
+            png_compression: Compression::default(),
+            webp_enabled: false,
+            max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
+        };
+        build_router(&cfg, Arc::new(store))
+    }
+
+    /// shortlink_ttl_seconds を明示的に指定できる router ヘルパー
+    /// (config駆動であることをdefault値(86400)と異なる値で検証するため)。
+    fn router_with_store_and_ttl(store: ShortlinkStore, ttl: u64) -> Router {
+        let cfg = Config {
+            host: "0.0.0.0".into(),
+            port: 3000,
+            max_concurrent: 4,
+            max_body_size: 102_400,
+            render_timeout_ms: 1000,
+            shortlink_limit: 100,
+            shortlink_max_bytes: 128 * 1024 * 1024,
+            shortlink_entry_bytes: 512 * 1024,
+            shortlink_ttl_seconds: ttl,
             cors_origins: "*".into(),
             rate_limit: 0,
             log_level: "info".into(),
@@ -291,5 +337,72 @@ mod http_tests {
                 .all(|c| "0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(c.to_ascii_uppercase())),
             "id should be valid Crockford base32: {id}"
         );
+    }
+
+    /// resolve成功時は Cache-Control: public, max-age=<config値> が付く。
+    /// default(86400)と異なる値(3600)を使い、handlerがハードコードでなく
+    /// config駆動であることを検証する。
+    #[tokio::test]
+    async fn resolve_success_sets_cache_control_from_config_ttl() {
+        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
+        let router = router_with_store_and_ttl(store, 3600);
+
+        let create_body =
+            r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
+        let (status, body) = status_and_body(
+            router
+                .clone()
+                .oneshot(create_request(create_body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body={body}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let url = json["url"].as_str().unwrap().to_string();
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::TEMPORARY_REDIRECT,
+            "headers={:?}",
+            resp.headers()
+        );
+        assert_eq!(
+            resp.headers().get("cache-control").unwrap(),
+            "public, max-age=3600"
+        );
+    }
+
+    /// 未検出(404)は Cache-Control: no-store。前段CDNのnegative-cacheが
+    /// LBハズレ由来の一時的な404を永続化させないようにするため。
+    #[tokio::test]
+    async fn resolve_not_found_sets_no_store_cache_control() {
+        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
+        let router = router_with_store(store);
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/chart/s/does-not-exist")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
     }
 }

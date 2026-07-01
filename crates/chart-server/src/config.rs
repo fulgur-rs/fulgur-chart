@@ -34,6 +34,14 @@ pub struct Config {
     #[arg(long, env = "FULGUR_SHORTLINK_ENTRY_BYTES", default_value_t = 512 * 1024)]
     pub shortlink_entry_bytes: usize,
 
+    /// shortlink の保証有効期限（秒）。リンクは少なくともこの期間は解決可能で
+    /// あることを約束する下限保証（この時刻ちょうどに実データが削除される
+    /// わけではない）。`/chart/s/{id}` 解決成功時レスポンスの
+    /// `Cache-Control: max-age` に使い、前段 CDN が保証期間を超えて古い
+    /// 解決結果を配信しないようにする。
+    #[arg(long, env = "FULGUR_SHORTLINK_TTL_SECONDS", default_value_t = 86_400)]
+    pub shortlink_ttl_seconds: u64,
+
     #[arg(long, env = "FULGUR_CORS_ORIGINS", default_value = "*")]
     pub cors_origins: String,
 

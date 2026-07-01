@@ -1,4 +1,6 @@
 use std::sync::Arc;
+
+use axum::http::HeaderValue;
 use tokio::sync::Semaphore;
 
 use crate::backend::ShortlinkBackend;
@@ -13,4 +15,8 @@ pub struct AppState {
     pub png_compression: Compression,
     /// WebP 出力のポリシー（有効/無効・面積予算。起動時設定）。
     pub webp: WebpPolicy,
+    /// shortlink 解決成功時に付与する `Cache-Control` ヘッダ値
+    /// （`public, max-age=<shortlink_ttl_seconds>`）。resolve はホットパスなので
+    /// 起動時に一度だけ構築し、リクエストごとの `format!`＋パースを避ける。
+    pub shortlink_cache_control: HeaderValue,
 }
