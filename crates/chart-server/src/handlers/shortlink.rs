@@ -98,12 +98,10 @@ pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>
     match state.store.get(&id).await {
         Ok(Some(query)) => {
             let mut resp = Redirect::temporary(&format!("/chart?{query}")).into_response();
-            resp.headers_mut().insert(
-                header::CACHE_CONTROL,
-                format!("public, max-age={}", state.shortlink_ttl_seconds)
-                    .parse()
-                    .unwrap(),
-            );
+            // 起動時に構築済みの値を clone（HeaderValue の clone は Bytes 参照カウントのみで
+            // アロケーションを伴わない）。ホットパスでの format!＋パースを避ける。
+            resp.headers_mut()
+                .insert(header::CACHE_CONTROL, state.shortlink_cache_control.clone());
             resp
         }
         Ok(None) => {
