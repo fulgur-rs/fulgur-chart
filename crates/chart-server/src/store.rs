@@ -53,8 +53,8 @@ impl ShortlinkBackend for ShortlinkStore {
         // (現状この区間に await は無く安全。durable backend 実装時もこの不変条件を守ること)。
         match self.map.entry(id) {
             dashmap::Entry::Occupied(mut entry) => {
-                // 同一 id は決定的に同一 query になるため通常 old_len == query_len。
-                // 一般化のためサイズ差分を正しく会計する。
+                // id は非決定的(ULID)なため通常この分岐(Occupied)は発生しない。
+                // 衝突や将来の backend 実装差異に備え、サイズ差分を正しく会計する一般化ロジックとして保持。
                 let old_len = entry.get().len();
                 if query_len > old_len {
                     let additional = query_len - old_len;
