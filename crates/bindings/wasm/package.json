@@ -18,11 +18,13 @@
   "scripts": {
     "build": "wasm-pack build --target web --release --locked",
     "test": "node --test",
+    "test:browser": "node --test __test__/browser-smoke.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepack": "npm run build && rm -f pkg/.gitignore"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "playwright": "^1.61.1",
     "typescript": "^5.0.0"
   }
 }
