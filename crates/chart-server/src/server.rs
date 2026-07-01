@@ -19,13 +19,13 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::{
+    backend::ShortlinkBackend,
     config::Config,
     handlers::{chart, mcp, meta, openapi::ApiDoc, shortlink, validate},
     state::AppState,
-    store::ShortlinkStore,
 };
 
-pub fn build_router(cfg: &Config, store: ShortlinkStore) -> Router {
+pub fn build_router(cfg: &Config, store: Arc<dyn ShortlinkBackend>) -> Router {
     // max_concurrent=0 は Semaphore::new(0) で恒久 503 になるため最低 1 に補正。
     let semaphore = Arc::new(Semaphore::new(cfg.max_concurrent.max(1)));
     let state = AppState {
@@ -130,7 +130,7 @@ mod tests {
         };
         build_router(
             &cfg,
-            ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024),
+            Arc::new(ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024)),
         )
     }
 
@@ -153,7 +153,7 @@ mod tests {
         };
         build_router(
             &cfg,
-            ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024),
+            Arc::new(ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024)),
         )
     }
 
