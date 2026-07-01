@@ -13,4 +13,6 @@ pub struct AppState {
     pub png_compression: Compression,
     /// WebP 出力のポリシー（有効/無効・面積予算。起動時設定）。
     pub webp: WebpPolicy,
+    /// shortlink 解決成功時の Cache-Control max-age に使う保証有効期限（秒）。
+    pub shortlink_ttl_seconds: u64,
 }

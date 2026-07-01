@@ -164,6 +164,7 @@ mod http_tests {
             shortlink_limit: 100,
             shortlink_max_bytes: 128 * 1024 * 1024,
             shortlink_entry_bytes: 512 * 1024,
+            shortlink_ttl_seconds: 86_400,
             cors_origins: "*".into(),
             rate_limit: 0,
             log_level: "info".into(),

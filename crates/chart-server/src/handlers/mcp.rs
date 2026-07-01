@@ -362,6 +362,7 @@ mod tests {
                 enabled: true,
                 max_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
             },
+            shortlink_ttl_seconds: 86_400,
         };
         axum::Router::new()
             .route("/mcp", post(mcp_handler))
