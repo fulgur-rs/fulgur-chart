@@ -7,7 +7,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
+use ulid::Ulid;
 
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateRequest {
@@ -23,26 +23,6 @@ pub struct CreateRequest {
     /// Output format: `svg`, `png`, `webp`, `data-uri`
     #[serde(default)]
     pub format: OutputFormat,
-}
-
-fn compute_id(
-    json: &str,
-    fmt: &str,
-    width: Option<u32>,
-    height: Option<u32>,
-    background_color: Option<&str>,
-) -> String {
-    // ID はチャート JSON + レンダーパラメータ全体のハッシュ（同スペックで異なるサイズ/フォーマットは別リンク）
-    // "_" を番兵として None と Some("") を区別する。
-    // ハッシュは 6 bytes（48bit）: 10000件時の誕生日衝突確率 < 0.001%。
-    let id_input = format!(
-        "{json}\x00{fmt}\x00{}\x00{}\x00{}",
-        width.map_or_else(|| "_".to_string(), |v| v.to_string()),
-        height.map_or_else(|| "_".to_string(), |v| v.to_string()),
-        background_color.unwrap_or("_"),
-    );
-    let hash = Sha256::digest(id_input.as_bytes());
-    hex::encode(&hash[..6])
 }
 
 #[utoipa::path(
@@ -61,14 +41,7 @@ pub async fn post_create(
     Json(req): Json<CreateRequest>,
 ) -> Response {
     let json = req.chart.to_string();
-    let id = compute_id(
-        &json,
-        req.format.as_str(),
-        req.width,
-        req.height,
-        // "_" を番兵として None と Some("") を区別する（Some("") は空文字列をそのまま使用）。
-        req.background_color.as_deref(),
-    );
+    let id = Ulid::new().to_string();
 
     let query = build_query(
         &json,
@@ -162,30 +135,6 @@ fn build_query(
     q
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn none_and_empty_string_background_produce_different_ids() {
-        let json = r#"{"type":"bar"}"#;
-        let id_none = compute_id(json, "svg", None, None, None);
-        let id_empty = compute_id(json, "svg", None, None, Some(""));
-        assert_ne!(
-            id_none, id_empty,
-            "None と Some(\"\") は異なるハッシュになるべき"
-        );
-    }
-
-    #[test]
-    fn same_params_produce_same_id() {
-        let json = r#"{"type":"bar"}"#;
-        let id1 = compute_id(json, "svg", Some(800), Some(600), Some("white"));
-        let id2 = compute_id(json, "svg", Some(800), Some(600), Some("white"));
-        assert_eq!(id1, id2);
-    }
-}
-
 /// HTTP レベルの統合テスト: `/chart/create` の handler→store マッピング
 /// （200 / 413 PAYLOAD_TOO_LARGE / 503 STORE_FULL）が配線として壊れないことを保証する。
 #[cfg(test)]
@@ -270,7 +219,7 @@ mod http_tests {
             status_and_body(router.clone().oneshot(create_request(body1)).await.unwrap()).await;
         assert_eq!(status1, StatusCode::OK, "body={b1}");
 
-        // 別スペック → 別 id → 新規挿入だが件数上限(1)に達しているため 503。
+        // ULID は非決定的なので spec に関わらず新規挿入だが、件数上限(1)に達しているため 503。
         let body2 =
             r#"{"chart":{"type":"line","data":{"labels":["B"],"datasets":[{"data":[2]}]}}}"#;
         let (status2, b2) =
@@ -291,5 +240,56 @@ mod http_tests {
         let (status, body) = status_and_body(resp).await;
         assert_eq!(status, StatusCode::OK, "body={body}");
         assert!(body.contains("/chart/s/"), "body={body}");
+    }
+
+    /// ULID は非決定的なので、同一 spec を連投しても別エントリ(別 URL)になる
+    /// (content-hash 時代の dedup は意図的に失われる — 8tr.5 の受容済みトレードオフ)。
+    #[tokio::test]
+    async fn create_generates_distinct_ids_for_identical_specs() {
+        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
+        let router = router_with_store(store);
+        let body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
+
+        let (status1, b1) =
+            status_and_body(router.clone().oneshot(create_request(body)).await.unwrap()).await;
+        assert_eq!(status1, StatusCode::OK, "body={b1}");
+
+        let (status2, b2) =
+            status_and_body(router.oneshot(create_request(body)).await.unwrap()).await;
+        assert_eq!(status2, StatusCode::OK, "body={b2}");
+
+        assert_ne!(
+            b1, b2,
+            "identical spec should produce distinct shortlink URLs (no dedup)"
+        );
+    }
+
+    /// 返却される id は ULID の文字列表現: 26 文字の Crockford base32。
+    #[tokio::test]
+    async fn create_returns_url_with_26_char_ulid_id() {
+        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
+        let body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
+        let resp = router_with_store(store)
+            .oneshot(create_request(body))
+            .await
+            .unwrap();
+        let (status, body) = status_and_body(resp).await;
+        assert_eq!(status, StatusCode::OK, "body={body}");
+
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let url = json["url"].as_str().unwrap();
+        let id = url
+            .strip_prefix("/chart/s/")
+            .expect("url should be /chart/s/{id}");
+        assert_eq!(
+            id.len(),
+            26,
+            "ULID string repr should be 26 chars, got: {id}"
+        );
+        assert!(
+            id.chars()
+                .all(|c| "0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(c.to_ascii_uppercase())),
+            "id should be valid Crockford base32: {id}"
+        );
     }
 }
