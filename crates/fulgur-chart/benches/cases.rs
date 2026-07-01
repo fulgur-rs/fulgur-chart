@@ -26,8 +26,15 @@ pub fn all() -> Vec<Case> {
             json: line(12),
         },
         Case {
+            // Off-path baseline: decimation explicitly disabled so this measures
+            // the full 10k-point render (no auto-decimation).
             name: "line_large",
-            json: line(10_000),
+            json: line_with_decimation(10_000, false),
+        },
+        Case {
+            // On-path: default auto-decimation fires (10k > plot_width*4).
+            name: "line_large_decimated",
+            json: line_with_decimation(10_000, true),
         },
         Case {
             name: "scatter_large",
@@ -72,6 +79,17 @@ fn line(n: usize) -> String {
         r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"label":"d","data":[{}]}}]}}}}"#,
         labels(n),
         numbers(n)
+    )
+}
+
+/// `line(n)` with an explicit `options.plugins.decimation.enabled` so benches can
+/// pin the off-path (false) baseline and the on-path (true) decimated variant.
+fn line_with_decimation(n: usize, enabled: bool) -> String {
+    format!(
+        r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"label":"d","data":[{}]}}]}},"options":{{"plugins":{{"decimation":{{"enabled":{}}}}}}}}}"#,
+        labels(n),
+        numbers(n),
+        enabled
     )
 }
 

@@ -330,6 +330,36 @@ impl Default for Theme {
     }
 }
 
+/// デシメーションアルゴリズム（Chart.js 互換）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecimationAlgorithm {
+    MinMax,
+    Lttb,
+}
+
+/// options.plugins.decimation の解決済み設定。
+/// 既定は自動オン（enabled=true）。Chart.js（false）からの意図的乖離。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Decimation {
+    pub enabled: bool,
+    pub algorithm: DecimationAlgorithm,
+    /// lttb の目標サンプル数。None なら論理プロット幅px。
+    pub samples: Option<f64>,
+    /// 間引き発動の点数しきい値。None なら論理プロット幅px × 4。
+    pub threshold: Option<f64>,
+}
+
+impl Default for Decimation {
+    fn default() -> Self {
+        Decimation {
+            enabled: true,
+            algorithm: DecimationAlgorithm::MinMax,
+            samples: None,
+            threshold: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartSpec {
     pub kind: ChartKind,
@@ -345,6 +375,8 @@ pub struct ChartSpec {
     pub data_labels: bool,
     /// 視覚トークンのテーマ(frontend で解決済み)。
     pub theme: Theme,
+    /// line/area 用デシメーション設定(frontend で解決済み)。
+    pub decimation: Decimation,
 }
 
 #[cfg(test)]

@@ -551,6 +551,25 @@ fn matrix_schema_roundtrip() {
 }
 
 #[test]
+fn schema_strict_parity_decimation_matrix() {
+    // MatrixOptions は CommonPlugins を流用するため schema は options.plugins.decimation を
+    // 受理する。strict matrix パーサも受理し、危険方向のパリティ破れ(schema OK / strict NG)を
+    // 作らないこと。decimation は matrix では no-op(line のみ参照)だが Chart.js のグローバル
+    // プラグイン挙動どおり「受理して無視」する。
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    let json = r##"{
+        "type": "matrix",
+        "data": { "datasets": [{ "data": [{"x": "Mon", "y": "AM", "v": 5.0}] }] },
+        "options": { "plugins": { "decimation": { "enabled": true, "algorithm": "lttb" } } }
+    }"##;
+    // strict 側: 厳格パーサも受理する。
+    assert!(chartjs::parse(json, true).is_ok());
+    // schema 側: ChartJsSpec でも受理される。
+    let spec: ChartJsSpec = serde_json::from_str(json).unwrap();
+    assert!(matches!(spec, ChartJsSpec::Matrix(_)));
+}
+
+#[test]
 fn treemap_schema_roundtrip() {
     use fulgur_chart::schema::chartjs::ChartJsSpec;
 
@@ -1139,4 +1158,84 @@ fn rendered_svg_reflects_top_level_width_height() {
     assert!(svg.contains(r#"width="640""#), "{svg}");
     assert!(svg.contains(r#"height="360""#), "{svg}");
     assert!(svg.contains(r#"viewBox="0 0 640 360""#), "{svg}");
+}
+
+// ── decimation (options.plugins.decimation) ──
+
+#[test]
+fn decimation_defaults_to_enabled_minmax_when_absent() {
+    let spec = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#,
+        false,
+    )
+    .unwrap();
+    assert!(spec.decimation.enabled);
+    assert_eq!(
+        spec.decimation.algorithm,
+        fulgur_chart::ir::DecimationAlgorithm::MinMax
+    );
+}
+
+#[test]
+fn decimation_explicit_disable_and_lttb() {
+    let json = r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+        "options":{"plugins":{"decimation":{"enabled":false,"algorithm":"lttb","samples":300,"threshold":1000}}}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    assert!(!spec.decimation.enabled);
+    assert_eq!(
+        spec.decimation.algorithm,
+        fulgur_chart::ir::DecimationAlgorithm::Lttb
+    );
+    assert_eq!(spec.decimation.samples, Some(300.0));
+    assert_eq!(spec.decimation.threshold, Some(1000.0));
+}
+
+#[test]
+fn decimation_invalid_algorithm_errors() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"decimation":{"algorithm":"bogus"}}}}"#;
+    assert!(chartjs::parse(json, false).is_err());
+}
+
+#[test]
+fn strict_accepts_decimation_keys() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"decimation":{"enabled":true,"algorithm":"min-max","samples":100,"threshold":500}}}}"#;
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn strict_rejects_unknown_decimation_subkey() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"decimation":{"bogus":1}}}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
+fn schema_strict_parity_decimation_line() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"decimation":{"enabled":true,"algorithm":"lttb","samples":50,"threshold":200}}}}"#;
+    // strict side: 厳格パーサも受理する。
+    assert!(chartjs::parse(json, true).is_ok());
+    // schema side: ChartJsSpec(internally tagged, deny_unknown_fields)でも受理されること。
+    let spec: fulgur_chart::schema::ChartJsSpec = serde_json::from_str(json).unwrap();
+    let decimation = match spec {
+        fulgur_chart::schema::ChartJsSpec::Line(line) => line
+            .options
+            .and_then(|o| o.plugins)
+            .and_then(|p| p.decimation),
+        _ => panic!("expected line variant"),
+    };
+    assert!(decimation.is_some());
+}
+
+#[test]
+fn schema_rejects_unknown_decimation_algorithm() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"decimation":{"algorithm":"bogus"}}}}"#;
+    // strict side は不正 algorithm を拒否する。
+    assert!(chartjs::parse(json, true).is_err());
+    // schema side も enum 制約で拒否すること（value レベルの parity）。
+    let v: serde_json::Value = serde_json::from_str(json).unwrap();
+    assert!(serde_json::from_value::<fulgur_chart::schema::ChartJsSpec>(v).is_err());
 }

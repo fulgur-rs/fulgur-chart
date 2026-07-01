@@ -70,12 +70,21 @@ struct RawPlugins {
     legend: Option<RawLegend>,
     datalabels: Option<RawDataLabels>,
     outlabels: Option<RawOutlabels>,
+    decimation: Option<RawDecimation>,
 }
 
 #[derive(Deserialize)]
 struct RawDataLabels {
     #[serde(default)]
     display: Option<bool>,
+}
+
+#[derive(Deserialize)]
+struct RawDecimation {
+    enabled: Option<bool>,
+    algorithm: Option<String>,
+    samples: Option<f64>,
+    threshold: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -446,6 +455,26 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         (None, _) => false,
     };
 
+    // decimation: options.plugins.decimation を IR へ解決する。未指定は既定(自動オン)。
+    let decimation = match &raw.options.plugins.decimation {
+        Some(d) => {
+            let algorithm = match d.algorithm.as_deref() {
+                None | Some("min-max") => DecimationAlgorithm::MinMax,
+                Some("lttb") => DecimationAlgorithm::Lttb,
+                Some(other) => {
+                    return Err(format!("未対応の decimation algorithm: {other}"));
+                }
+            };
+            Decimation {
+                enabled: d.enabled.unwrap_or(true),
+                algorithm,
+                samples: d.samples,
+                threshold: d.threshold,
+            }
+        }
+        None => Decimation::default(),
+    };
+
     // テーマ解決(配色に使うため色解決より先に行う)。
     let theme = build_theme(raw.options.theme);
 
@@ -678,6 +707,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels,
         theme,
+        decimation,
     })
 }
 
@@ -890,13 +920,20 @@ fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
         )?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             let allowed_plugins: &[&str] = if allow_outlabels {
-                &["title", "legend", "datalabels", "outlabels"]
+                &["title", "legend", "datalabels", "outlabels", "decimation"]
             } else {
-                &["title", "legend", "datalabels"]
+                &["title", "legend", "datalabels", "decimation"]
             };
             check_object(plugins, allowed_plugins, "options.plugins")?;
             if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
                 check_object(dl, &["display"], "options.plugins.datalabels")?;
+            }
+            if let Some(dec) = plugins.get("decimation").and_then(|v| v.as_object()) {
+                check_object(
+                    dec,
+                    &["enabled", "algorithm", "samples", "threshold"],
+                    "options.plugins.decimation",
+                )?;
             }
             if allow_outlabels
                 && let Some(ol) = plugins.get("outlabels").and_then(|v| v.as_object())
@@ -994,7 +1031,21 @@ fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
     if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
         check_object(options, &["plugins", "theme"], "options")?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            check_object(plugins, &["title", "legend"], "options.plugins")?;
+            // MatrixOptions は CommonPlugins を流用するため schema は decimation を受理する。
+            // strict も受理し(no-op、Chart.js のグローバルプラグイン挙動)、schema↔strict の
+            // 危険方向のパリティ破れを作らない。datalabels の破れは別 issue(27k)。
+            check_object(
+                plugins,
+                &["title", "legend", "decimation"],
+                "options.plugins",
+            )?;
+            if let Some(dec) = plugins.get("decimation").and_then(|v| v.as_object()) {
+                check_object(
+                    dec,
+                    &["enabled", "algorithm", "samples", "threshold"],
+                    "options.plugins.decimation",
+                )?;
+            }
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
             check_object(
@@ -1381,6 +1432,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 
@@ -1738,6 +1790,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 
@@ -1950,6 +2003,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 
@@ -2172,6 +2226,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 
@@ -2333,6 +2388,7 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         height: raw.height.unwrap_or(300.0),
         data_labels: false,
         theme,
+        decimation: Decimation::default(),
     })
 }
 

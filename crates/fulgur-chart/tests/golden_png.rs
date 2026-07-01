@@ -14,7 +14,14 @@ use fulgur_chart::raster_direct::render_chart_to_png;
 use tiny_skia::Pixmap;
 
 /// 比較対象の代表 spec 名（examples/specs/<name>.json）。
-const NAMES: &[&str] = &["bar", "line", "area", "pie"];
+const NAMES: &[&str] = &[
+    "bar",
+    "line",
+    "area",
+    "pie",
+    "line_decimated",
+    "line_decimated_lttb",
+];
 
 /// 1 チャンネルあたりの絶対差がこの値を超えたら「差分ピクセル」と数える。
 const CHANNEL_TOLERANCE: i16 = 4;

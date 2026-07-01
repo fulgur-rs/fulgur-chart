@@ -1,26 +1,30 @@
 {
   "bar_large": {
-    "alloc_bytes": 1304013,
+    "alloc_bytes": 1368981,
     "alloc_blocks": 12931
   },
   "bar_small": {
-    "alloc_bytes": 35877,
+    "alloc_bytes": 37357,
     "alloc_blocks": 619
   },
   "line_large": {
-    "alloc_bytes": 13489281,
-    "alloc_blocks": 90975
+    "alloc_bytes": 14516236,
+    "alloc_blocks": 90986
+  },
+  "line_large_decimated": {
+    "alloc_bytes": 8982265,
+    "alloc_blocks": 26641
   },
   "line_small": {
-    "alloc_bytes": 35570,
-    "alloc_blocks": 597
+    "alloc_bytes": 37562,
+    "alloc_blocks": 598
   },
   "pie_small": {
-    "alloc_bytes": 18062,
+    "alloc_bytes": 18518,
     "alloc_blocks": 286
   },
   "scatter_large": {
-    "alloc_bytes": 18447547,
+    "alloc_bytes": 18971267,
     "alloc_blocks": 170592
   }
 }

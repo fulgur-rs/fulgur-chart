@@ -10,7 +10,9 @@ use std::fmt::Write;
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
 
-/// line チャートの全マーカー点（renderer とモデルの単一の真実源）。
+/// line チャートのモデル幾何用の全マーカー点（`model::build_model` が参照）。
+/// レンダリング経路の `build()` は点を独立に計算しデシメーションするため、巨大データでは
+/// この全点列と実際の描画点は乖離する（モデルは chart.js 数値照合用＝間引きなしが正しい）。
 /// カテゴリごとに `line_category_x + ys.map` で計算し、欠損値は 0.0 扱い。
 pub fn line_points(
     spec: &crate::ir::ChartSpec,
@@ -59,15 +61,17 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
         // 元インデックスが連続しない箇所でセグメントを分割する。
         // chart.js の spanGaps=false デフォルトと同じ「欠損で線が途切れる」挙動。
-        let segments: Vec<Vec<(f64, f64)>> = {
-            let mut segs: Vec<Vec<(f64, f64)>> = Vec::new();
-            let mut cur: Vec<(f64, f64)> = Vec::new();
+        // 間引きは cat を保持したまま各セグメントへ適用するため、cat を含めて分割する
+        // （間引き後に cat で再分割すると全点が gap 扱いになり線が消えるため、再分割しない）。
+        let segments: Vec<Vec<(f64, f64, usize)>> = {
+            let mut segs: Vec<Vec<(f64, f64, usize)>> = Vec::new();
+            let mut cur: Vec<(f64, f64, usize)> = Vec::new();
             let mut prev_cat: Option<usize> = None;
             for &(x, y, cat) in &valid {
                 if prev_cat.is_some_and(|pc| cat != pc + 1) && !cur.is_empty() {
                     segs.push(std::mem::take(&mut cur));
                 }
-                cur.push((x, y));
+                cur.push((x, y, cat));
                 prev_cat = Some(cat);
             }
             if !cur.is_empty() {
@@ -75,6 +79,25 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
             segs
         };
+
+        // デシメーション判定は系列全体の点数で（gap 分割の前後で一貫）。
+        // 各セグメントを個別に間引き、line はその結果から直接描く（再分割しない）。
+        let plot_width = frame.plot_right - frame.plot_left;
+        let dec = crate::layout::decimate::resolve(&spec.decimation, plot_width, valid.len());
+        let decimated = dec.is_some();
+        let segments: Vec<Vec<(f64, f64, usize)>> = if let Some((algo, samples)) = dec {
+            segments
+                .iter()
+                // samples はセグメント単位で適用される。LTTB の場合、マルチセグメント系列では
+                // 最大 samples × セグメント数 点になりうる（min-max は占有ピクセル列数で自己制限）。
+                .map(|s| crate::layout::decimate::decimate_one(s, algo, samples))
+                .collect()
+        } else {
+            segments
+        };
+        // area/marker/label 用に間引き後の点列へ差し替え（Chart.js dataset.data 差し替えモデル）。
+        // cat は維持するため、ラベルの ser.values[cat] 参照は引き続き正しい。
+        let valid: Vec<(f64, f64, usize)> = segments.iter().flatten().copied().collect();
 
         // area（背面）: 有効点全体でひとつの閉多角形を描く。
         if ser.area && !valid.is_empty() {
@@ -105,19 +128,20 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             });
         }
 
-        // 線: セグメントごとに描く(gap で線が途切れる)。
+        // 線: セグメントごとに描く(gap で線が途切れる)。間引き済みセグメントから直接描画する。
         for seg in &segments {
             if seg.len() < 2 {
                 continue;
             }
+            let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
             if ser.tension <= 0.0 {
                 items.push(Prim::Polyline {
-                    points: seg.clone(),
+                    points: xy,
                     stroke: ser.stroke_at(0),
                     stroke_width: ser.stroke_width,
                 });
             } else {
-                let d = catmull_rom_path(seg, ser.tension);
+                let d = catmull_rom_path(&xy, ser.tension);
                 items.push(Prim::Path {
                     d,
                     fill: None,
@@ -127,16 +151,32 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
         }
 
-        // マーカー。
-        for &(cx, cy, _) in &valid {
-            items.push(Prim::Circle {
-                cx,
-                cy,
-                r: MARKER_R,
-                fill: ser.stroke_at(0),
-                stroke: ser.stroke_at(0),
-                stroke_width: 0.0,
-            });
+        // マーカー。threshold 超過で間引いた場合、線として描かれる(≥2点)セグメントの帯マーカーは
+        // 既定で抑制する。ただし単点セグメント(gap で孤立し線にならない点)はマーカーが唯一の
+        // 表現なので描画し、空チャート化を防ぐ。pointRadius 明示時は全点描画(エスケープハッチ)。
+        // 非間引き時は従来どおり全点を MARKER_R で描画(バイト不変。segments を平坦化すると valid と
+        // 同順・同内容)。
+        for seg in &segments {
+            let r = match (decimated, ser.point_radius) {
+                (false, _) => Some(MARKER_R),
+                (true, Some(r)) if r > 0.0 => Some(r),
+                (true, Some(_)) => None,
+                // 間引き既定: 線になる(≥2点)なら帯を抑制、単点(孤立点)は描画。
+                (true, None) if seg.len() < 2 => Some(MARKER_R),
+                (true, None) => None,
+            };
+            if let Some(r) = r {
+                for &(cx, cy, _) in seg {
+                    items.push(Prim::Circle {
+                        cx,
+                        cy,
+                        r,
+                        fill: ser.stroke_at(0),
+                        stroke: ser.stroke_at(0),
+                        stroke_width: 0.0,
+                    });
+                }
+            }
         }
 
         // データラベル(点の上、マーカー半径ぶん+余白だけ上)。
