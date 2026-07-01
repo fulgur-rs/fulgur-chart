@@ -551,6 +551,25 @@ fn matrix_schema_roundtrip() {
 }
 
 #[test]
+fn schema_strict_parity_decimation_matrix() {
+    // MatrixOptions は CommonPlugins を流用するため schema は options.plugins.decimation を
+    // 受理する。strict matrix パーサも受理し、危険方向のパリティ破れ(schema OK / strict NG)を
+    // 作らないこと。decimation は matrix では no-op(line のみ参照)だが Chart.js のグローバル
+    // プラグイン挙動どおり「受理して無視」する。
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    let json = r##"{
+        "type": "matrix",
+        "data": { "datasets": [{ "data": [{"x": "Mon", "y": "AM", "v": 5.0}] }] },
+        "options": { "plugins": { "decimation": { "enabled": true, "algorithm": "lttb" } } }
+    }"##;
+    // strict 側: 厳格パーサも受理する。
+    assert!(chartjs::parse(json, true).is_ok());
+    // schema 側: ChartJsSpec でも受理される。
+    let spec: ChartJsSpec = serde_json::from_str(json).unwrap();
+    assert!(matches!(spec, ChartJsSpec::Matrix(_)));
+}
+
+#[test]
 fn treemap_schema_roundtrip() {
     use fulgur_chart::schema::chartjs::ChartJsSpec;
 

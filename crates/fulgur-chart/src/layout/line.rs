@@ -151,23 +151,31 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
         }
 
-        // マーカー。threshold 超過で間引いた場合は既定で抑制（pointRadius 明示時のみ描画）。
-        let marker_r = match (decimated, ser.point_radius) {
-            (true, None) => None,
-            (true, Some(r)) if r > 0.0 => Some(r),
-            (true, Some(_)) => None,
-            (false, _) => Some(MARKER_R),
-        };
-        if let Some(r) = marker_r {
-            for &(cx, cy, _) in &valid {
-                items.push(Prim::Circle {
-                    cx,
-                    cy,
-                    r,
-                    fill: ser.stroke_at(0),
-                    stroke: ser.stroke_at(0),
-                    stroke_width: 0.0,
-                });
+        // マーカー。threshold 超過で間引いた場合、線として描かれる(≥2点)セグメントの帯マーカーは
+        // 既定で抑制する。ただし単点セグメント(gap で孤立し線にならない点)はマーカーが唯一の
+        // 表現なので描画し、空チャート化を防ぐ。pointRadius 明示時は全点描画(エスケープハッチ)。
+        // 非間引き時は従来どおり全点を MARKER_R で描画(バイト不変。segments を平坦化すると valid と
+        // 同順・同内容)。
+        for seg in &segments {
+            let r = match (decimated, ser.point_radius) {
+                (false, _) => Some(MARKER_R),
+                (true, Some(r)) if r > 0.0 => Some(r),
+                (true, Some(_)) => None,
+                // 間引き既定: 線になる(≥2点)なら帯を抑制、単点(孤立点)は描画。
+                (true, None) if seg.len() < 2 => Some(MARKER_R),
+                (true, None) => None,
+            };
+            if let Some(r) = r {
+                for &(cx, cy, _) in seg {
+                    items.push(Prim::Circle {
+                        cx,
+                        cy,
+                        r,
+                        fill: ser.stroke_at(0),
+                        stroke: ser.stroke_at(0),
+                        stroke_width: 0.0,
+                    });
+                }
             }
         }
 

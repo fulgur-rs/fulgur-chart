@@ -1031,7 +1031,21 @@ fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
     if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
         check_object(options, &["plugins", "theme"], "options")?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            check_object(plugins, &["title", "legend"], "options.plugins")?;
+            // MatrixOptions は CommonPlugins を流用するため schema は decimation を受理する。
+            // strict も受理し(no-op、Chart.js のグローバルプラグイン挙動)、schema↔strict の
+            // 危険方向のパリティ破れを作らない。datalabels の破れは別 issue(27k)。
+            check_object(
+                plugins,
+                &["title", "legend", "decimation"],
+                "options.plugins",
+            )?;
+            if let Some(dec) = plugins.get("decimation").and_then(|v| v.as_object()) {
+                check_object(
+                    dec,
+                    &["enabled", "algorithm", "samples", "threshold"],
+                    "options.plugins.decimation",
+                )?;
+            }
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
             check_object(

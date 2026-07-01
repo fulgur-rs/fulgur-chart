@@ -256,6 +256,46 @@ fn gapped_large_line_keeps_segments_and_decimates() {
     );
 }
 
+/// spec から Circle マーカー数を数える（NaN 注入など parse 後に変異させた spec 用）。
+fn circle_count_spec(spec: &fulgur_chart::ir::ChartSpec) -> usize {
+    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let scene = line::build(spec, &m);
+    scene
+        .items
+        .iter()
+        .filter(|p| matches!(p, Prim::Circle { .. }))
+        .count()
+}
+
+#[test]
+fn all_singleton_gaps_keep_markers_when_decimated() {
+    // 回帰: 非有限値で全ての有限点が「孤立点(単点セグメント)」になる巨大系列では、
+    // resolve は有限点数(>threshold)で間引きを有効化するが、単点セグメントは Polyline を
+    // 出さない。マーカーまで一律抑制すると線もマーカーも無い「空チャート」になる(以前は
+    // 点として見えていた回帰)。単点セグメントの孤立点はマーカーを保持すること。
+    // JSON は非有限値を表現できないため parse 後に奇数 index を NaN 化して孤立点を作る。
+    let n = 12000;
+    let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
+    let data: Vec<String> = (0..n).map(|i| format!("{}", (i * 37) % 101)).collect();
+    let json = format!(
+        r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"data":[{}]}}]}}}}"#,
+        labels.join(","),
+        data.join(",")
+    );
+    let mut spec = chartjs::parse(&json, false).unwrap();
+    // 奇数 index を NaN 化 → 偶数 index の有限点はすべて cat 不連続の単点セグメント。
+    for i in (1..n).step_by(2) {
+        spec.series[0].values[i] = f64::NAN;
+    }
+    // 有限点(=n/2=6000)は threshold を超え間引きが有効化されるが、全て単点 → Polyline は 0 本。
+    assert!(polylines(&spec).is_empty(), "all singletons → no polyline");
+    // マーカーは孤立点の唯一の表現なので保持される（空チャートにしない）。
+    assert!(
+        circle_count_spec(&spec) > 0,
+        "singleton (undrawable-as-line) points must keep markers when decimated"
+    );
+}
+
 // --- 決定性・no-op サニティ・SVG↔PNG 一致（Task 9）---
 
 #[test]
