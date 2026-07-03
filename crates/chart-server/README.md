@@ -141,7 +141,10 @@ volume). Horizontal scale-out is out of scope for this backend.
 - **Docker / Compose:** mount a volume at `/data` (the image default). The provided
   `docker-compose.yml` already does this.
 - **Railway:** attach a Volume and set `FULGUR_SHORTLINK_DIR` to its mount path;
-  without a Volume the filesystem is ephemeral and links vanish on redeploy.
+  without a Volume the filesystem is ephemeral and links vanish on redeploy. If the
+  process runs as nonroot (e.g. deploying the Docker image as-is) and writes to the
+  Volume fail with a permission error, also set `RAILWAY_RUN_UID=0` — Railway mounts
+  Volumes as root, so a nonroot process otherwise can't write to them.
 
 There is no active TTL deletion or LRU eviction, so the directory grows unbounded;
 `FULGUR_SHORTLINK_TTL_SECONDS` is only a `Cache-Control` floor guarantee, not a

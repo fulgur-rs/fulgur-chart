@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use tokio::fs;
+use ulid::Ulid;
 
 use crate::backend::{BackendError, ShortlinkBackend};
 
@@ -22,11 +23,36 @@ pub struct FileShortlinkStore {
 
 impl FileShortlinkStore {
     /// `root` ディレクトリを作成（存在すれば再利用）して store を構築する。
-    /// ディレクトリを作成できない場合はエラー（呼び出し側=main で fail-fast）。
+    /// ディレクトリを作成・書き込みできない場合はエラー（呼び出し側=main で fail-fast）。
     pub async fn new(root: impl AsRef<Path>, entry_bytes: usize) -> io::Result<Self> {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root).await?;
-        Ok(Self { root, entry_bytes })
+        let store = Self { root, entry_bytes };
+        // create_dir_all は既存の書き込み不可 dir（read-only / root 所有の mount 等）でも
+        // Ok を返す。実際に write→rename→remove の probe を行い、書けない dir を起動時に
+        // 検出して fail-fast する（さもないと最初の /chart/create まで問題が顕在化しない）。
+        store.probe_writable().await?;
+        Ok(store)
+    }
+
+    /// `root` が実際に書き込み可能かを起動時に検証する。insert と同じ write→rename
+    /// 経路を最小ペイロードで一度だけ実行し、成否に関わらず probe ファイルを掃除する。
+    async fn probe_writable(&self) -> io::Result<()> {
+        // 複数インスタンスが同一 dir を共有しても衝突しないよう一意名を使う。
+        let name = format!(".fulgur-write-probe-{}", Ulid::new());
+        let tmp = self.root.join(format!("{name}.tmp"));
+        let final_path = self.root.join(&name);
+        fs::write(&tmp, b"").await?;
+        match fs::rename(&tmp, &final_path).await {
+            Ok(()) => {
+                let _ = fs::remove_file(&final_path).await;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&tmp).await;
+                Err(e)
+            }
+        }
     }
 
     /// id をファイル名として安全に使えるパスへ写像する。

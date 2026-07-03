@@ -73,13 +73,12 @@ async fn status_and_body(resp: Response) -> (StatusCode, String) {
 async fn external_backend_can_be_injected_into_build_router() {
     let cfg = default_config();
     let _router = build_router(&cfg, Arc::new(NoopBackend));
+    // TempDir を変数に束縛して router 構築後も dir を生存させる（直接 .path() を渡すと
+    // 一時 TempDir が文末で drop され dir が消える。store ヘルパの established pattern に揃える）。
+    let dir = tempfile::tempdir().unwrap();
     let _router2 = build_router(
         &cfg,
-        Arc::new(
-            FileShortlinkStore::new(tempfile::tempdir().unwrap().path(), 256)
-                .await
-                .unwrap(),
-        ),
+        Arc::new(FileShortlinkStore::new(dir.path(), 256).await.unwrap()),
     );
 }
 
