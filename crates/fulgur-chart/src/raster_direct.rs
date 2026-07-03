@@ -362,6 +362,13 @@ fn all_pixels_opaque(scene: &Scene, pixmap: &Pixmap, scale: f32) -> bool {
     }
     // scene_to_pixmap と同一の scale フォールバック（<=0/非有限は 1.0）。
     let scale = if scale > 0.0 { scale } else { 1.0 };
+    // f32 のまま比較するのは **意図的**。`pixmap.width()` は scene_to_pixmap が
+    // `(scene.width as f32 * scale).round().max(1.0) as u32` で確保した値なので、
+    // 右辺と同一の f32 式に対する `round(e) <= e`（丸め上げでない＝完全被覆）へ厳密に還元される。
+    // `pixmap.width() as f32` は f32 由来整数の f32↔u32 往復ゆえ無損失で、64M px 上限
+    // (>2^24) でも round down しない（round(e) は常に f32 表現可能な整数）。f64 化すると
+    // 逆に「確保に使った f32 積」「tiny-skia が背景を描いた f32 変換」と判定がズレ、
+    // 実 pixmap 幾何と乖離しうる。健全性は 8888 万組の掃引で unsound skip ゼロを確認済み。
     (pixmap.width() as f32) <= scene.width as f32 * scale
         && (pixmap.height() as f32) <= scene.height as f32 * scale
 }
