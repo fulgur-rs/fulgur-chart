@@ -31,8 +31,8 @@ impl FileShortlinkStore {
     /// **検証を先に行う**こと（パス構築より前）。ULID の文字集合以外
     /// （`/`・`..` 等）は path traversal のリスクがあるため弾き、`None` を返す。
     fn path_for(&self, id: &str) -> Option<PathBuf> {
-        // ULID 文字列は 26 文字。ASCII 英数字のみ許可すれば `/`・`.`・`\` を含む
-        // id は構造的に弾かれ、traversal は起こり得ない（byte==char なので slice 安全）。
+        // ULID 文字列は 26 文字。長さ + ASCII 英数字のみの検証で `/`・`.`・`\` を含む
+        // id は構造的に弾かれ、path traversal は起こり得ない。
         if id.len() != 26 || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return None;
         }
@@ -78,14 +78,19 @@ impl ShortlinkBackend for FileShortlinkStore {
     }
 }
 
-/// temp に書いて rename する。rename 失敗時は temp を掃除して漏らさない。
+/// temp に書いて rename する。write/rename いずれの失敗でも temp を掃除して漏らさない。
 async fn write_then_rename(tmp: &Path, final_path: &Path, data: &[u8]) -> io::Result<()> {
-    fs::write(tmp, data).await?;
-    if let Err(e) = fs::rename(tmp, final_path).await {
+    if let Err(e) = write_then_rename_inner(tmp, final_path, data).await {
+        // write が temp を作る前に失敗した場合でも remove_file の失敗は無害（let _ で無視）。
         let _ = fs::remove_file(tmp).await;
         return Err(e);
     }
     Ok(())
+}
+
+async fn write_then_rename_inner(tmp: &Path, final_path: &Path, data: &[u8]) -> io::Result<()> {
+    fs::write(tmp, data).await?;
+    fs::rename(tmp, final_path).await
 }
 
 #[cfg(test)]
