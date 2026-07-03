@@ -65,7 +65,7 @@ jobs:
         with:
           key: coverage
 
-      - uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+      - uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
         with:
           tool: cargo-llvm-cov
 
@@ -116,7 +116,7 @@ jobs:
 
       - name: Install cross
         if: matrix.use_cross == true
-        uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+        uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
         with:
           tool: cross
 
@@ -150,7 +150,7 @@ jobs:
 
       # wasm32 でビルドが通るだけでなく、実際に SVG/PNG を生成して native と
       # byte 一致する(決定論が cross-platform で保たれる)ことを node 上で検証する。
-      - uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+      - uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
         with:
           tool: wasm-pack
 
@@ -195,7 +195,7 @@ jobs:
           workspaces: crates/bindings/ruby
           key: ruby-binding
 
-      - uses: ruby/setup-ruby@0dafeac902942906541bc140009cdbf32665b601 # v1.315.0
+      - uses: ruby/setup-ruby@d45b1a4e94b71acab930e56e79c6aa188764e7f9 # v1.316.0
         with:
           ruby-version: "3.3"
           working-directory: crates/bindings/ruby
@@ -381,7 +381,7 @@ jobs:
         with:
           node-version: "20"
 
-      - uses: taiki-e/install-action@9bcaee1dcae34154180f412e2fa69355a7cda9f6 # v2.82.6
+      - uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
         with:
           tool: wasm-pack
 
