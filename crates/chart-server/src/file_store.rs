@@ -7,6 +7,9 @@ use ulid::Ulid;
 
 use crate::backend::{BackendError, ShortlinkBackend};
 
+/// time-bucket ディレクトリの幅（ms）。`bucket = ulid_ms(id) / WIDTH_MS` で 1h 単位に束ねる。
+const WIDTH_MS: u64 = 3_600_000; // 1h
+
 /// ファイルシステム上に id→query を永続化する durable な単一ノード backend。
 ///
 /// 1 エントリ = 1 ファイル（ファイル名 = id、内容 = query 文字列）。filesystem の
@@ -55,16 +58,12 @@ impl FileShortlinkStore {
         }
     }
 
-    /// id をファイル名として安全に使えるパスへ写像する。
-    /// **検証を先に行う**こと（パス構築より前）。ULID の文字集合以外
-    /// （`/`・`..` 等）は path traversal のリスクがあるため弾き、`None` を返す。
+    /// id を検証し `root/{bucket}/{id}` パスへ写像する。ULID 以外は None。
+    /// ULID のパース成功が 26 文字 Crockford base32 を保証し path traversal を構造的に排除する。
     fn path_for(&self, id: &str) -> Option<PathBuf> {
-        // ULID 文字列は 26 文字。長さ + ASCII 英数字のみの検証で `/`・`.`・`\` を含む
-        // id は構造的に弾かれ、path traversal は起こり得ない。
-        if id.len() != 26 || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
-            return None;
-        }
-        Some(self.root.join(id))
+        let ulid = Ulid::from_string(id).ok()?;
+        let bucket = ulid.timestamp_ms() / WIDTH_MS;
+        Some(self.root.join(bucket.to_string()).join(id))
     }
 }
 
@@ -81,14 +80,18 @@ impl ShortlinkBackend for FileShortlinkStore {
                 format!("invalid shortlink id: {id}").into(),
             ));
         };
-        // 同一ディレクトリ内の temp ファイルに書いてから rename で atomic に配置する
+        // 同一 bucket ディレクトリ内の temp ファイルに書いてから rename で atomic に配置する
         // （並行 resolve の torn read 防止。同一 dir/同一 fs なので rename は atomic）。
         // ULID は一意なので temp 名（{id}.tmp）の衝突は起きない。fsync はしない
         // （保証は再起動/デプロイ耐性であって電源断耐性ではない）。
-        let tmp_path = self.root.join(format!("{id}.tmp"));
+        let bucket_dir = final_path
+            .parent()
+            .expect("path_for always has a bucket parent")
+            .to_path_buf();
+        let tmp_path = bucket_dir.join(format!("{id}.tmp"));
         // query と path を所有権ごと単一の blocking タスクへ move し、同期 std::fs で
-        // 書く。tokio::fs::write に借用スライスを渡すと payload を to_owned で複製する
-        // うえ write/rename が spawn_blocking を 2 回張るため、それを避けて 1 回に畳む。
+        // bucket dir 生成→write→rename を 1 回の spawn_blocking に畳む。tokio::fs に借用
+        // スライスを渡すと payload を to_owned で複製するうえ dispatch も増えるため避ける。
         tokio::task::spawn_blocking(move || {
             write_then_rename(&tmp_path, &final_path, query.as_bytes())
         })
@@ -112,9 +115,14 @@ impl ShortlinkBackend for FileShortlinkStore {
     }
 }
 
-/// temp に同期 I/O で書いて rename する（呼び出し側の spawn_blocking 内で実行）。
+/// bucket dir を掘ってから temp に同期 I/O で書いて rename する（呼び出し側の spawn_blocking 内で実行）。
 /// write/rename いずれの失敗でも temp を掃除して漏らさない。
 fn write_then_rename(tmp: &Path, final_path: &Path, data: &[u8]) -> io::Result<()> {
+    // time-bucket 化で final は root 直下ではなくなったため bucket dir を遅延生成する。
+    // parent は path_for が必ず付与する（tmp と同一 dir）。生成失敗時は temp 未作成なので掃除不要。
+    if let Some(parent) = final_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     if let Err(e) = std::fs::write(tmp, data).and_then(|()| std::fs::rename(tmp, final_path)) {
         // write が temp を作る前に失敗した場合でも remove_file の失敗は無害（let _ で無視）。
         let _ = std::fs::remove_file(tmp);
@@ -128,10 +136,16 @@ mod tests {
     use super::FileShortlinkStore;
     use crate::backend::{BackendError, ShortlinkBackend};
     use tempfile::TempDir;
+    use ulid::Ulid;
 
     /// 有効な ULID 形状の id（26 文字 Crockford base32）。
     fn valid_id() -> String {
         "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()
+    }
+
+    /// 指定 ms の ULID を生成（bucket/TTL の決定的テスト用）。
+    fn id_at_ms(ms: u64) -> String {
+        Ulid::from_parts(ms, 0).to_string()
     }
 
     async fn store(entry_bytes: usize) -> (FileShortlinkStore, TempDir) {
@@ -168,7 +182,17 @@ mod tests {
     async fn invalid_id_is_treated_as_not_found() {
         let (s, _d) = store(1_000).await;
         let long = "x".repeat(27);
-        for bad in ["../../etc/passwd", "..", "a/b", "short", long.as_str()] {
+        // 前半は長さゲート。後半は「26 文字だが Crockford base32 外（末尾 `/`・`.`）」で、
+        // 長さチェックではなく ULID decode 拒否 = path traversal 経路そのものを検証する。
+        for bad in [
+            "../../etc/passwd",
+            "..",
+            "a/b",
+            "short",
+            long.as_str(),
+            "01ARZ3NDEKTSV4RRFFQ69G5FA/",
+            "01ARZ3NDEKTSV4RRFFQ69G5FA.",
+        ] {
             assert_eq!(s.get(bad).await.unwrap(), None, "id={bad:?}");
         }
     }
@@ -203,11 +227,28 @@ mod tests {
         let (s, d) = store(1_000).await;
         let id = valid_id();
         s.insert(id.clone(), "x".into()).await.unwrap();
-        let mut rd = tokio::fs::read_dir(d.path()).await.unwrap();
+        let bucket = Ulid::from_string(&id).unwrap().timestamp_ms() / super::WIDTH_MS;
+        let bucket_dir = d.path().join(bucket.to_string());
+        let mut rd = tokio::fs::read_dir(&bucket_dir).await.unwrap();
         let mut names = vec![];
         while let Some(e) = rd.next_entry().await.unwrap() {
             names.push(e.file_name().to_string_lossy().into_owned());
         }
         assert_eq!(names, vec![id]);
+    }
+
+    #[tokio::test]
+    async fn insert_places_entry_in_time_bucket_dir() {
+        let (s, d) = store(1_000).await;
+        let ms = 1_700_000_000_000; // 任意の固定時刻
+        let id = id_at_ms(ms);
+        s.insert(id.clone(), "c=x&f=svg".into()).await.unwrap();
+        let bucket = ms / super::WIDTH_MS;
+        let expected = d.path().join(bucket.to_string()).join(&id);
+        assert!(
+            expected.is_file(),
+            "entry should live at root/{{bucket}}/{{id}}: {expected:?}"
+        );
+        assert_eq!(s.get(&id).await.unwrap(), Some("c=x&f=svg".into()));
     }
 }
