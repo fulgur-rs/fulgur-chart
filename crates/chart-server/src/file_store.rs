@@ -228,14 +228,19 @@ impl ShortlinkBackend for FileShortlinkStore {
                 format!("invalid shortlink id: {id}").into(),
             ));
         };
-        // 容量 backstop: 件数 or バイト上限を超えるなら即 Full(→503)。
-        // Task 4 で inline sweep を挟む。現段階では即 Full。
+        // 容量 backstop: 件数 or バイト上限を超えるなら、まず期限切れ bucket を drain
+        // して自己回復を試み、それでもなお超過なら Full(→503)。
         // 注: この would_exceed→（write→）fetch_add の並びは意図的に非アトミック。
         // 並行 insert 下では cap を僅かに超過し得るが、soft backstop として許容する
         // 性質であり、ロックは張らない（真実源はディスク、再起動時に scan で自己修復）。
         let new_len = query.len() as u64;
         if self.would_exceed(new_len) {
-            return Err(BackendError::Full);
+            // 満杯: まず期限切れ bucket を drain して自己回復を試みる（system now）。
+            self.sweep_expired(system_now_ms()).await;
+            if self.would_exceed(new_len) {
+                // drain 後もなお超過（＝全 live が age<TTL）→ 一時拒否（次 sweep で回復）。
+                return Err(BackendError::Full);
+            }
         }
         // 同一 bucket ディレクトリ内の temp ファイルに書いてから rename で atomic に配置する
         // （並行 resolve の torn read 防止。同一 dir/同一 fs なので rename は atomic）。
@@ -291,6 +296,15 @@ fn write_then_rename(tmp: &Path, final_path: &Path, data: &[u8]) -> io::Result<(
         return Err(e);
     }
     Ok(())
+}
+
+/// 現在時刻を Unix epoch からのミリ秒で返す。sweep のしきい値計算に使う
+/// （システムクロックが epoch 以前という異常時のみ 0 = 何も削除しない安全側）。
+fn system_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -431,6 +445,9 @@ mod tests {
     #[tokio::test]
     async fn insert_returns_full_when_entry_cap_reached() {
         let (s, _d) = store_capped(1_000, 0, 1).await; // 件数上限 1
+        // wall-clock 非依存化: TTL=u64::MAX で inline sweep を no-op にし cap backstop のみ検証。
+        // 固定 2023 timestamp は default TTL 下で age≥TTL となり inline sweep に drain され得るため。
+        let s = s.with_ttl_seconds(u64::MAX);
         s.insert(id_at_ms(1_700_000_000_000), "a".into())
             .await
             .unwrap();
@@ -441,6 +458,8 @@ mod tests {
     #[tokio::test]
     async fn insert_returns_full_when_byte_budget_reached() {
         let (s, _d) = store_capped(1_000, 4, 0).await; // バイト上限 4
+        // TTL=u64::MAX で inline sweep を no-op 化し byte cap のみ検証（上のテストと同理由）。
+        let s = s.with_ttl_seconds(u64::MAX);
         s.insert(id_at_ms(1_700_000_000_000), "abc".into())
             .await
             .unwrap(); // 3B
@@ -461,6 +480,7 @@ mod tests {
         let s2 = FileShortlinkStore::new(dir.path(), 1_000)
             .await
             .unwrap()
+            .with_ttl_seconds(u64::MAX) // inline sweep を no-op 化し seed count のみ検証
             .with_capacity(0, 1);
         let r = s2.insert(id_at_ms(1_700_000_000_001), "x".into()).await;
         assert!(matches!(&r, Err(BackendError::Full)), "{r:?}");
@@ -481,6 +501,7 @@ mod tests {
         let s2 = FileShortlinkStore::new(dir.path(), 1_000)
             .await
             .unwrap()
+            .with_ttl_seconds(u64::MAX) // inline sweep を no-op 化し byte seed のみ検証
             .with_capacity(3, 0);
         let r = s2.insert(id_at_ms(1_700_000_000_001), "x".into()).await; // +1B > 3
         assert!(matches!(&r, Err(BackendError::Full)), "{r:?}");
@@ -510,6 +531,7 @@ mod tests {
         let s2 = FileShortlinkStore::new(dir.path(), 1_000)
             .await
             .unwrap()
+            .with_ttl_seconds(u64::MAX) // inline sweep を no-op 化し seed filter のみ検証
             .with_capacity(0, 2);
         s2.insert(id_at_ms(ms + 1), "y".into())
             .await
@@ -591,7 +613,10 @@ mod tests {
     async fn sweep_decrements_counters() {
         // 消えた bucket の分だけ件数上限が空くことで間接的に検証。
         let (s, _d) = store(1_000).await;
-        let s = s.with_ttl_seconds(TTL).with_capacity(0, 1);
+        // TTL=u64::MAX: insert 内の inline sweep（system now）を無効化し、下の明示 sweep
+        // だけが drain するようにする。明示 sweep は now=u64::MAX で呼ぶ（deletable_at も
+        // 飽和して u64::MAX、`deletable_at > now` が false になり削除される）。
+        let s = s.with_ttl_seconds(u64::MAX).with_capacity(0, 1);
         let old_ms = 1_700_000_000_000;
         s.insert(id_at_ms(old_ms), "old".into()).await.unwrap();
         // 上限 1 なので今は Full
@@ -600,8 +625,8 @@ mod tests {
             Err(BackendError::Full)
         ));
         let b = old_ms / W;
-        s.sweep_expired((b + 1) * W + TTL_MS).await;
-        // sweep でカウンタが 0 に戻り、新規 insert が通る（新しい若い id）
+        s.sweep_expired(u64::MAX).await;
+        // sweep でカウンタが 0 に戻り、新規 insert が通る
         s.insert(id_at_ms((b + 1) * W + TTL_MS + 1), "fresh".into())
             .await
             .unwrap();
@@ -611,7 +636,8 @@ mod tests {
     #[tokio::test]
     async fn sweep_decrements_byte_counter() {
         let (s, _d) = store(1_000).await;
-        let s = s.with_ttl_seconds(TTL).with_capacity(3, 0); // byte 上限 3
+        // TTL=u64::MAX で inline sweep を無効化し、明示 sweep(now=u64::MAX) だけが drain する。
+        let s = s.with_ttl_seconds(u64::MAX).with_capacity(3, 0); // byte 上限 3
         let old_ms = 1_700_000_000_000;
         s.insert(id_at_ms(old_ms), "abc".into()).await.unwrap(); // 3B で budget 満杯
         assert!(matches!(
@@ -619,10 +645,33 @@ mod tests {
             Err(BackendError::Full)
         ));
         let b = old_ms / W;
-        s.sweep_expired((b + 1) * W + TTL_MS).await; // 旧 bucket drain → bytes 0
+        s.sweep_expired(u64::MAX).await; // 旧 bucket drain → bytes 0
         // bytes を 0 に減算していなければ +2B で超過し Full になり、この unwrap が落ちる。
         s.insert(id_at_ms((b + 1) * W + TTL_MS + 1), "yz".into())
             .await
             .unwrap(); // 2B ≤ 3
+    }
+
+    #[tokio::test]
+    async fn insert_over_cap_drains_expired_then_succeeds() {
+        // 件数上限 1。まず古いエントリで埋める。
+        let (s, _d) = store(1_000).await;
+        let s = s.with_ttl_seconds(1).with_capacity(0, 1); // TTL=1s（すぐ期限切れ）
+        let old_ms: u64 = 1_000; // epoch 直後 → 現在時刻から見て遥かに age≥TTL
+        s.insert(id_at_ms(old_ms), "old".into()).await.unwrap();
+        // 新しい若い id を insert → over-cap だが inline sweep が古い bucket を drain して受理。
+        let fresh = Ulid::new().to_string(); // 現在時刻の ULID
+        s.insert(fresh.clone(), "fresh".into()).await.unwrap();
+        assert_eq!(s.get(&fresh).await.unwrap(), Some("fresh".into()));
+    }
+
+    #[tokio::test]
+    async fn insert_over_cap_all_young_returns_full() {
+        let (s, _d) = store(1_000).await;
+        let s = s.with_ttl_seconds(86_400).with_capacity(0, 1); // TTL=24h
+        // 2 件とも「今」作成＝ age<TTL。inline sweep は何も消せない → Full。
+        s.insert(Ulid::new().to_string(), "a".into()).await.unwrap();
+        let r = s.insert(Ulid::new().to_string(), "b".into()).await;
+        assert!(matches!(&r, Err(BackendError::Full)), "{r:?}");
     }
 }
