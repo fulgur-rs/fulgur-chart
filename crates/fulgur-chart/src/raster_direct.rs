@@ -190,10 +190,19 @@ pub fn render_chart_to_webp(
     // WebP 専用の上限(軸・面積)で pixmap 確保前に弾き OOM を防ぐ(→ WEBP_LIMITS)。
     let mut pixmap = scene_to_pixmap(&scene, scale, &face, &WEBP_LIMITS)?;
 
-    // pixmap バッファを in-place で straight 化する(別バッファを確保しない。
-    // WebPEncoder は premultiplied ではなく straight alpha を要求する → demultiply_in_place)。
-    demultiply_in_place(&mut pixmap);
+    // WebPEncoder は straight alpha を要求する。全画素 α==255 が保証される
+    // (不透明背景・完全被覆)ときは premult==straight のため demultiply を省く。
+    // それ以外は in-place で straight 化する(別バッファを確保しない)。
+    if !all_pixels_opaque(&scene, &pixmap, scale) {
+        demultiply_in_place(&mut pixmap);
+    }
 
+    encode_pixmap_webp(&pixmap)
+}
+
+/// straight RGBA8 の Pixmap をロスレス WebP バイト列へエンコードする。
+/// `render_chart_to_webp` と回帰テストで共有する（DRY）。
+fn encode_pixmap_webp(pixmap: &Pixmap) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
     WebPEncoder::new_lossless(&mut buf)
         .write_image(
@@ -330,7 +339,38 @@ fn scene_to_png_with_face(
     compression: PngCompression,
 ) -> Result<Vec<u8>, String> {
     let mut pixmap = scene_to_pixmap(scene, scale, face, &PNG_LIMITS)?;
-    encode_png_fast(&mut pixmap, compression)
+    let skip = all_pixels_opaque(scene, &pixmap, scale);
+    encode_png_fast(&mut pixmap, compression, skip)
+}
+
+/// pixmap の全画素が α==255（部分α画素ゼロ）と **静的に保証**できるとき true。
+///
+/// 条件は 2 つ:
+/// 1. `scene.has_opaque_background()` — 最背面に全面不透明 Rect が敷かれている。
+///    背景 rect は非 AA（中心サンプリング）で描かれ部分αを作らず、その上の source-over は
+///    opaque dest 上で α==255 を保つため、被覆された画素は必ず α==255 になる。
+///    skip 正当性は全内容が source-over 合成である前提に依存する（本 crate は既定 source-over のみ）。
+/// 2. pixmap が背景の device 矩形 `[0,width*scale]×[0,height*scale]` に**完全内包**される。
+///    丸め上げ（`round(w*scale) > w*scale`）だと右/下端に未被覆の列/行が生じ、そこへ AA 内容が
+///    届くと部分αが出る余地が残る。内包していれば未被覆画素が存在せず原理的に起きない。
+///
+/// 両立時のみ `demultiply_in_place`（部分α画素の書き換え）は no-op と確定するので省ける。
+/// どちらか false でも安全側で従来スキャンへ fallback する（fail-safe）。
+fn all_pixels_opaque(scene: &Scene, pixmap: &Pixmap, scale: f32) -> bool {
+    if !scene.has_opaque_background() {
+        return false;
+    }
+    // scene_to_pixmap と同一の scale フォールバック（<=0/非有限は 1.0）。
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    // f32 のまま比較するのは **意図的**。`pixmap.width()` は scene_to_pixmap が
+    // `(scene.width as f32 * scale).round().max(1.0) as u32` で確保した値なので、
+    // 右辺と同一の f32 式に対する `round(e) <= e`（丸め上げでない＝完全被覆）へ厳密に還元される。
+    // `pixmap.width() as f32` は f32 由来整数の f32↔u32 往復ゆえ無損失で、64M px 上限
+    // (>2^24) でも round down しない（round(e) は常に f32 表現可能な整数）。f64 化すると
+    // 逆に「確保に使った f32 積」「tiny-skia が背景を描いた f32 変換」と判定がズレ、
+    // 実 pixmap 幾何と乖離しうる。健全性は 8888 万組の掃引で unsound skip ゼロを確認済み。
+    (pixmap.width() as f32) <= scene.width as f32 * scale
+        && (pixmap.height() as f32) <= scene.height as f32 * scale
 }
 
 /// premultiplied RGBA な Pixmap を straight(非 premultiplied) RGBA へ **in-place** 変換する。
@@ -372,14 +412,24 @@ fn demultiply_in_place(pixmap: &mut Pixmap) {
 
 /// Pixmap を PNG バイト列にエンコードする（tiny-skia `encode_png()` の高速等価版）。
 ///
-/// 圧縮 `Compression::Fast`(fdeflate)・フィルタ `Sub` は tiny-skia が用いる png の
-/// デフォルトと同値。straight 変換を高速化した点だけが異なり、出力は tiny-skia
-/// `encode_png()` とバイト単位で一致する（回帰: `encode_png_fast_matches_tiny_skia_byte_for_byte`）。
+/// 圧縮 `Compression::Fast`(fdeflate)・フィルタ `Sub` は tiny-skia の png デフォルトと同値。
+/// straight 変換を高速化した点だけが異なり、出力は tiny-skia `encode_png()` とバイト一致する
+/// （回帰: `encode_png_fast_matches_tiny_skia_byte_for_byte`）。
+///
+/// `skip_demultiply == true`（呼び出し元が全画素 α==255 を保証: [`all_pixels_opaque`]）のときは
+/// demultiply スキャンを丸ごと省き、premultiplied バッファ(`pixmap.data()`)をそのまま
+/// straight としてエンコードする。追加バッファは確保しない（ピークメモリ不変）。
 ///
 /// `pixmap` を in-place で straight 化するため `&mut` を取る(呼び出し元はこの直後に
 /// pixmap を捨てる前提)。これにより straight のフルフレームコピーを確保しない。
-fn encode_png_fast(pixmap: &mut Pixmap, compression: PngCompression) -> Result<Vec<u8>, String> {
-    demultiply_in_place(pixmap);
+fn encode_png_fast(
+    pixmap: &mut Pixmap,
+    compression: PngCompression,
+    skip_demultiply: bool,
+) -> Result<Vec<u8>, String> {
+    if !skip_demultiply {
+        demultiply_in_place(pixmap);
+    }
     encode_rgba_png(pixmap.data(), pixmap.width(), pixmap.height(), compression)
         .map_err(|e| format!("PNG encode failed: {e}"))
 }
@@ -1155,6 +1205,16 @@ mod tests {
         .unwrap()
     }
 
+    /// 不透明背景の spec（bar_spec に白背景を付与）。
+    /// 色コード `#ffffff` を含むため `"#` を含まない `r##"..."##` デリミタを使う。
+    fn opaque_bar_spec() -> crate::ir::ChartSpec {
+        chartjs::parse(
+            r##"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[{"label":"売上","data":[10,20,30]}]},"options":{"theme":{"backgroundColor":"#ffffff"}}}"##,
+            false,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn rasterizes_to_valid_png() {
         let png = render_chart_to_png(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
@@ -1197,12 +1257,83 @@ mod tests {
         // tiny-skia の参照出力（premultiplied→straight を全画素 demultiply）。
         // encode_png_fast は pixmap を in-place で straight 化するため、参照出力を先に取る。
         let expected = pixmap.encode_png().unwrap();
-        // 自前パス（a==255/a==0 は据え置き、部分αのみ in-place demultiply）。Fast は tiny-skia 同設定。
-        let actual = encode_png_fast(&mut pixmap, PngCompression::Fast).unwrap();
+        // bar_spec は背景なし → 非 opaque → skip=false（従来どおり全画素 demultiply）。
+        let actual = encode_png_fast(&mut pixmap, PngCompression::Fast, false).unwrap();
 
         assert_eq!(
             actual, expected,
             "fast PNG encode は tiny-skia encode_png とバイト一致でなければならない"
+        );
+    }
+
+    /// opaque 背景では demultiply をスキップしても tiny-skia の全画素 demultiply と
+    /// バイト一致しなければならない（全画素 α==255 で premult==straight）。
+    #[test]
+    fn encode_png_fast_opaque_bg_skip_matches_tiny_skia_byte_for_byte() {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let measurer = crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = crate::layout::build_scene(&opaque_bar_spec(), &measurer);
+        assert!(scene.has_opaque_background());
+
+        let mut pixmap = scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap();
+        // 参照: tiny-skia の全画素 demultiply（&self、pixmap を破壊しない）。
+        let expected = pixmap.encode_png().unwrap();
+        // スキップ経路（demultiply を呼ばない）。opaque なので一致するはず。
+        let actual = encode_png_fast(&mut pixmap, PngCompression::Fast, true).unwrap();
+        assert_eq!(
+            actual, expected,
+            "opaque skip 経路は tiny-skia encode_png とバイト一致でなければならない"
+        );
+    }
+
+    /// 部分α内容(AA 縁)で誤って skip すると tiny-skia の全 demultiply と食い違う。
+    /// = demultiply は load-bearing であり、opaque skip テストの一致は guard が
+    /// 部分α画素の存在を排除しているからこそ意味を持つ、ことの証明。
+    #[test]
+    fn encode_png_fast_wrong_skip_on_partial_alpha_diverges() {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let measurer = crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap();
+        // bar_spec は背景なし → AA 縁に部分α画素がある。
+        let scene = crate::layout::build_scene(&bar_spec(), &measurer);
+        let mut pixmap = scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap();
+        let expected = pixmap.encode_png().unwrap(); // 全画素 demultiply（正しい出力）
+        let wrongly_skipped = encode_png_fast(&mut pixmap, PngCompression::Fast, true).unwrap();
+        assert_ne!(
+            wrongly_skipped, expected,
+            "部分α内容で skip すると出力は食い違うはず（demultiply は load-bearing）"
+        );
+    }
+
+    /// スキップ判定: opaque + 整数 scale は true、非 opaque は false、
+    /// opaque + 丸め上げ分数 scale は false（安全側で従来スキャンへ）。
+    #[test]
+    fn all_pixels_opaque_decision() {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let measurer = crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let op = crate::layout::build_scene(&opaque_bar_spec(), &measurer);
+        let pm1 = scene_to_pixmap(&op, 1.0, &face, &PNG_LIMITS).unwrap();
+        assert!(all_pixels_opaque(&op, &pm1, 1.0), "opaque+整数は skip 可");
+        let pm2 = scene_to_pixmap(&op, 2.0, &face, &PNG_LIMITS).unwrap();
+        assert!(
+            all_pixels_opaque(&op, &pm2, 2.0),
+            "opaque+整数(2x)は skip 可"
+        );
+
+        // op.width に依存せず丸め上げを強制: width*scale = width+0.5 →
+        // round=width+1 > width+0.5 → 被覆保証不可（安全側で skip 不可）。
+        let round_up_scale = 1.0 + 0.5 / op.width as f32;
+        let pmf = scene_to_pixmap(&op, round_up_scale, &face, &PNG_LIMITS).unwrap();
+        assert!(
+            !all_pixels_opaque(&op, &pmf, round_up_scale),
+            "丸め上げは skip 不可"
+        );
+
+        let non = crate::layout::build_scene(&bar_spec(), &measurer);
+        let pmn = scene_to_pixmap(&non, 1.0, &face, &PNG_LIMITS).unwrap();
+        assert!(
+            !all_pixels_opaque(&non, &pmn, 1.0),
+            "非 opaque は skip 不可"
         );
     }
 
@@ -1377,6 +1508,66 @@ mod tests {
         let a = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
         let b = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
         assert_eq!(a, b, "WebP 出力は決定的でなければならない");
+    }
+
+    /// WebP も opaque 時に demultiply をスキップして byte 一致すること。
+    /// 参照 = 全画素 demultiply 後にエンコード、実測 = スキップしてエンコード。
+    #[test]
+    fn webp_opaque_bg_skip_matches_full_demultiply_byte_for_byte() {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let measurer = crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = crate::layout::build_scene(&opaque_bar_spec(), &measurer);
+        assert!(scene.has_opaque_background());
+
+        let mut ref_pm = scene_to_pixmap(&scene, 1.0, &face, &WEBP_LIMITS).unwrap();
+        let skip_pm = ref_pm.clone();
+        demultiply_in_place(&mut ref_pm);
+        let expected = encode_pixmap_webp(&ref_pm).unwrap();
+        let actual = encode_pixmap_webp(&skip_pm).unwrap();
+
+        assert_eq!(
+            actual, expected,
+            "opaque WebP skip 経路は全 demultiply 経路とバイト一致でなければならない"
+        );
+    }
+
+    /// WebP と PNG は同一 spec を同一ピクセルへエンコードすること(end-to-end)。
+    /// 非 opaque(demultiply 分岐)と opaque(skip 分岐)の両方を通し、guard 誤配線
+    /// (例: `!` 脱落で premultiplied のまま WebP 出力)を AA 縁のズレとして捕捉する。
+    ///
+    /// 両経路とも同じ straight RGBA を lossless に書くが、デコーダの alpha 規約が違う:
+    /// `image` の WebP デコードは straight を返し、tiny-skia の `decode_png` は
+    /// `premultiply_u8` で premultiplied 化して返す。straight→premult→straight の
+    /// round-trip は低 α 縁で丸め損失があるため、WebP 側を tiny-skia と同一の
+    /// `premultiply_u8`(= `ColorU8::premultiply`)で premultiplied 空間へ揃えてから
+    /// 厳密比較する。両者が同じ straight 値を書いていれば byte 一致する。
+    #[test]
+    fn webp_and_png_decode_to_identical_pixels() {
+        for (name, spec) in [("non_opaque", bar_spec()), ("opaque", opaque_bar_spec())] {
+            let webp = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT).unwrap();
+            let png =
+                render_chart_to_png_with(&spec, 1.0, DEFAULT_FONT, PngCompression::Fast).unwrap();
+            let webp_rgba = image::load_from_memory_with_format(&webp, image::ImageFormat::WebP)
+                .unwrap()
+                .to_rgba8();
+            let png_pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
+            assert_eq!(webp_rgba.width(), png_pm.width(), "{name} width");
+            assert_eq!(webp_rgba.height(), png_pm.height(), "{name} height");
+
+            // WebP の straight RGBA を tiny-skia と同一の premultiply で揃える。
+            let webp_premul: Vec<u8> = webp_rgba
+                .pixels()
+                .flat_map(|p| {
+                    let pm = tiny_skia::ColorU8::from_rgba(p[0], p[1], p[2], p[3]).premultiply();
+                    [pm.red(), pm.green(), pm.blue(), pm.alpha()]
+                })
+                .collect();
+            assert_eq!(
+                webp_premul.as_slice(),
+                png_pm.data(),
+                "{name}: WebP と PNG は同一ピクセルへエンコードすべき（premultiplied 空間で厳密一致）"
+            );
+        }
     }
 
     #[test]

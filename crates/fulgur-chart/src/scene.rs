@@ -81,3 +81,152 @@ pub struct Scene {
     pub height: f64,
     pub items: Vec<Prim>,
 }
+
+impl Scene {
+    /// 最背面(items[0])が canvas 全面を覆う不透明 Rect のとき true。
+    ///
+    /// `build_scene` は `theme.background` 指定時に全面矩形を index 0 へ挿入するため、
+    /// これは「不透明背景が敷かれている」ことと一致する。背景なし・半透明背景・部分被覆の
+    /// 先頭矩形では false（＝最適化を適用せず安全側）。PNG/WebP エンコードで
+    /// demultiply スキャンを省ける（全画素 α==255 を前提にできる）ための **必要条件**。
+    /// 十分条件は encode 時に scale 依存の device 被覆判定と合成する。
+    pub fn has_opaque_background(&self) -> bool {
+        matches!(
+            self.items.first(),
+            Some(Prim::Rect { x, y, w, h, fill })
+                if *x <= 0.0
+                    && *y <= 0.0
+                    && *x + *w >= self.width
+                    && *y + *h >= self.height
+                    && fill.a >= 1.0
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::Color;
+
+    fn full_rect(w: f64, h: f64, a: f32) -> Prim {
+        Prim::Rect {
+            x: 0.0,
+            y: 0.0,
+            w,
+            h,
+            fill: Color {
+                r: 10,
+                g: 20,
+                b: 30,
+                a,
+            },
+        }
+    }
+
+    #[test]
+    fn opaque_full_canvas_rect_is_opaque_background() {
+        let s = Scene {
+            width: 100.0,
+            height: 50.0,
+            items: vec![full_rect(100.0, 50.0, 1.0)],
+        };
+        assert!(s.has_opaque_background());
+    }
+
+    #[test]
+    fn semi_transparent_bg_is_not_opaque() {
+        let s = Scene {
+            width: 100.0,
+            height: 50.0,
+            items: vec![full_rect(100.0, 50.0, 0.5)],
+        };
+        assert!(!s.has_opaque_background());
+    }
+
+    #[test]
+    fn empty_scene_is_not_opaque() {
+        let s = Scene {
+            width: 100.0,
+            height: 50.0,
+            items: vec![],
+        };
+        assert!(!s.has_opaque_background());
+    }
+
+    #[test]
+    fn partial_coverage_first_rect_is_not_opaque() {
+        // 全幅に満たない先頭矩形は背景として扱わない。
+        let s = Scene {
+            width: 100.0,
+            height: 50.0,
+            items: vec![full_rect(80.0, 50.0, 1.0)],
+        };
+        assert!(!s.has_opaque_background());
+    }
+
+    #[test]
+    fn positive_offset_rect_is_not_opaque() {
+        // x=10,y=10 は左上端を覆わない → *x<=0.0 / *y<=0.0 節を固定する。
+        let s = Scene {
+            width: 100.0,
+            height: 50.0,
+            items: vec![Prim::Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 100.0,
+                h: 50.0,
+                fill: Color {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 1.0,
+                },
+            }],
+        };
+        assert!(!s.has_opaque_background());
+    }
+
+    #[test]
+    fn short_height_rect_is_not_opaque() {
+        // h=40 は下端まで届かない → *y + *h >= self.height 節を固定する。
+        let s = Scene {
+            width: 100.0,
+            height: 50.0,
+            items: vec![Prim::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 40.0,
+                fill: Color {
+                    r: 10,
+                    g: 20,
+                    b: 30,
+                    a: 1.0,
+                },
+            }],
+        };
+        assert!(!s.has_opaque_background());
+    }
+
+    #[test]
+    fn non_rect_first_item_is_not_opaque() {
+        let s = Scene {
+            width: 100.0,
+            height: 50.0,
+            items: vec![Prim::Line {
+                x1: 0.0,
+                y1: 0.0,
+                x2: 1.0,
+                y2: 1.0,
+                stroke: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                stroke_width: 1.0,
+            }],
+        };
+        assert!(!s.has_opaque_background());
+    }
+}
