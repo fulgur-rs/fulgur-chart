@@ -1,5 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use tokio::fs;
@@ -22,6 +23,16 @@ pub struct FileShortlinkStore {
     root: PathBuf,
     /// 単一エントリ（query 文字列）のバイト数上限。超過は `TooLarge`（→413）。
     entry_bytes: usize,
+    /// 集約バイト上限（0 = 無制限）。超過は Full(→503)。
+    max_bytes: u64,
+    /// 件数上限（0 = 無制限）。超過は Full(→503)。
+    max_entries: u64,
+    /// TTL 秒（sweep のしきい値。既定 86_400）。Task 3 で使用。
+    ttl_seconds: u64,
+    /// 現在のエントリ数（accelerator。真実源はディスク）。
+    count: AtomicU64,
+    /// 現在の集約バイト数（accelerator）。
+    bytes: AtomicU64,
 }
 
 impl FileShortlinkStore {
@@ -30,12 +41,87 @@ impl FileShortlinkStore {
     pub async fn new(root: impl AsRef<Path>, entry_bytes: usize) -> io::Result<Self> {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root).await?;
-        let store = Self { root, entry_bytes };
+        let store = Self {
+            root,
+            entry_bytes,
+            max_bytes: 0,
+            max_entries: 0,
+            ttl_seconds: 86_400,
+            count: AtomicU64::new(0),
+            bytes: AtomicU64::new(0),
+        };
         // create_dir_all は既存の書き込み不可 dir（read-only / root 所有の mount 等）でも
         // Ok を返す。実際に write→rename→remove の probe を行い、書けない dir を起動時に
         // 検出して fail-fast する（さもないと最初の /chart/create まで問題が顕在化しない）。
         store.probe_writable().await?;
+        // 既存エントリを 1 度だけ走査してカウンタを seed（accelerator。真実源はディスク）。
+        let (count, bytes) = store.scan_totals().await?;
+        store.count.store(count, Ordering::Relaxed);
+        store.bytes.store(bytes, Ordering::Relaxed);
         Ok(store)
+    }
+
+    /// builder: 容量上限を設定（0 = 無制限）。
+    pub fn with_capacity(mut self, max_bytes: u64, max_entries: u64) -> Self {
+        self.max_bytes = max_bytes;
+        self.max_entries = max_entries;
+        self
+    }
+
+    /// builder: TTL 秒を設定（sweep しきい値）。
+    pub fn with_ttl_seconds(mut self, ttl_seconds: u64) -> Self {
+        self.ttl_seconds = ttl_seconds;
+        self
+    }
+
+    /// 全 bucket dir を走査して (件数, 総バイト) を返す。起動時 seed 用（O(n) 1 回）。
+    ///
+    /// エラー方針は意図的に混在させている: `read_dir` の失敗は起動時 fail-fast
+    /// （`new()` が Err を返す）。一方で個々のファイルの `metadata()` 失敗は
+    /// best-effort でスキップする（カウンタは soft accelerator で、真実源はディスク、
+    /// 走査取りこぼしは次回起動の再 scan で自己修復する）。
+    async fn scan_totals(&self) -> io::Result<(u64, u64)> {
+        let mut count = 0u64;
+        let mut bytes = 0u64;
+        let mut buckets = match fs::read_dir(&self.root).await {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((0, 0)),
+            Err(e) => return Err(e),
+        };
+        while let Some(b) = buckets.next_entry().await? {
+            // 数値名の bucket dir のみを対象（probe/tmp 等の root 直下ファイルは無視）。
+            let name = b.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if name.parse::<u64>().is_err() {
+                continue;
+            }
+            if !b.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let mut entries = fs::read_dir(b.path()).await?;
+            while let Some(e) = entries.next_entry().await? {
+                let fname = e.file_name();
+                // temp ファイルは数えない。
+                if fname.to_str().map(|s| s.ends_with(".tmp")).unwrap_or(true) {
+                    continue;
+                }
+                if let Ok(meta) = e.metadata().await
+                    && meta.is_file()
+                {
+                    count += 1;
+                    bytes += meta.len();
+                }
+            }
+        }
+        Ok((count, bytes))
+    }
+
+    /// new_len バイトの追加が件数 or バイト上限を超えるか（0 上限は無制限）。
+    fn would_exceed(&self, new_len: u64) -> bool {
+        let count = self.count.load(Ordering::Relaxed);
+        let bytes = self.bytes.load(Ordering::Relaxed);
+        (self.max_entries != 0 && count.saturating_add(1) > self.max_entries)
+            || (self.max_bytes != 0 && bytes.saturating_add(new_len) > self.max_bytes)
     }
 
     /// `root` が実際に書き込み可能かを起動時に検証する。insert と同じ write→rename
@@ -80,6 +166,15 @@ impl ShortlinkBackend for FileShortlinkStore {
                 format!("invalid shortlink id: {id}").into(),
             ));
         };
+        // 容量 backstop: 件数 or バイト上限を超えるなら即 Full(→503)。
+        // Task 4 で inline sweep を挟む。現段階では即 Full。
+        // 注: この would_exceed→（write→）fetch_add の並びは意図的に非アトミック。
+        // 並行 insert 下では cap を僅かに超過し得るが、soft backstop として許容する
+        // 性質であり、ロックは張らない（真実源はディスク、再起動時に scan で自己修復）。
+        let new_len = query.len() as u64;
+        if self.would_exceed(new_len) {
+            return Err(BackendError::Full);
+        }
         // 同一 bucket ディレクトリ内の temp ファイルに書いてから rename で atomic に配置する
         // （並行 resolve の torn read 防止。同一 dir/同一 fs なので rename は atomic）。
         // ULID は一意なので temp 名（{id}.tmp）の衝突は起きない。fsync はしない
@@ -92,12 +187,17 @@ impl ShortlinkBackend for FileShortlinkStore {
         // query と path を所有権ごと単一の blocking タスクへ move し、同期 std::fs で
         // bucket dir 生成→write→rename を 1 回の spawn_blocking に畳む。tokio::fs に借用
         // スライスを渡すと payload を to_owned で複製するうえ dispatch も増えるため避ける。
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             write_then_rename(&tmp_path, &final_path, query.as_bytes())
         })
         .await
         .map_err(|e| BackendError::Unavailable(Box::new(e)))?
-        .map_err(|e| BackendError::Unavailable(Box::new(e)))
+        .map_err(|e| BackendError::Unavailable(Box::new(e)));
+        // 書き込み成功後にのみカウンタを進める（accelerator。TooLarge/Full/Unavailable では進めない）。
+        result?;
+        self.count.fetch_add(1, Ordering::Relaxed);
+        self.bytes.fetch_add(new_len, Ordering::Relaxed);
+        Ok(())
     }
 
     async fn get(&self, id: &str) -> Result<Option<String>, BackendError> {
@@ -250,5 +350,119 @@ mod tests {
             "entry should live at root/{{bucket}}/{{id}}: {expected:?}"
         );
         assert_eq!(s.get(&id).await.unwrap(), Some("c=x&f=svg".into()));
+    }
+
+    /// caps を明示した store ヘルパー（unlimited=0）。
+    async fn store_capped(
+        entry_bytes: usize,
+        max_bytes: u64,
+        max_entries: u64,
+    ) -> (FileShortlinkStore, TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let s = FileShortlinkStore::new(dir.path(), entry_bytes)
+            .await
+            .unwrap()
+            .with_capacity(max_bytes, max_entries);
+        (s, dir)
+    }
+
+    #[tokio::test]
+    async fn insert_returns_full_when_entry_cap_reached() {
+        let (s, _d) = store_capped(1_000, 0, 1).await; // 件数上限 1
+        s.insert(id_at_ms(1_700_000_000_000), "a".into())
+            .await
+            .unwrap();
+        let r = s.insert(id_at_ms(1_700_000_000_001), "b".into()).await;
+        assert!(matches!(&r, Err(BackendError::Full)), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn insert_returns_full_when_byte_budget_reached() {
+        let (s, _d) = store_capped(1_000, 4, 0).await; // バイト上限 4
+        s.insert(id_at_ms(1_700_000_000_000), "abc".into())
+            .await
+            .unwrap(); // 3B
+        let r = s.insert(id_at_ms(1_700_000_000_001), "de".into()).await; // +2B > 4
+        assert!(matches!(&r, Err(BackendError::Full)), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn counters_are_seeded_from_existing_entries_on_construction() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let s = FileShortlinkStore::new(dir.path(), 1_000).await.unwrap();
+            s.insert(id_at_ms(1_700_000_000_000), "abc".into())
+                .await
+                .unwrap();
+        }
+        // 再構築（件数上限 1）→ 既存 1 件を数えているので次 insert は Full
+        let s2 = FileShortlinkStore::new(dir.path(), 1_000)
+            .await
+            .unwrap()
+            .with_capacity(0, 1);
+        let r = s2.insert(id_at_ms(1_700_000_000_001), "x".into()).await;
+        assert!(matches!(&r, Err(BackendError::Full)), "{r:?}");
+    }
+
+    /// 上の姉妹テスト。COUNT ではなく scan_totals の BYTE seed 経路を検証する。
+    #[tokio::test]
+    async fn byte_counter_is_seeded_from_existing_entries_on_construction() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let s = FileShortlinkStore::new(dir.path(), 1_000).await.unwrap();
+            s.insert(id_at_ms(1_700_000_000_000), "abc".into()) // 3B
+                .await
+                .unwrap();
+        }
+        // 再構築（バイト上限 3・件数無制限）。scan が bytes=3 を seed していれば次 insert(+1B>3) は Full。
+        // seed していなければ bytes=0 で通ってしまう＝この assert が BYTE seed 経路を実証する。
+        let s2 = FileShortlinkStore::new(dir.path(), 1_000)
+            .await
+            .unwrap()
+            .with_capacity(3, 0);
+        let r = s2.insert(id_at_ms(1_700_000_000_001), "x".into()).await; // +1B > 3
+        assert!(matches!(&r, Err(BackendError::Full)), "{r:?}");
+    }
+
+    /// scan_totals が bucket dir 内の `.tmp` と root 直下の非 bucket ファイルを数えないこと。
+    #[tokio::test]
+    async fn scan_seed_ignores_tmp_and_non_bucket_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let ms = 1_700_000_000_000;
+        let id = id_at_ms(ms);
+        {
+            let s = FileShortlinkStore::new(dir.path(), 1_000).await.unwrap();
+            s.insert(id.clone(), "abc".into()).await.unwrap(); // 実エントリ 1 件
+        }
+        // bucket dir 内に `.tmp` を、root 直下に probe 風ファイルを手動配置（どちらも数えてはならない）。
+        let bucket = ms / super::WIDTH_MS;
+        let bucket_dir = dir.path().join(bucket.to_string());
+        tokio::fs::write(bucket_dir.join(format!("{id}.tmp")), b"junk")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join(".fulgur-write-probe-xyz"), b"junk")
+            .await
+            .unwrap();
+        // 件数上限 2 で再構築。フィルタが効いていれば seed=1 なので 1 件は通り、その次で Full。
+        // `.tmp`/probe を数えていれば seed>=2 で最初の insert が即 Full になり、下の expect が落ちる。
+        let s2 = FileShortlinkStore::new(dir.path(), 1_000)
+            .await
+            .unwrap()
+            .with_capacity(0, 2);
+        s2.insert(id_at_ms(ms + 1), "y".into())
+            .await
+            .expect("seed must count only the 1 real entry, ignoring .tmp/probe files");
+        let r = s2.insert(id_at_ms(ms + 2), "z".into()).await; // count 2→上限到達
+        assert!(matches!(&r, Err(BackendError::Full)), "{r:?}");
+    }
+
+    #[tokio::test]
+    async fn zero_caps_mean_unlimited() {
+        let (s, _d) = store_capped(1_000, 0, 0).await;
+        for i in 0..50u64 {
+            s.insert(id_at_ms(1_700_000_000_000 + i), "x".into())
+                .await
+                .unwrap();
+        }
     }
 }
