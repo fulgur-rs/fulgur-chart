@@ -27,7 +27,7 @@ pub struct FileShortlinkStore {
     max_bytes: u64,
     /// 件数上限（0 = 無制限）。超過は Full(→503)。
     max_entries: u64,
-    /// TTL 秒（sweep のしきい値。既定 86_400）。Task 3 で使用。
+    /// TTL 秒（sweep のしきい値。既定 86_400）。
     ttl_seconds: u64,
     /// 現在のエントリ数（accelerator。真実源はディスク）。
     count: AtomicU64,
@@ -76,10 +76,11 @@ impl FileShortlinkStore {
 
     /// 全 bucket dir を走査して (件数, 総バイト) を返す。起動時 seed 用（O(n) 1 回）。
     ///
-    /// エラー方針は意図的に混在させている: `read_dir` の失敗は起動時 fail-fast
-    /// （`new()` が Err を返す）。一方で個々のファイルの `metadata()` 失敗は
-    /// best-effort でスキップする（カウンタは soft accelerator で、真実源はディスク、
-    /// 走査取りこぼしは次回起動の再 scan で自己修復する）。
+    /// エラー方針は意図的に混在させている: root 直下の `read_dir`（および外側ループの
+    /// `next_entry`）失敗は起動時 fail-fast（`new()` が Err を返す）。一方で個々の bucket
+    /// dir の read（`bucket_totals` へ委譲）と per-file `metadata()` の失敗は best-effort で
+    /// スキップし、その bucket を 0 として seed する（カウンタは soft accelerator で、真実源は
+    /// ディスク、取りこぼしは次回起動の再 scan で自己修復する）。
     async fn scan_totals(&self) -> io::Result<(u64, u64)> {
         let mut count = 0u64;
         let mut bytes = 0u64;
@@ -98,22 +99,41 @@ impl FileShortlinkStore {
             if !b.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
                 continue;
             }
-            let mut entries = fs::read_dir(b.path()).await?;
-            while let Some(e) = entries.next_entry().await? {
-                let fname = e.file_name();
-                // temp ファイルは数えない。
-                if fname.to_str().map(|s| s.ends_with(".tmp")).unwrap_or(true) {
-                    continue;
-                }
-                if let Ok(meta) = e.metadata().await
-                    && meta.is_file()
-                {
-                    count += 1;
-                    bytes += meta.len();
-                }
-            }
+            // 個々の bucket 内の per-file 集計は best-effort な共有ヘルパーへ委譲する
+            // （sweep_expired と同一ロジック）。外側 root の read_dir? fail-fast はそのまま。
+            let (c, b_bytes) = Self::bucket_totals(&b.path()).await;
+            count += c;
+            bytes += b_bytes;
         }
         Ok((count, bytes))
+    }
+
+    /// 単一 bucket dir 内の (件数, 総バイト) を集計する best-effort ヘルパー。
+    /// `.tmp`・非ファイル・非 UTF8 名（`unwrap_or(true)` で skip）を除外し `metadata().len()`
+    /// を合算する。read/metadata エラーは無視（読めなかったぶんは 0 として扱う）。
+    /// `scan_totals`（起動時 seed）と `sweep_expired`（削除前の減算量集計）の共通ロジック。
+    async fn bucket_totals(dir: &Path) -> (u64, u64) {
+        let (mut count, mut bytes) = (0u64, 0u64);
+        let Ok(mut entries) = fs::read_dir(dir).await else {
+            return (0, 0);
+        };
+        while let Ok(Some(e)) = entries.next_entry().await {
+            // temp・非 UTF8 名は数えない。
+            if e.file_name()
+                .to_str()
+                .map(|s| s.ends_with(".tmp"))
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            if let Ok(meta) = e.metadata().await
+                && meta.is_file()
+            {
+                count += 1;
+                bytes += meta.len();
+            }
+        }
+        (count, bytes)
     }
 
     /// new_len バイトの追加が件数 or バイト上限を超えるか（0 上限は無制限）。
@@ -122,6 +142,48 @@ impl FileShortlinkStore {
         let bytes = self.bytes.load(Ordering::Relaxed);
         (self.max_entries != 0 && count.saturating_add(1) > self.max_entries)
             || (self.max_bytes != 0 && bytes.saturating_add(new_len) > self.max_bytes)
+    }
+
+    /// `(b+1)*WIDTH_MS + ttl_ms ≤ now_ms` を満たす bucket dir を丸ごと削除する。
+    /// この条件により bucket 内の最も若いエントリでも age≥TTL が保証され、age<TTL は
+    /// 構造的に削除されない（Cache-Control: max-age の下限保証を厳守）。
+    /// 削除したファイル数/バイトぶんカウンタを減算する。I/O エラーは best-effort で無視
+    /// （次回 sweep で再試行される。janitor なので単発失敗を致命にしない）。
+    pub async fn sweep_expired(&self, now_ms: u64) {
+        let ttl_ms = self.ttl_seconds.saturating_mul(1_000);
+        let mut buckets = match fs::read_dir(&self.root).await {
+            Ok(rd) => rd,
+            Err(_) => return,
+        };
+        while let Ok(Some(b)) = buckets.next_entry().await {
+            let name = b.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Ok(bucket) = name.parse::<u64>() else {
+                continue;
+            }; // 数値名のみ
+            // (b+1)*W + TTL ≤ now で削除可能。オーバーフローは saturating で回避。
+            let deletable_at = bucket
+                .saturating_add(1)
+                .saturating_mul(WIDTH_MS)
+                .saturating_add(ttl_ms);
+            if deletable_at > now_ms {
+                continue;
+            }
+            // 削除前に件数/バイトを集計してカウンタを減算（scan_totals と共通ヘルパー）。
+            let (n, nbytes) = Self::bucket_totals(&b.path()).await;
+            // scan_totals と違い is_dir チェックは省く: 数値名の非 dir エントリは insert が
+            // 作らないため、remove_dir_all が非 dir に対し Err を返す経路は実質発生しない。
+            if fs::remove_dir_all(b.path()).await.is_ok() {
+                // .min(current) で減算アンダーフローを防ぐ。並行 insert は現在 bucket に入り、
+                // sweep 対象の expired bucket とは別 dir なので両者は同一 dir を触らない。
+                self.count
+                    .fetch_sub(n.min(self.count.load(Ordering::Relaxed)), Ordering::Relaxed);
+                self.bytes.fetch_sub(
+                    nbytes.min(self.bytes.load(Ordering::Relaxed)),
+                    Ordering::Relaxed,
+                );
+            }
+        }
     }
 
     /// `root` が実際に書き込み可能かを起動時に検証する。insert と同じ write→rename
@@ -464,5 +526,103 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    const TTL: u64 = 86_400;
+    const TTL_MS: u64 = TTL * 1_000;
+    const W: u64 = 3_600_000;
+
+    #[tokio::test]
+    async fn sweep_removes_buckets_older_than_ttl() {
+        let (s, d) = store(1_000).await;
+        let s = s.with_ttl_seconds(TTL);
+        let old_ms = 1_700_000_000_000;
+        let old_id = id_at_ms(old_ms);
+        s.insert(old_id.clone(), "old".into()).await.unwrap();
+        // bucket b の削除可能時刻 = (b+1)*W + TTL_MS
+        let b = old_ms / W;
+        let now = (b + 1) * W + TTL_MS; // ちょうど削除可能になる境界
+        s.sweep_expired(now).await;
+        assert_eq!(s.get(&old_id).await.unwrap(), None, "age≥TTL は削除される");
+        let bucket_dir = d.path().join(b.to_string());
+        assert!(!bucket_dir.exists(), "expired bucket dir は rmdir される");
+    }
+
+    #[tokio::test]
+    async fn sweep_preserves_entries_at_bucket_boundary() {
+        // bucket 粒度の境界: 削除可能まで 1ms 足りない now では bucket ごと残る。
+        let (s, _d) = store(1_000).await;
+        let s = s.with_ttl_seconds(TTL);
+        let ms = 1_700_000_000_000;
+        let id = id_at_ms(ms);
+        s.insert(id.clone(), "boundary".into()).await.unwrap();
+        let b = ms / W;
+        let now = (b + 1) * W + TTL_MS - 1;
+        s.sweep_expired(now).await;
+        assert_eq!(
+            s.get(&id).await.unwrap(),
+            Some("boundary".into()),
+            "境界の 1ms 手前は残る"
+        );
+    }
+
+    /// Cache-Control: max-age 保証の核: 「今」作成した age≈0 のエントリは、system now での
+    /// sweep で決して消えない。issue の本丸なので明示的に検証する。
+    #[tokio::test]
+    async fn sweep_never_removes_a_genuinely_young_entry() {
+        let (s, _d) = store(1_000).await;
+        let s = s.with_ttl_seconds(TTL);
+        let id = Ulid::new().to_string(); // age ≈ 0
+        s.insert(id.clone(), "fresh".into()).await.unwrap();
+        // 実時刻で sweep（system_now_ms ヘルパは Task 4 で導入するため、ここではインライン計算）。
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        s.sweep_expired(now).await;
+        assert_eq!(
+            s.get(&id).await.unwrap(),
+            Some("fresh".into()),
+            "age<TTL は絶対に消えない"
+        );
+    }
+
+    #[tokio::test]
+    async fn sweep_decrements_counters() {
+        // 消えた bucket の分だけ件数上限が空くことで間接的に検証。
+        let (s, _d) = store(1_000).await;
+        let s = s.with_ttl_seconds(TTL).with_capacity(0, 1);
+        let old_ms = 1_700_000_000_000;
+        s.insert(id_at_ms(old_ms), "old".into()).await.unwrap();
+        // 上限 1 なので今は Full
+        assert!(matches!(
+            s.insert(id_at_ms(old_ms + 1), "x".into()).await,
+            Err(BackendError::Full)
+        ));
+        let b = old_ms / W;
+        s.sweep_expired((b + 1) * W + TTL_MS).await;
+        // sweep でカウンタが 0 に戻り、新規 insert が通る（新しい若い id）
+        s.insert(id_at_ms((b + 1) * W + TTL_MS + 1), "fresh".into())
+            .await
+            .unwrap();
+    }
+
+    /// 上の姉妹テスト。COUNT ではなく sweep_expired の BYTE fetch_sub 経路を検証する。
+    #[tokio::test]
+    async fn sweep_decrements_byte_counter() {
+        let (s, _d) = store(1_000).await;
+        let s = s.with_ttl_seconds(TTL).with_capacity(3, 0); // byte 上限 3
+        let old_ms = 1_700_000_000_000;
+        s.insert(id_at_ms(old_ms), "abc".into()).await.unwrap(); // 3B で budget 満杯
+        assert!(matches!(
+            s.insert(id_at_ms(old_ms + 1), "x".into()).await, // +1B 超過 → Full
+            Err(BackendError::Full)
+        ));
+        let b = old_ms / W;
+        s.sweep_expired((b + 1) * W + TTL_MS).await; // 旧 bucket drain → bytes 0
+        // bytes を 0 に減算していなければ +2B で超過し Full になり、この unwrap が落ちる。
+        s.insert(id_at_ms((b + 1) * W + TTL_MS + 1), "yz".into())
+            .await
+            .unwrap(); // 2B ≤ 3
     }
 }
