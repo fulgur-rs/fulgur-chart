@@ -103,8 +103,7 @@ With WebP disabled, `format=webp` returns `415 Unsupported Media Type`.
 | `FULGUR_MAX_CONCURRENT` | CPU count | Maximum concurrent renders |
 | `FULGUR_MAX_BODY_SIZE` | `102400` | Request body size limit (bytes) |
 | `FULGUR_RENDER_TIMEOUT_MS` | `1000` | Render timeout (milliseconds) |
-| `FULGUR_SHORTLINK_LIMIT` | `10000` | Maximum number of stored short links |
-| `FULGUR_SHORTLINK_MAX_BYTES` | `134217728` (128 MiB) | Aggregate byte budget across all stored short links (bounds memory; oldest is **not** evicted — see below) |
+| `FULGUR_SHORTLINK_DIR` | `./fulgur-shortlinks` | Directory where short links are persisted (one file per link). Created on startup; the server fails fast if it can't be created. For persistence across redeploy this must live on durable storage — see [Short link persistence](#short-link-persistence) |
 | `FULGUR_SHORTLINK_ENTRY_BYTES` | `524288` (512 KiB) | Per-entry byte cap for a stored short link. Oversized requests are rejected with `413 PAYLOAD_TOO_LARGE`. The stored value is the URL-encoded chart JSON (up to ~3× the raw body), so keep this ≳ `3 × FULGUR_MAX_BODY_SIZE`; raising `FULGUR_MAX_BODY_SIZE` without raising this will 413 legitimate large charts |
 | `FULGUR_SHORTLINK_TTL_SECONDS` | `86400` (24h) | Guaranteed minimum resolvable lifetime for a short link, as a floor guarantee (the underlying data isn't necessarily deleted at exactly this time). Used as the `Cache-Control: max-age` on successful `/chart/s/{id}` resolutions so upstream CDNs don't serve stale resolutions past the guarantee window |
 | `FULGUR_CORS_ORIGINS` | `*` | Allowed CORS origins (comma-separated) |
@@ -121,8 +120,32 @@ The Dockerfile expects a pre-built binary. Build from the repository root:
 cargo build --release -p chart-server
 cp target/release/chart-server chart-server-bin
 docker build -f crates/chart-server/Dockerfile -t chart-server .
-docker run -p 3000:3000 chart-server
+# mount a volume at /data so short links survive `docker restart` and redeploys
+docker run -p 3000:3000 -v chart-shortlinks:/data chart-server
 ```
+
+The image sets `FULGUR_SHORTLINK_DIR=/data` (a nonroot-owned directory baked into
+the image), so it starts even without a volume — but short links are then lost on
+redeploy. Mount a volume at `/data` (as above, or via the provided
+`docker-compose.yml`) to persist them. See [Short link persistence](#short-link-persistence).
+
+## Short link persistence
+
+Short links (`POST /chart/create` → `GET /chart/s/{id}`) are stored on disk under
+`FULGUR_SHORTLINK_DIR`, one file per link, and resolve across process restarts and
+redeploys **as long as that directory is on durable storage**. This is single-node
+durability: the directory is host/volume-local, so a multi-instance deployment behind
+a load balancer only resolves links created on the same node (or on a shared network
+volume). Horizontal scale-out is out of scope for this backend.
+
+- **Docker / Compose:** mount a volume at `/data` (the image default). The provided
+  `docker-compose.yml` already does this.
+- **Railway:** attach a Volume and set `FULGUR_SHORTLINK_DIR` to its mount path;
+  without a Volume the filesystem is ephemeral and links vanish on redeploy.
+
+There is no active TTL deletion or LRU eviction, so the directory grows unbounded;
+`FULGUR_SHORTLINK_TTL_SECONDS` is only a `Cache-Control` floor guarantee, not a
+storage lifetime. Capacity management (TTL sweep / eviction) is tracked separately.
 
 ## Error Codes
 

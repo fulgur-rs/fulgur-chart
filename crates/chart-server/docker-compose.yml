@@ -6,3 +6,11 @@ services:
     environment:
       FULGUR_HOST: "0.0.0.0"
       FULGUR_PORT: "3000"
+    # shortlink を再起動/再デプロイをまたいで永続化する。イメージは
+    # FULGUR_SHORTLINK_DIR=/data を既定にしているので named volume を /data に
+    # マウントするだけでよい（volume は nonroot 所有を継承する）。
+    volumes:
+      - shortlinks:/data
+
+volumes:
+  shortlinks:

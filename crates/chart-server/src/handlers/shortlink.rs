@@ -73,7 +73,7 @@ pub async fn post_create(
             })),
         )
             .into_response(),
-        // durable backend の一時障害: 503（in-memory では発生しない）。
+        // durable backend の一時障害: 503（FileShortlinkStore は I/O 失敗時に返す）。
         Err(BackendError::Unavailable(err)) => {
             eprintln!("Shortlink backend unavailable (create): {err}");
             (
@@ -118,7 +118,7 @@ pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>
                 .insert(header::CACHE_CONTROL, no_store_cache_control());
             resp
         }
-        // durable backend の一時障害: 503（in-memory では発生しない）。
+        // durable backend の一時障害: 503（FileShortlinkStore は I/O 失敗時に返す）。
         Err(err) => {
             eprintln!("Shortlink backend unavailable (resolve): {err}");
             let mut resp = (

@@ -1,3 +1,7 @@
+# shortlink を再デプロイをまたいで永続化するには、Railway Volume をアタッチし、
+# その mount path を FULGUR_SHORTLINK_DIR に設定すること（例: mount=/data,
+# FULGUR_SHORTLINK_DIR=/data）。Volume 無しでも既定 dir (./fulgur-shortlinks) に
+# 書いて起動はするが、Railway の FS は ephemeral なので再デプロイで消える。
 [deploy]
 startCommand = "./target/release/chart-server"
 healthcheckPath = "/health"

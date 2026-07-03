@@ -5,9 +5,9 @@ use async_trait::async_trait;
 /// Shortlink backend の失敗理由。
 ///
 /// `TooLarge` / `Full` は容量系の拒否で、それぞれ HTTP 413 / 503 にマップする。
-/// `Unavailable` は durable backend の I/O 障害用(→ 5xx)。in-memory 実装は
-/// 決して `Unavailable` を返さないが、durable adapter(8tr.6 等)が trait
-/// シグネチャを変えずに使えるよう、最初からこの variant を含めておく。
+/// `Unavailable` は durable backend の I/O 障害用(→ 503)。既定の
+/// `FileShortlinkStore` を含む durable 実装がディスク I/O 失敗時に返す
+/// （純粋にメモリ上で完結する adapter は返さない）。
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum BackendError {
@@ -15,7 +15,7 @@ pub enum BackendError {
     TooLarge,
     /// ストアが満杯（件数 or 集約バイト上限。→ 503）。
     Full,
-    /// durable backend の一時的な I/O 障害（→ 503）。in-memory は返さない。
+    /// durable backend の一時的な I/O 障害（→ 503）。FileShortlinkStore が I/O 失敗時に返す。
     Unavailable(Box<dyn std::error::Error + Send + Sync>),
 }
 
@@ -41,8 +41,9 @@ impl std::error::Error for BackendError {
 /// Shortlink の保存・解決を抽象化する backend。
 ///
 /// `Arc<dyn ShortlinkBackend>` として `AppState` に保持するため `Send + Sync`。
-/// メソッドは durable 実装(I/O を伴う)を見越して async + fallible。in-memory
-/// 実装は await を持たず `Unavailable` も返さないが、同じ seam を共有する。
+/// メソッドは durable 実装(I/O を伴う)に合わせて async + fallible。既定の
+/// `FileShortlinkStore` はディスク I/O を行い、純粋なメモリ adapter は await 無しでも
+/// 同じ seam を共有できる。
 #[async_trait]
 pub trait ShortlinkBackend: Send + Sync {
     /// `id` に `query` を保存する。容量超過時は `TooLarge` / `Full`。

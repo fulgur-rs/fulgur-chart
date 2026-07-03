@@ -10,8 +10,10 @@ use crate::backend::{BackendError, ShortlinkBackend};
 ///
 /// 1 エントリ = 1 ファイル（ファイル名 = id、内容 = query 文字列）。filesystem の
 /// パスが id→artifact 対応そのものになるため in-memory インデックスは持たない。
-/// 再起動/デプロイをまたいでリンクを維持する。マルチノード/LB ハズレは解決しない
-/// （ローカルディスクはノード固有）。TTL 能動削除・LRU eviction は範囲外（sdp）。
+/// `root` が永続ストレージ上にある限り、再起動/デプロイをまたいでリンクを維持する
+/// （揮発 FS 上では再デプロイで消える。Docker/Railway では volume マウントが前提）。
+/// マルチノード/LB ハズレは解決しない（ローカルディスクはノード固有）。
+/// TTL 能動削除・LRU eviction は範囲外（sdp）。
 pub struct FileShortlinkStore {
     root: PathBuf,
     /// 単一エントリ（query 文字列）のバイト数上限。超過は `TooLarge`（→413）。

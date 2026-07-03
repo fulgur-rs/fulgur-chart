@@ -28,7 +28,8 @@ pub struct Config {
 
     /// shortlink を永続化するディレクトリ。既定は cwd 相対の `./fulgur-shortlinks`。
     /// FileShortlinkStore が起動時に作成する（作成不可なら fail-fast で起動中止）。
-    /// 単一ノードの durable 保存であり、マルチノード/LB ハズレは解決しない。
+    /// 再デプロイをまたいで永続化するには永続ストレージ（Docker/Railway の volume 等）
+    /// に置くこと。単一ノードの durable 保存であり、マルチノード/LB ハズレは解決しない。
     #[arg(
         long,
         env = "FULGUR_SHORTLINK_DIR",
