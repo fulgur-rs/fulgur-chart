@@ -12,7 +12,7 @@ use axum::{
     http::{Request, StatusCode},
     response::Response,
 };
-use chart_server::{BackendError, Config, ShortlinkBackend, ShortlinkStore, build_router};
+use chart_server::{BackendError, Config, FileShortlinkStore, ShortlinkBackend, build_router};
 use clap::Parser;
 use tower::ServiceExt;
 
@@ -55,11 +55,18 @@ async fn status_and_body(resp: Response) -> (StatusCode, String) {
 
 /// 受け入れ基準: 外部実装の backend も OSS デフォルトの in-memory backend も
 /// 同じ `build_router` シームに渡せる(コンパイルが通ること自体が実証)。
-#[test]
-fn external_backend_can_be_injected_into_build_router() {
+#[tokio::test]
+async fn external_backend_can_be_injected_into_build_router() {
     let cfg = default_config();
     let _router = build_router(&cfg, Arc::new(NoopBackend));
-    let _router2 = build_router(&cfg, Arc::new(ShortlinkStore::new(10, 1024, 256)));
+    let _router2 = build_router(
+        &cfg,
+        Arc::new(
+            FileShortlinkStore::new(tempfile::tempdir().unwrap().path(), 256)
+                .await
+                .unwrap(),
+        ),
+    );
 }
 
 /// backend が `Unavailable` を返すと `POST /chart/create` は 503 BACKEND_UNAVAILABLE。

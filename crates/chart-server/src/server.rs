@@ -110,22 +110,32 @@ pub fn build_router(cfg: &Config, store: Arc<dyn ShortlinkBackend>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::ShortlinkStore;
+    use crate::file_store::FileShortlinkStore;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
     use crate::render::Compression;
 
-    fn restricted_cors_router() -> Router {
+    /// テスト用: tempdir に FileShortlinkStore を作って Arc で返す。
+    /// TempDir はリークしてテスト実行中 dir を保持する（テスト専用の許容トレードオフ）。
+    async fn temp_file_store() -> std::sync::Arc<FileShortlinkStore> {
+        let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        std::sync::Arc::new(
+            FileShortlinkStore::new(dir.path(), 512 * 1024)
+                .await
+                .unwrap(),
+        )
+    }
+
+    async fn restricted_cors_router() -> Router {
         let cfg = Config {
             host: "0.0.0.0".into(),
             port: 3000,
             max_concurrent: 1,
             max_body_size: 102_400,
             render_timeout_ms: 1000,
-            shortlink_limit: 100,
-            shortlink_max_bytes: 128 * 1024 * 1024,
             shortlink_entry_bytes: 512 * 1024,
+            shortlink_dir: "unused".into(),
             shortlink_ttl_seconds: 86_400,
             cors_origins: "https://example.com".into(),
             rate_limit: 0,
@@ -134,22 +144,18 @@ mod tests {
             webp_enabled: false,
             max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
         };
-        build_router(
-            &cfg,
-            Arc::new(ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024)),
-        )
+        build_router(&cfg, temp_file_store().await)
     }
 
-    fn router_with_compression(compression: Compression) -> Router {
+    async fn router_with_compression(compression: Compression) -> Router {
         let cfg = Config {
             host: "0.0.0.0".into(),
             port: 3000,
             max_concurrent: 4,
             max_body_size: 102_400,
             render_timeout_ms: 5000,
-            shortlink_limit: 100,
-            shortlink_max_bytes: 128 * 1024 * 1024,
             shortlink_entry_bytes: 512 * 1024,
+            shortlink_dir: "unused".into(),
             shortlink_ttl_seconds: 86_400,
             cors_origins: "*".into(),
             rate_limit: 0,
@@ -158,10 +164,7 @@ mod tests {
             webp_enabled: false,
             max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
         };
-        build_router(
-            &cfg,
-            Arc::new(ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024)),
-        )
+        build_router(&cfg, temp_file_store().await)
     }
 
     /// 指定した起動時設定 `png_compression` の下で PNG をレンダーし、バイト長を返す。
@@ -169,6 +172,7 @@ mod tests {
     async fn png_len_for_config(compression: Compression) -> usize {
         let body = r#"{"chart":{"type":"bar","data":{"labels":["A","B","C","D"],"datasets":[{"data":[12,19,3,5]}]}},"format":"png"}"#;
         let resp = router_with_compression(compression)
+            .await
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -212,6 +216,7 @@ mod tests {
     #[tokio::test]
     async fn restricted_cors_allows_if_none_match_preflight() {
         let resp = restricted_cors_router()
+            .await
             .oneshot(
                 Request::builder()
                     .method("OPTIONS")
@@ -258,6 +263,7 @@ mod tests {
 
         // router_with_compression は webp_enabled=false（既定 disable）。
         let webp = router_with_compression(Compression::default())
+            .await
             .oneshot(mk("webp"))
             .await
             .unwrap();
@@ -269,6 +275,7 @@ mod tests {
 
         // PNG は precheck 対象外なので If-None-Match:* で従来どおり 304。
         let png = router_with_compression(Compression::default())
+            .await
             .oneshot(mk("png"))
             .await
             .unwrap();

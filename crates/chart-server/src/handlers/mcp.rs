@@ -349,11 +349,16 @@ mod tests {
     use tokio::sync::Semaphore;
     use tower::ServiceExt;
 
-    use crate::{state::AppState, store::ShortlinkStore};
+    use crate::{file_store::FileShortlinkStore, state::AppState};
 
-    fn test_app() -> axum::Router {
+    async fn test_app() -> axum::Router {
+        // tempdir-backed の durable store。TempDir はリークしてテスト実行中 dir を保持する。
+        let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        let store = FileShortlinkStore::new(dir.path(), 512 * 1024)
+            .await
+            .unwrap();
         let state = AppState {
-            store: Arc::new(ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024)),
+            store: Arc::new(store),
             semaphore: Arc::new(Semaphore::new(1)),
             render_timeout_ms: 1000,
             png_compression: crate::render::Compression::default(),
@@ -439,7 +444,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_json_returns_parse_error() {
-        let (status, json) = post_mcp(test_app(), "not json").await;
+        let (status, json) = post_mcp(test_app().await, "not json").await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(json["error"]["code"], -32700);
         // id は null として出力されること
@@ -449,7 +454,7 @@ mod tests {
     #[tokio::test]
     async fn notification_returns_202() {
         let body = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
-        let (status, _) = post_mcp(test_app(), body).await;
+        let (status, _) = post_mcp(test_app().await, body).await;
         assert_eq!(status, axum::http::StatusCode::ACCEPTED);
     }
 
@@ -457,7 +462,7 @@ mod tests {
     async fn invalid_jsonrpc_echoes_valid_id() {
         // jsonrpc が 2.0 以外でも valid な id があれば echo back する
         let body = r#"{"jsonrpc":"1.0","id":99,"method":"tools/list"}"#;
-        let (status, json) = post_mcp(test_app(), body).await;
+        let (status, json) = post_mcp(test_app().await, body).await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
         assert_eq!(json["id"], 99);
         assert_eq!(json["error"]["code"], -32600);
@@ -466,13 +471,13 @@ mod tests {
     #[tokio::test]
     async fn notification_batch_returns_202() {
         let body = r#"[{"jsonrpc":"2.0","method":"notifications/initialized"}]"#;
-        let (status, _) = post_mcp(test_app(), body).await;
+        let (status, _) = post_mcp(test_app().await, body).await;
         assert_eq!(status, axum::http::StatusCode::ACCEPTED);
     }
 
     #[tokio::test]
     async fn empty_batch_returns_400() {
-        let (status, _) = post_mcp(test_app(), "[]").await;
+        let (status, _) = post_mcp(test_app().await, "[]").await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
     }
 }

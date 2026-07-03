@@ -1,16 +1,19 @@
 use std::net::SocketAddr;
 
-use chart_server::{Config, ShortlinkStore, build_router};
+use chart_server::{Config, FileShortlinkStore, build_router};
 use clap::Parser;
 
 #[tokio::main]
 async fn main() {
     let cfg = Config::parse();
-    let store = std::sync::Arc::new(ShortlinkStore::new(
-        cfg.shortlink_limit,
-        cfg.shortlink_max_bytes,
-        cfg.shortlink_entry_bytes,
-    ));
+    // shortlink dir を作成して durable backend を wire。作成不可なら fail-fast。
+    let store = std::sync::Arc::new(
+        FileShortlinkStore::new(&cfg.shortlink_dir, cfg.shortlink_entry_bytes)
+            .await
+            .unwrap_or_else(|e| {
+                panic!("failed to open shortlink dir {:?}: {e}", cfg.shortlink_dir)
+            }),
+    );
     // Railway は $PORT を inject する。FULGUR_PORT より優先して読む。
     let port = std::env::var("PORT")
         .ok()
