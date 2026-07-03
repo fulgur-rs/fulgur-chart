@@ -676,9 +676,17 @@ git commit -m "feat(chart-server): wire shortlink caps config + background sweep
 
 **Files:**
 - Modify: `crates/chart-server/src/file_store.rs`（モジュール doc の「TTL 能動削除・LRU eviction は範囲外(sdp)」行を削除し、bucket/TTL/backstop の要約に更新）
-- Modify: `crates/chart-server/src/backend.rs`（`Full` の doc に FileShortlinkStore も返すようになった旨を反映。handler の「FileShortlinkStore は返さず」コメントも更新: `handlers/shortlink.rs` の `BackendError::Full` アームのコメント）
+- Modify: `crates/chart-server/src/backend.rs`（`Full` の doc に FileShortlinkStore も返すようになった旨を反映）
+- Modify: `crates/chart-server/src/handlers/shortlink.rs`（`BackendError::Full` アームのコメント「FileShortlinkStore は返さず、external adapter 用に残す」を「FileShortlinkStore は容量上限超過時に返す」に修正）
+- Modify: `crates/chart-server/tests/public_api.rs`（`:86` の「FileShortlinkStore は Full を返さない」コメントを修正）
+- Modify: `crates/chart-server/README.md`（env-var 表に新 2 ノブを追記）
 
-**Step 1: コメント更新**（振る舞い変更なし、テスト不要）。`file_store.rs` 冒頭 doc を「time-bucket レイアウト＋TTL sweep＋容量 backstop を持つ durable 単一ノード backend」に更新。`handlers/shortlink.rs:66-67` の「FileShortlinkStore は返さず、external adapter 用に残すアーム」を「FileShortlinkStore は容量上限超過時に返す」に修正。`tests/public_api.rs:86` の同趣旨コメント（「FileShortlinkStore は Full を返さない」）も修正。
+**Step 1: コメント更新**（振る舞い変更なし、テスト不要）。`file_store.rs` 冒頭 doc を「time-bucket レイアウト＋TTL sweep＋容量 backstop を持つ durable 単一ノード backend」に更新（`:21` の「TTL 能動削除・LRU eviction は範囲外（sdp）」を削除）。`handlers/shortlink.rs:67` の「FileShortlinkStore は返さず、external adapter 用に残すアーム」を「FileShortlinkStore は容量上限超過時に返す」に修正。`tests/public_api.rs:86` の同趣旨コメント（「FileShortlinkStore は Full を返さない」）も修正。`backend.rs` の `Full` variant doc が「FileShortlinkStore は返さない」旨を含むなら修正（含まなければ触らない）。
+
+**Step 1b: README env-var 表を更新**（`crates/chart-server/README.md`、`FULGUR_SHORTLINK_TTL_SECONDS` 行=`:108` の直後に 2 行追加）:
+- `FULGUR_SHORTLINK_MAX_BYTES`（既定 `536870912`＝512 MiB）: 集約バイト上限（0=無制限）。TTL sweep が主だが、TTL 窓内に埋め尽くされてもディスクを直接上限化する hard guard。超過 insert は inline sweep→なお超過なら `503`（次 sweep で自己回復）。**per-entry 上限（`FULGUR_SHORTLINK_ENTRY_BYTES`）以上に設定すること**（下回ると起動時 fail-fast）。
+- `FULGUR_SHORTLINK_MAX_ENTRIES`（既定 `100000`）: 件数上限（0=無制限）。inode/dir 枯渇を上限化。
+- 加えて表の近傍か persistence セクションに、**既定が「無制限」から「512 MiB / 10 万件」に変わった**旨（8tr.6 で一時撤去された集約上限が sdp で durable eviction 付きで復活）と、**旧 `FULGUR_SHORTLINK_LIMIT` は起動時 rename エラー**（→ `FULGUR_SHORTLINK_MAX_ENTRIES` を使う）である旨を 1 文追記。README `:150` 付近の「TTL は Cache-Control floor guarantee であって hard deletion time ではない」という記述は依然正しい（sweep は TTL 経過後にのみ削除するため保証を破らない）ので**変更不要**。
 
 **CHANGELOG について:** `crates/chart-server/CHANGELOG.md` は release-plz が conventional commit から自動生成する。本 PR の `feat(chart-server): ...` コミットが新エントリを生む（`MAX_BYTES` をバイト予算として復活、`MAX_ENTRIES` を追加＝旧 `LIMIT` の改名、TTL eviction 追加）。**historical な既存 BREAKING 行（8tr.6 の記録）は編集しない**（過去リリースの事実として残す）。手動編集は不要。
 
@@ -695,7 +703,7 @@ Expected: fmt 差分なし（or 整形適用）、clippy warning 0、test 全 pa
 **Step 3: commit**
 
 ```bash
-git add crates/chart-server/src
+git add crates/chart-server/src crates/chart-server/tests crates/chart-server/README.md
 git commit -m "docs(chart-server): update shortlink store docs for TTL/eviction (sdp)"
 ```
 
