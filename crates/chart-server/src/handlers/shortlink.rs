@@ -63,7 +63,8 @@ pub async fn post_create(
             })),
         )
             .into_response(),
-        // 件数 or 集約バイトが満杯: 一時的な拒否なので 503。
+        // 満杯（件数/集約バイト上限）: 一時的な拒否なので 503。FileShortlinkStore は
+        // 返さず、external adapter 用に残すアーム。
         Err(BackendError::Full) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
