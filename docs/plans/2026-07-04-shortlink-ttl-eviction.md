@@ -20,7 +20,7 @@
 - 各タスクは TDD（失敗テスト→最小実装→pass→commit）。
 - テストコマンドは worktree ルート `/home/ubuntu/fulgur-chart/.worktrees/sdp-shortlink-eviction` で実行。
 - 定数: `const WIDTH_MS: u64 = 3_600_000;`（1h）, `const SWEEP_INTERVAL_SECS: u64 = 60;`（main のみ使用）。
-- 時刻ヘルパー（file_store.rs 内）:
+- 時刻ヘルパー（file_store.rs 内、**Task 4 で導入**＝最初に非テストコードで使う場所。それ以前のタスクで足すと dead_code になる）:
   ```rust
   fn system_now_ms() -> u64 {
       std::time::SystemTime::now()
@@ -391,7 +391,12 @@ async fn sweep_never_removes_a_genuinely_young_entry() {
     let s = s.with_ttl_seconds(TTL);
     let id = Ulid::new().to_string(); // age ≈ 0
     s.insert(id.clone(), "fresh".into()).await.unwrap();
-    s.sweep_expired(super::system_now_ms()).await; // 実時刻での sweep（module private fn）
+    // 実時刻で sweep（system_now_ms ヘルパは Task 4 で導入するため、ここではインライン計算）。
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    s.sweep_expired(now).await;
     assert_eq!(s.get(&id).await.unwrap(), Some("fresh".into()), "age<TTL は絶対に消えない");
 }
 
