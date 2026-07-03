@@ -10,6 +10,8 @@
 
 **参照:** design/acceptance は beads issue `fulgur-chart-sdp`（`bd show fulgur-chart-sdp`）。現状コードは `src/file_store.rs`, `src/backend.rs`, `src/config.rs`, `src/main.rs`, `src/server.rs`, `src/handlers/shortlink.rs`。
 
+**レイアウト移行の方針（明示的決定）:** Task 1 は on-disk レイアウトを flat `root/{id}` → `root/{bucket}/{id}` に変更する。**移行処理も `get()` の flat read-fallback も意図的に設けない。** 根拠: brainstorming でオーナーが「本番に保持すべき既存 on-disk shortlink データは無し（greenfield）」と明示決定済み（FileShortlinkStore は直近着地。durable volume は永続化能力を持つが、保持対象の実データは無いとの判断）。したがって既存 flat エントリの orphan 化＝旧データ喪失は許容される既知のトレードオフである。もし将来「デプロイ済み volume に flat 実データが存在する」と判明した場合のみ、起動時 one-shot 移行（`root/{id}` → bucket dir へ mv）を別 issue として追加する。
+
 **設計の精緻化（saved design からの改善、実装はこちらに従う）:**
 1. clock 注入は行わず `sweep_expired(&self, now_ms: u64)` に now を引数で渡す。背景/inline は system now、テストは任意 now。insert の over-cap 判定は old-ULID エントリで age を制御でき決定的。
 2. 周期フル再カウントは行わない（O(buckets) sweep と矛盾）。カウンタは「起動時 seed＋insert 加算＋sweep 削除数で減算」で正確に保つ。overwrite は server 生成 ULID が一意なので本番で発生せず、発生しても soft backstop の +1 slack として許容。
