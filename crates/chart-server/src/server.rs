@@ -127,42 +127,42 @@ mod tests {
         )
     }
 
-    async fn restricted_cors_router() -> Router {
-        let cfg = Config {
-            host: "0.0.0.0".into(),
-            port: 3000,
-            max_concurrent: 1,
-            max_body_size: 102_400,
-            render_timeout_ms: 1000,
-            shortlink_entry_bytes: 512 * 1024,
-            shortlink_dir: "unused".into(),
-            shortlink_ttl_seconds: 86_400,
-            cors_origins: "https://example.com".into(),
-            rate_limit: 0,
-            log_level: "info".into(),
-            png_compression: Compression::default(),
-            webp_enabled: false,
-            max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
-        };
-        build_router(&cfg, temp_file_store().await)
-    }
-
-    async fn router_with_compression(compression: Compression) -> Router {
-        let cfg = Config {
+    /// hermetic なテスト用デフォルト Config。各ヘルパーは差分フィールドだけを
+    /// 上書きする。`Config::parse_from(..)` は clap の env フォールバックで ambient
+    /// な `FULGUR_*` を拾い test 前提を崩すため、あえて明示リテラルで組む。
+    fn base_config() -> Config {
+        Config {
             host: "0.0.0.0".into(),
             port: 3000,
             max_concurrent: 4,
             max_body_size: 102_400,
-            render_timeout_ms: 5000,
+            render_timeout_ms: 1000,
             shortlink_entry_bytes: 512 * 1024,
             shortlink_dir: "unused".into(),
             shortlink_ttl_seconds: 86_400,
             cors_origins: "*".into(),
             rate_limit: 0,
             log_level: "info".into(),
-            png_compression: compression,
+            png_compression: Compression::default(),
             webp_enabled: false,
             max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
+        }
+    }
+
+    async fn restricted_cors_router() -> Router {
+        let cfg = Config {
+            max_concurrent: 1,
+            cors_origins: "https://example.com".into(),
+            ..base_config()
+        };
+        build_router(&cfg, temp_file_store().await)
+    }
+
+    async fn router_with_compression(compression: Compression) -> Router {
+        let cfg = Config {
+            render_timeout_ms: 5000,
+            png_compression: compression,
+            ..base_config()
         };
         build_router(&cfg, temp_file_store().await)
     }

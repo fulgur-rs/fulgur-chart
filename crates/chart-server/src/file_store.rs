@@ -60,9 +60,15 @@ impl ShortlinkBackend for FileShortlinkStore {
         // ULID は一意なので temp 名（{id}.tmp）の衝突は起きない。fsync はしない
         // （保証は再起動/デプロイ耐性であって電源断耐性ではない）。
         let tmp_path = self.root.join(format!("{id}.tmp"));
-        write_then_rename(&tmp_path, &final_path, query.as_bytes())
-            .await
-            .map_err(|e| BackendError::Unavailable(Box::new(e)))
+        // query と path を所有権ごと単一の blocking タスクへ move し、同期 std::fs で
+        // 書く。tokio::fs::write に借用スライスを渡すと payload を to_owned で複製する
+        // うえ write/rename が spawn_blocking を 2 回張るため、それを避けて 1 回に畳む。
+        tokio::task::spawn_blocking(move || {
+            write_then_rename(&tmp_path, &final_path, query.as_bytes())
+        })
+        .await
+        .map_err(|e| BackendError::Unavailable(Box::new(e)))?
+        .map_err(|e| BackendError::Unavailable(Box::new(e)))
     }
 
     async fn get(&self, id: &str) -> Result<Option<String>, BackendError> {
@@ -80,19 +86,15 @@ impl ShortlinkBackend for FileShortlinkStore {
     }
 }
 
-/// temp に書いて rename する。write/rename いずれの失敗でも temp を掃除して漏らさない。
-async fn write_then_rename(tmp: &Path, final_path: &Path, data: &[u8]) -> io::Result<()> {
-    if let Err(e) = write_then_rename_inner(tmp, final_path, data).await {
+/// temp に同期 I/O で書いて rename する（呼び出し側の spawn_blocking 内で実行）。
+/// write/rename いずれの失敗でも temp を掃除して漏らさない。
+fn write_then_rename(tmp: &Path, final_path: &Path, data: &[u8]) -> io::Result<()> {
+    if let Err(e) = std::fs::write(tmp, data).and_then(|()| std::fs::rename(tmp, final_path)) {
         // write が temp を作る前に失敗した場合でも remove_file の失敗は無害（let _ で無視）。
-        let _ = fs::remove_file(tmp).await;
+        let _ = std::fs::remove_file(tmp);
         return Err(e);
     }
     Ok(())
-}
-
-async fn write_then_rename_inner(tmp: &Path, final_path: &Path, data: &[u8]) -> io::Result<()> {
-    fs::write(tmp, data).await?;
-    fs::rename(tmp, final_path).await
 }
 
 #[cfg(test)]
