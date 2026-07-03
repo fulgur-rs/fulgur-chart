@@ -190,10 +190,19 @@ pub fn render_chart_to_webp(
     // WebP 専用の上限(軸・面積)で pixmap 確保前に弾き OOM を防ぐ(→ WEBP_LIMITS)。
     let mut pixmap = scene_to_pixmap(&scene, scale, &face, &WEBP_LIMITS)?;
 
-    // pixmap バッファを in-place で straight 化する(別バッファを確保しない。
-    // WebPEncoder は premultiplied ではなく straight alpha を要求する → demultiply_in_place)。
-    demultiply_in_place(&mut pixmap);
+    // WebPEncoder は straight alpha を要求する。全画素 α==255 が保証される
+    // (不透明背景・完全被覆)ときは premult==straight のため demultiply を省く。
+    // それ以外は in-place で straight 化する(別バッファを確保しない)。
+    if !all_pixels_opaque(&scene, &pixmap, scale) {
+        demultiply_in_place(&mut pixmap);
+    }
 
+    encode_pixmap_webp(&pixmap)
+}
+
+/// straight RGBA8 の Pixmap をロスレス WebP バイト列へエンコードする。
+/// `render_chart_to_webp` と回帰テストで共有する（DRY）。
+fn encode_pixmap_webp(pixmap: &Pixmap) -> Result<Vec<u8>, String> {
     let mut buf = Vec::new();
     WebPEncoder::new_lossless(&mut buf)
         .write_image(
@@ -1492,6 +1501,66 @@ mod tests {
         let a = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
         let b = render_chart_to_webp(&bar_spec(), 1.0, DEFAULT_FONT).unwrap();
         assert_eq!(a, b, "WebP 出力は決定的でなければならない");
+    }
+
+    /// WebP も opaque 時に demultiply をスキップして byte 一致すること。
+    /// 参照 = 全画素 demultiply 後にエンコード、実測 = スキップしてエンコード。
+    #[test]
+    fn webp_opaque_bg_skip_matches_full_demultiply_byte_for_byte() {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let measurer = crate::text::TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = crate::layout::build_scene(&opaque_bar_spec(), &measurer);
+        assert!(scene.has_opaque_background());
+
+        let mut ref_pm = scene_to_pixmap(&scene, 1.0, &face, &WEBP_LIMITS).unwrap();
+        let skip_pm = ref_pm.clone();
+        demultiply_in_place(&mut ref_pm);
+        let expected = encode_pixmap_webp(&ref_pm).unwrap();
+        let actual = encode_pixmap_webp(&skip_pm).unwrap();
+
+        assert_eq!(
+            actual, expected,
+            "opaque WebP skip 経路は全 demultiply 経路とバイト一致でなければならない"
+        );
+    }
+
+    /// WebP と PNG は同一 spec を同一ピクセルへエンコードすること(end-to-end)。
+    /// 非 opaque(demultiply 分岐)と opaque(skip 分岐)の両方を通し、guard 誤配線
+    /// (例: `!` 脱落で premultiplied のまま WebP 出力)を AA 縁のズレとして捕捉する。
+    ///
+    /// 両経路とも同じ straight RGBA を lossless に書くが、デコーダの alpha 規約が違う:
+    /// `image` の WebP デコードは straight を返し、tiny-skia の `decode_png` は
+    /// `premultiply_u8` で premultiplied 化して返す。straight→premult→straight の
+    /// round-trip は低 α 縁で丸め損失があるため、WebP 側を tiny-skia と同一の
+    /// `premultiply_u8`(= `ColorU8::premultiply`)で premultiplied 空間へ揃えてから
+    /// 厳密比較する。両者が同じ straight 値を書いていれば byte 一致する。
+    #[test]
+    fn webp_and_png_decode_to_identical_pixels() {
+        for (name, spec) in [("non_opaque", bar_spec()), ("opaque", opaque_bar_spec())] {
+            let webp = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT).unwrap();
+            let png =
+                render_chart_to_png_with(&spec, 1.0, DEFAULT_FONT, PngCompression::Fast).unwrap();
+            let webp_rgba = image::load_from_memory_with_format(&webp, image::ImageFormat::WebP)
+                .unwrap()
+                .to_rgba8();
+            let png_pm = tiny_skia::Pixmap::decode_png(&png).unwrap();
+            assert_eq!(webp_rgba.width(), png_pm.width(), "{name} width");
+            assert_eq!(webp_rgba.height(), png_pm.height(), "{name} height");
+
+            // WebP の straight RGBA を tiny-skia と同一の premultiply で揃える。
+            let webp_premul: Vec<u8> = webp_rgba
+                .pixels()
+                .flat_map(|p| {
+                    let pm = tiny_skia::ColorU8::from_rgba(p[0], p[1], p[2], p[3]).premultiply();
+                    [pm.red(), pm.green(), pm.blue(), pm.alpha()]
+                })
+                .collect();
+            assert_eq!(
+                webp_premul.as_slice(),
+                png_pm.data(),
+                "{name}: WebP と PNG は同一ピクセルへエンコードすべき（premultiplied 空間で厳密一致）"
+            );
+        }
     }
 
     #[test]
