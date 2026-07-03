@@ -106,6 +106,8 @@ With WebP disabled, `format=webp` returns `415 Unsupported Media Type`.
 | `FULGUR_SHORTLINK_DIR` | `./fulgur-shortlinks` | Directory where short links are persisted (one file per link). Created on startup; the server fails fast if it can't be created. For persistence across redeploy this must live on durable storage — see [Short link persistence](#short-link-persistence) |
 | `FULGUR_SHORTLINK_ENTRY_BYTES` | `524288` (512 KiB) | Per-entry byte cap for a stored short link. Oversized requests are rejected with `413 PAYLOAD_TOO_LARGE`. The stored value is the URL-encoded chart JSON (up to ~3× the raw body), so keep this ≳ `3 × FULGUR_MAX_BODY_SIZE`; raising `FULGUR_MAX_BODY_SIZE` without raising this will 413 legitimate large charts |
 | `FULGUR_SHORTLINK_TTL_SECONDS` | `86400` (24h) | Guaranteed minimum resolvable lifetime for a short link, as a floor guarantee (the underlying data isn't necessarily deleted at exactly this time). Used as the `Cache-Control: max-age` on successful `/chart/s/{id}` resolutions so upstream CDNs don't serve stale resolutions past the guarantee window |
+| `FULGUR_SHORTLINK_MAX_BYTES` | `536870912` (512 MiB) | Aggregate byte budget for the shortlink store (`0` = unlimited). The TTL sweep is the primary drain; this is a hard guard that caps disk even if the store is filled within the TTL window. An over-budget `POST /chart/create` triggers an inline sweep and, if still full, returns `503` (self-heals on the next sweep). Must be `≥ FULGUR_SHORTLINK_ENTRY_BYTES` or the server fails fast at startup |
+| `FULGUR_SHORTLINK_MAX_ENTRIES` | `100000` | Maximum number of stored short links (`0` = unlimited); caps inode/directory growth. Same over-cap behaviour as `FULGUR_SHORTLINK_MAX_BYTES` (inline sweep → `503` if still full) |
 | `FULGUR_CORS_ORIGINS` | `*` | Allowed CORS origins (comma-separated) |
 | `FULGUR_RATE_LIMIT` | `0` | Rate limit (requests/minute/IP). `0` disables rate limiting (default) |
 | `FULGUR_PNG_COMPRESSION` | `balanced` | PNG compression preset: `fast` / `balanced` / `high` (PNG only) |
@@ -146,9 +148,18 @@ volume). Horizontal scale-out is out of scope for this backend.
   Volume fail with a permission error, also set `RAILWAY_RUN_UID=0` — Railway mounts
   Volumes as root, so a nonroot process otherwise can't write to them.
 
-There is no active TTL deletion or LRU eviction, so the directory grows unbounded;
-`FULGUR_SHORTLINK_TTL_SECONDS` is only a `Cache-Control` floor guarantee, not a
-storage lifetime. Capacity management (TTL sweep / eviction) is tracked separately.
+A background sweep actively deletes entries older than `FULGUR_SHORTLINK_TTL_SECONDS`
+(bucketed by creation time), so the store self-drains and disk use stays bounded by the
+arrival rate over the TTL window. The sweep never deletes an entry younger than the TTL,
+so `FULGUR_SHORTLINK_TTL_SECONDS` remains a true `Cache-Control` floor guarantee rather
+than a hard storage lifetime. As a hard backstop against being filled within that window,
+`FULGUR_SHORTLINK_MAX_BYTES` (default 512 MiB) and `FULGUR_SHORTLINK_MAX_ENTRIES`
+(default 100k) cap aggregate bytes and entry count; an over-cap create runs an inline
+sweep and, if still full, returns `503` (recovering on the next sweep). These aggregate
+caps were briefly removed in the previous release and are reintroduced here with durable
+TTL-based eviction, so the default behaviour changed from unbounded to 512 MiB / 100k
+entries. The old `FULGUR_SHORTLINK_LIMIT` env is now a startup rename-error pointing to
+`FULGUR_SHORTLINK_MAX_ENTRIES`.
 
 ## Error Codes
 

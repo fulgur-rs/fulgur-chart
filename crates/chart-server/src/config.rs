@@ -46,7 +46,7 @@ pub struct Config {
     pub shortlink_ttl_seconds: u64,
 
     /// shortlink ストアの集約バイト上限（0 = 無制限）。既定 512 MiB。
-    /// TTL sweep が主だが、TTL 窓(24h)内に埋め尽くされてもディスクを直接上限化する
+    /// TTL sweep が主だが、TTL 窓内に埋め尽くされてもディスクを直接上限化する
     /// hard guard。超過 insert は inline sweep→なお超過なら 503（次 sweep で自己回復）。
     #[arg(long, env = "FULGUR_SHORTLINK_MAX_BYTES", default_value_t = 512 * 1024 * 1024)]
     pub shortlink_max_bytes: u64,

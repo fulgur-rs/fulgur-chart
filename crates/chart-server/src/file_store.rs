@@ -13,12 +13,16 @@ const WIDTH_MS: u64 = 3_600_000; // 1h
 
 /// ファイルシステム上に id→query を永続化する durable な単一ノード backend。
 ///
-/// 1 エントリ = 1 ファイル（ファイル名 = id、内容 = query 文字列）。filesystem の
-/// パスが id→artifact 対応そのものになるため in-memory インデックスは持たない。
+/// 1 エントリ = 1 ファイル（内容 = query 文字列）。エントリは作成時刻由来の
+/// time-bucket ディレクトリ `root/{bucket}/{id}`（`bucket = ulid_ms(id) / WIDTH_MS`）に
+/// 配置し、bucket は id から導出できるため in-memory インデックスは持たない。
 /// `root` が永続ストレージ上にある限り、再起動/デプロイをまたいでリンクを維持する
 /// （揮発 FS 上では再デプロイで消える。Docker/Railway では volume マウントが前提）。
 /// マルチノード/LB ハズレは解決しない（ローカルディスクはノード固有）。
-/// TTL 能動削除・LRU eviction は範囲外（sdp）。
+/// TTL sweep（`sweep_expired`）が age≥TTL の bucket を能動削除して自己ドレインする一方、
+/// age<TTL のエントリは決して消さず `Cache-Control: max-age` の下限保証を厳守する。
+/// 集約バイト/件数の容量 backstop を持ち、超過 insert は inline sweep 後もなお満杯なら
+/// `Full`（→503、次 sweep で自己回復）を返す。
 pub struct FileShortlinkStore {
     root: PathBuf,
     /// 単一エントリ（query 文字列）のバイト数上限。超過は `TooLarge`（→413）。
@@ -261,6 +265,9 @@ impl ShortlinkBackend for FileShortlinkStore {
         .map_err(|e| BackendError::Unavailable(Box::new(e)))?
         .map_err(|e| BackendError::Unavailable(Box::new(e)));
         // 書き込み成功後にのみカウンタを進める（accelerator。TooLarge/Full/Unavailable では進めない）。
+        // 前提: id は一意（呼び出し側=post_create が毎回新規 ULID を発行）。同一 id を上書き
+        // した場合は実ファイルが増えないのにカウンタだけ +1 され、この過剰分は sweep では
+        // 減らず（sweep は実ディスク量を減算するため）再起動時の scan 再 seed でのみ解消する。
         result?;
         self.count.fetch_add(1, Ordering::Relaxed);
         self.bytes.fetch_add(new_len, Ordering::Relaxed);
@@ -596,7 +603,7 @@ mod tests {
         let s = s.with_ttl_seconds(TTL);
         let id = Ulid::new().to_string(); // age ≈ 0
         s.insert(id.clone(), "fresh".into()).await.unwrap();
-        // 実時刻で sweep（system_now_ms ヘルパは Task 4 で導入するため、ここではインライン計算）。
+        // 実時刻で sweep（今作成した age≈0 のエントリが実 now で消えないことを検証）。
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

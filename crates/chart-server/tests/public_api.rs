@@ -83,7 +83,8 @@ async fn external_backend_can_be_injected_into_build_router() {
 }
 
 /// backend が `Full` を返すと `POST /chart/create` は 503 STORE_FULL。
-/// （FileShortlinkStore は Full を返さないが、ハンドラのアームは external adapter 用に残るため網羅する。）
+/// （このテストはスタブ backend で 503 経路を検証する。FileShortlinkStore も容量上限
+/// 超過時に `Full` を返す。）
 #[tokio::test]
 async fn create_returns_503_store_full_when_backend_full() {
     let cfg = default_config();
