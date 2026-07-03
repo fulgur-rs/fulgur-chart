@@ -7,6 +7,7 @@
 
 mod backend;
 mod config;
+mod file_store;
 mod handlers;
 mod render;
 mod response;
@@ -16,5 +17,6 @@ mod store;
 
 pub use backend::{BackendError, ShortlinkBackend};
 pub use config::Config;
+pub use file_store::FileShortlinkStore;
 pub use server::build_router;
 pub use store::ShortlinkStore;
