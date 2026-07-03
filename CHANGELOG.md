@@ -12,6 +12,58 @@
 
 - *(png)* 既定圧縮をライブラリ全体で Balanced に統一
 
+### Other
+
+- release
+
+## [0.12.0](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.11.5...fulgur-chart-v0.12.0) - 2026-07-01
+
+### Added
+
+- *(decimate)* threshold 超過 line のマーカーを既定抑制 (pointRadius で復活)
+- *(decimate)* line::build に間引きを配線 (セグメント先行分割)
+- *(decimate)* JSON schema に DecimationPlugin を追加 (CommonPlugins/BarPlugins)
+- *(decimate)* strict parser で options.plugins.decimation を許可
+- *(decimate)* chartjs frontend で decimation を parse し IR へ解決
+- *(decimate)* 設定型と発動判定 resolve / 単一セグメント間引き decimate_one を追加
+- *(decimate)* LTTB デシメーションを追加
+- *(decimate)* 列ごと min/max デシメーションを追加
+- *(raster)* stamp cache を描画ループへ配線 + フォールバック
+- *(raster)* 手書き premultiplied source-over blit
+- *(raster)* B=8 サブピクセル stamp ビルダ(fill+stroke)
+- *(raster)* 連続均一マーカー run 検出
+- *(png)* 既定圧縮をライブラリ全体で Balanced に統一
+- *(png)* demultiply 高速化 + 圧縮プリセット (fast/balanced/high)
+
+### Fixed
+
+- *(decimate)* Codex 指摘に対応 (単点gapのマーカー保持 / matrix schema↔strict parity)
+- *(raster)* 巨大な有限座標での blit 桁あふれを i64 計算で回避 (codex review)
+- *(raster)* AI レビュー対応 — 堅牢性4点
+- AI レビュー対応 — compression を起動時設定に、ほか
+
+### Other
+
+- release
+- *(decimate)* membench baseline を更新 (line_large_decimated 追加, 現行 alloc を反映)
+- *(decimate)* line_points の doc コメントを修正 (build はレンダ点を独立計算・間引き)
+- *(decimate)* bench 変種を追加し CHANGELOG に互換性乖離を記載
+- *(decimate)* 決定性・no-op サニティ・SVG↔PNG 一致・新規 golden を追加
+- *(decimate)* gap あり巨大系列の間引き回帰テストを追加し LTTB の per-segment samples を明記
+- *(decimate)* schema の algorithm を enum 化し value レベルの parity を閉じる
+- *(decimate)* resolve の戻り値検証を強化し lttb dispatch テストとコメントを追加
+- *(raster)* WebP validly 検証を実デコードまで強化 (coderabbit review)
+- Merge remote-tracking branch 'origin/main' into perf/raster-stamp-cache
+- *(raster)* レビュー対応 — WebP stamp 経路の決定性 + scale=2 許容テスト
+- *(raster)* stamp 経路の決定性ゲート(native↔wasm)
+- Merge pull request #100 from fulgur-rs/perf/png-demultiply-fast
+
+## [0.1.18](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.17...fulgur-chart-cli-v0.1.18) - 2026-07-01
+
+### Added
+
+- *(png)* 既定圧縮をライブラリ全体で Balanced に統一
+
 ## [0.12.0](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.11.5...fulgur-chart-v0.12.0) - 2026-07-01
 
 ### Added
