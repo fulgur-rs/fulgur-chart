@@ -627,6 +627,19 @@ let store = std::sync::Arc::new(
 
 `build_router(&cfg, store)` はそのまま（`Arc<FileShortlinkStore>` → `Arc<dyn ShortlinkBackend>` に coercion）。
 
+**config 整合の fail-fast（misconfiguration guard）:** `Config::parse` の直後（store 構築前）に、バイト予算が per-entry 上限を下回る設定を弾く。この場合 `entry_bytes` 以下だが `max_bytes` を超えるサイズのエントリは per-entry チェック（TooLarge）を通過しつつ集約 backstop（Full）で恒久拒否され、しかも sweep でも解消できない（空ストアでも Full）。codebase の fail-fast 哲学（migration guard・probe_writable）に倣い起動時に検出する:
+
+```rust
+if cfg.shortlink_max_bytes != 0 && cfg.shortlink_max_bytes < cfg.shortlink_entry_bytes as u64 {
+    panic!(
+        "FULGUR_SHORTLINK_MAX_BYTES ({}) must be >= FULGUR_SHORTLINK_ENTRY_BYTES ({}): \
+         a byte budget smaller than a single entry permanently rejects large entries \
+         (even on an empty store). Raise the budget or lower the per-entry limit.",
+        cfg.shortlink_max_bytes, cfg.shortlink_entry_bytes
+    );
+}
+```
+
 **Step 3: テスト内 Config リテラルにフィールド追加**
 
 `server.rs` の `base_config()`（134 行）と `handlers/shortlink.rs` http_tests の `Config { .. }`（192 行）に:
