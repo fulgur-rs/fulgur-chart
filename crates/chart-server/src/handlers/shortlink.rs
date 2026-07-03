@@ -63,7 +63,8 @@ pub async fn post_create(
             })),
         )
             .into_response(),
-        // 件数 or 集約バイトが満杯: 一時的な拒否なので 503。
+        // 満杯（件数/集約バイト上限）: 一時的な拒否なので 503。FileShortlinkStore は
+        // 返さず、external adapter 用に残すアーム。
         Err(BackendError::Full) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
@@ -72,7 +73,7 @@ pub async fn post_create(
             })),
         )
             .into_response(),
-        // durable backend の一時障害: 503（in-memory では発生しない）。
+        // durable backend の一時障害: 503（FileShortlinkStore は I/O 失敗時に返す）。
         Err(BackendError::Unavailable(err)) => {
             eprintln!("Shortlink backend unavailable (create): {err}");
             (
@@ -117,7 +118,7 @@ pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>
                 .insert(header::CACHE_CONTROL, no_store_cache_control());
             resp
         }
-        // durable backend の一時障害: 503（in-memory では発生しない）。
+        // durable backend の一時障害: 503（FileShortlinkStore は I/O 失敗時に返す）。
         Err(err) => {
             eprintln!("Shortlink backend unavailable (resolve): {err}");
             let mut resp = (
@@ -158,13 +159,14 @@ fn build_query(
 }
 
 /// HTTP レベルの統合テスト: `/chart/create` の handler→store マッピング
-/// （200 / 413 PAYLOAD_TOO_LARGE / 503 STORE_FULL）が配線として壊れないことを保証する。
+/// （200 / 413 PAYLOAD_TOO_LARGE）が配線として壊れないことを保証する。
+/// 503 BACKEND_UNAVAILABLE 経路は `tests/public_api.rs` がスタック backend で網羅する。
 #[cfg(test)]
 mod http_tests {
     use crate::config::Config;
+    use crate::file_store::FileShortlinkStore;
     use crate::render::Compression;
     use crate::server::build_router;
-    use crate::store::ShortlinkStore;
     use axum::{
         Router,
         body::Body,
@@ -174,41 +176,27 @@ mod http_tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    /// 指定したストア上限で `/chart/create` を叩ける router を組む。
-    /// バイト/件数上限のテストのため store だけ呼び出し側で構成する。
-    fn router_with_store(store: ShortlinkStore) -> Router {
-        let cfg = Config {
-            host: "0.0.0.0".into(),
-            port: 3000,
-            max_concurrent: 4,
-            max_body_size: 102_400,
-            render_timeout_ms: 1000,
-            shortlink_limit: 100,
-            shortlink_max_bytes: 128 * 1024 * 1024,
-            shortlink_entry_bytes: 512 * 1024,
-            shortlink_ttl_seconds: 86_400,
-            cors_origins: "*".into(),
-            rate_limit: 0,
-            log_level: "info".into(),
-            png_compression: Compression::default(),
-            webp_enabled: false,
-            max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
-        };
-        build_router(&cfg, Arc::new(store))
+    /// 指定した entry_bytes で tempdir-backed FileShortlinkStore を組んだ router。
+    /// per-entry バイト上限のテストのため entry_bytes を呼び出し側で指定する。
+    async fn router_with_entry_bytes(entry_bytes: usize) -> Router {
+        router_with_entry_bytes_and_ttl(entry_bytes, 86_400).await
     }
 
-    /// shortlink_ttl_seconds を明示的に指定できる router ヘルパー
+    /// entry_bytes と shortlink_ttl_seconds を明示指定できる router ヘルパー
     /// (config駆動であることをdefault値(86400)と異なる値で検証するため)。
-    fn router_with_store_and_ttl(store: ShortlinkStore, ttl: u64) -> Router {
+    async fn router_with_entry_bytes_and_ttl(entry_bytes: usize, ttl: u64) -> Router {
+        let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        let store = FileShortlinkStore::new(dir.path(), entry_bytes)
+            .await
+            .unwrap();
         let cfg = Config {
             host: "0.0.0.0".into(),
             port: 3000,
             max_concurrent: 4,
             max_body_size: 102_400,
             render_timeout_ms: 1000,
-            shortlink_limit: 100,
-            shortlink_max_bytes: 128 * 1024 * 1024,
-            shortlink_entry_bytes: 512 * 1024,
+            shortlink_entry_bytes: entry_bytes,
+            shortlink_dir: "unused".into(),
             shortlink_ttl_seconds: ttl,
             cors_origins: "*".into(),
             rate_limit: 0,
@@ -243,9 +231,9 @@ mod http_tests {
     async fn create_rejects_oversized_entry_with_413() {
         // entry_bytes=10。小さな valid body でも query が 10B を超えるため store が拒否。
         // body は 100KiB の DefaultBodyLimit を下回るので 413 は store 由来。
-        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 10);
         let body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
-        let resp = router_with_store(store)
+        let resp = router_with_entry_bytes(10)
+            .await
             .oneshot(create_request(body))
             .await
             .unwrap();
@@ -254,32 +242,12 @@ mod http_tests {
         assert!(body.contains("PAYLOAD_TOO_LARGE"), "body={body}");
     }
 
-    /// 件数上限に達したら以後の create は 503 STORE_FULL。
-    #[tokio::test]
-    async fn create_returns_503_when_store_full() {
-        let store = ShortlinkStore::new(1, 128 * 1024 * 1024, 512 * 1024);
-        let router = router_with_store(store);
-
-        let body1 = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
-        let (status1, b1) =
-            status_and_body(router.clone().oneshot(create_request(body1)).await.unwrap()).await;
-        assert_eq!(status1, StatusCode::OK, "body={b1}");
-
-        // ULID は非決定的なので spec に関わらず新規挿入だが、件数上限(1)に達しているため 503。
-        let body2 =
-            r#"{"chart":{"type":"line","data":{"labels":["B"],"datasets":[{"data":[2]}]}}}"#;
-        let (status2, b2) =
-            status_and_body(router.oneshot(create_request(body2)).await.unwrap()).await;
-        assert_eq!(status2, StatusCode::SERVICE_UNAVAILABLE, "body={b2}");
-        assert!(b2.contains("STORE_FULL"), "body={b2}");
-    }
-
     /// 上限内なら 200 で /chart/s/{id} を返す。
     #[tokio::test]
     async fn create_succeeds_within_limits() {
-        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
         let body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
-        let resp = router_with_store(store)
+        let resp = router_with_entry_bytes(512 * 1024)
+            .await
             .oneshot(create_request(body))
             .await
             .unwrap();
@@ -292,8 +260,7 @@ mod http_tests {
     /// (content-hash 時代の dedup は意図的に失われる — 8tr.5 の受容済みトレードオフ)。
     #[tokio::test]
     async fn create_generates_distinct_ids_for_identical_specs() {
-        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
-        let router = router_with_store(store);
+        let router = router_with_entry_bytes(512 * 1024).await;
         let body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
 
         let (status1, b1) =
@@ -313,9 +280,9 @@ mod http_tests {
     /// 返却される id は ULID の文字列表現: 26 文字の Crockford base32。
     #[tokio::test]
     async fn create_returns_url_with_26_char_ulid_id() {
-        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
         let body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
-        let resp = router_with_store(store)
+        let resp = router_with_entry_bytes(512 * 1024)
+            .await
             .oneshot(create_request(body))
             .await
             .unwrap();
@@ -344,8 +311,7 @@ mod http_tests {
     /// config駆動であることを検証する。
     #[tokio::test]
     async fn resolve_success_sets_cache_control_from_config_ttl() {
-        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
-        let router = router_with_store_and_ttl(store, 3600);
+        let router = router_with_entry_bytes_and_ttl(512 * 1024, 3600).await;
 
         let create_body =
             r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
@@ -388,8 +354,7 @@ mod http_tests {
     /// LBハズレ由来の一時的な404を永続化させないようにするため。
     #[tokio::test]
     async fn resolve_not_found_sets_no_store_cache_control() {
-        let store = ShortlinkStore::new(100, 128 * 1024 * 1024, 512 * 1024);
-        let router = router_with_store(store);
+        let router = router_with_entry_bytes(512 * 1024).await;
 
         let resp = router
             .oneshot(

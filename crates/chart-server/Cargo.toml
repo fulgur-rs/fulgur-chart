@@ -19,7 +19,6 @@ axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "compression-full", "limit"] }
 tower_governor = "0.6"
-dashmap = "6"
 async-trait = "0.1"
 sha2 = "0.10"
 hex = "0.4"
@@ -36,3 +35,4 @@ ulid = "1.2"
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+tempfile = "3"

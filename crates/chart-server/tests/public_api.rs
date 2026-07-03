@@ -1,8 +1,8 @@
 //! 公開 API が外部 crate と同じ経路(`chart_server::...` の再エクスポートのみ)で
 //! 使えること、特に `ShortlinkBackend` を実装した任意の backend を
-//! `build_router` に inject できることを検証する。in-memory が決して返さない
-//! `Unavailable` 経路(→ 503 BACKEND_UNAVAILABLE)も、スタブ backend を注入して
-//! HTTP レベルで実際に網羅する。
+//! `build_router` に inject できることを検証する。OSS デフォルトの file backend
+//! (`FileShortlinkStore`)では通常発生しない `Unavailable`/`Full` 経路(→ 503)も、
+//! スタブ backend を注入して HTTP レベルで実際に網羅する。
 
 use std::sync::Arc;
 
@@ -12,7 +12,7 @@ use axum::{
     http::{Request, StatusCode},
     response::Response,
 };
-use chart_server::{BackendError, Config, ShortlinkBackend, ShortlinkStore, build_router};
+use chart_server::{BackendError, Config, FileShortlinkStore, ShortlinkBackend, build_router};
 use clap::Parser;
 use tower::ServiceExt;
 
@@ -42,6 +42,19 @@ impl ShortlinkBackend for UnavailableBackend {
     }
 }
 
+/// 常に `Full` を返す backend のスタブ（満杯状態を模擬）。
+struct FullBackend;
+
+#[async_trait]
+impl ShortlinkBackend for FullBackend {
+    async fn insert(&self, _id: String, _query: String) -> Result<(), BackendError> {
+        Err(BackendError::Full)
+    }
+    async fn get(&self, _id: &str) -> Result<Option<String>, BackendError> {
+        Ok(None)
+    }
+}
+
 /// clap のデフォルト値で Config を構築(引数なし起動相当)。
 fn default_config() -> Config {
     Config::parse_from(["chart-server"])
@@ -53,13 +66,38 @@ async fn status_and_body(resp: Response) -> (StatusCode, String) {
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// 受け入れ基準: 外部実装の backend も OSS デフォルトの in-memory backend も
-/// 同じ `build_router` シームに渡せる(コンパイルが通ること自体が実証)。
-#[test]
-fn external_backend_can_be_injected_into_build_router() {
+/// 受け入れ基準: 外部実装の backend も OSS デフォルトの file backend
+/// (`FileShortlinkStore`)も同じ `build_router` シームに渡せる
+/// (コンパイルが通ること自体が実証)。
+#[tokio::test]
+async fn external_backend_can_be_injected_into_build_router() {
     let cfg = default_config();
     let _router = build_router(&cfg, Arc::new(NoopBackend));
-    let _router2 = build_router(&cfg, Arc::new(ShortlinkStore::new(10, 1024, 256)));
+    // TempDir を変数に束縛して router 構築後も dir を生存させる（直接 .path() を渡すと
+    // 一時 TempDir が文末で drop され dir が消える。store ヘルパの established pattern に揃える）。
+    let dir = tempfile::tempdir().unwrap();
+    let _router2 = build_router(
+        &cfg,
+        Arc::new(FileShortlinkStore::new(dir.path(), 256).await.unwrap()),
+    );
+}
+
+/// backend が `Full` を返すと `POST /chart/create` は 503 STORE_FULL。
+/// （FileShortlinkStore は Full を返さないが、ハンドラのアームは external adapter 用に残るため網羅する。）
+#[tokio::test]
+async fn create_returns_503_store_full_when_backend_full() {
+    let cfg = default_config();
+    let router = build_router(&cfg, Arc::new(FullBackend));
+    let body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/chart/create")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, body) = status_and_body(router.oneshot(req).await.unwrap()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body={body}");
+    assert!(body.contains("STORE_FULL"), "body={body}");
 }
 
 /// backend が `Unavailable` を返すと `POST /chart/create` は 503 BACKEND_UNAVAILABLE。

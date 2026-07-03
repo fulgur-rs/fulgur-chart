@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(chart-server)* durable filesystem shortlink backend (`FileShortlinkStore`): short links are persisted to `FULGUR_SHORTLINK_DIR` (default `./fulgur-shortlinks`, one file per link) and now survive server restart/redeploy when that dir is on durable storage
+- *(chart-server)* `FULGUR_SHORTLINK_DIR` config for the shortlink storage directory
+- *(chart-server)* Docker image bakes a nonroot-owned `/data` and sets `FULGUR_SHORTLINK_DIR=/data`; `docker-compose.yml` mounts a `shortlinks` volume there
+
+### Changed
+
+- **BREAKING** *(chart-server)* the in-memory shortlink store is replaced by the filesystem backend as the sole/default backend
+
+### Removed
+
+- **BREAKING** *(chart-server)* `FULGUR_SHORTLINK_LIMIT` and `FULGUR_SHORTLINK_MAX_BYTES` (aggregate count/byte caps): the filesystem backend enforces only the per-entry cap (`FULGUR_SHORTLINK_ENTRY_BYTES`). Deployments still setting these env vars will fail to start
+
 ## [0.1.0](https://github.com/fulgur-rs/fulgur-chart/releases/tag/chart-server-v0.1.0) - 2026-07-01
 
 ### Added
