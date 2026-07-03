@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+# SaaS レンダラであり crates.io に公開しない (公開は GitHub リポジトリで担保)。
+# release-plz/cargo publish の対象から除外する。
+publish = false
 
 [[bin]]
 name = "chart-server"
