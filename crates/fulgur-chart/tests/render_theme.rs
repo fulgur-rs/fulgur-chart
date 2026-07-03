@@ -80,3 +80,32 @@ fn default_palette_fill_uses_default_alpha() {
         "default palette should use 0.5 fill alpha, got:\n{svg}"
     );
 }
+#[test]
+fn opaque_theme_background_marks_scene_opaque() {
+    use fulgur_chart::layout::build_scene;
+    use fulgur_chart::text::TextMeasurer;
+    let m = TextMeasurer::new(fulgur_chart::font::DEFAULT_FONT).unwrap();
+
+    let opaque = chartjs::parse(
+        r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+          "options":{"theme":{"backgroundColor":"#ff00ff"}}}"##,
+        false,
+    )
+    .unwrap();
+    assert!(build_scene(&opaque, &m).has_opaque_background());
+
+    let semi = chartjs::parse(
+        r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+          "options":{"theme":{"backgroundColor":"rgba(255,0,255,0.5)"}}}"##,
+        false,
+    )
+    .unwrap();
+    assert!(!build_scene(&semi, &m).has_opaque_background());
+
+    let none = chartjs::parse(
+        r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#,
+        false,
+    )
+    .unwrap();
+    assert!(!build_scene(&none, &m).has_opaque_background());
+}
