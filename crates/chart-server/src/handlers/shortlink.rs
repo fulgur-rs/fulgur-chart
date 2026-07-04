@@ -113,9 +113,13 @@ pub async fn get_shortlink(
             // entry_bytes 512KiB)まで通る大 spec を resolve で 414/500 に落として
             // しまう。render-by-id は「spec を URL に載せない」のが要件なので、
             // query 文字列を直接 parse して長さ上限を持ち込まない。
+            // c 欠落の破損エントリは 400(missing param)ではなく 500 に倒す。
+            // build_query は常に c を書くので、c 欠落は store 側の破損を意味し、
+            // client(/chart/s/{id} を呼んだだけ)の責任ではない。decode 失敗と
+            // 同じ internal_error_no_store 経路に揃える。
             let q = match serde_urlencoded::from_str::<ChartQuery>(&query) {
-                Ok(q) => q,
-                Err(_) => return internal_error_no_store(),
+                Ok(q) if q.c.is_some() => q,
+                _ => return internal_error_no_store(),
             };
             let mut resp = render_from_query(q, headers, state.clone()).await;
             // 成功(200)と 304(条件付き再検証)だけを CDN キャッシュ可能にし、
@@ -225,11 +229,12 @@ mod http_tests {
     /// entry_bytes と shortlink_ttl_seconds を明示指定できる router ヘルパー
     /// (config駆動であることをdefault値(86400)と異なる値で検証するため)。
     async fn router_with_entry_bytes_and_ttl(entry_bytes: usize, ttl: u64) -> Router {
-        let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-        let store = FileShortlinkStore::new(dir.path(), entry_bytes)
-            .await
-            .unwrap();
-        let cfg = Config {
+        store_and_router(entry_bytes, ttl).await.1
+    }
+
+    /// テスト用 Config(entry_bytes と ttl 以外は固定)。
+    fn test_config(entry_bytes: usize, ttl: u64) -> Config {
+        Config {
             host: "0.0.0.0".into(),
             port: 3000,
             max_concurrent: 4,
@@ -246,8 +251,21 @@ mod http_tests {
             png_compression: Compression::default(),
             webp_enabled: false,
             max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
-        };
-        build_router(&cfg, Arc::new(store))
+        }
+    }
+
+    /// store の Arc と、その store で組んだ router の両方を返す。
+    /// store に生エントリを直接 insert して resolve 経路(破損エントリ等)を
+    /// テストするために使う。
+    async fn store_and_router(entry_bytes: usize, ttl: u64) -> (Arc<FileShortlinkStore>, Router) {
+        let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        let store = Arc::new(
+            FileShortlinkStore::new(dir.path(), entry_bytes)
+                .await
+                .unwrap(),
+        );
+        let router = build_router(&test_config(entry_bytes, ttl), store.clone());
+        (store, router)
     }
 
     fn create_request(body: &str) -> Request<Body> {
@@ -427,6 +445,36 @@ mod http_tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+    }
+
+    /// store が壊れて `c` を欠くエントリ(build_query は常に c を書くので通常経路では
+    /// 作れない破損状態)を resolve すると、400(missing param)ではなく 500 + no-store を
+    /// 返す。破損は client(/chart/s/{id} を呼んだだけ)の責任ではないため。gemini レビュー対応。
+    #[tokio::test]
+    async fn resolve_corrupt_entry_missing_c_returns_500_no_store() {
+        use crate::backend::ShortlinkBackend;
+        let (store, router) = store_and_router(512 * 1024, 86_400).await;
+        // 有効な ULID id に、c を欠いた query を直接 insert(通常経路では作れない破損状態)。
+        let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string();
+        store.insert(id.clone(), "f=svg".to_string()).await.unwrap();
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/chart/s/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "corrupt (missing c) entry must be 500, not 400"
+        );
         assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
     }
 
