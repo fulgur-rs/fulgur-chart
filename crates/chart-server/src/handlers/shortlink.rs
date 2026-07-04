@@ -429,6 +429,70 @@ mod http_tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
     }
+
+    /// 旧 307 リダイレクト方式では request-line 上限(~8-16KiB)を超える大 spec は
+    /// resolve 時に 414 になっていた。render-by-id では spec を URL に載せないので
+    /// create の受理域(body 100KiB / entry_bytes)まで resolve も 200 で通る。
+    #[tokio::test]
+    async fn resolve_large_spec_renders_200_not_414() {
+        let router = router_with_entry_bytes(512 * 1024).await;
+
+        // ~40KiB のラベルを持つ棒グラフ。旧方式なら resolve の URL 長が
+        // request-line 上限を大きく超えて 414 になっていたサイズ。
+        let labels: Vec<String> = (0..2000)
+            .map(|i| format!("category-label-{i:05}"))
+            .collect();
+        let data: Vec<u32> = (0..2000).collect();
+        let chart = serde_json::json!({
+            "type": "bar",
+            "data": { "labels": labels, "datasets": [{ "data": data }] }
+        });
+        // format:svg を明示（default は Png のため content-type を SVG に固定）。
+        let create_body = serde_json::json!({ "chart": chart, "format": "svg" }).to_string();
+        assert!(
+            create_body.len() > 16_384,
+            "test spec must exceed the old request-line ceiling, got {}B",
+            create_body.len()
+        );
+
+        let (status, body) = status_and_body(
+            router
+                .clone()
+                .oneshot(create_request(&create_body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "create should accept large spec: {body}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let url = json["url"].as_str().unwrap().to_string();
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "resolve of large spec must render (200), not 414; headers={:?}",
+            resp.headers()
+        );
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "image/svg+xml; charset=utf-8"
+        );
+    }
 }
 
 /// build_query が作る query 文字列を、GET /chart と同一の抽出器
