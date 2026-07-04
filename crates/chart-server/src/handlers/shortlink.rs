@@ -373,3 +373,63 @@ mod http_tests {
         assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
     }
 }
+
+/// build_query が作る query 文字列を、GET /chart と同一の抽出器
+/// (`Query::try_from_uri`)で parse し直したとき、c/f/w/h/bkg が原値復元される
+/// ことを固定する。resolve の render-by-id 化はこの往復に依存する(advisor 指摘の盲点)。
+#[cfg(test)]
+mod roundtrip_tests {
+    use super::build_query;
+    use crate::handlers::chart::ChartQuery;
+    use crate::render::OutputFormat;
+    use axum::{extract::Query, http::Uri};
+
+    #[test]
+    fn build_query_round_trips_all_fields_and_formats() {
+        // 構造文字 { } " : , / 空白 / 非ASCII(日本語) / + と & を値に含む。
+        // + と & は form-encoding の古典的な罠(percent-encode されていれば復元される)。
+        let spec = r#"{"type":"bar","data":{"labels":["a b","日本語","x+y&z"],"datasets":[{"data":[1,2,3]}]}}"#;
+
+        for fmt in [
+            OutputFormat::Svg,
+            OutputFormat::Png,
+            OutputFormat::Webp,
+            OutputFormat::DataUri,
+        ] {
+            let q = build_query(spec, Some(640), Some(360), Some("hot+pink & white"), fmt);
+            let uri: Uri = format!("/chart?{q}")
+                .parse()
+                .expect("query must form a valid URI");
+            let Query(parsed) = Query::<ChartQuery>::try_from_uri(&uri)
+                .expect("stored query must parse as ChartQuery");
+
+            assert_eq!(
+                parsed.c.as_deref(),
+                Some(spec),
+                "spec round-trip failed for {fmt:?}"
+            );
+            assert_eq!(parsed.w, Some(640), "w round-trip failed for {fmt:?}");
+            assert_eq!(parsed.h, Some(360), "h round-trip failed for {fmt:?}");
+            assert_eq!(
+                parsed.bkg.as_deref(),
+                Some("hot+pink & white"),
+                "bkg round-trip failed for {fmt:?}"
+            );
+            assert_eq!(parsed.f, fmt, "format round-trip failed");
+        }
+    }
+
+    /// None の w/h/bkg は query に出ず、parse 後も None のまま(Some("") にならない)。
+    #[test]
+    fn build_query_omits_absent_optionals() {
+        let spec = r#"{"type":"bar"}"#;
+        let q = build_query(spec, None, None, None, OutputFormat::Svg);
+        let uri: Uri = format!("/chart?{q}").parse().unwrap();
+        let Query(parsed) = Query::<ChartQuery>::try_from_uri(&uri).unwrap();
+        assert_eq!(parsed.c.as_deref(), Some(spec));
+        assert_eq!(parsed.w, None);
+        assert_eq!(parsed.h, None);
+        assert_eq!(parsed.bkg, None);
+        assert_eq!(parsed.f, OutputFormat::Svg);
+    }
+}
