@@ -449,10 +449,21 @@ mod http_tests {
         });
         // format:svg を明示（default は Png のため content-type を SVG に固定）。
         let create_body = serde_json::json!({ "chart": chart, "format": "svg" }).to_string();
+        // この回帰ガードの本質は「store される encoded query が http::Uri の
+        // MAX_LEN(65534)を超える」こと。旧 try_from_uri 経路はこの長さで 500(TooLong)
+        // に落ちた。raw body 長ではなく encoded query 長を固定しないと、payload を
+        // 縮めた際に 64KiB を下回って判別力を失う(advisor 指摘)。
+        let stored_query = super::build_query(
+            &chart.to_string(),
+            None,
+            None,
+            None,
+            crate::render::OutputFormat::Svg,
+        );
         assert!(
-            create_body.len() > 16_384,
-            "test spec must exceed the old request-line ceiling, got {}B",
-            create_body.len()
+            stored_query.len() > 65_534,
+            "encoded query must exceed http::Uri MAX_LEN (got {}B) so this guards against the try_from_uri regression",
+            stored_query.len()
         );
 
         let (status, body) = status_and_body(
@@ -495,15 +506,17 @@ mod http_tests {
     }
 }
 
-/// build_query が作る query 文字列を、GET /chart と同一の抽出器
-/// (`Query::try_from_uri`)で parse し直したとき、c/f/w/h/bkg が原値復元される
-/// ことを固定する。resolve の render-by-id 化はこの往復に依存する(advisor 指摘の盲点)。
+/// build_query が作る query 文字列を、resolve handler と同一の decode
+/// (`serde_urlencoded::from_str::<ChartQuery>` — axum の Query 抽出器が内部で使う
+/// のと同じ parser)で parse し直したとき、c/f/w/h/bkg が原値復元されることを固定する。
+/// handler は `http::Uri` の長さ上限(MAX_LEN=65534)を避けるため Uri を経由せず
+/// この関数を直接呼ぶので、テストも同じ経路を lock する。
+/// resolve の render-by-id 化はこの往復に依存する(advisor 指摘の盲点)。
 #[cfg(test)]
 mod roundtrip_tests {
     use super::build_query;
     use crate::handlers::chart::ChartQuery;
     use crate::render::OutputFormat;
-    use axum::{extract::Query, http::Uri};
 
     #[test]
     fn build_query_round_trips_all_fields_and_formats() {
@@ -518,11 +531,8 @@ mod roundtrip_tests {
             OutputFormat::DataUri,
         ] {
             let q = build_query(spec, Some(640), Some(360), Some("hot+pink & white"), fmt);
-            let uri: Uri = format!("/chart?{q}")
-                .parse()
-                .expect("query must form a valid URI");
-            let Query(parsed) = Query::<ChartQuery>::try_from_uri(&uri)
-                .expect("stored query must parse as ChartQuery");
+            let parsed: ChartQuery =
+                serde_urlencoded::from_str(&q).expect("stored query must parse as ChartQuery");
 
             assert_eq!(
                 parsed.c.as_deref(),
@@ -545,8 +555,7 @@ mod roundtrip_tests {
     fn build_query_omits_absent_optionals() {
         let spec = r#"{"type":"bar"}"#;
         let q = build_query(spec, None, None, None, OutputFormat::Svg);
-        let uri: Uri = format!("/chart?{q}").parse().unwrap();
-        let Query(parsed) = Query::<ChartQuery>::try_from_uri(&uri).unwrap();
+        let parsed: ChartQuery = serde_urlencoded::from_str(&q).unwrap();
         assert_eq!(parsed.c.as_deref(), Some(spec));
         assert_eq!(parsed.w, None);
         assert_eq!(parsed.h, None);
