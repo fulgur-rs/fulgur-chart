@@ -430,6 +430,129 @@ mod http_tests {
         assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
     }
 
+    /// resolve 時にレンダが失敗(400)した場合、Cache-Control: no-store になる。
+    /// post_create は spec を検証せず保存するため、レンダ不能な spec の shortlink を
+    /// 作れる。前段 CDN が transient なエラー応答を永続化しないことを保証する
+    /// (8tr.3 のセキュリティ関連分岐 — else→no-store)。404 の no-store は別テストで
+    /// 網羅済みだが、render-error 分岐はこのテストが初めて固定する。
+    #[tokio::test]
+    async fn resolve_render_error_sets_no_store_cache_control() {
+        let router = router_with_entry_bytes(512 * 1024).await;
+
+        // post_create は spec を検証しないので、レンダで失敗する不正 spec を保存できる。
+        // 不正な chart type は render::parse_and_validate で弾かれ 400 を返す。
+        let create_body = r#"{"chart":{"type":"definitely-not-a-real-chart-type"}}"#;
+        let (status, body) = status_and_body(
+            router
+                .clone()
+                .oneshot(create_request(create_body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "create should accept (unvalidated) invalid spec: body={body}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let url = json["url"].as_str().unwrap().to_string();
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // 不正 spec は render::parse_and_validate で弾かれ 400 BAD_REQUEST。
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "invalid spec should render as 400 client error; headers={:?}",
+            resp.headers()
+        );
+        // 本題: エラー分岐(else)は no-store。CDN がエラーをキャッシュしないため(8tr.3)。
+        assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+    }
+
+    /// 条件付き再検証(If-None-Match)で 304 を返す場合、Cache-Control は shortlink
+    /// TTL(config 値)に結合される(no-store ではない)。CDN/ブラウザの通常再検証パス
+    /// を表す 8tr.3 の `== NOT_MODIFIED` 分岐を固定する。
+    #[tokio::test]
+    async fn resolve_not_modified_sets_shortlink_cache_control() {
+        let router = router_with_entry_bytes_and_ttl(512 * 1024, 3600).await;
+
+        // format:svg を明示（default は Png のため content-type を SVG に固定）。
+        let create_body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}},"format":"svg"}"#;
+        let (status, body) = status_and_body(
+            router
+                .clone()
+                .oneshot(create_request(create_body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body={body}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let url = json["url"].as_str().unwrap().to_string();
+
+        // 1回目: 200 でレンダし、レスポンスの ETag を取得。
+        let first = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first.status(),
+            StatusCode::OK,
+            "headers={:?}",
+            first.headers()
+        );
+        let etag = first
+            .headers()
+            .get("etag")
+            .expect("rendered 200 must expose ETag")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // 2回目: 同 url を If-None-Match 付きで再取得 → 304。
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&url)
+                    .header("if-none-match", &etag)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_MODIFIED,
+            "headers={:?}",
+            resp.headers()
+        );
+        // 304 分岐は shortlink TTL(config 3600)に結合(no-store ではない)。
+        assert_eq!(
+            resp.headers().get("cache-control").unwrap(),
+            "public, max-age=3600"
+        );
+    }
+
     /// 旧 307 リダイレクト方式では request-line 上限(~8-16KiB)を超える大 spec は
     /// resolve 時に 414 になっていた。render-by-id では spec を URL に載せないので
     /// create の受理域(body 100KiB / entry_bytes)まで resolve も 200 で通る。
