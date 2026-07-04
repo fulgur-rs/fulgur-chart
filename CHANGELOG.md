@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- *(decimate)* sparkline を間引き対象に追加 (単一セグメント・auto-on、`decimation.enabled:false` で無効化)
+- *(decimate)* JSON schema の SparklineOptions に plugins.decimation を追加 (schema↔strict parity)
+
 ## [0.1.18](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.17...fulgur-chart-cli-v0.1.18) - 2026-07-01
 
 ### Added

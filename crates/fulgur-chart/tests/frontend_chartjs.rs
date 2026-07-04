@@ -570,6 +570,25 @@ fn schema_strict_parity_decimation_matrix() {
 }
 
 #[test]
+fn schema_strict_parity_decimation_sparkline() {
+    // sparkline はマーカー無し。line と同じ decimation を受理する。runtime strict と
+    // 公開 schema の両方が options.plugins.decimation を受理し、危険方向のパリティ破れ
+    // (schema OK / strict NG、またはその逆) を作らないこと。
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    let json = r##"{
+        "type": "sparkline",
+        "data": { "datasets": [{ "data": [1.0, 2.0, 3.0] }] },
+        "options": { "plugins": { "decimation": { "enabled": false, "algorithm": "lttb" } } }
+    }"##;
+    // strict 側: 厳格パーサが受理し、enabled=false が spec に届く。
+    let spec = chartjs::parse(json, true).unwrap();
+    assert!(!spec.decimation.enabled);
+    // schema 側: ChartJsSpec でも受理される。
+    let schema_spec: ChartJsSpec = serde_json::from_str(json).unwrap();
+    assert!(matches!(schema_spec, ChartJsSpec::Sparkline(_)));
+}
+
+#[test]
 fn treemap_schema_roundtrip() {
     use fulgur_chart::schema::chartjs::ChartJsSpec;
 

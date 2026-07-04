@@ -26,5 +26,13 @@
   "scatter_large": {
     "alloc_bytes": 18971267,
     "alloc_blocks": 170592
+  },
+  "sparkline_large": {
+    "alloc_bytes": 4978418,
+    "alloc_blocks": 20086
+  },
+  "sparkline_large_decimated": {
+    "alloc_bytes": 4270687,
+    "alloc_blocks": 6021
   }
 }

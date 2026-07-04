@@ -740,9 +740,20 @@ pub struct SparklineDataset {
     pub fill: Option<FillSpec>,
 }
 
+/// sparkline が受け付ける plugins。sparkline は title/legend/datalabels を描画しないため
+/// decimation のみ公開する（正直な最小 schema）。line と同じ巨大データ間引きを許可する。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SparklinePlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimation: Option<DecimationPlugin>,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SparklineOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<SparklinePlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scales: Option<BarScales>,
     #[serde(skip_serializing_if = "Option::is_none")]

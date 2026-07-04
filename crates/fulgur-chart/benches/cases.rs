@@ -37,6 +37,17 @@ pub fn all() -> Vec<Case> {
             json: line_with_decimation(10_000, true),
         },
         Case {
+            // Off-path baseline: decimation explicitly disabled so this measures
+            // the full 10k-point sparkline render (no auto-decimation).
+            name: "sparkline_large",
+            json: sparkline_with_decimation(10_000, false),
+        },
+        Case {
+            // On-path: default auto-decimation fires (10k > plot_width*4).
+            name: "sparkline_large_decimated",
+            json: sparkline_with_decimation(10_000, true),
+        },
+        Case {
             name: "scatter_large",
             json: scatter(10_000),
         },
@@ -88,6 +99,17 @@ fn line_with_decimation(n: usize, enabled: bool) -> String {
     format!(
         r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"label":"d","data":[{}]}}]}},"options":{{"plugins":{{"decimation":{{"enabled":{}}}}}}}}}"#,
         labels(n),
+        numbers(n),
+        enabled
+    )
+}
+
+/// A `sparkline` (no labels/axes) with an explicit `options.plugins.decimation.enabled`
+/// so benches can pin the off-path (false) baseline and the on-path (true) decimated
+/// variant, mirroring `line_with_decimation`.
+fn sparkline_with_decimation(n: usize, enabled: bool) -> String {
+    format!(
+        r#"{{"type":"sparkline","data":{{"datasets":[{{"data":[{}]}}]}},"options":{{"plugins":{{"decimation":{{"enabled":{}}}}}}}}}"#,
         numbers(n),
         enabled
     )
