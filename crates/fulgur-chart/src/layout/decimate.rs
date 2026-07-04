@@ -138,6 +138,34 @@ pub fn decimate_one(
     }
 }
 
+/// gap 分割済みの全セグメントを間引く。`samples` はセグメント長で按分する
+/// （`budget_i = max(3, samples × len_i / total)`）。これにより LTTB のマルチ
+/// セグメント予算超過（合計 samples×セグメント数）を防ぎ、出力を
+/// `samples + 3×セグメント数` 以下に上限化する。整数演算のみ = 決定的。
+/// min-max は samples を無視するため按分は実質 LTTB のみに効く（呼び出しは一様）。
+/// FLOOR=3 は LTTB の `samples≥3` ガードを満たすので decimate_one 側は無変更。
+// `if total==0 {…} else {…/total}` は空セグメント時の意味的フォールバック（samples 復帰 +
+// .max(3)）であり checked_div とは非等価。決定的意図で明示保持するため manual_checked_ops を抑止。
+#[allow(clippy::manual_checked_ops)]
+pub fn decimate_segments(
+    segments: &[Vec<(f64, f64, usize)>],
+    algo: DecimationAlgorithm,
+    samples: usize,
+) -> Vec<Vec<(f64, f64, usize)>> {
+    let total: usize = segments.iter().map(|s| s.len()).sum();
+    segments
+        .iter()
+        .map(|s| {
+            let budget = if total == 0 {
+                samples
+            } else {
+                (samples * s.len() / total).max(3)
+            };
+            decimate_one(s, algo, budget)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,5 +341,85 @@ mod tests {
             .collect();
         let out = decimate_one(&pts, DecimationAlgorithm::Lttb, 100);
         assert_eq!(out.len(), 100);
+    }
+
+    // ヘルパ: k セグメント × 各 seg_len 点の連続系列群を作る（cat は連番、gap 相当に非連続）。
+    fn make_segments(k: usize, seg_len: usize) -> Vec<Vec<(f64, f64, usize)>> {
+        (0..k)
+            .map(|s| {
+                (0..seg_len)
+                    .map(|i| {
+                        let idx = s * (seg_len + 1) + i; // +1 で cat に隙間（gap）を作る
+                        (idx as f64, ((idx * 31) % 97) as f64, idx)
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn decimate_segments_lttb_bounds_few_large() {
+        // 少数大セグメント: 5×5000, samples=100。素朴実装なら 5×100=500 点だが、
+        // 按分すれば合計 ≈ samples に収まる。
+        let segs = make_segments(5, 5000);
+        let out = decimate_segments(&segs, DecimationAlgorithm::Lttb, 100);
+        let total: usize = out.iter().map(|s| s.len()).sum();
+        // 証明済み上限: samples + 3×num_segments。
+        assert!(
+            total <= 100 + 3 * 5,
+            "total {total} must be <= samples + 3*num_segments"
+        );
+        // 素朴実装（各セグメントに full samples）なら 500。按分でそれを大幅に下回る。
+        assert!(
+            total < 100 * 5,
+            "proration must beat naive per-segment budget"
+        );
+    }
+
+    #[test]
+    fn decimate_segments_lttb_many_small_no_passthrough() {
+        // 多数小セグメント: 100×10, samples=100。素朴実装は各 n(=10)≤samples(=100) で
+        // passthrough → 1000 点（削減ゼロ）。按分後は budget=max(3,1)=3 で LTTB 発動。
+        let segs = make_segments(100, 10);
+        let out = decimate_segments(&segs, DecimationAlgorithm::Lttb, 100);
+        let total: usize = out.iter().map(|s| s.len()).sum();
+        assert!(
+            total <= 100 + 3 * 100,
+            "total {total} must be <= samples + 3*num_segments"
+        );
+        // 元は 1000 点。passthrough せず明確に削減されること。
+        assert!(
+            total < 100 * 10,
+            "many-small must not pass through unreduced"
+        );
+    }
+
+    #[test]
+    fn decimate_segments_min_max_ignores_budget() {
+        // min-max は samples を無視するので、按分の有無で結果は変わらず、
+        // 各セグメントを個別に min_max した結果と一致する。
+        let segs = make_segments(4, 800);
+        let out = decimate_segments(&segs, DecimationAlgorithm::MinMax, 100);
+        let expected: Vec<Vec<(f64, f64, usize)>> = segs.iter().map(|s| min_max(s)).collect();
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn decimate_segments_is_deterministic() {
+        let segs = make_segments(6, 700);
+        assert_eq!(
+            decimate_segments(&segs, DecimationAlgorithm::Lttb, 80),
+            decimate_segments(&segs, DecimationAlgorithm::Lttb, 80)
+        );
+    }
+
+    #[test]
+    fn decimate_segments_single_segment_matches_decimate_one() {
+        // 単一セグメントでは total==len なので budget==samples。既存単体 golden が
+        // バイト不変であることの根拠（decimate_one を素通しするのと一致）。
+        let segs = make_segments(1, 5000);
+        let out = decimate_segments(&segs, DecimationAlgorithm::Lttb, 100);
+        let expected = vec![decimate_one(&segs[0], DecimationAlgorithm::Lttb, 100)];
+        assert_eq!(out, expected);
     }
 }
