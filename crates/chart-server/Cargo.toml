@@ -27,6 +27,9 @@ serde_json = { workspace = true }
 clap = { workspace = true }
 base64 = "0.22"
 urlencoding = "2"
+# 短縮リンク解決で store の query 文字列を ChartQuery に直接デコードするため。
+# http::Uri 経由(MAX_LEN=65534)を避け、大 spec でも長さ上限なく parse する。
+serde_urlencoded = "0.7"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-axum = "0.2"
 utoipa-swagger-ui = { version = "9", features = ["axum"] }

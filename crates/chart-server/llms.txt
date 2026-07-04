@@ -29,4 +29,4 @@ POST /chart/validate — returns {"valid":true} or {"valid":false,"error":"…",
 ## Short Links
 
 POST /chart/create — returns {"url":"/chart/s/<id>"}
-GET  /chart/s/<id> — redirects to /chart?c=…
+GET  /chart/s/<id> — renders the chart directly (server-side render-by-id; no redirect)

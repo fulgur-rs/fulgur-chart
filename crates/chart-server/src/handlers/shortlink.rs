@@ -1,9 +1,10 @@
+use crate::handlers::chart::{ChartQuery, render_from_query};
 use crate::{backend::BackendError, render::OutputFormat, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
-    http::{HeaderValue, StatusCode, header},
-    response::{IntoResponse, Redirect, Response},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -95,14 +96,41 @@ fn no_store_cache_control() -> HeaderValue {
     HeaderValue::from_static("no-store")
 }
 
-pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>) -> Response {
+pub async fn get_shortlink(
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
     match state.store.get(&id).await {
         Ok(Some(query)) => {
-            let mut resp = Redirect::temporary(&format!("/chart?{query}")).into_response();
-            // 起動時に構築済みの値を clone（HeaderValue の clone は Bytes 参照カウントのみで
-            // アロケーションを伴わない）。ホットパスでの format!＋パースを避ける。
-            resp.headers_mut()
-                .insert(header::CACHE_CONTROL, state.shortlink_cache_control.clone());
+            // store の query 文字列を GET /chart と同一の意味論で ChartQuery に
+            // デコードする。axum の `Query::try_from_uri` は内部で
+            // `serde_urlencoded::Deserializer::new(form_urlencoded::parse(..))` を使うので、
+            // ここで `serde_urlencoded::from_str` を直接呼ぶのと成功時は等価
+            // (axum は serde_path_to_error でエラー文言を richにするだけ)。
+            // 重要: `http::Uri` を経由しない。Uri は内部 offset が u16 のため
+            // MAX_LEN=65534 の長さ上限を持ち、create の受理域(body 100KiB /
+            // entry_bytes 512KiB)まで通る大 spec を resolve で 414/500 に落として
+            // しまう。render-by-id は「spec を URL に載せない」のが要件なので、
+            // query 文字列を直接 parse して長さ上限を持ち込まない。
+            // c 欠落の破損エントリは 400(missing param)ではなく 500 に倒す。
+            // build_query は常に c を書くので、c 欠落は store 側の破損を意味し、
+            // client(/chart/s/{id} を呼んだだけ)の責任ではない。decode 失敗と
+            // 同じ internal_error_no_store 経路に揃える。
+            let q = match serde_urlencoded::from_str::<ChartQuery>(&query) {
+                Ok(q) if q.c.is_some() => q,
+                _ => return internal_error_no_store(),
+            };
+            let mut resp = render_from_query(q, headers, state.clone()).await;
+            // 成功(200)と 304(条件付き再検証)だけを CDN キャッシュ可能にし、
+            // max-age を shortlink TTL に結合する(8tr.3)。エラー(400/415/500/503/504)は
+            // no-store で、前段 CDN が誤って永続化しないようにする。
+            let cc = if resp.status().is_success() || resp.status() == StatusCode::NOT_MODIFIED {
+                state.shortlink_cache_control.clone()
+            } else {
+                no_store_cache_control()
+            };
+            resp.headers_mut().insert(header::CACHE_CONTROL, cc);
             resp
         }
         Ok(None) => {
@@ -134,6 +162,22 @@ pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>
             resp
         }
     }
+}
+
+/// store に入っている query 文字列が壊れていて parse 不能な場合の 500。
+/// 自前 write なので通常到達しないが、防御的に no-store で返す。
+fn internal_error_no_store() -> Response {
+    let mut resp = (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "error": "corrupt short link entry",
+            "code": "INTERNAL"
+        })),
+    )
+        .into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, no_store_cache_control());
+    resp
 }
 
 fn build_query(
@@ -185,11 +229,12 @@ mod http_tests {
     /// entry_bytes と shortlink_ttl_seconds を明示指定できる router ヘルパー
     /// (config駆動であることをdefault値(86400)と異なる値で検証するため)。
     async fn router_with_entry_bytes_and_ttl(entry_bytes: usize, ttl: u64) -> Router {
-        let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
-        let store = FileShortlinkStore::new(dir.path(), entry_bytes)
-            .await
-            .unwrap();
-        let cfg = Config {
+        store_and_router(entry_bytes, ttl).await.1
+    }
+
+    /// テスト用 Config(entry_bytes と ttl 以外は固定)。
+    fn test_config(entry_bytes: usize, ttl: u64) -> Config {
+        Config {
             host: "0.0.0.0".into(),
             port: 3000,
             max_concurrent: 4,
@@ -206,8 +251,21 @@ mod http_tests {
             png_compression: Compression::default(),
             webp_enabled: false,
             max_webp_area: fulgur_chart::raster_direct::MAX_WEBP_AREA_PIXELS,
-        };
-        build_router(&cfg, Arc::new(store))
+        }
+    }
+
+    /// store の Arc と、その store で組んだ router の両方を返す。
+    /// store に生エントリを直接 insert して resolve 経路(破損エントリ等)を
+    /// テストするために使う。
+    async fn store_and_router(entry_bytes: usize, ttl: u64) -> (Arc<FileShortlinkStore>, Router) {
+        let dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+        let store = Arc::new(
+            FileShortlinkStore::new(dir.path(), entry_bytes)
+                .await
+                .unwrap(),
+        );
+        let router = build_router(&test_config(entry_bytes, ttl), store.clone());
+        (store, router)
     }
 
     fn create_request(body: &str) -> Request<Body> {
@@ -315,8 +373,9 @@ mod http_tests {
     async fn resolve_success_sets_cache_control_from_config_ttl() {
         let router = router_with_entry_bytes_and_ttl(512 * 1024, 3600).await;
 
-        let create_body =
-            r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
+        // 明示的に format:svg を要求する。OutputFormat の default は Png のため、
+        // resolve のレンダ済み content-type を SVG に固定するには create 時に指定する。
+        let create_body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}},"format":"svg"}"#;
         let (status, body) = status_and_body(
             router
                 .clone()
@@ -340,15 +399,31 @@ mod http_tests {
             .await
             .unwrap();
 
+        // render-by-id: リダイレクトではなく 200 でレンダリング済み SVG を返す。
         assert_eq!(
             resp.status(),
-            StatusCode::TEMPORARY_REDIRECT,
+            StatusCode::OK,
             "headers={:?}",
             resp.headers()
         );
         assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "image/svg+xml; charset=utf-8"
+        );
+        // Cache-Control は shortlink TTL(config 3600)に結合(8tr.3)。
+        assert_eq!(
             resp.headers().get("cache-control").unwrap(),
             "public, max-age=3600"
+        );
+        // ボディは非空のレンダリング済み SVG。
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(!bytes.is_empty(), "resolved SVG body must be non-empty");
+        assert!(
+            bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml"),
+            "body should be SVG, got: {:?}",
+            String::from_utf8_lossy(&bytes[..bytes.len().min(64)])
         );
     }
 
@@ -371,5 +446,291 @@ mod http_tests {
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+    }
+
+    /// store が壊れて `c` を欠くエントリ(build_query は常に c を書くので通常経路では
+    /// 作れない破損状態)を resolve すると、400(missing param)ではなく 500 + no-store を
+    /// 返す。破損は client(/chart/s/{id} を呼んだだけ)の責任ではないため。gemini レビュー対応。
+    #[tokio::test]
+    async fn resolve_corrupt_entry_missing_c_returns_500_no_store() {
+        use crate::backend::ShortlinkBackend;
+        let (store, router) = store_and_router(512 * 1024, 86_400).await;
+        // 有効な ULID id に、c を欠いた query を直接 insert(通常経路では作れない破損状態)。
+        let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string();
+        store.insert(id.clone(), "f=svg".to_string()).await.unwrap();
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/chart/s/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "corrupt (missing c) entry must be 500, not 400"
+        );
+        assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+    }
+
+    /// resolve 時にレンダが失敗(400)した場合、Cache-Control: no-store になる。
+    /// post_create は spec を検証せず保存するため、レンダ不能な spec の shortlink を
+    /// 作れる。前段 CDN が transient なエラー応答を永続化しないことを保証する
+    /// (8tr.3 のセキュリティ関連分岐 — else→no-store)。404 の no-store は別テストで
+    /// 網羅済みだが、render-error 分岐はこのテストが初めて固定する。
+    #[tokio::test]
+    async fn resolve_render_error_sets_no_store_cache_control() {
+        let router = router_with_entry_bytes(512 * 1024).await;
+
+        // post_create は spec を検証しないので、レンダで失敗する不正 spec を保存できる。
+        // 不正な chart type は render::parse_and_validate で弾かれ 400 を返す。
+        let create_body = r#"{"chart":{"type":"definitely-not-a-real-chart-type"}}"#;
+        let (status, body) = status_and_body(
+            router
+                .clone()
+                .oneshot(create_request(create_body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "create should accept (unvalidated) invalid spec: body={body}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let url = json["url"].as_str().unwrap().to_string();
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // 不正 spec は render::parse_and_validate で弾かれ 400 BAD_REQUEST。
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "invalid spec should render as 400 client error; headers={:?}",
+            resp.headers()
+        );
+        // 本題: エラー分岐(else)は no-store。CDN がエラーをキャッシュしないため(8tr.3)。
+        assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
+    }
+
+    /// 条件付き再検証(If-None-Match)で 304 を返す場合、Cache-Control は shortlink
+    /// TTL(config 値)に結合される(no-store ではない)。CDN/ブラウザの通常再検証パス
+    /// を表す 8tr.3 の `== NOT_MODIFIED` 分岐を固定する。
+    #[tokio::test]
+    async fn resolve_not_modified_sets_shortlink_cache_control() {
+        let router = router_with_entry_bytes_and_ttl(512 * 1024, 3600).await;
+
+        // format:svg を明示（default は Png のため content-type を SVG に固定）。
+        let create_body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}},"format":"svg"}"#;
+        let (status, body) = status_and_body(
+            router
+                .clone()
+                .oneshot(create_request(create_body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body={body}");
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let url = json["url"].as_str().unwrap().to_string();
+
+        // 1回目: 200 でレンダし、レスポンスの ETag を取得。
+        let first = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first.status(),
+            StatusCode::OK,
+            "headers={:?}",
+            first.headers()
+        );
+        let etag = first
+            .headers()
+            .get("etag")
+            .expect("rendered 200 must expose ETag")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        // 2回目: 同 url を If-None-Match 付きで再取得 → 304。
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&url)
+                    .header("if-none-match", &etag)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_MODIFIED,
+            "headers={:?}",
+            resp.headers()
+        );
+        // 304 分岐は shortlink TTL(config 3600)に結合(no-store ではない)。
+        assert_eq!(
+            resp.headers().get("cache-control").unwrap(),
+            "public, max-age=3600"
+        );
+    }
+
+    /// 旧 307 リダイレクト方式では request-line 上限(~8-16KiB)を超える大 spec は
+    /// resolve 時に 414 になっていた。render-by-id では spec を URL に載せないので
+    /// create の受理域(body 100KiB / entry_bytes)まで resolve も 200 で通る。
+    #[tokio::test]
+    async fn resolve_large_spec_renders_200_not_414() {
+        let router = router_with_entry_bytes(512 * 1024).await;
+
+        // ~40KiB のラベルを持つ棒グラフ。旧方式なら resolve の URL 長が
+        // request-line 上限を大きく超えて 414 になっていたサイズ。
+        let labels: Vec<String> = (0..2000)
+            .map(|i| format!("category-label-{i:05}"))
+            .collect();
+        let data: Vec<u32> = (0..2000).collect();
+        let chart = serde_json::json!({
+            "type": "bar",
+            "data": { "labels": labels, "datasets": [{ "data": data }] }
+        });
+        // format:svg を明示（default は Png のため content-type を SVG に固定）。
+        let create_body = serde_json::json!({ "chart": chart, "format": "svg" }).to_string();
+        // この回帰ガードの本質は「store される encoded query が http::Uri の
+        // MAX_LEN(65534)を超える」こと。旧 try_from_uri 経路はこの長さで 500(TooLong)
+        // に落ちた。raw body 長ではなく encoded query 長を固定しないと、payload を
+        // 縮めた際に 64KiB を下回って判別力を失う(advisor 指摘)。
+        let stored_query = super::build_query(
+            &chart.to_string(),
+            None,
+            None,
+            None,
+            crate::render::OutputFormat::Svg,
+        );
+        assert!(
+            stored_query.len() > 65_534,
+            "encoded query must exceed http::Uri MAX_LEN (got {}B) so this guards against the try_from_uri regression",
+            stored_query.len()
+        );
+
+        let (status, body) = status_and_body(
+            router
+                .clone()
+                .oneshot(create_request(&create_body))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "create should accept large spec: {body}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let url = json["url"].as_str().unwrap().to_string();
+
+        let resp = router
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(&url)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "resolve of large spec must render (200), not 414; headers={:?}",
+            resp.headers()
+        );
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "image/svg+xml; charset=utf-8"
+        );
+    }
+}
+
+/// build_query が作る query 文字列を、resolve handler と同一の decode
+/// (`serde_urlencoded::from_str::<ChartQuery>` — axum の Query 抽出器が内部で使う
+/// のと同じ parser)で parse し直したとき、c/f/w/h/bkg が原値復元されることを固定する。
+/// handler は `http::Uri` の長さ上限(MAX_LEN=65534)を避けるため Uri を経由せず
+/// この関数を直接呼ぶので、テストも同じ経路を lock する。
+/// resolve の render-by-id 化はこの往復に依存する(advisor 指摘の盲点)。
+#[cfg(test)]
+mod roundtrip_tests {
+    use super::build_query;
+    use crate::handlers::chart::ChartQuery;
+    use crate::render::OutputFormat;
+
+    #[test]
+    fn build_query_round_trips_all_fields_and_formats() {
+        // 構造文字 { } " : , / 空白 / 非ASCII(日本語) / + と & を値に含む。
+        // + と & は form-encoding の古典的な罠(percent-encode されていれば復元される)。
+        let spec = r#"{"type":"bar","data":{"labels":["a b","日本語","x+y&z"],"datasets":[{"data":[1,2,3]}]}}"#;
+
+        for fmt in [
+            OutputFormat::Svg,
+            OutputFormat::Png,
+            OutputFormat::Webp,
+            OutputFormat::DataUri,
+        ] {
+            let q = build_query(spec, Some(640), Some(360), Some("hot+pink & white"), fmt);
+            let parsed: ChartQuery =
+                serde_urlencoded::from_str(&q).expect("stored query must parse as ChartQuery");
+
+            assert_eq!(
+                parsed.c.as_deref(),
+                Some(spec),
+                "spec round-trip failed for {fmt:?}"
+            );
+            assert_eq!(parsed.w, Some(640), "w round-trip failed for {fmt:?}");
+            assert_eq!(parsed.h, Some(360), "h round-trip failed for {fmt:?}");
+            assert_eq!(
+                parsed.bkg.as_deref(),
+                Some("hot+pink & white"),
+                "bkg round-trip failed for {fmt:?}"
+            );
+            assert_eq!(parsed.f, fmt, "format round-trip failed for {fmt:?}");
+        }
+    }
+
+    /// None の w/h/bkg は query に出ず、parse 後も None のまま(Some("") にならない)。
+    #[test]
+    fn build_query_omits_absent_optionals() {
+        let spec = r#"{"type":"bar"}"#;
+        let q = build_query(spec, None, None, None, OutputFormat::Svg);
+        let parsed: ChartQuery = serde_urlencoded::from_str(&q).unwrap();
+        assert_eq!(parsed.c.as_deref(), Some(spec));
+        assert_eq!(parsed.w, None);
+        assert_eq!(parsed.h, None);
+        assert_eq!(parsed.bkg, None);
+        assert_eq!(parsed.f, OutputFormat::Svg);
     }
 }
