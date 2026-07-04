@@ -29,7 +29,7 @@ curl -X POST http://localhost:3000/chart \
 | `POST` | `/chart` | Render via JSON body |
 | `POST` | `/chart/validate` | Validate spec without rendering |
 | `POST` | `/chart/create` | Create a short link |
-| `GET`  | `/chart/s/{id}` | Redirect short link to `/chart?c=…` |
+| `GET`  | `/chart/s/{id}` | Render a short link server-side (no redirect; the spec never re-enters the URL) |
 | `POST` | `/mcp` | MCP tool endpoint (JSON-RPC 2.0) |
 | `GET`  | `/health` | Health check |
 | `GET`  | `/llms.txt` | LLM-readable API description |
