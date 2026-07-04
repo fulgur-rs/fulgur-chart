@@ -172,6 +172,20 @@ mod tests {
             .expect("sparkline should have a polyline")
     }
 
+    /// area の `Prim::Path` の座標コマンド数（"L " の出現回数）。
+    /// area パスは M + 各点 L + baseline 2×L で構成されるため、
+    /// 非間引き N 点なら (N-1)+2 = N+1 個の "L "。間引きで大きく減る。
+    fn area_path_l_count(scene: &Scene) -> usize {
+        scene
+            .items
+            .iter()
+            .find_map(|p| match p {
+                Prim::Path { d, .. } => Some(d.matches("L ").count()),
+                _ => None,
+            })
+            .expect("area sparkline should have a Path")
+    }
+
     fn huge_sparkline_json(extra_opts: &str) -> String {
         let data: Vec<String> = (0..5000).map(|i| ((i * 7) % 13).to_string()).collect();
         format!(
@@ -210,6 +224,27 @@ mod tests {
     }
 
     #[test]
+    fn huge_sparkline_area_fire_path_is_decimated() {
+        // fill:true → ser.area が真になり area の Prim::Path が生成される。
+        // 間引きが発動すると area パスの頂点数も系列全体（5000）より大きく減る。
+        // 非間引きなら "L " は 5001 個。間引きで 4000 未満に収まることを確認する。
+        let data: Vec<String> = (0..5000).map(|i| ((i * 7) % 13).to_string()).collect();
+        let scene = build_spec(&format!(
+            r#"{{"type":"sparkline","data":{{"datasets":[{{"data":[{}],"fill":true}}]}}}}"#,
+            data.join(",")
+        ));
+        // area パスと折れ線の両方が間引き後の点列から描かれている。
+        assert!(
+            polyline_len(&scene) < 5000,
+            "area fire-path: polyline must be reduced"
+        );
+        assert!(
+            area_path_l_count(&scene) < 4000,
+            "area path vertices must be far below the undecimated 5001"
+        );
+    }
+
+    #[test]
     fn sparkline_decimation_is_deterministic() {
         let json = huge_sparkline_json("");
         let a = crate::render::render_chart(&chartjs::parse(&json, false).unwrap());
@@ -218,7 +253,7 @@ mod tests {
     }
 
     #[test]
-    fn sparkline_lttb_reduces_to_samples_order() {
+    fn sparkline_lttb_reduces_to_samples_cap() {
         let json = huge_sparkline_json(
             r#","options":{"plugins":{"decimation":{"algorithm":"lttb","samples":200}}}"#,
         );
@@ -236,9 +271,13 @@ mod tests {
         let svg = crate::render::render_chart(&chartjs::parse(&json, false).unwrap());
         assert!(svg.contains("<path"), "tension → Bezier path");
         assert!(!svg.contains("NaN") && !svg.contains("inf"));
+        // 間引きが実際に起きたことを直接確認する（SVG サイズという弱い代理指標ではなく）。
+        // 非間引きの 5000 点 Catmull-Rom は ~4999 個の "C " を出す。間引きで大きく減る。
+        // 既定アルゴリズム（minMax）はこの系列を ~2500 点へ落とすため 4000 未満に収まる。
+        let bezier_count = svg.matches("C ").count();
         assert!(
-            svg.len() < 200_000,
-            "decimated spline SVG should be bounded"
+            bezier_count < 4000,
+            "decimation must cut Bezier commands well below the undecimated ~4999: got {bezier_count}"
         );
     }
 }
