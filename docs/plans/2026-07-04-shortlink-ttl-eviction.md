@@ -32,7 +32,7 @@
 
 ---
 
-### Task 1: time-bucket レイアウト（path_for / insert / get）
+## Task 1: time-bucket レイアウト（path_for / insert / get）
 
 エントリ配置を `root/{id}` から `root/{bucket}/{id}` に変える。まだカウンタ/sweep/caps は入れない（純リファクタ）。
 
@@ -144,7 +144,7 @@ git commit -m "refactor(chart-server): store shortlinks in time-bucket dirs (sdp
 
 ---
 
-### Task 2: 容量カウンタ + backstop（over-cap で Full、sweep はまだ無し）
+## Task 2: 容量カウンタ + backstop（over-cap で Full、sweep はまだ無し）
 
 アトミックカウンタ（件数・バイト）を追加し、起動時 seed・insert 加算。caps 超過で `BackendError::Full`。
 
@@ -339,7 +339,7 @@ git commit -m "feat(chart-server): capacity counters + Full backstop for file st
 
 ---
 
-### Task 3: TTL sweep（`sweep_expired(now_ms)`）と保証厳守
+## Task 3: TTL sweep（`sweep_expired(now_ms)`）と保証厳守
 
 `(b+1)·W + TTL ≤ now` の bucket のみ削除し、カウンタを削除数/バイトで減算。
 
@@ -486,7 +486,7 @@ git commit -m "feat(chart-server): TTL sweep_expired preserving the max-age guar
 
 ---
 
-### Task 4: insert の inline sweep（over-cap 時）
+## Task 4: insert の inline sweep（over-cap 時）
 
 over-cap 時にまず inline sweep で期限切れ bucket を drain し、再判定してから Full を返す（自己回復型）。
 
@@ -553,7 +553,7 @@ git commit -m "feat(chart-server): inline sweep on over-capacity insert before 5
 
 ---
 
-### Task 5: config 追加 + main の背景 sweep task 配線
+## Task 5: config 追加 + main の背景 sweep task 配線
 
 新 config 2 本を追加し、main で store に caps/TTL を wire、背景 sweep task を spawn。migration guard を更新。
 
@@ -672,7 +672,7 @@ git commit -m "feat(chart-server): wire shortlink caps config + background sweep
 
 ---
 
-### Task 6: doc コメント整理 + 最終検証
+## Task 6: doc コメント整理 + 最終検証
 
 **Files:**
 - Modify: `crates/chart-server/src/file_store.rs`（モジュール doc の「TTL 能動削除・LRU eviction は範囲外(sdp)」行を削除し、bucket/TTL/backstop の要約に更新）

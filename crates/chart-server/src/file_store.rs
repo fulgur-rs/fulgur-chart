@@ -178,14 +178,21 @@ impl FileShortlinkStore {
             // scan_totals と違い is_dir チェックは省く: 数値名の非 dir エントリは insert が
             // 作らないため、remove_dir_all が非 dir に対し Err を返す経路は実質発生しない。
             if fs::remove_dir_all(b.path()).await.is_ok() {
-                // .min(current) で減算アンダーフローを防ぐ。並行 insert は現在 bucket に入り、
-                // sweep 対象の expired bucket とは別 dir なので両者は同一 dir を触らない。
-                self.count
-                    .fetch_sub(n.min(self.count.load(Ordering::Relaxed)), Ordering::Relaxed);
-                self.bytes.fetch_sub(
-                    nbytes.min(self.bytes.load(Ordering::Relaxed)),
-                    Ordering::Relaxed,
-                );
+                // 原子的な飽和減算。background janitor と insert 内 inline sweep が別 bucket を
+                // 同時に削除すると、load→fetch_sub の非原子性で実値を超える量を引き、u64 が
+                // wrap（≈u64::MAX）して would_exceed が恒久 true=永続 503 に張り付く。fetch_update
+                // で「現在値からの saturating_sub」を CAS ループとして原子適用し、並行削除でも
+                // 0 未満に落ちないことを保証する。
+                let _ = self
+                    .count
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                        Some(v.saturating_sub(n))
+                    });
+                let _ = self
+                    .bytes
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                        Some(v.saturating_sub(nbytes))
+                    });
             }
         }
     }
