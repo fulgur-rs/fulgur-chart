@@ -415,7 +415,7 @@ mod roundtrip_tests {
                 Some("hot+pink & white"),
                 "bkg round-trip failed for {fmt:?}"
             );
-            assert_eq!(parsed.f, fmt, "format round-trip failed");
+            assert_eq!(parsed.f, fmt, "format round-trip failed for {fmt:?}");
         }
     }
 
