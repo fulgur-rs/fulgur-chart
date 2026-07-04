@@ -30,35 +30,46 @@ pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
 
     let mut items: Vec<Prim> = Vec::new();
 
+    // plot_width は間引き判定に使う（論理ピクセル空間、Frame は持たない）。
+    let plot_width = plot_right - plot_left;
+
     for ser in &spec.series {
         let count = ser.values.len();
         if count == 0 {
             continue;
         }
-        // エッジ対エッジ配置（最初の点は plot_left、最後は plot_right）。
+        // (x, y, index)。x はエッジ対エッジ配置（最初の点は plot_left、最後は plot_right）。
         // 系列が 1 点の場合は中央に配置する。
-        let pts: Vec<(f64, f64)> = (0..count)
+        let pts: Vec<(f64, f64, usize)> = (0..count)
             .map(|i| {
                 let x = if max_count == 1 {
                     (plot_left + plot_right) / 2.0
                 } else {
                     plot_left + i as f64 * (plot_right - plot_left) / (max_count - 1) as f64
                 };
-                let v = ser.values[i];
-                (x, ys.map(v))
+                (x, ys.map(ser.values[i]), i)
             })
             .collect();
+
+        // sparkline は gap 分割を持たないため系列全体を単一セグメントとして間引く。
+        // 判定は系列全体の点数で（line と同じ Chart.js セマンティクス）。
+        // no-fire 時は pts をそのまま使い、変更前とバイト不変を保つ。
+        let pts: Vec<(f64, f64, usize)> =
+            match crate::layout::decimate::resolve(&spec.decimation, plot_width, count) {
+                Some((algo, samples)) => crate::layout::decimate::decimate_one(&pts, algo, samples),
+                None => pts,
+            };
 
         // area（背面）
         if ser.area && pts.len() >= 2 {
             let baseline_y = ys.map(0.0_f64.clamp(domain_min, domain_max));
             let mut d = String::new();
-            for (k, (x, y)) in pts.iter().enumerate() {
+            for (k, &(x, y, _)) in pts.iter().enumerate() {
                 let cmd = if k == 0 { 'M' } else { 'L' };
-                write!(d, "{} {} {} ", cmd, fmt_num(*x), fmt_num(*y)).unwrap();
+                write!(d, "{} {} {} ", cmd, fmt_num(x), fmt_num(y)).unwrap();
             }
-            let (last_x, _) = pts[pts.len() - 1];
-            let (first_x, _) = pts[0];
+            let (last_x, _, _) = pts[pts.len() - 1];
+            let (first_x, _, _) = pts[0];
             write!(
                 d,
                 "L {} {} L {} {} Z",
@@ -80,12 +91,13 @@ pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
         if pts.len() >= 2 {
             if ser.tension <= 0.0 {
                 items.push(Prim::Polyline {
-                    points: pts.clone(),
+                    points: pts.iter().map(|&(x, y, _)| (x, y)).collect(),
                     stroke: ser.stroke_at(0),
                     stroke_width: ser.stroke_width,
                 });
             } else {
-                let d = catmull_rom_path(&pts, ser.tension);
+                let xy: Vec<(f64, f64)> = pts.iter().map(|&(x, y, _)| (x, y)).collect();
+                let d = catmull_rom_path(&xy, ser.tension);
                 items.push(Prim::Path {
                     d,
                     fill: None,
@@ -134,4 +146,99 @@ fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
         .unwrap();
     }
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::font::DEFAULT_FONT;
+    use crate::frontend::chartjs;
+    use crate::scene::Prim;
+
+    fn build_spec(json: &str) -> Scene {
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        build(&spec, &m)
+    }
+
+    fn polyline_len(scene: &Scene) -> usize {
+        scene
+            .items
+            .iter()
+            .find_map(|p| match p {
+                Prim::Polyline { points, .. } => Some(points.len()),
+                _ => None,
+            })
+            .expect("sparkline should have a polyline")
+    }
+
+    fn huge_sparkline_json(extra_opts: &str) -> String {
+        let data: Vec<String> = (0..5000).map(|i| ((i * 7) % 13).to_string()).collect();
+        format!(
+            r#"{{"type":"sparkline","data":{{"datasets":[{{"data":[{}]}}]}}{}}}"#,
+            data.join(","),
+            extra_opts
+        )
+    }
+
+    #[test]
+    fn huge_sparkline_is_decimated_by_default() {
+        let scene = build_spec(&huge_sparkline_json(""));
+        assert!(
+            polyline_len(&scene) < 5000,
+            "auto-on decimation should reduce 5000 pts"
+        );
+    }
+
+    #[test]
+    fn huge_sparkline_passthrough_when_disabled() {
+        let json =
+            huge_sparkline_json(r#","options":{"plugins":{"decimation":{"enabled":false}}}"#);
+        let scene = build_spec(&json);
+        assert_eq!(
+            polyline_len(&scene),
+            5000,
+            "enabled:false must keep all points (byte-identity path)"
+        );
+    }
+
+    #[test]
+    fn small_sparkline_below_threshold_keeps_all_points() {
+        let scene =
+            build_spec(r#"{"type":"sparkline","data":{"datasets":[{"data":[3,1,4,1,5,9,2,6]}]}}"#);
+        assert_eq!(polyline_len(&scene), 8, "below threshold: no decimation");
+    }
+
+    #[test]
+    fn sparkline_decimation_is_deterministic() {
+        let json = huge_sparkline_json("");
+        let a = crate::render::render_chart(&chartjs::parse(&json, false).unwrap());
+        let b = crate::render::render_chart(&chartjs::parse(&json, false).unwrap());
+        assert_eq!(a, b, "same input must yield identical SVG");
+    }
+
+    #[test]
+    fn sparkline_lttb_reduces_to_samples_order() {
+        let json = huge_sparkline_json(
+            r#","options":{"plugins":{"decimation":{"algorithm":"lttb","samples":200}}}"#,
+        );
+        let scene = build_spec(&json);
+        assert!(polyline_len(&scene) <= 200, "lttb should hit samples cap");
+    }
+
+    #[test]
+    fn huge_sparkline_with_tension_still_decimates_and_renders() {
+        let data: Vec<String> = (0..5000).map(|i| ((i * 7) % 13).to_string()).collect();
+        let json = format!(
+            r#"{{"type":"sparkline","data":{{"datasets":[{{"data":[{}],"tension":0.4}}]}}}}"#,
+            data.join(",")
+        );
+        let svg = crate::render::render_chart(&chartjs::parse(&json, false).unwrap());
+        assert!(svg.contains("<path"), "tension → Bezier path");
+        assert!(!svg.contains("NaN") && !svg.contains("inf"));
+        assert!(
+            svg.len() < 200_000,
+            "decimated spline SVG should be bounded"
+        );
+    }
 }
