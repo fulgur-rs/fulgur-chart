@@ -1,9 +1,10 @@
+use crate::handlers::chart::{ChartQuery, render_from_query};
 use crate::{backend::BackendError, render::OutputFormat, state::AppState};
 use axum::{
     Json,
     extract::{Path, State},
-    http::{HeaderValue, StatusCode, header},
-    response::{IntoResponse, Redirect, Response},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -95,14 +96,37 @@ fn no_store_cache_control() -> HeaderValue {
     HeaderValue::from_static("no-store")
 }
 
-pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>) -> Response {
+pub async fn get_shortlink(
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
     match state.store.get(&id).await {
         Ok(Some(query)) => {
-            let mut resp = Redirect::temporary(&format!("/chart?{query}")).into_response();
-            // 起動時に構築済みの値を clone（HeaderValue の clone は Bytes 参照カウントのみで
-            // アロケーションを伴わない）。ホットパスでの format!＋パースを避ける。
-            resp.headers_mut()
-                .insert(header::CACHE_CONTROL, state.shortlink_cache_control.clone());
+            // store の query 文字列を GET /chart と同一の意味論で ChartQuery に
+            // デコードする。axum の `Query::try_from_uri` は内部で
+            // `serde_urlencoded::Deserializer::new(form_urlencoded::parse(..))` を使うので、
+            // ここで `serde_urlencoded::from_str` を直接呼ぶのと成功時は等価
+            // (axum は serde_path_to_error でエラー文言を richにするだけ)。
+            // 重要: `http::Uri` を経由しない。Uri は内部 offset が u16 のため
+            // MAX_LEN=65534 の長さ上限を持ち、create の受理域(body 100KiB /
+            // entry_bytes 512KiB)まで通る大 spec を resolve で 414/500 に落として
+            // しまう。render-by-id は「spec を URL に載せない」のが要件なので、
+            // query 文字列を直接 parse して長さ上限を持ち込まない。
+            let q = match serde_urlencoded::from_str::<ChartQuery>(&query) {
+                Ok(q) => q,
+                Err(_) => return internal_error_no_store(),
+            };
+            let mut resp = render_from_query(q, headers, state.clone()).await;
+            // 成功(200)と 304(条件付き再検証)だけを CDN キャッシュ可能にし、
+            // max-age を shortlink TTL に結合する(8tr.3)。エラー(400/415/500/503/504)は
+            // no-store で、前段 CDN が誤って永続化しないようにする。
+            let cc = if resp.status().is_success() || resp.status() == StatusCode::NOT_MODIFIED {
+                state.shortlink_cache_control.clone()
+            } else {
+                no_store_cache_control()
+            };
+            resp.headers_mut().insert(header::CACHE_CONTROL, cc);
             resp
         }
         Ok(None) => {
@@ -134,6 +158,22 @@ pub async fn get_shortlink(Path(id): Path<String>, State(state): State<AppState>
             resp
         }
     }
+}
+
+/// store に入っている query 文字列が壊れていて parse 不能な場合の 500。
+/// 自前 write なので通常到達しないが、防御的に no-store で返す。
+fn internal_error_no_store() -> Response {
+    let mut resp = (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "error": "corrupt short link entry",
+            "code": "INTERNAL"
+        })),
+    )
+        .into_response();
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, no_store_cache_control());
+    resp
 }
 
 fn build_query(
@@ -315,8 +355,9 @@ mod http_tests {
     async fn resolve_success_sets_cache_control_from_config_ttl() {
         let router = router_with_entry_bytes_and_ttl(512 * 1024, 3600).await;
 
-        let create_body =
-            r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}}}"#;
+        // 明示的に format:svg を要求する。OutputFormat の default は Png のため、
+        // resolve のレンダ済み content-type を SVG に固定するには create 時に指定する。
+        let create_body = r#"{"chart":{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]}},"format":"svg"}"#;
         let (status, body) = status_and_body(
             router
                 .clone()
@@ -340,15 +381,31 @@ mod http_tests {
             .await
             .unwrap();
 
+        // render-by-id: リダイレクトではなく 200 でレンダリング済み SVG を返す。
         assert_eq!(
             resp.status(),
-            StatusCode::TEMPORARY_REDIRECT,
+            StatusCode::OK,
             "headers={:?}",
             resp.headers()
         );
         assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "image/svg+xml; charset=utf-8"
+        );
+        // Cache-Control は shortlink TTL(config 3600)に結合(8tr.3)。
+        assert_eq!(
             resp.headers().get("cache-control").unwrap(),
             "public, max-age=3600"
+        );
+        // ボディは非空のレンダリング済み SVG。
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert!(!bytes.is_empty(), "resolved SVG body must be non-empty");
+        assert!(
+            bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml"),
+            "body should be SVG, got: {:?}",
+            String::from_utf8_lossy(&bytes[..bytes.len().min(64)])
         );
     }
 
