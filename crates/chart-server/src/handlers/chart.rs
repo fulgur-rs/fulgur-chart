@@ -69,6 +69,18 @@ pub async fn get_chart(
     Query(q): Query<ChartQuery>,
     headers: HeaderMap,
 ) -> Response {
+    render_from_query(q, headers, state).await
+}
+
+/// `ChartQuery` を受けてチャートをレンダリングする共有経路。
+/// `GET /chart`(抽出器で `ChartQuery` を得る)と `GET /chart/s/{id}`
+/// (store の query 文字列を同じ抽出器で parse する)の両方から呼ばれ、
+/// overrides 適用とレンダリングの意味論を一致させる。
+pub(crate) async fn render_from_query(
+    q: ChartQuery,
+    headers: HeaderMap,
+    state: AppState,
+) -> Response {
     let Some(c) = q.c else {
         return (
             StatusCode::BAD_REQUEST,
