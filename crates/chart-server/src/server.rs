@@ -140,6 +140,8 @@ mod tests {
             shortlink_entry_bytes: 512 * 1024,
             shortlink_dir: "unused".into(),
             shortlink_ttl_seconds: 86_400,
+            shortlink_max_bytes: 0, // テストは無制限（容量テストは file_store 側で実施）
+            shortlink_max_entries: 0,
             cors_origins: "*".into(),
             rate_limit: 0,
             log_level: "info".into(),
