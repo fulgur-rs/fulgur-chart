@@ -436,11 +436,11 @@ git commit -m "test(chart-server): resolve renders large spec as 200 (no 414 cei
 
 `crates/chart-server/README.md:32`:
 
-```
+```text
 | `GET`  | `/chart/s/{id}` | Redirect short link to `/chart?c=…` |
 ```
 を
-```
+```text
 | `GET`  | `/chart/s/{id}` | Render the chart for a short link server-side (no redirect; spec never re-enters the URL) |
 ```
 に変更。
@@ -449,11 +449,11 @@ git commit -m "test(chart-server): resolve renders large spec as 200 (no 414 cei
 
 `crates/chart-server/llms.txt:32`:
 
-```
+```text
 GET  /chart/s/<id> — redirects to /chart?c=…
 ```
 を
-```
+```text
 GET  /chart/s/<id> — renders the chart directly (server-side render-by-id; no redirect)
 ```
 に変更。
