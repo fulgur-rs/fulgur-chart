@@ -156,10 +156,14 @@ pub fn decimate_segments(
     segments
         .iter()
         .map(|s| {
+            // 積は u64 で計算する。wasm32 等 32bit usize では `samples * s.len()` が
+            // オーバーフローしうる（debug=panic / release=wrap で本来 passthrough すべき
+            // データを誤間引き）。s.len() ≤ total より商 ≤ samples なので usize へ安全に戻せ、
+            // 32bit/64bit で同値 = クロスターゲット決定性も担保する。
             let budget = if total == 0 {
                 samples
             } else {
-                (samples * s.len() / total).max(3)
+                ((samples as u64 * s.len() as u64 / total as u64) as usize).max(3)
             };
             decimate_one(s, algo, budget)
         })
