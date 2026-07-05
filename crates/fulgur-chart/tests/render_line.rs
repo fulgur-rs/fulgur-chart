@@ -256,6 +256,54 @@ fn gapped_large_line_keeps_segments_and_decimates() {
     );
 }
 
+#[test]
+fn gapped_large_line_lttb_prorates_segment_budget() {
+    // 回帰: LTTB × gap 多数セグメント時、per-segment に full samples を与えると
+    // 合計 samples×セグメント数 点に膨れる（fulgur-chart-vzd）。セグメント長で
+    // 予算を按分し、合計を samples+3×セグメント数 以下に上限化することを検証する。
+    // JSON は非有限値を表現できないため parse 後に NaN を注入して gap を作る。
+    let n = 8000;
+    let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
+    let data: Vec<String> = (0..n).map(|i| format!("{}", (i * 37) % 101)).collect();
+    // samples/threshold を明示し、確実に LTTB 間引きを発動させる。
+    let json = format!(
+        r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"data":[{}]}}]}},"options":{{"plugins":{{"decimation":{{"enabled":true,"algorithm":"lttb","samples":100,"threshold":500}}}}}}}}"#,
+        labels.join(","),
+        data.join(",")
+    );
+    let mut spec = chartjs::parse(&json, false).unwrap();
+    // 3 箇所に孤立 NaN を注入 → 3 gap → 4 セグメント。
+    for p in [n / 4, n / 2, 3 * n / 4] {
+        spec.series[0].values[p] = f64::NAN;
+    }
+
+    let polys = polylines(&spec);
+    let counts: Vec<usize> = polys.iter().map(|p| p.len()).collect();
+    let num_seg = counts.len();
+    let total: usize = counts.iter().sum();
+
+    // 複数セグメントに割れている（gap が保たれている）。
+    assert!(
+        num_seg >= 2,
+        "gaps must yield >=2 polylines, got {counts:?}"
+    );
+    // 各セグメントは崩壊していない。
+    assert!(
+        counts.iter().all(|&c| c >= 2),
+        "no segment collapse: {counts:?}"
+    );
+    // 証明済み上限: samples(=100) + 3×num_segments。素朴実装なら 100×num_seg に膨れる。
+    assert!(
+        total <= 100 + 3 * num_seg,
+        "budget must be prorated across segments: total={total}, num_seg={num_seg}"
+    );
+    // 素朴 per-segment 予算（samples×num_seg）を明確に下回る。
+    assert!(
+        total < 100 * num_seg,
+        "must beat naive per-segment budget: total={total}"
+    );
+}
+
 /// spec から Circle マーカー数を数える（NaN 注入など parse 後に変異させた spec 用）。
 fn circle_count_spec(spec: &fulgur_chart::ir::ChartSpec) -> usize {
     let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
