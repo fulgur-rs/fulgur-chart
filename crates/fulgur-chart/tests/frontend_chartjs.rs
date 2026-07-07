@@ -552,10 +552,10 @@ fn matrix_schema_roundtrip() {
 
 #[test]
 fn schema_strict_parity_decimation_matrix() {
-    // MatrixOptions は CommonPlugins を流用するため schema は options.plugins.decimation を
-    // 受理する。strict matrix パーサも受理し、危険方向のパリティ破れ(schema OK / strict NG)を
-    // 作らないこと。decimation は matrix では no-op(line のみ参照)だが Chart.js のグローバル
-    // プラグイン挙動どおり「受理して無視」する。
+    // schema(MatrixPlugins)は options.plugins.decimation を受理する。strict matrix パーサも
+    // 受理し、危険方向のパリティ破れ(schema OK / strict NG)を作らないこと。decimation は
+    // matrix では no-op(line のみ参照)だが Chart.js のグローバルプラグイン挙動どおり
+    // 「受理して無視」する。
     use fulgur_chart::schema::chartjs::ChartJsSpec;
     let json = r##"{
         "type": "matrix",
@@ -567,6 +567,30 @@ fn schema_strict_parity_decimation_matrix() {
     // schema 側: ChartJsSpec でも受理される。
     let spec: ChartJsSpec = serde_json::from_str(json).unwrap();
     assert!(matches!(spec, ChartJsSpec::Matrix(_)));
+}
+
+#[test]
+fn matrix_schema_and_parser_both_reject_datalabels() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    // matrix は datalabels を描画しない(parse_matrix は theme のみ消費)。schema(MatrixPlugins)と
+    // strict パーサ(check_unknown_keys_matrix)が共に拒否し、「schema 受理 → strict 拒否」の
+    // 危険方向のパリティ破れを起こさないこと。sankey #87 と同型の契約。
+    let json = r##"{"type":"matrix","data":{"datasets":[{"data":[{"x":"Mon","y":"AM","v":5.0}]}]},"options":{"plugins":{"datalabels":{}}}}"##;
+    assert!(
+        serde_json::from_str::<ChartJsSpec>(json).is_err(),
+        "schema は matrix の plugins.datalabels を拒否すべき"
+    );
+    assert!(
+        chartjs::parse(json, true).is_err(),
+        "strict パーサも plugins.datalabels を拒否すべき"
+    );
+    // title/legend/decimation は schema・parser とも受理する(正常系の確認)。
+    let ok = r##"{"type":"matrix","data":{"datasets":[{"data":[{"x":"Mon","y":"AM","v":5.0}]}]},"options":{"plugins":{"title":{"display":true,"text":"T"},"legend":{"display":true}}}}"##;
+    assert!(matches!(
+        serde_json::from_str::<ChartJsSpec>(ok).unwrap(),
+        ChartJsSpec::Matrix(_)
+    ));
+    assert!(chartjs::parse(ok, true).is_ok());
 }
 
 #[test]

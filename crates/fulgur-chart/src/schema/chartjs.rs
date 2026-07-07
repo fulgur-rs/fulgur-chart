@@ -514,9 +514,25 @@ pub struct MatrixPoint {
 #[serde(deny_unknown_fields)]
 pub struct MatrixOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub plugins: Option<CommonPlugins>,
+    pub plugins: Option<MatrixPlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOptions>,
+}
+
+/// matrix の plugins。`CommonPlugins` を流用すると `plugins.datalabels` を schema が受理するが、
+/// matrix は datalabels を描画しない(parse_matrix は theme のみ消費)ため strict パーサ
+/// (check_unknown_keys_matrix)は datalabels を弾く。schema 受理→strict 拒否の危険方向パリティ
+/// 破れを避けて matrix 専用に定義し datalabels を契約から外す(sankey #87 と同型)。
+/// title/legend/decimation は schema・strict とも受理する(decimation は no-op)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MatrixPlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legend: Option<LegendPlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimation: Option<DecimationPlugin>,
 }
 
 // ────────────────────────────────────────────────
