@@ -524,7 +524,7 @@ pub struct MatrixOptions {
 /// (check_unknown_keys_matrix)は datalabels を弾く。schema 受理→strict 拒否の危険方向パリティ
 /// 破れを避けて matrix 専用に定義し datalabels を契約から外す(sankey #87 と同型)。
 /// title/legend/decimation は schema・strict とも受理する(decimation は no-op)。
-#[derive(Serialize, Deserialize, JsonSchema)]
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct MatrixPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
