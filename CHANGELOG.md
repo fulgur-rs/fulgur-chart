@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- *(matrix)* `options.plugins.datalabels` を matrix の schema 契約から除外 (`MatrixPlugins` 導入)。matrix は datalabels を描画しないため、schema 受理→strict 拒否のパリティ破れを解消 (sankey #87 と同型)
 - *(decimate)* LTTB の samples 予算をセグメント長で按分し、gap 多数セグメント時の per-segment 予算超過を解消 (合計を samples+3×セグメント数 以下に上限化)
 
 ## [0.1.18](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.17...fulgur-chart-cli-v0.1.18) - 2026-07-01
