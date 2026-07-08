@@ -160,9 +160,9 @@ pub struct VlPointEncoding {
 // ────────────────────────────────────────────────
 // Circle plot (mark: "circle")
 //
-// point mark の常に塗りつぶし円バリアント。`shape` フィールドは意図的に持たない
-// ため、将来 point mark に shape エンコーディングが加わっても circle は shape
-// 非対応のまま構造的に保たれる。
+// Always-filled-circle variant of the point mark. `shape` is intentionally
+// omitted so that if point ever grows a shape channel, circle stays
+// shape-free by structure.
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -181,6 +181,7 @@ pub struct VlCircleSpec {
     pub title: Option<VlTitle>,
 }
 
+/// Encoding for `mark: "circle"`. No `shape` channel — see section note.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VlCircleEncoding {
