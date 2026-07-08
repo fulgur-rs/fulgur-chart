@@ -266,6 +266,19 @@ fn circle_mark_renders_svg() {
     let spec = vegalite::parse(json, false).unwrap();
     let svg = fulgur_chart::render::render_chart(&spec);
     assert!(svg.starts_with("<svg"));
-    // Prim::Circle が出るので <circle 要素が含まれる。
-    assert!(svg.contains("<circle "));
+    // scatter renderer emits one <circle> per point.
+    assert_eq!(svg.matches("<circle ").count(), 2);
+}
+
+#[test]
+fn strict_circle_rejects_shape_encoding() {
+    // 構造的 shape 非対応の invariant を strict パーサで pin する。
+    // 現状 check_unknown_keys の encoding allow-list は shape を含まない
+    // ため強制されるが、allow-list ドリフトで壊れないようテストで固定する。
+    let json = r#"{
+        "mark": "circle",
+        "data": {"values": [{"x":1,"y":2}]},
+        "encoding": {"x": {"field":"x"}, "y": {"field":"y"}, "shape": {"field":"c"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
 }
