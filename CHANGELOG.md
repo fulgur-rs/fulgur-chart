@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.1.19](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.18...fulgur-chart-cli-v0.1.19) - 2026-07-08
+
+### Other
+
+- updated the following local packages: fulgur-chart
+
 ### Added
 
 - *(decimate)* sparkline を間引き対象に追加 (単一セグメント・auto-on、`decimation.enabled:false` で無効化)
