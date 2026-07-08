@@ -255,3 +255,17 @@ fn circle_mark_object_form_accepted() {
     let spec = vegalite::parse(json, false).unwrap();
     assert!(matches!(spec.kind, ChartKind::Scatter));
 }
+
+#[test]
+fn circle_mark_renders_svg() {
+    let json = r#"{
+        "mark": "circle",
+        "data": {"values": [{"x":1,"y":2},{"x":3,"y":4}]},
+        "encoding": {"x": {"field":"x","type":"quantitative"}, "y": {"field":"y","type":"quantitative"}}
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+    assert!(svg.starts_with("<svg"));
+    // Prim::Circle が出るので <circle 要素が含まれる。
+    assert!(svg.contains("<circle "));
+}
