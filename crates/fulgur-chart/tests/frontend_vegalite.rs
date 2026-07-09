@@ -454,3 +454,35 @@ fn rect_mark_object_form_accepted() {
         fulgur_chart::ir::ChartKind::VegaRect { .. }
     ));
 }
+
+#[test]
+fn rect_mark_nominal_color_uses_palette_roundrobin() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","c":"cat0"},
+            {"x":"B","y":"X","c":"cat1"},
+            {"x":"A","y":"Y","c":"cat0"}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"c","type":"nominal"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let cells = match &spec.kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+    // Vega-Lite Tableau10 first color: #4c78a8 (76, 120, 168)
+    // Vega-Lite Tableau10 second color: #f58518 (245, 133, 24)
+    let cat0_color = cells[0][0].expect("cell (A,X) present"); // cat0 → palette[0]
+    let cat1_color = cells[0][1].expect("cell (B,X) present"); // cat1 → palette[1]
+    let cat0_color_again = cells[1][0].expect("cell (A,Y) present"); // cat0 → palette[0]
+    assert_eq!((cat0_color.r, cat0_color.g, cat0_color.b), (76, 120, 168));
+    assert_eq!((cat1_color.r, cat1_color.g, cat1_color.b), (245, 133, 24));
+    assert_eq!(cat0_color, cat0_color_again, "same category → same color");
+    // (B, Y) は未出現 → None
+    assert!(cells[1][1].is_none(), "missing (B,Y) should be None");
+}

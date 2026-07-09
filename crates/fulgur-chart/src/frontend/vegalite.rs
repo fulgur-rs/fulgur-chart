@@ -85,10 +85,20 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             validate_category(&records, xf)?;
             validate_category(&records, yf)?;
             // color は数値または文字列のカテゴリ(quantitative/nominal を後段で判定)。
-            // 存在だけ確認、型は build_rect_cells で扱う。
+            // 存在だけ確認、型は build_rect で扱う。
             for r in &records {
-                if r.get(cf).is_none() {
-                    return Err(format!("フィールド {cf} が見つかりません(typo?)"));
+                match r.get(cf) {
+                    Some(Value::Number(_) | Value::String(_) | Value::Bool(_)) => {}
+                    Some(Value::Null) | None => {
+                        return Err(format!(
+                            "フィールド {cf} が見つかりません(typo? または null)"
+                        ));
+                    }
+                    Some(_) => {
+                        return Err(format!(
+                            "フィールド {cf} は数値/文字列/真偽である必要があります"
+                        ));
+                    }
                 }
             }
         }
@@ -120,18 +130,24 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let theme = vegalite_theme();
 
     // rect ヒートマップの場合、kind に cells を差し替え、series/categories は空。
-    // ここでは validation で確認済みだが、"パニックしない" invariant を守るため
-    // require_field で Result 伝播する(実質 unreachable の Err)。
     if matches!(kind, ChartKind::VegaRect { .. }) {
-        let xf = require_field(&x_field, "x")?;
-        let yf = require_field(&y_field, "y")?;
+        let color_type_hint = encoding
+            .get("color")
+            .and_then(Value::as_object)
+            .and_then(|o| o.get("type"))
+            .and_then(Value::as_str);
+        // color.field は上流 validation で確認済みだが、"パニックしない" invariant を
+        // 守るため require_field で Result 伝播する(実質 unreachable)。
         let cf = require_field(&color_field, "color")?;
-        let (x_labels, y_labels, cells) = build_rect(&records, xf, yf, cf);
-        kind = ChartKind::VegaRect {
-            x_labels,
-            y_labels,
-            cells,
-        };
+        let color_type = infer_color_type(&records, cf, color_type_hint);
+        kind = parse_rect_kind(
+            &records,
+            &x_field,
+            &y_field,
+            &color_field,
+            color_type,
+            &theme.palette,
+        )?;
     }
 
     let series = match &kind {
@@ -608,14 +624,70 @@ fn lerp_rect_color(t: f64) -> Color {
             as u8,
         b: (RECT_COLOR_LO.b as f64 + (RECT_COLOR_HI.b as f64 - RECT_COLOR_LO.b as f64) * t).round()
             as u8,
-        a: RECT_COLOR_LO.a + (RECT_COLOR_HI.a - RECT_COLOR_LO.a) * t as f32,
+        a: 1.0, // both endpoints are opaque
     }
+}
+
+/// rect の color エンコードの型。quantitative は 2 色補間、
+/// nominal はパレットのラウンドロビン割当。
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ColorType {
+    Quantitative,
+    Nominal,
+}
+
+/// encoding.color.type と実データから color 型を判定する。
+/// - "quantitative" → Quantitative
+/// - "nominal" / "ordinal" → Nominal
+/// - 省略時 → 全レコードの color 値が数値なら Quantitative、それ以外は Nominal
+fn infer_color_type(
+    records: &[Map<String, Value>],
+    color_field: &str,
+    explicit: Option<&str>,
+) -> ColorType {
+    match explicit {
+        Some("quantitative") => ColorType::Quantitative,
+        Some("nominal" | "ordinal") => ColorType::Nominal,
+        _ => {
+            let all_numeric = records
+                .iter()
+                .all(|r| matches!(r.get(color_field), Some(Value::Number(_))));
+            if all_numeric {
+                ColorType::Quantitative
+            } else {
+                ColorType::Nominal
+            }
+        }
+    }
+}
+
+/// Vega-Lite rect の encoding とデータから `ChartKind::VegaRect` を構築する。
+/// `parse_mark` は sentinel を返し、この関数が実体で置き換える。
+/// x/y/color フィールドは `parse` の validation で確認済みだが、"パニックしない"
+/// invariant を守るため require_field で Result 伝播する(実質 unreachable の Err)。
+fn parse_rect_kind(
+    records: &[Map<String, Value>],
+    x_field: &Option<String>,
+    y_field: &Option<String>,
+    color_field: &Option<String>,
+    color_type: ColorType,
+    palette: &[Color],
+) -> Result<ChartKind, String> {
+    let xf = require_field(x_field, "x")?;
+    let yf = require_field(y_field, "y")?;
+    let cf = require_field(color_field, "color")?;
+    let (x_labels, y_labels, cells) = build_rect(records, xf, yf, cf, color_type, palette);
+    Ok(ChartKind::VegaRect {
+        x_labels,
+        y_labels,
+        cells,
+    })
 }
 
 /// rect 用の cells / labels を構築する。
 /// - x/y の distinct カテゴリを first-seen 順で採取
-/// - 各セルの color 値 (この Step では quantitative のみ、集約なし)
-/// - min/max の 2 色補間で Rgb 解決 → cells[row][col]
+/// - Quantitative: 各セルの color 値の min/max 2 色補間で Rgb 解決 → cells[row][col]
+/// - Nominal: color カテゴリの first-seen index を palette へラウンドロビン割当
 /// - 未出現の (x,y) は None(スキップ)
 /// - 同じ (x,y) が複数レコードで出た場合は最後の 1 件を採用(aggregate は Task 5)
 fn build_rect(
@@ -623,64 +695,92 @@ fn build_rect(
     x_field: &str,
     y_field: &str,
     color_field: &str,
+    color_type: ColorType,
+    palette: &[Color],
 ) -> (Vec<String>, Vec<String>, Vec<Vec<Option<Color>>>) {
     let x_labels = distinct_categories(records, Some(x_field));
     let y_labels = distinct_categories(records, Some(y_field));
 
-    // 各セルの数値の生値を Vec に集める(この Step では最後の 1 件を採用)。
-    // Task 5 で aggregate mean/sum を扱う。
-    let mut cell_values: Vec<Vec<Option<f64>>> = vec![vec![None; x_labels.len()]; y_labels.len()];
-    for r in records {
-        let xk = field_category(r, Some(x_field));
-        let yk = field_category(r, Some(y_field));
-        let (Some(col), Some(row)) = (
-            x_labels.iter().position(|l| l == &xk),
-            y_labels.iter().position(|l| l == &yk),
-        ) else {
-            continue;
-        };
-        let v = r.get(color_field).and_then(Value::as_f64);
-        cell_values[row][col] = v;
-    }
-
-    // min/max を有限値のみから算出。
-    let (mut min_v, mut max_v) = (f64::INFINITY, f64::NEG_INFINITY);
-    for row in &cell_values {
-        for v in row.iter().flatten() {
-            if v.is_finite() {
-                if *v < min_v {
-                    min_v = *v;
-                }
-                if *v > max_v {
-                    max_v = *v;
-                }
+    match color_type {
+        ColorType::Quantitative => {
+            // 各セルの数値の生値を Vec に集める(この Step では最後の 1 件を採用)。
+            // Task 5 で aggregate mean/sum を扱う。
+            let mut cell_values: Vec<Vec<Option<f64>>> =
+                vec![vec![None; x_labels.len()]; y_labels.len()];
+            for r in records {
+                let xk = field_category(r, Some(x_field));
+                let yk = field_category(r, Some(y_field));
+                let (Some(col), Some(row)) = (
+                    x_labels.iter().position(|l| l == &xk),
+                    y_labels.iter().position(|l| l == &yk),
+                ) else {
+                    continue;
+                };
+                let v = r.get(color_field).and_then(Value::as_f64);
+                cell_values[row][col] = v;
             }
-        }
-    }
-    let range = if (max_v - min_v).abs() < f64::EPSILON {
-        1.0
-    } else {
-        max_v - min_v
-    };
-    let degenerate = !min_v.is_finite() || (max_v - min_v).abs() < f64::EPSILON;
 
-    let cells: Vec<Vec<Option<Color>>> = cell_values
-        .iter()
-        .map(|row| {
-            row.iter()
-                .map(|v| match v {
-                    Some(v) if v.is_finite() => {
-                        if degenerate {
-                            Some(RECT_COLOR_HI)
-                        } else {
-                            Some(lerp_rect_color((*v - min_v) / range))
+            // min/max を有限値のみから算出。
+            let (mut min_v, mut max_v) = (f64::INFINITY, f64::NEG_INFINITY);
+            for row in &cell_values {
+                for v in row.iter().flatten() {
+                    if v.is_finite() {
+                        if *v < min_v {
+                            min_v = *v;
+                        }
+                        if *v > max_v {
+                            max_v = *v;
                         }
                     }
-                    _ => None,
-                })
-                .collect()
-        })
-        .collect();
+                }
+            }
+            let range = if (max_v - min_v).abs() < f64::EPSILON {
+                1.0
+            } else {
+                max_v - min_v
+            };
+            let degenerate = !min_v.is_finite() || (max_v - min_v).abs() < f64::EPSILON;
 
-    (x_labels, y_labels, cells)
+            let cells: Vec<Vec<Option<Color>>> = cell_values
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|v| match v {
+                            Some(v) if v.is_finite() => {
+                                if degenerate {
+                                    // 単一値・全値同一時: 白セルが白背景に埋没しないよう HI を採用。
+                                    Some(RECT_COLOR_HI)
+                                } else {
+                                    Some(lerp_rect_color((*v - min_v) / range))
+                                }
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .collect();
+
+            (x_labels, y_labels, cells)
+        }
+        ColorType::Nominal => {
+            // 色カテゴリの first-seen 順を採取。cat → palette index (mod len)。
+            let color_cats = distinct_categories(records, Some(color_field));
+            let mut cells: Vec<Vec<Option<Color>>> =
+                vec![vec![None; x_labels.len()]; y_labels.len()];
+            for r in records {
+                let xk = field_category(r, Some(x_field));
+                let yk = field_category(r, Some(y_field));
+                let ck = field_category(r, Some(color_field));
+                let (Some(col), Some(row), Some(ci)) = (
+                    x_labels.iter().position(|l| l == &xk),
+                    y_labels.iter().position(|l| l == &yk),
+                    color_cats.iter().position(|l| l == &ck),
+                ) else {
+                    continue;
+                };
+                cells[row][col] = Some(palette[ci % palette.len()]);
+            }
+            (x_labels, y_labels, cells)
+        }
+    }
 }
