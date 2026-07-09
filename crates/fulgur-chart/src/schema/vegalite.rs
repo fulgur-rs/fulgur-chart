@@ -13,6 +13,7 @@ pub enum VegaLiteSpec {
     Point(VlPointSpec),
     Circle(VlCircleSpec),
     Arc(VlArcSpec),
+    Rect(VlRectSpec),
 }
 
 // ────────────────────────────────────────────────
@@ -153,6 +154,26 @@ pub struct MarkArcObject {
 pub enum MarkArc {
     String(MarkArcName),
     Object(MarkArcObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkRectName {
+    Rect,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkRectObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkRectName,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkRect {
+    String(MarkRectName),
+    Object(MarkRectObject),
 }
 
 // ────────────────────────────────────────────────
@@ -298,4 +319,47 @@ pub struct VlArcEncoding {
     pub x: Option<VlChannel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub y: Option<VlChannel>,
+}
+
+// ────────────────────────────────────────────────
+// Rect / heatmap chart (mark: "rect")
+//
+// x/y はカテゴリ、color は quantitative(2色補間)または nominal(パレット割当)。
+// encoding.color.aggregate として "mean" / "sum" を受理する(schema 上は文字列)。
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRectSpec {
+    pub mark: MarkRect,
+    pub data: VlData,
+    pub encoding: VlRectEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRectEncoding {
+    pub x: VlChannel,
+    pub y: VlChannel,
+    pub color: VlRectColorChannel,
+}
+
+/// rect の color チャネル。基本の `field`/`type` に加え、`aggregate` を許容する。
+/// `aggregate` は "mean" | "sum" のみ frontend で受理される(他値は strict で Err)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRectColorChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aggregate: Option<String>,
 }
