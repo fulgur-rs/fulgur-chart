@@ -282,3 +282,92 @@ fn strict_circle_rejects_shape_encoding() {
     }"#;
     assert!(vegalite::parse(json, true).is_err());
 }
+
+#[test]
+fn strict_bar_rejects_theta_encoding() {
+    let json = r#"{
+        "mark": "bar",
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}, "theta": {"field":"c"}}
+    }"#;
+    // strict では VlBarEncoding が受理しない theta を拒否する。
+    assert!(vegalite::parse(json, true).is_err());
+    // 非 strict では現状通り黙って許容(挙動維持)。
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_line_rejects_theta_encoding() {
+    let json = r#"{
+        "mark": "line",
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}, "theta": {"field":"c"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_point_rejects_theta_encoding() {
+    let json = r#"{
+        "mark": "point",
+        "data": {"values": [{"x":1,"y":2}]},
+        "encoding": {"x": {"field":"x","type":"quantitative"}, "y": {"field":"y","type":"quantitative"}, "theta": {"field":"c"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_arc_accepts_x_encoding() {
+    // arc の allow-list は [theta, color, x, y] を含むので strict でも OK。
+    let json = r#"{
+        "mark": "arc",
+        "data": {"values": [{"cat":"A","val":3},{"cat":"B","val":5}]},
+        "encoding": {"theta": {"field":"val"}, "color": {"field":"cat"}, "x": {"field":"cat"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_ok());
+}
+
+#[test]
+fn strict_arc_rejects_unknown_encoding_channel() {
+    // arc の allow-list に含まれない channel(size)は strict で拒否される。
+    // arc 側からも invariant を pin して、将来の allow-list ドリフトを検出する。
+    let json = r#"{
+        "mark": "arc",
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"theta": {"field":"val"}, "color": {"field":"cat"}, "size": {"field":"val"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+    // 非 strict では現状通り黙って許容(挙動維持)。
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_object_form_mark_dispatches_allow_list() {
+    // object 形の mark(`{"type": "bar"}`)からも mark 名を読めることを pin する。
+    // read_mark_name の object 分岐が strict 経路で使われる保証。
+    let json = r#"{
+        "mark": {"type": "bar"},
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}, "theta": {"field":"c"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+}
+
+#[test]
+fn strict_unknown_mark_falls_through_to_parse_error() {
+    // 未対応 mark は check_unknown_keys で早期 Err にせず、後段の
+    // parse_mark へフォールスルーする。エラー文言も encoding.* ではなく
+    // mark 名についてのものであることを確認して invariant を pin する。
+    let json = r#"{
+        "mark": "unknownX",
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}, "theta": {"field":"c"}}
+    }"#;
+    let err = vegalite::parse(json, true).unwrap_err();
+    assert!(
+        err.contains("mark") && !err.contains("encoding."),
+        "expected mark-name error, got: {err}"
+    );
+}
