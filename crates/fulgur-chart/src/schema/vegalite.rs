@@ -47,36 +47,92 @@ pub enum VlTitle {
 
 // ────────────────────────────────────────────────
 // Mark constant types
+//
+// Each mark comes in two forms: a bare string ("bar") and an object with
+// a `type` key (`{"type": "bar"}`). The `Mark*Name` enums pin the accepted
+// literal, and the `Mark*` untagged wrappers accept either form so the
+// generated JSON Schema matches what `parse_mark` in frontend/vegalite.rs
+// already accepts.
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum MarkBar {
+pub enum MarkBarName {
     Bar,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkBar {
+    String(MarkBarName),
+    Object {
+        #[serde(rename = "type")]
+        mark_type: MarkBarName,
+    },
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum MarkLine {
+pub enum MarkLineName {
     Line,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkLine {
+    String(MarkLineName),
+    Object {
+        #[serde(rename = "type")]
+        mark_type: MarkLineName,
+    },
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum MarkPoint {
+pub enum MarkPointName {
     Point,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum MarkCircle {
-    Circle,
+#[serde(untagged)]
+pub enum MarkPoint {
+    String(MarkPointName),
+    Object {
+        #[serde(rename = "type")]
+        mark_type: MarkPointName,
+    },
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum MarkArc {
+pub enum MarkCircleName {
+    Circle,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkCircle {
+    String(MarkCircleName),
+    Object {
+        #[serde(rename = "type")]
+        mark_type: MarkCircleName,
+    },
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkArcName {
     Arc,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkArc {
+    String(MarkArcName),
+    Object {
+        #[serde(rename = "type")]
+        mark_type: MarkArcName,
+    },
 }
 
 // ────────────────────────────────────────────────
