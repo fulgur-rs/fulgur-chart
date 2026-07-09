@@ -503,8 +503,8 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
     if let Some(encoding) = top.get("encoding").and_then(Value::as_object) {
         // mark 別 encoding allow-list を選ぶ。mark 名が読めない/未対応なら
         // 現状挙動(全キー拒否せずスルー)を保つ = 後段パースに委ねる。
-        let allowed: &[&str] = match read_mark_name(top).as_deref() {
-            Some("bar") | Some("line") | Some("point") | Some("circle") => &["x", "y", "color"],
+        let allowed: &[&str] = match read_mark_name(top) {
+            Some("bar" | "line" | "point" | "circle") => &["x", "y", "color"],
             Some("arc") => &["theta", "color", "x", "y"],
             _ => return Ok(()),
         };
@@ -522,10 +522,10 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
 }
 
 /// top.mark の名前を string / object 両形で取り出す。取れなければ None。
-fn read_mark_name(top: &Map<String, Value>) -> Option<String> {
+fn read_mark_name(top: &Map<String, Value>) -> Option<&str> {
     match top.get("mark")? {
-        Value::String(s) => Some(s.clone()),
-        Value::Object(o) => o.get("type").and_then(Value::as_str).map(str::to_owned),
+        Value::String(s) => Some(s.as_str()),
+        Value::Object(o) => o.get("type").and_then(Value::as_str),
         _ => None,
     }
 }

@@ -328,3 +328,29 @@ fn strict_arc_accepts_x_encoding() {
     }"#;
     assert!(vegalite::parse(json, true).is_ok());
 }
+
+#[test]
+fn strict_arc_rejects_unknown_encoding_channel() {
+    // arc の allow-list に含まれない channel(size)は strict で拒否される。
+    // arc 側からも invariant を pin して、将来の allow-list ドリフトを検出する。
+    let json = r#"{
+        "mark": "arc",
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"theta": {"field":"val"}, "color": {"field":"cat"}, "size": {"field":"val"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+    // 非 strict では現状通り黙って許容(挙動維持)。
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_object_form_mark_dispatches_allow_list() {
+    // object 形の mark(`{"type": "bar"}`)からも mark 名を読めることを pin する。
+    // read_mark_name の object 分岐が strict 経路で使われる保証。
+    let json = r#"{
+        "mark": {"type": "bar"},
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}, "theta": {"field":"c"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+}
