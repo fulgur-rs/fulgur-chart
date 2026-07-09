@@ -282,3 +282,49 @@ fn strict_circle_rejects_shape_encoding() {
     }"#;
     assert!(vegalite::parse(json, true).is_err());
 }
+
+#[test]
+fn strict_bar_rejects_theta_encoding() {
+    let json = r#"{
+        "mark": "bar",
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}, "theta": {"field":"c"}}
+    }"#;
+    // strict では VlBarEncoding が受理しない theta を拒否する。
+    assert!(vegalite::parse(json, true).is_err());
+    // 非 strict では現状通り黙って許容(挙動維持)。
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_line_rejects_theta_encoding() {
+    let json = r#"{
+        "mark": "line",
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}, "theta": {"field":"c"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_point_rejects_theta_encoding() {
+    let json = r#"{
+        "mark": "point",
+        "data": {"values": [{"x":1,"y":2}]},
+        "encoding": {"x": {"field":"x","type":"quantitative"}, "y": {"field":"y","type":"quantitative"}, "theta": {"field":"c"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_arc_accepts_x_encoding() {
+    // arc の allow-list は [theta, color, x, y] を含むので strict でも OK。
+    let json = r#"{
+        "mark": "arc",
+        "data": {"values": [{"cat":"A","val":3},{"cat":"B","val":5}]},
+        "encoding": {"theta": {"field":"val"}, "color": {"field":"cat"}, "x": {"field":"cat"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_ok());
+}
