@@ -140,6 +140,24 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         // 守るため require_field で Result 伝播する(実質 unreachable)。
         let cf = require_field(&color_field, "color")?;
         let color_type = infer_color_type(&records, cf, color_type_hint);
+        // encoding.color.type: "quantitative" が指定されたのに、どのレコードも
+        // 有限数値を持たないと build_rect 内で全セル None になり黙って空チャートを
+        // 返す。build_rect の push 条件 (`Value::as_f64` && `is_finite()`) を裏返し、
+        // 「全 bucket 空になる」ケースだけを明示 Err にする。
+        // (validate_numeric ではなく any-finite ガードなのは、
+        // Aggregate::None が「非数値/NaN を挟んでも最後の有限数値を残す」
+        // 挙動をサポートしている(既存テストで pin 済み)ため。混在データ耐性は
+        // 意図的なので、grid が実際にブランクになる場合のみ拒否する。)
+        if color_type == ColorType::Quantitative
+            && !records.is_empty()
+            && !records.iter().any(|r| {
+                r.get(cf)
+                    .and_then(Value::as_f64)
+                    .is_some_and(f64::is_finite)
+            })
+        {
+            return Err(format!("フィールド {cf} は数値である必要があります"));
+        }
         let aggregate_hint = encoding
             .get("color")
             .and_then(Value::as_object)
@@ -695,8 +713,10 @@ enum ColorType {
 }
 
 /// rect color の集約方式。
-/// `Aggregate::None` は同一 (x,y) セルの複数レコードを最後の 1 件で上書きする既存挙動。
-/// `Mean` / `Sum` は encoding.color.aggregate で指定されたときのみ選択される。
+/// - `None`: encoding.color.aggregate が省略時。同一 (x,y) セルの「最後の有限数値」を採用。
+///   非数値/NaN は push 時にフィルタされるため、悪いデータで良いデータが上書きされない。
+///   (Task 3/4 の raw last-write-wins からのドリフト。試験で pin 済み。)
+/// - `Mean` / `Sum`: encoding.color.aggregate で指定されたときのみ選択。
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Aggregate {
     None,
@@ -763,7 +783,8 @@ fn parse_rect_kind(
 /// - Quantitative: 各セルの color 値を bucket に蓄積 → `aggregate` 適用 → min/max 2 色補間
 /// - Nominal: color カテゴリの first-seen index を palette へラウンドロビン割当
 /// - 未出現の (x,y) は None(スキップ)
-/// - Quantitative + `Aggregate::None`: 同じ (x,y) は最後の 1 件を採用(既存挙動)
+/// - Quantitative + `Aggregate::None`: 同じ (x,y) は「最後の有限数値」を採用
+///   (非数値/NaN は push 時にフィルタ済みなので上書きされない)
 /// - Quantitative + `Aggregate::Mean` / `Sum`: 同じ (x,y) の全値を集約
 fn build_rect(
     records: &[Map<String, Value>],
@@ -780,7 +801,7 @@ fn build_rect(
     match color_type {
         ColorType::Quantitative => {
             // (row, col) → Vec<f64> の bucket に有限な生値を蓄積してから aggregate を適用。
-            // `Aggregate::None` は既存の "最後の 1 件を採用" 挙動を維持する。
+            // `Aggregate::None` は「最後の有限数値」を採用(非数値/NaN は push 時にフィルタ済み)。
             let mut buckets: Vec<Vec<Vec<f64>>> =
                 vec![vec![Vec::new(); x_labels.len()]; y_labels.len()];
             for r in records {

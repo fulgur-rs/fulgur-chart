@@ -838,3 +838,73 @@ fn rect_mark_skips_missing_cells() {
         "expected 3 cells + 1 background, got {rect_count}"
     );
 }
+
+#[test]
+fn rect_mark_rejects_quantitative_with_non_numeric_color() {
+    // encoding.color.type: "quantitative" は数値を要求。文字列/bool の場合、
+    // 黙って空チャートを返さず明示 Err にする(bar/line の validate_numeric と同型)。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":"foo"},
+            {"x":"B","y":"X","v":"bar"}
+        ]},
+        "encoding": {
+            "x": {"field":"x"},
+            "y": {"field":"y"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    let err = vegalite::parse(json, false).unwrap_err();
+    assert!(
+        err.contains("数値") || err.contains("v"),
+        "expected numeric-type error, got: {err}"
+    );
+}
+
+#[test]
+fn rect_mark_degenerate_all_equal_values_use_hi() {
+    // range が 0 (全値同一) のとき、全セルは RECT_COLOR_HI = Tableau steel-blue。
+    // 白セルが白背景に埋没しないよう HI を採用する invariant を pin する。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":5},
+            {"x":"B","y":"X","v":5},
+            {"x":"A","y":"Y","v":5},
+            {"x":"B","y":"Y","v":5}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let cells = match &spec.kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+    for row in &cells {
+        for cell in row {
+            let c = cell.expect("all cells should be Some (degenerate uses HI)");
+            assert_eq!(
+                (c.r, c.g, c.b),
+                (76, 120, 168),
+                "degenerate min==max should resolve every cell to RECT_COLOR_HI"
+            );
+        }
+    }
+}
+
+#[test]
+fn rect_hi_color_matches_vegalite_palette_head() {
+    // RECT_COLOR_HI は Vega-Lite テーマの palette[0] (Tableau10 steel-blue) と揃える
+    // 前提。パレット定数の drift を pin する。
+    let palette_head = fulgur_chart::palette::vegalite_theme().palette[0];
+    assert_eq!(
+        (palette_head.r, palette_head.g, palette_head.b),
+        (76, 120, 168),
+        "vegalite palette[0] must remain (76, 120, 168); RECT_COLOR_HI depends on this"
+    );
+}
