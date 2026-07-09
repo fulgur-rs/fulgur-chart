@@ -562,3 +562,189 @@ fn rect_mark_aggregate_sum() {
     let bx = cells[0][1].expect("cell (B,X)");
     assert_eq!((bx.r, bx.g, bx.b), (76, 120, 168));
 }
+
+#[test]
+fn rect_mark_aggregate_mean_vs_sum_are_distinguishable() {
+    // 3 x-buckets so the aggregated (A,X) can land at intermediate positions.
+    // Data:
+    //   (A,X): [10, 10] — mean=10, sum=20
+    //   (B,X): [15]      — mean=15, sum=15
+    //   (C,X): [5]       — mean=5,  sum=5
+    // Mean: range [5, 15], (A,X)=10 → t=0.5 → intermediate color
+    // Sum:  range [5, 20], (A,X)=20 → t=1.0 → RECT_COLOR_HI (blue)
+    let json_mean = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":10},
+            {"x":"A","y":"X","v":10},
+            {"x":"B","y":"X","v":15},
+            {"x":"C","y":"X","v":5}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative","aggregate":"mean"}
+        }
+    }"#;
+    let json_sum = json_mean.replace(r#""aggregate":"mean""#, r#""aggregate":"sum""#);
+
+    let mean_cells = match &vegalite::parse(json_mean, false).unwrap().kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+    let sum_cells = match &vegalite::parse(&json_sum, false).unwrap().kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+
+    // (A,X) is at row 0, col 0.
+    let mean_ax = mean_cells[0][0].expect("mean (A,X) present");
+    let sum_ax = sum_cells[0][0].expect("sum (A,X) present");
+    // Mean: (A,X) is intermediate (not blue).
+    assert_ne!(
+        (mean_ax.r, mean_ax.g, mean_ax.b),
+        (76, 120, 168),
+        "mean (A,X) should not be at max endpoint"
+    );
+    // Sum: (A,X) becomes the max (t=1.0) → Tableau blue.
+    assert_eq!(
+        (sum_ax.r, sum_ax.g, sum_ax.b),
+        (76, 120, 168),
+        "sum (A,X) should be at max endpoint"
+    );
+    // And they must differ.
+    assert_ne!(
+        mean_ax, sum_ax,
+        "mean and sum should produce different colors here"
+    );
+}
+
+#[test]
+fn rect_mark_aggregate_none_preserves_last_finite_numeric() {
+    // Explicit quantitative + no aggregate + a bool follows a number at the same cell.
+    // With bucket-based None, the finite numeric value survives (not clobbered by the non-numeric).
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":7},
+            {"x":"A","y":"X","v":true},
+            {"x":"B","y":"X","v":1}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let cells = match &spec.kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+    // (A,X) uses v=7 (last finite numeric); (B,X) uses v=1.
+    // range [1, 7], (A,X)=7 → max → blue; (B,X)=1 → min → white.
+    let ax = cells[0][0].expect("(A,X) should be Some");
+    assert_eq!((ax.r, ax.g, ax.b), (76, 120, 168));
+    let bx = cells[0][1].expect("(B,X) should be Some");
+    assert_eq!((bx.r, bx.g, bx.b), (255, 255, 255));
+}
+
+#[test]
+fn strict_rect_rejects_size_encoding() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x"}, "y": {"field":"y"}, "color": {"field":"v"},
+            "size": {"field":"v"}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "size should be rejected in strict"
+    );
+    assert!(
+        vegalite::parse(json, false).is_ok(),
+        "size should be tolerated in non-strict"
+    );
+}
+
+#[test]
+fn strict_rect_rejects_tooltip_encoding() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x"}, "y": {"field":"y"}, "color": {"field":"v"},
+            "tooltip": {"field":"v"}
+        }
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_rect_rejects_x2_y2_encoding() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x"}, "y": {"field":"y"}, "color": {"field":"v"},
+            "x2": {"field":"x2"}
+        }
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+}
+
+#[test]
+fn strict_rect_rejects_quantitative_xy() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":1,"y":2,"v":3}]},
+        "encoding": {
+            "x": {"field":"x","type":"quantitative"},
+            "y": {"field":"y"},
+            "color": {"field":"v"}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "quantitative x should be rejected in strict"
+    );
+    // 非 strict では文字列化して受理される(既存の緩さと同型)。
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_rect_rejects_unsupported_aggregate() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x"}, "y": {"field":"y"},
+            "color": {"field":"v","aggregate":"count"}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "aggregate=count should be rejected"
+    );
+    // 非 strict では既存挙動(未対応値は無視)。
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_rect_rejects_nominal_color_with_aggregate() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","c":"cat0"}]},
+        "encoding": {
+            "x": {"field":"x"}, "y": {"field":"y"},
+            "color": {"field":"c","type":"nominal","aggregate":"sum"}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "nominal + aggregate should be rejected in strict"
+    );
+}

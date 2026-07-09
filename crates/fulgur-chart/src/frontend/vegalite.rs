@@ -571,14 +571,55 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         let allowed: &[&str] = match read_mark_name(top) {
             Some("bar" | "line" | "point" | "circle") => &["x", "y", "color"],
             Some("arc") => &["theta", "color", "x", "y"],
+            Some("rect") => &["x", "y", "color"],
             _ => return Ok(()),
         };
         check_object(encoding, allowed, "encoding")?;
         for channel in allowed {
             if let Some(ch) = encoding.get(*channel).and_then(Value::as_object) {
-                // aggregate は未実装(本体は単純合計しかしない)。strict では
+                // aggregate は原則未実装(本体は単純合計しかしない)。strict では
                 // 誤った集計結果を黙って返さないよう、未対応キーとして拒否する。
-                check_object(ch, &["field", "type"], &format!("encoding.{channel}"))?;
+                // ただし rect の color チャネルに限り、mean/sum のみ受理する
+                // (aggregate の値のバリデーションは下の rect 固有ブロックで行う)。
+                let channel_allowed: &[&str] =
+                    if matches!(read_mark_name(top), Some("rect")) && *channel == "color" {
+                        &["field", "type", "aggregate"]
+                    } else {
+                        &["field", "type"]
+                    };
+                check_object(ch, channel_allowed, &format!("encoding.{channel}"))?;
+            }
+        }
+
+        // rect 固有の strict チェック:
+        // - x/y encoding の type: "quantitative" は binned ヒートマップ想定で MVP 外。
+        // - color aggregate は "mean"/"sum" のみ受理。
+        // - nominal/ordinal color + aggregate は同時指定不可(集計対象がカテゴリ)。
+        if matches!(read_mark_name(top), Some("rect")) {
+            for axis in ["x", "y"] {
+                if let Some(ch) = encoding.get(axis).and_then(Value::as_object)
+                    && let Some(t) = ch.get("type").and_then(Value::as_str)
+                    && t == "quantitative"
+                {
+                    return Err(format!(
+                        "rect の encoding.{axis}.type: \"quantitative\" は未対応です(binned ヒートマップは別 issue)"
+                    ));
+                }
+            }
+            if let Some(color) = encoding.get("color").and_then(Value::as_object) {
+                let agg = color.get("aggregate").and_then(Value::as_str);
+                if let Some(a) = agg
+                    && a != "mean"
+                    && a != "sum"
+                {
+                    return Err(format!(
+                        "rect の encoding.color.aggregate: \"{a}\" は未対応です(mean/sum のみ)"
+                    ));
+                }
+                let color_type = color.get("type").and_then(Value::as_str);
+                if matches!(color_type, Some("nominal" | "ordinal")) && agg.is_some() {
+                    return Err("rect の nominal color に aggregate は指定できません".to_string());
+                }
             }
         }
     }
@@ -762,7 +803,11 @@ fn build_rect(
                             (_, []) => None,
                             (Aggregate::Mean, vs) => Some(vs.iter().sum::<f64>() / vs.len() as f64),
                             (Aggregate::Sum, vs) => Some(vs.iter().sum()),
-                            // 集約なしの既存挙動を維持: 最後の 1 件を採用。
+                            // 集約なし: 同一 (x,y) セルの「最後の有限数値」を採用。
+                            // Task 3/4 の last-write-wins から微差: 非数値/NaN を挟んだ場合、
+                            // 現行は push 時にフィルタするため直前の有限数値が残る
+                            // (旧: 非数値/NaN で cell が None にクリアされていた)。
+                            // これは望ましい方向のドリフト(悪いデータで良いデータを壊さない)。
                             // 上の [] アームで空を除外済みなので last() は必ず Some。
                             (Aggregate::None, vs) => vs.last().copied(),
                         })
