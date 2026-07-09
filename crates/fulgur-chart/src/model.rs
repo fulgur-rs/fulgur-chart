@@ -252,6 +252,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Radar => "radar",
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",
+        ChartKind::VegaRect { .. } => "vegaRect",
         ChartKind::Progress => "progress",
         ChartKind::BoxPlot => "boxplot",
         ChartKind::Sparkline => "sparkline",

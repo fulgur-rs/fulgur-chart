@@ -212,6 +212,19 @@ pub enum ChartKind {
         color_lo: Color, // min 値のセル色（白固定）
         color_hi: Color, // max 値のセル色（backgroundColor 由来）
     },
+    /// Vega-Lite `mark: "rect"` (ヒートマップ)。
+    /// scale 解決済み色を per-cell で持つ純粋 grid。`None` セルは描画スキップ(透過)。
+    /// x_labels/y_labels は categories/series 経由ではなくここに直接持ち、layout 側は
+    /// この variant の情報だけで描画する(既存 ChartKind::Matrix パスを触らないため)。
+    VegaRect {
+        /// 列ラベル(横軸カテゴリ)、first-seen 順。
+        x_labels: Vec<String>,
+        /// 行ラベル(縦軸カテゴリ)、first-seen 順。
+        y_labels: Vec<String>,
+        /// cells[row][col] = 解決済み Color または None(欠損/skip)。
+        /// row: y_labels の index、col: x_labels の index。
+        cells: Vec<Vec<Option<Color>>>,
+    },
     /// QuickChart 互換の progress バー。軸なし水平バー。
     /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。
     Progress,

@@ -371,3 +371,22 @@ fn strict_unknown_mark_falls_through_to_parse_error() {
         "expected mark-name error, got: {err}"
     );
 }
+
+#[test]
+fn rect_ir_variant_exists() {
+    use fulgur_chart::ir::{ChartKind, Color};
+    let kind = ChartKind::VegaRect {
+        x_labels: vec!["A".to_string(), "B".to_string()],
+        y_labels: vec!["X".to_string()],
+        cells: vec![vec![
+            Some(Color {
+                r: 10,
+                g: 20,
+                b: 30,
+                a: 1.0,
+            }),
+            None,
+        ]],
+    };
+    assert!(matches!(kind, ChartKind::VegaRect { .. }));
+}
