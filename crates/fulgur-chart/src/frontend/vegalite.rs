@@ -140,12 +140,25 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         // 守るため require_field で Result 伝播する(実質 unreachable)。
         let cf = require_field(&color_field, "color")?;
         let color_type = infer_color_type(&records, cf, color_type_hint);
+        let aggregate_hint = encoding
+            .get("color")
+            .and_then(Value::as_object)
+            .and_then(|o| o.get("aggregate"))
+            .and_then(Value::as_str);
+        let aggregate = match aggregate_hint {
+            Some("mean") => Aggregate::Mean,
+            Some("sum") => Aggregate::Sum,
+            // 非 strict では未対応値 (count / min / max / median 等) も無視して
+            // Aggregate::None (last-write-wins) 扱い。strict Err は Task 6 で追加。
+            _ => Aggregate::None,
+        };
         kind = parse_rect_kind(
             &records,
             &x_field,
             &y_field,
             &color_field,
             color_type,
+            aggregate,
             &theme.palette,
         )?;
     }
@@ -636,6 +649,16 @@ enum ColorType {
     Nominal,
 }
 
+/// rect color の集約方式。
+/// `Aggregate::None` は同一 (x,y) セルの複数レコードを最後の 1 件で上書きする既存挙動。
+/// `Mean` / `Sum` は encoding.color.aggregate で指定されたときのみ選択される。
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Aggregate {
+    None,
+    Mean,
+    Sum,
+}
+
 /// encoding.color.type と実データから color 型を判定する。
 /// - "quantitative" → Quantitative
 /// - "nominal" / "ordinal" → Nominal
@@ -647,8 +670,12 @@ fn infer_color_type(
 ) -> ColorType {
     match explicit {
         Some("quantitative") => ColorType::Quantitative,
+        // 注: Vega-Lite 本家では ordinal + rect は単一 hue の sequential scale だが、
+        // MVP では nominal と同じカテゴリパレット扱い。sequential 対応は将来の拡張。
         Some("nominal" | "ordinal") => ColorType::Nominal,
         _ => {
+            // 空データでは all() が vacuously true → Quantitative になるが、
+            // x_labels / y_labels も空なので cells も空、選択は観測不能。
             let all_numeric = records
                 .iter()
                 .all(|r| matches!(r.get(color_field), Some(Value::Number(_))));
@@ -671,12 +698,14 @@ fn parse_rect_kind(
     y_field: &Option<String>,
     color_field: &Option<String>,
     color_type: ColorType,
+    aggregate: Aggregate,
     palette: &[Color],
 ) -> Result<ChartKind, String> {
     let xf = require_field(x_field, "x")?;
     let yf = require_field(y_field, "y")?;
     let cf = require_field(color_field, "color")?;
-    let (x_labels, y_labels, cells) = build_rect(records, xf, yf, cf, color_type, palette);
+    let (x_labels, y_labels, cells) =
+        build_rect(records, xf, yf, cf, color_type, aggregate, palette);
     Ok(ChartKind::VegaRect {
         x_labels,
         y_labels,
@@ -686,16 +715,18 @@ fn parse_rect_kind(
 
 /// rect 用の cells / labels を構築する。
 /// - x/y の distinct カテゴリを first-seen 順で採取
-/// - Quantitative: 各セルの color 値の min/max 2 色補間で Rgb 解決 → cells[row][col]
+/// - Quantitative: 各セルの color 値を bucket に蓄積 → `aggregate` 適用 → min/max 2 色補間
 /// - Nominal: color カテゴリの first-seen index を palette へラウンドロビン割当
 /// - 未出現の (x,y) は None(スキップ)
-/// - 同じ (x,y) が複数レコードで出た場合は最後の 1 件を採用(aggregate は Task 5)
+/// - Quantitative + `Aggregate::None`: 同じ (x,y) は最後の 1 件を採用(既存挙動)
+/// - Quantitative + `Aggregate::Mean` / `Sum`: 同じ (x,y) の全値を集約
 fn build_rect(
     records: &[Map<String, Value>],
     x_field: &str,
     y_field: &str,
     color_field: &str,
     color_type: ColorType,
+    aggregate: Aggregate,
     palette: &[Color],
 ) -> (Vec<String>, Vec<String>, Vec<Vec<Option<Color>>>) {
     let x_labels = distinct_categories(records, Some(x_field));
@@ -703,10 +734,10 @@ fn build_rect(
 
     match color_type {
         ColorType::Quantitative => {
-            // 各セルの数値の生値を Vec に集める(この Step では最後の 1 件を採用)。
-            // Task 5 で aggregate mean/sum を扱う。
-            let mut cell_values: Vec<Vec<Option<f64>>> =
-                vec![vec![None; x_labels.len()]; y_labels.len()];
+            // (row, col) → Vec<f64> の bucket に有限な生値を蓄積してから aggregate を適用。
+            // `Aggregate::None` は既存の "最後の 1 件を採用" 挙動を維持する。
+            let mut buckets: Vec<Vec<Vec<f64>>> =
+                vec![vec![Vec::new(); x_labels.len()]; y_labels.len()];
             for r in records {
                 let xk = field_category(r, Some(x_field));
                 let yk = field_category(r, Some(y_field));
@@ -716,9 +747,28 @@ fn build_rect(
                 ) else {
                     continue;
                 };
-                let v = r.get(color_field).and_then(Value::as_f64);
-                cell_values[row][col] = v;
+                if let Some(v) = r.get(color_field).and_then(Value::as_f64)
+                    && v.is_finite()
+                {
+                    buckets[row][col].push(v);
+                }
             }
+            // aggregate 適用: 空 bucket は None、そうでなければ mean / sum / last。
+            let cell_values: Vec<Vec<Option<f64>>> = buckets
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .map(|b| match (aggregate, b.as_slice()) {
+                            (_, []) => None,
+                            (Aggregate::Mean, vs) => Some(vs.iter().sum::<f64>() / vs.len() as f64),
+                            (Aggregate::Sum, vs) => Some(vs.iter().sum()),
+                            // 集約なしの既存挙動を維持: 最後の 1 件を採用。
+                            // 上の [] アームで空を除外済みなので last() は必ず Some。
+                            (Aggregate::None, vs) => vs.last().copied(),
+                        })
+                        .collect()
+                })
+                .collect();
 
             // min/max を有限値のみから算出。
             let (mut min_v, mut max_v) = (f64::INFINITY, f64::NEG_INFINITY);

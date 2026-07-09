@@ -486,3 +486,79 @@ fn rect_mark_nominal_color_uses_palette_roundrobin() {
     // (B, Y) は未出現 → None
     assert!(cells[1][1].is_none(), "missing (B,Y) should be None");
 }
+
+#[test]
+fn rect_mark_rejects_null_color_value() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","c":null}]},
+        "encoding": {"x": {"field":"x"}, "y": {"field":"y"}, "color": {"field":"c"}}
+    }"#;
+    let err = vegalite::parse(json, false).unwrap_err();
+    assert!(
+        err.contains("見つかりません") || err.contains("null"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn rect_mark_aggregate_mean() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":2},
+            {"x":"A","y":"X","v":4},
+            {"x":"B","y":"X","v":10}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative","aggregate":"mean"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let cells = match &spec.kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+    // (A, X) mean = (2 + 4) / 2 = 3.0 → min
+    // (B, X) mean = 10 → max
+    // range = 10 - 3 = 7, (A,X) t = 0.0 → white
+    let ax = cells[0][0].expect("cell (A,X)");
+    assert_eq!((ax.r, ax.g, ax.b), (255, 255, 255), "mean=3 → min → white");
+    // (B, X) is at column index 1, row 0
+    let bx = cells[0][1].expect("cell (B,X)");
+    assert_eq!(
+        (bx.r, bx.g, bx.b),
+        (76, 120, 168),
+        "mean=10 → max → Tableau blue"
+    );
+}
+
+#[test]
+fn rect_mark_aggregate_sum() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":2},
+            {"x":"A","y":"X","v":4},
+            {"x":"B","y":"X","v":10}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative","aggregate":"sum"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let cells = match &spec.kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+    // (A, X) sum = 6, (B, X) sum = 10, range = 4
+    // (A,X) t=0 → white, (B,X) t=1 → blue
+    let ax = cells[0][0].expect("cell (A,X)");
+    assert_eq!((ax.r, ax.g, ax.b), (255, 255, 255));
+    let bx = cells[0][1].expect("cell (B,X)");
+    assert_eq!((bx.r, bx.g, bx.b), (76, 120, 168));
+}
