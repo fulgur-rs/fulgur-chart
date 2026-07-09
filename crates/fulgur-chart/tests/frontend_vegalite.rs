@@ -390,3 +390,67 @@ fn rect_ir_variant_exists() {
     };
     assert!(matches!(kind, ChartKind::VegaRect { .. }));
 }
+
+#[test]
+fn rect_mark_quantitative_maps_to_vegarect() {
+    // 2x2 grid, quantitative color.
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"day":"Mon","hour":"AM","v":1},
+            {"day":"Tue","hour":"AM","v":3},
+            {"day":"Mon","hour":"PM","v":5},
+            {"day":"Tue","hour":"PM","v":7}
+        ]},
+        "encoding": {
+            "x": {"field":"day","type":"nominal"},
+            "y": {"field":"hour","type":"nominal"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let (x_labels, y_labels, cells) = match &spec.kind {
+        fulgur_chart::ir::ChartKind::VegaRect {
+            x_labels,
+            y_labels,
+            cells,
+        } => (x_labels.clone(), y_labels.clone(), cells.clone()),
+        _ => panic!("expected VegaRect, got {:?}", spec.kind),
+    };
+    // first-seen order
+    assert_eq!(x_labels, vec!["Mon", "Tue"]);
+    assert_eq!(y_labels, vec!["AM", "PM"]);
+    // 2 rows x 2 cols
+    assert_eq!(cells.len(), 2);
+    assert_eq!(cells[0].len(), 2);
+    // min (v=1) at (Mon, AM) → color_lo (#ffffff white)
+    let c00 = cells[0][0].expect("cell should not be None");
+    assert_eq!(
+        (c00.r, c00.g, c00.b),
+        (255, 255, 255),
+        "min cell should be white"
+    );
+    // max (v=7) at (Tue, PM) → color_hi (VL theme palette[0] = Tableau steel-blue #4c78a8 = (76, 120, 168))
+    let c11 = cells[1][1].expect("cell should not be None");
+    assert_eq!(
+        (c11.r, c11.g, c11.b),
+        (76, 120, 168),
+        "max cell should be Tableau steel-blue"
+    );
+}
+
+#[test]
+fn rect_mark_object_form_accepted() {
+    let json = r#"{
+        "mark": {"type": "rect"},
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x"}, "y": {"field":"y"}, "color": {"field":"v"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    assert!(matches!(
+        spec.kind,
+        fulgur_chart::ir::ChartKind::VegaRect { .. }
+    ));
+}

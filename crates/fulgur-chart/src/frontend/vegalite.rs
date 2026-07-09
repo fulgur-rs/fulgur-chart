@@ -28,7 +28,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .as_object()
         .ok_or_else(|| "トップレベルは object でなければなりません".to_string())?;
 
-    let kind = parse_mark(top.get("mark"))?;
+    let mut kind = parse_mark(top.get("mark"))?;
     let records = parse_data_values(top.get("data"))?;
     let encoding = top
         .get("encoding")
@@ -78,6 +78,20 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 })?;
             validate_category(&records, cf)?;
         }
+        ChartKind::VegaRect { .. } => {
+            let xf = require_field(&x_field, "x")?;
+            let yf = require_field(&y_field, "y")?;
+            let cf = require_field(&color_field, "color")?;
+            validate_category(&records, xf)?;
+            validate_category(&records, yf)?;
+            // color は数値または文字列のカテゴリ(quantitative/nominal を後段で判定)。
+            // 存在だけ確認、型は build_rect_cells で扱う。
+            for r in &records {
+                if r.get(cf).is_none() {
+                    return Err(format!("フィールド {cf} が見つかりません(typo?)"));
+                }
+            }
+        }
         // Bubble/Radar/Mixed は Vega-Lite mark から生成されない。
         _ => {}
     }
@@ -105,6 +119,21 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
 
     let theme = vegalite_theme();
 
+    // rect ヒートマップの場合、kind に cells を差し替え、series/categories は空。
+    // ここでは validation で確認済みだが、"パニックしない" invariant を守るため
+    // require_field で Result 伝播する(実質 unreachable の Err)。
+    if matches!(kind, ChartKind::VegaRect { .. }) {
+        let xf = require_field(&x_field, "x")?;
+        let yf = require_field(&y_field, "y")?;
+        let cf = require_field(&color_field, "color")?;
+        let (x_labels, y_labels, cells) = build_rect(&records, xf, yf, cf);
+        kind = ChartKind::VegaRect {
+            x_labels,
+            y_labels,
+            cells,
+        };
+    }
+
     let series = match &kind {
         ChartKind::Pie { .. } => build_pie(
             &records,
@@ -115,6 +144,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             &theme,
         ),
         ChartKind::Scatter => build_scatter(&records, &x_field, &y_field, &color_field, &theme),
+        ChartKind::VegaRect { .. } => vec![],
         _ => build_categorical(&kind, &records, &x_field, &y_field, &color_field, &theme),
     };
 
@@ -125,11 +155,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             distinct_categories(&records, cat_field)
         }
         ChartKind::Scatter => vec![],
+        ChartKind::VegaRect { .. } => vec![],
         _ => distinct_categories(&records, x_field.as_deref()),
     };
 
-    // scatter は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点（chartjs と一致）。
-    let y_begin_at_zero = !matches!(kind, ChartKind::Scatter);
+    // scatter/rect は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点（chartjs と一致）。
+    let y_begin_at_zero = !matches!(kind, ChartKind::Scatter | ChartKind::VegaRect { .. });
 
     // VL トップレベルの width/height/title を反映する(無ければ既定 800x450・無題)。
     // title は文字列、または `{"text": "..."}` オブジェクトを受ける。
@@ -207,6 +238,11 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
         "line" => Ok(ChartKind::Line),
         "point" => Ok(ChartKind::Scatter),
         "circle" => Ok(ChartKind::Scatter),
+        "rect" => Ok(ChartKind::VegaRect {
+            x_labels: Vec::new(),
+            y_labels: Vec::new(),
+            cells: Vec::new(),
+        }),
         "arc" => Ok(ChartKind::Pie { donut_ratio: 0.0 }),
         other => Err(format!("未対応の mark: {other}")),
     }
@@ -543,4 +579,108 @@ fn check_object(obj: &Map<String, Value>, allowed: &[&str], path: &str) -> Resul
         }
     }
     Ok(())
+}
+
+/// rect ヒートマップ用の 2 色補間の endpoint。
+/// HI は Vega-Lite テーマの palette[0] (Tableau10 steel-blue #4c78a8) と揃える。
+/// nominal 経路も同じパレットを使うため、quantitative と nominal で色系統が一貫する。
+/// (chart.js matrix の #36A2EB 定数は Chart.js DSL 経路 (`ChartKind::Matrix`) 側で
+/// 独立に保持されており、Vega-Lite rect とは意図的に別テーマとする。)
+const RECT_COLOR_LO: Color = Color {
+    r: 255,
+    g: 255,
+    b: 255,
+    a: 1.0,
+};
+const RECT_COLOR_HI: Color = Color {
+    r: 76,
+    g: 120,
+    b: 168,
+    a: 1.0,
+};
+
+fn lerp_rect_color(t: f64) -> Color {
+    let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+    Color {
+        r: (RECT_COLOR_LO.r as f64 + (RECT_COLOR_HI.r as f64 - RECT_COLOR_LO.r as f64) * t).round()
+            as u8,
+        g: (RECT_COLOR_LO.g as f64 + (RECT_COLOR_HI.g as f64 - RECT_COLOR_LO.g as f64) * t).round()
+            as u8,
+        b: (RECT_COLOR_LO.b as f64 + (RECT_COLOR_HI.b as f64 - RECT_COLOR_LO.b as f64) * t).round()
+            as u8,
+        a: RECT_COLOR_LO.a + (RECT_COLOR_HI.a - RECT_COLOR_LO.a) * t as f32,
+    }
+}
+
+/// rect 用の cells / labels を構築する。
+/// - x/y の distinct カテゴリを first-seen 順で採取
+/// - 各セルの color 値 (この Step では quantitative のみ、集約なし)
+/// - min/max の 2 色補間で Rgb 解決 → cells[row][col]
+/// - 未出現の (x,y) は None(スキップ)
+/// - 同じ (x,y) が複数レコードで出た場合は最後の 1 件を採用(aggregate は Task 5)
+fn build_rect(
+    records: &[Map<String, Value>],
+    x_field: &str,
+    y_field: &str,
+    color_field: &str,
+) -> (Vec<String>, Vec<String>, Vec<Vec<Option<Color>>>) {
+    let x_labels = distinct_categories(records, Some(x_field));
+    let y_labels = distinct_categories(records, Some(y_field));
+
+    // 各セルの数値の生値を Vec に集める(この Step では最後の 1 件を採用)。
+    // Task 5 で aggregate mean/sum を扱う。
+    let mut cell_values: Vec<Vec<Option<f64>>> = vec![vec![None; x_labels.len()]; y_labels.len()];
+    for r in records {
+        let xk = field_category(r, Some(x_field));
+        let yk = field_category(r, Some(y_field));
+        let (Some(col), Some(row)) = (
+            x_labels.iter().position(|l| l == &xk),
+            y_labels.iter().position(|l| l == &yk),
+        ) else {
+            continue;
+        };
+        let v = r.get(color_field).and_then(Value::as_f64);
+        cell_values[row][col] = v;
+    }
+
+    // min/max を有限値のみから算出。
+    let (mut min_v, mut max_v) = (f64::INFINITY, f64::NEG_INFINITY);
+    for row in &cell_values {
+        for v in row.iter().flatten() {
+            if v.is_finite() {
+                if *v < min_v {
+                    min_v = *v;
+                }
+                if *v > max_v {
+                    max_v = *v;
+                }
+            }
+        }
+    }
+    let range = if (max_v - min_v).abs() < f64::EPSILON {
+        1.0
+    } else {
+        max_v - min_v
+    };
+    let degenerate = !min_v.is_finite() || (max_v - min_v).abs() < f64::EPSILON;
+
+    let cells: Vec<Vec<Option<Color>>> = cell_values
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|v| match v {
+                    Some(v) if v.is_finite() => {
+                        if degenerate {
+                            Some(RECT_COLOR_HI)
+                        } else {
+                            Some(lerp_rect_color((*v - min_v) / range))
+                        }
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+
+    (x_labels, y_labels, cells)
 }
