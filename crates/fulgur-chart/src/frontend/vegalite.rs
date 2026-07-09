@@ -617,8 +617,12 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                     ));
                 }
                 let color_type = color.get("type").and_then(Value::as_str);
-                if matches!(color_type, Some("nominal" | "ordinal")) && agg.is_some() {
-                    return Err("rect の nominal color に aggregate は指定できません".to_string());
+                if let (Some(ct), Some(a)) = (color_type, agg)
+                    && (ct == "nominal" || ct == "ordinal")
+                {
+                    return Err(format!(
+                        "rect の encoding.color.type: \"{ct}\" に aggregate: \"{a}\" は指定できません(集計対象がカテゴリ)"
+                    ));
                 }
             }
         }

@@ -684,7 +684,7 @@ fn strict_rect_rejects_tooltip_encoding() {
 }
 
 #[test]
-fn strict_rect_rejects_x2_y2_encoding() {
+fn strict_rect_rejects_x2_encoding() {
     let json = r#"{
         "mark": "rect",
         "data": {"values": [{"x":"A","y":"X","v":1}]},
@@ -697,7 +697,20 @@ fn strict_rect_rejects_x2_y2_encoding() {
 }
 
 #[test]
-fn strict_rect_rejects_quantitative_xy() {
+fn strict_rect_rejects_y2_encoding() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x"}, "y": {"field":"y"}, "color": {"field":"v"},
+            "y2": {"field":"y2"}
+        }
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+}
+
+#[test]
+fn strict_rect_rejects_quantitative_x() {
     let json = r#"{
         "mark": "rect",
         "data": {"values": [{"x":1,"y":2,"v":3}]},
@@ -712,6 +725,24 @@ fn strict_rect_rejects_quantitative_xy() {
         "quantitative x should be rejected in strict"
     );
     // 非 strict では文字列化して受理される(既存の緩さと同型)。
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_rect_rejects_quantitative_y() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":2,"v":3}]},
+        "encoding": {
+            "x": {"field":"x"},
+            "y": {"field":"y","type":"quantitative"},
+            "color": {"field":"v"}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "quantitative y should be rejected in strict"
+    );
     assert!(vegalite::parse(json, false).is_ok());
 }
 
@@ -746,5 +777,64 @@ fn strict_rect_rejects_nominal_color_with_aggregate() {
     assert!(
         vegalite::parse(json, true).is_err(),
         "nominal + aggregate should be rejected in strict"
+    );
+}
+
+#[test]
+fn rect_mark_renders_svg_with_expected_rect_count() {
+    // 2x2 grid, all cells present → 4 rects.
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":1},
+            {"x":"B","y":"X","v":2},
+            {"x":"A","y":"Y","v":3},
+            {"x":"B","y":"Y","v":4}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+    assert!(svg.starts_with("<svg"));
+    // Cells 4 + optional background 1
+    let rect_count = svg.matches("<rect").count();
+    assert!(
+        rect_count >= 4,
+        "expected at least 4 cells, got {rect_count}: {svg}"
+    );
+    // Axis labels appear.
+    assert!(svg.contains(">A<"));
+    assert!(svg.contains(">B<"));
+    assert!(svg.contains(">X<"));
+    assert!(svg.contains(">Y<"));
+}
+
+#[test]
+fn rect_mark_skips_missing_cells() {
+    // (B, Y) missing → 3 cells, None cell does not emit <rect>.
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":1},
+            {"x":"B","y":"X","v":2},
+            {"x":"A","y":"Y","v":3}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+    // 3 cells + optional background
+    let rect_count = svg.matches("<rect").count();
+    assert!(
+        (3..=4).contains(&rect_count),
+        "expected 3 cells + optional bg, got {rect_count}"
     );
 }
