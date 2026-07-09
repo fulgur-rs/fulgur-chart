@@ -228,3 +228,57 @@ fn strict_rejects_aggregate() {
     assert!(vegalite::parse(json, true).is_err());
     assert!(vegalite::parse(json, false).is_ok());
 }
+
+#[test]
+fn circle_mark_maps_to_scatter_with_points() {
+    let json = r#"{
+        "mark": "circle",
+        "data": {"values": [{"x":1,"y":2},{"x":3,"y":4}]},
+        "encoding": {"x": {"field":"x","type":"quantitative"}, "y": {"field":"y","type":"quantitative"}}
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Scatter));
+    assert_eq!(spec.series.len(), 1);
+    let pts = &spec.series[0].points;
+    assert_eq!(pts.len(), 2);
+    assert_eq!((pts[0].x, pts[0].y), (1.0, 2.0));
+    assert_eq!((pts[1].x, pts[1].y), (3.0, 4.0));
+}
+
+#[test]
+fn circle_mark_object_form_accepted() {
+    let json = r#"{
+        "mark": {"type": "circle"},
+        "data": {"values": [{"x":1,"y":2}]},
+        "encoding": {"x": {"field":"x"}, "y": {"field":"y"}}
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Scatter));
+}
+
+#[test]
+fn circle_mark_renders_svg() {
+    let json = r#"{
+        "mark": "circle",
+        "data": {"values": [{"x":1,"y":2},{"x":3,"y":4}]},
+        "encoding": {"x": {"field":"x","type":"quantitative"}, "y": {"field":"y","type":"quantitative"}}
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+    assert!(svg.starts_with("<svg"));
+    // scatter renderer emits one <circle> per point.
+    assert_eq!(svg.matches("<circle ").count(), 2);
+}
+
+#[test]
+fn strict_circle_rejects_shape_encoding() {
+    // 構造的 shape 非対応の invariant を strict パーサで pin する。
+    // 現状 check_unknown_keys の encoding allow-list は shape を含まない
+    // ため強制されるが、allow-list ドリフトで壊れないようテストで固定する。
+    let json = r#"{
+        "mark": "circle",
+        "data": {"values": [{"x":1,"y":2}]},
+        "encoding": {"x": {"field":"x"}, "y": {"field":"y"}, "shape": {"field":"c"}}
+    }"#;
+    assert!(vegalite::parse(json, true).is_err());
+}

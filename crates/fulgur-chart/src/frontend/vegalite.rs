@@ -206,6 +206,7 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
         }),
         "line" => Ok(ChartKind::Line),
         "point" => Ok(ChartKind::Scatter),
+        "circle" => Ok(ChartKind::Scatter),
         "arc" => Ok(ChartKind::Pie { donut_ratio: 0.0 }),
         other => Err(format!("未対応の mark: {other}")),
     }
