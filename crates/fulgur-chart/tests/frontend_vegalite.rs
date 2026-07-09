@@ -354,3 +354,20 @@ fn strict_object_form_mark_dispatches_allow_list() {
     }"#;
     assert!(vegalite::parse(json, true).is_err());
 }
+
+#[test]
+fn strict_unknown_mark_falls_through_to_parse_error() {
+    // 未対応 mark は check_unknown_keys で早期 Err にせず、後段の
+    // parse_mark へフォールスルーする。エラー文言も encoding.* ではなく
+    // mark 名についてのものであることを確認して invariant を pin する。
+    let json = r#"{
+        "mark": "unknownX",
+        "data": {"values": [{"cat":"A","val":3}]},
+        "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}, "theta": {"field":"c"}}
+    }"#;
+    let err = vegalite::parse(json, true).unwrap_err();
+    assert!(
+        err.contains("mark") && !err.contains("encoding."),
+        "expected mark-name error, got: {err}"
+    );
+}
