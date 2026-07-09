@@ -800,11 +800,11 @@ fn rect_mark_renders_svg_with_expected_rect_count() {
     let spec = vegalite::parse(json, false).unwrap();
     let svg = fulgur_chart::render::render_chart(&spec);
     assert!(svg.starts_with("<svg"));
-    // Cells 4 + optional background 1
     let rect_count = svg.matches("<rect").count();
-    assert!(
-        rect_count >= 4,
-        "expected at least 4 cells, got {rect_count}: {svg}"
+    // 4 cells + 1 vegalite_theme white background rect.
+    assert_eq!(
+        rect_count, 5,
+        "expected 4 cells + 1 background, got {rect_count}"
     );
     // Axis labels appear.
     assert!(svg.contains(">A<"));
@@ -831,10 +831,10 @@ fn rect_mark_skips_missing_cells() {
     }"#;
     let spec = vegalite::parse(json, false).unwrap();
     let svg = fulgur_chart::render::render_chart(&spec);
-    // 3 cells + optional background
     let rect_count = svg.matches("<rect").count();
-    assert!(
-        (3..=4).contains(&rect_count),
-        "expected 3 cells + optional bg, got {rect_count}"
+    // 3 cells (one None skipped) + 1 background.
+    assert_eq!(
+        rect_count, 4,
+        "expected 3 cells + 1 background, got {rect_count}"
     );
 }
