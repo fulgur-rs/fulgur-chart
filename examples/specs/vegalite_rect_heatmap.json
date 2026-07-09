@@ -1,0 +1,20 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "mark": "rect",
+  "title": "Weekly Activity Heatmap",
+  "data": {
+    "values": [
+      {"day": "Mon", "hour": "AM", "v": 5},
+      {"day": "Tue", "hour": "AM", "v": 8},
+      {"day": "Wed", "hour": "AM", "v": 3},
+      {"day": "Mon", "hour": "PM", "v": 9},
+      {"day": "Tue", "hour": "PM", "v": 2},
+      {"day": "Wed", "hour": "PM", "v": 7}
+    ]
+  },
+  "encoding": {
+    "x": {"field": "day", "type": "nominal"},
+    "y": {"field": "hour", "type": "nominal"},
+    "color": {"field": "v", "type": "quantitative"}
+  }
+}
