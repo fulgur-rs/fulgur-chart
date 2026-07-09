@@ -62,13 +62,17 @@ pub enum MarkBarName {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkBarObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkBarName,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum MarkBar {
     String(MarkBarName),
-    Object {
-        #[serde(rename = "type")]
-        mark_type: MarkBarName,
-    },
+    Object(MarkBarObject),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -78,13 +82,17 @@ pub enum MarkLineName {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkLineObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkLineName,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum MarkLine {
     String(MarkLineName),
-    Object {
-        #[serde(rename = "type")]
-        mark_type: MarkLineName,
-    },
+    Object(MarkLineObject),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -94,13 +102,17 @@ pub enum MarkPointName {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkPointObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkPointName,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum MarkPoint {
     String(MarkPointName),
-    Object {
-        #[serde(rename = "type")]
-        mark_type: MarkPointName,
-    },
+    Object(MarkPointObject),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -110,13 +122,17 @@ pub enum MarkCircleName {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkCircleObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkCircleName,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum MarkCircle {
     String(MarkCircleName),
-    Object {
-        #[serde(rename = "type")]
-        mark_type: MarkCircleName,
-    },
+    Object(MarkCircleObject),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -126,13 +142,17 @@ pub enum MarkArcName {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkArcObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkArcName,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum MarkArc {
     String(MarkArcName),
-    Object {
-        #[serde(rename = "type")]
-        mark_type: MarkArcName,
-    },
+    Object(MarkArcObject),
 }
 
 // ────────────────────────────────────────────────
