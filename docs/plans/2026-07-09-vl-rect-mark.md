@@ -1580,14 +1580,14 @@ EOF
 
 ## Task 9: example spec と CLI smoke
 
-**目的:** `examples/specs/vegalite_rect_heatmap.json` を追加し、CLI 経由で SVG が生成できることを確認する。
+**目的:** `examples/specs/vegalite-rect-heatmap.json` を追加し、CLI 経由で SVG が生成できることを確認する。
 
 **Files:**
-- Create: `examples/specs/vegalite_rect_heatmap.json`
+- Create: `examples/specs/vegalite-rect-heatmap.json`
 
 **Step 1: fixture spec を作成**
 
-`examples/specs/vegalite_rect_heatmap.json`:
+`examples/specs/vegalite-rect-heatmap.json`:
 
 ```json
 {
@@ -1615,7 +1615,7 @@ EOF
 **Step 2: CLI で SVG 生成確認**
 
 ```bash
-cargo run -p fulgur-chart-cli -- render --dsl vegalite --format svg examples/specs/vegalite_rect_heatmap.json /tmp/rect_heatmap.svg 2>&1 | tail -5
+cargo run -p fulgur-chart-cli -- render --dsl vegalite --format svg examples/specs/vegalite-rect-heatmap.json /tmp/rect_heatmap.svg 2>&1 | tail -5
 head -2 /tmp/rect_heatmap.svg
 ```
 Expected: 生成成功、`<svg` から始まる SVG。
@@ -1625,16 +1625,16 @@ Expected: 生成成功、`<svg` から始まる SVG。
 **Step 3: fixture のパースが strict でも通ることを確認**
 
 ```bash
-cargo run -p fulgur-chart-cli -- render --dsl vegalite --strict --format svg examples/specs/vegalite_rect_heatmap.json /tmp/rect_heatmap_strict.svg 2>&1 | tail -5
+cargo run -p fulgur-chart-cli -- render --dsl vegalite --strict --format svg examples/specs/vegalite-rect-heatmap.json /tmp/rect_heatmap_strict.svg 2>&1 | tail -5
 ```
 Expected: 成功。
 
 **Step 4: commit**
 
 ```bash
-git add examples/specs/vegalite_rect_heatmap.json
+git add examples/specs/vegalite-rect-heatmap.json
 git commit -m "$(cat <<'EOF'
-docs(examples): add vegalite_rect_heatmap.json fixture
+docs(examples): add vegalite-rect-heatmap.json fixture
 
 Vega-Lite mark: "rect" のサンプル spec。曜日 × 時間帯のアクティビティ
 ヒートマップ。CLI から strict/非 strict の両モードで SVG 生成できる。
@@ -1704,5 +1704,5 @@ git commit -m "chore: satisfy clippy and fmt for rect mark implementation"
 - [x] 未出現の (x,y) 組み合わせのセルは透過スキップされる(Prim::Rect emit なし) → Task 7
 - [x] strict モードで size / tooltip / x2 / y2 encoding、quantitative x、quantitative y、mean/sum 以外の aggregate、nominal color + aggregate を Err にする → Task 6
 - [x] `cargo test` (unit + snapshot golden) / `cargo clippy` / `cargo fmt` 通過 → Task 10
-- [x] `examples/specs/vegalite_rect_heatmap.json` が動く → Task 9
+- [x] `examples/specs/vegalite-rect-heatmap.json` が動く → Task 9
 - [x] 既存 ChartKind::Matrix パスと Chart.js matrix chart 出力に regression がない → 各タスクの回帰確認で保証
