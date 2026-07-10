@@ -1066,3 +1066,64 @@ fn rect_mark_rejects_oversized_x_labels_at_parse_time() {
         "expected pre-allocation guard error, got: {err}"
     );
 }
+
+#[test]
+fn rect_mark_aggregate_mean_opposite_signs_uses_fallback() {
+    // [1e308, -1e308] の真の mean は 0。running mean は (v - mean) が -inf に
+    // なり非有限になるが、naive sum / len にフォールバックすると 0 (finite) が
+    // 得られる。二段構えで silently None にしないことを pin する。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":1.0e308},
+            {"x":"A","y":"X","v":-1.0e308}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative","aggregate":"mean"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let cells = match &spec.kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+    // Single finite cell → degenerate → HI (RECT_COLOR_HI = Tableau blue).
+    let ax = cells[0][0].expect("(A,X) mean should be 0 (finite via fallback), not None");
+    assert_eq!((ax.r, ax.g, ax.b), (76, 120, 168));
+}
+
+#[test]
+fn rect_mark_rejects_excessive_records_at_parse_time() {
+    // 小さい grid でも records.len() が上限を超えたら pre-aggregation で reject。
+    // ここでは max_categorical_primitives + 1 件の (A,X,v) を作り、同一セルへの
+    // 重複観測を pin する。1 セルにしか反映されないのに bucket が数百万件の f64 を
+    // 抱えるメモリ圧を parse 時点で潰す。
+    let n = fulgur_chart::guard::InputLimits::default().max_categorical_primitives + 1;
+    let mut values = String::with_capacity(24 * n);
+    values.push('[');
+    for i in 0..n {
+        if i > 0 {
+            values.push(',');
+        }
+        values.push_str(r#"{"x":"A","y":"X","v":1}"#);
+    }
+    values.push(']');
+    let json = format!(
+        r#"{{
+            "mark": "rect",
+            "data": {{"values": {values}}},
+            "encoding": {{
+                "x": {{"field":"x","type":"nominal"}},
+                "y": {{"field":"y","type":"nominal"}},
+                "color": {{"field":"v","type":"quantitative"}}
+            }}
+        }}"#
+    );
+    let err = vegalite::parse(&json, false).unwrap_err();
+    assert!(
+        err.contains("records") && err.contains("pre-aggregation"),
+        "expected pre-aggregation guard error, got: {err}"
+    );
+}

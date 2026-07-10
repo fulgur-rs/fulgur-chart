@@ -13,7 +13,7 @@
 use crate::ir::*;
 use crate::palette::vegalite_theme;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Vega-Lite サブセットを [`ChartSpec`] へ変換する。
 ///
@@ -395,12 +395,17 @@ fn field_category(record: &Map<String, Value>, field: Option<&str>) -> String {
     }
 }
 
-/// 指定フィールドの distinct 値を first-seen 順で返す（Vec ベースで決定的）。
+/// 指定フィールドの distinct 値を first-seen 順で返す（決定的）。
+///
+/// first-seen 順を保ちつつ HashSet で dedup。従来の `out.iter().any(...)` は
+/// O(records × distinct) で 100k+ records / distinct labels で quadratic 化し、
+/// 100k 件級の parse が billions of string compare を走る CPU DoS になっていた。
 fn distinct_categories(records: &[Map<String, Value>], field: Option<&str>) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
     for r in records {
         let v = field_category(r, field);
-        if !out.iter().any(|x| x == &v) {
+        if seen.insert(v.clone()) {
             out.push(v);
         }
     }
@@ -817,15 +822,29 @@ fn build_rect(
     aggregate: Aggregate,
     palette: &[Color],
 ) -> Result<(Vec<String>, Vec<String>, Vec<Vec<Option<Color>>>), String> {
-    let x_labels = distinct_categories(records, Some(x_field));
-    let y_labels = distinct_categories(records, Some(y_field));
-
     // guard::validate_spec と同じ上限を parse 時点で先取り。
     // validate_spec は frontend::parse の後段で走るため、ここで dense grid を確保する
     // (下の `vec![vec![...; x_labels.len()]; y_labels.len()]`) 前に checks しないと
     // 病的な入力 (例: 1M distinct x labels) で allocation OOM になる。
     // 直接 IR を組む callers 向けには guard::validate_spec の同一 checks を残してある。
     let limits = crate::guard::InputLimits::default();
+
+    // records.len() を primitive 上限で押さえる。小さい grid でも同一セルへの
+    // 大量重複観測 (数百万件) で bucket に無制限に f64 が積まれ、grid caps を
+    // 通過してもメモリ圧を生む。集約後は 1 セルにしか反映されないため、raw
+    // records 数を制限する。distinct_categories の O(n) scan の前に検査すること
+    // で、病的な入力での余分な走査も避ける。
+    if records.len() > limits.max_categorical_primitives {
+        return Err(format!(
+            "VegaRect の records 数 {} が既定上限 {} を超えています(parse 時 pre-aggregation 検査)",
+            records.len(),
+            limits.max_categorical_primitives,
+        ));
+    }
+
+    let x_labels = distinct_categories(records, Some(x_field));
+    let y_labels = distinct_categories(records, Some(y_field));
+
     if x_labels.len() > limits.max_categories {
         return Err(format!(
             "VegaRect の x_labels 数 {} が既定上限 {} を超えています(parse 時 pre-allocation 検査)",
@@ -890,14 +909,25 @@ fn build_rect(
                         .map(|b| match (aggregate, b.as_slice()) {
                             (_, []) => None,
                             (Aggregate::Mean, vs) => {
-                                // 累積和 → 除算は f64::MAX 近傍で inf にオーバーフロー。
-                                // running mean (mean_i = mean_{i-1} + (v_i - mean_{i-1}) / i) で
-                                // intermediate overflow を避け、非有限になった場合は明示 None にする。
-                                let mut mean = 0.0_f64;
+                                // 二段構えの mean:
+                                //  1. running mean (mean_i = mean_{i-1} + (v_i - mean_{i-1}) / i)
+                                //     — 同符号で f64::MAX 近傍の値でも intermediate sum overflow を
+                                //     避けられる。
+                                //  2. running mean が非有限 (逆符号の f64::MAX を混ぜて
+                                //     (v - mean) が -inf 等) に落ちたら、naive sum / len に
+                                //     フォールバック。両アルゴリズムでカバーできないケース
+                                //     だけ None セルにする。
+                                let mut running = 0.0_f64;
                                 for (i, v) in vs.iter().enumerate() {
-                                    mean += (v - mean) / (i + 1) as f64;
+                                    running += (v - running) / (i + 1) as f64;
                                 }
-                                mean.is_finite().then_some(mean)
+                                if running.is_finite() {
+                                    Some(running)
+                                } else {
+                                    let sum: f64 = vs.iter().sum();
+                                    let fallback = sum / vs.len() as f64;
+                                    fallback.is_finite().then_some(fallback)
+                                }
                             }
                             (Aggregate::Sum, vs) => {
                                 // 大きな有限値の総和も inf になり得る。inf は None セル扱いを明示。

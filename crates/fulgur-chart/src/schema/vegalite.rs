@@ -347,9 +347,29 @@ pub struct VlRectSpec {
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VlRectEncoding {
-    pub x: VlChannel,
-    pub y: VlChannel,
+    pub x: VlRectAxisChannel,
+    pub y: VlRectAxisChannel,
     pub color: VlRectColorChannel,
+}
+
+/// rect の x/y encoding が受理する type。quantitative は binned ヒートマップ
+/// 想定で MVP 外のため、schema レベルで nominal / ordinal のみ許可する。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlRectAxisType {
+    Nominal,
+    Ordinal,
+}
+
+/// rect の x/y チャネル。`field` は必須、`type` は nominal/ordinal のみ受理。
+/// (`VlChannel` は `type` に任意文字列を許容するが、rect の軸では quantitative
+/// は runtime で reject されるため、schema でも同じ範囲に絞っておく。)
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRectAxisChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlRectAxisType>,
 }
 
 /// rect の color.aggregate に許容される集約方式。frontend が受理する "mean"/"sum" と
