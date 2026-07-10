@@ -747,6 +747,67 @@ fn strict_rect_rejects_quantitative_y() {
 }
 
 #[test]
+fn strict_rect_rejects_temporal_axis_type() {
+    // rect の x/y は nominal / ordinal のみ受理。temporal は sequence として
+    // 意味的に不定なので strict では明示 Err にする。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x","type":"temporal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "temporal x axis type should be rejected in strict"
+    );
+    // 非 strict は既存の緩さを維持。
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
+fn strict_rect_rejects_typo_axis_type() {
+    // "nomial" は "nominal" の typo。strict では silently カテゴリ扱いにせず
+    // 明示 Err にする。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nomial"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "typo axis type should be rejected in strict"
+    );
+}
+
+#[test]
+fn strict_rect_rejects_temporal_color_type() {
+    // rect の color type は quantitative / nominal / ordinal のみ受理。
+    // temporal は infer に落ちる前に strict Err にする。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"temporal"}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "temporal color type should be rejected in strict"
+    );
+    // 非 strict は infer で扱う(既存挙動)。
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
 fn strict_rect_rejects_unsupported_aggregate() {
     let json = r#"{
         "mark": "rect",

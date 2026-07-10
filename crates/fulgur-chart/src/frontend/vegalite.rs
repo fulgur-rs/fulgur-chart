@@ -641,21 +641,38 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         }
 
         // rect 固有の strict チェック:
-        // - x/y encoding の type: "quantitative" は binned ヒートマップ想定で MVP 外。
+        // - x/y encoding の type は nominal/ordinal のみ受理(quantitative は binned
+        //   ヒートマップ想定で MVP 外、temporal / typo は sequence として意味的に
+        //   不定なので strict では明示 Err にする)。
+        // - color type は quantitative/nominal/ordinal のみ受理(他 explicit hint は
+        //   infer に落ちてユーザー意図と乖離するのを防ぐ)。
         // - color aggregate は "mean"/"sum" のみ受理。
         // - nominal/ordinal color + aggregate は同時指定不可(集計対象がカテゴリ)。
         if matches!(read_mark_name(top), Some("rect")) {
             for axis in ["x", "y"] {
                 if let Some(ch) = encoding.get(axis).and_then(Value::as_object)
                     && let Some(t) = ch.get("type").and_then(Value::as_str)
-                    && t == "quantitative"
+                    && t != "nominal"
+                    && t != "ordinal"
                 {
                     return Err(format!(
-                        "rect の encoding.{axis}.type: \"quantitative\" は未対応です(binned ヒートマップは別 issue)"
+                        "rect の encoding.{axis}.type: \"{t}\" は未対応です(nominal / ordinal のみ)"
                     ));
                 }
             }
             if let Some(color) = encoding.get("color").and_then(Value::as_object) {
+                // color type は quantitative / nominal / ordinal のみ受理。
+                // 他 explicit hint (temporal / typo 等) は infer で silently 落ちて
+                // ユーザー意図と乖離するので strict では Err にする。
+                if let Some(t) = color.get("type").and_then(Value::as_str)
+                    && t != "quantitative"
+                    && t != "nominal"
+                    && t != "ordinal"
+                {
+                    return Err(format!(
+                        "rect の encoding.color.type: \"{t}\" は未対応です(quantitative / nominal / ordinal のみ)"
+                    ));
+                }
                 // aggregate は文字列 "mean" | "sum" のみ受理。非文字列(例: 数値)を
                 // silently 無視すると集計指定が黙って落ちるため、明示 Err にする。
                 let agg = match color.get("aggregate") {

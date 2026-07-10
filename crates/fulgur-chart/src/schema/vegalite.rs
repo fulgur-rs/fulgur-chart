@@ -382,15 +382,55 @@ pub enum VlRectAggregate {
     Sum,
 }
 
-/// rect の color チャネル。基本の `field`/`type` に加え、`aggregate` を許容する。
-/// `aggregate` は列挙で受理値を絞ることで schema と runtime の受理範囲を揃える
-/// (以前は `Option<String>` で任意文字列が受理されていた)。
+/// rect の color チャネルのうち quantitative variant が受理する type。
+/// `Option` と組合わせて `type` 省略も許容する (省略時は infer に委ねる)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlRectColorQuantitativeType {
+    Quantitative,
+}
+
+/// rect の color チャネルのうち nominal / ordinal を表現する categorical variant の type。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlRectColorCategoricalType {
+    Nominal,
+    Ordinal,
+}
+
+/// rect の color チャネル (quantitative variant)。
+/// `type` は省略可能 (省略時は infer)、`aggregate` は列挙で受理値を絞る。
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct VlRectColorChannel {
+pub struct VlRectColorQuantitativeChannel {
     pub field: String,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub field_type: Option<String>,
+    pub field_type: Option<VlRectColorQuantitativeType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aggregate: Option<VlRectAggregate>,
+}
+
+/// rect の color チャネル (categorical variant)。
+/// `type` は必須 (`nominal` / `ordinal`)、`aggregate` は許容しない
+/// (categorical への aggregate は runtime で明示 Err になる)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRectColorCategoricalChannel {
+    pub field: String,
+    #[serde(rename = "type")]
+    pub field_type: VlRectColorCategoricalType,
+}
+
+/// rect の color チャネル。
+///
+/// - Quantitative: `type` 省略 or `quantitative`、`aggregate` 許容。
+/// - Categorical: `type` は `nominal` / `ordinal`、`aggregate` 不可。
+///
+/// `untagged` で外から見ると同じ JSON 形だが、"quantitative-with-aggregate XOR
+/// nominal/ordinal-without-aggregate" の invariant を schema レベルで表現する。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlRectColorChannel {
+    Quantitative(VlRectColorQuantitativeChannel),
+    Categorical(VlRectColorCategoricalChannel),
 }
