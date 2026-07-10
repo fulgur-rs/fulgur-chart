@@ -432,8 +432,8 @@ fn sankey_parsing_strict_rejects_typo_in_parsing_object() {
     }]}}"##;
     let err = chartjs::parse(json, true).unwrap_err();
     assert!(
-        err.contains("formm") || err.contains("parsing"),
-        "strict must reject typo in parsing object: {err}"
+        err.contains("formm"),
+        "strict must reject typo 'formm' by name in parsing object: {err}"
     );
 }
 
