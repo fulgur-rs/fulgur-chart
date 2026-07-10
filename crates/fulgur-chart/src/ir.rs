@@ -49,11 +49,18 @@ pub struct TreeNode {
 }
 
 /// sankey のリンク(フロー)。ノード間のフロー量を表す。from/to はノードID(文字列)。
+/// per-link 色上書き: chartjs-chart-sankey の data 要素 `color`/`colorFrom`/`colorTo` に対応。
+/// None なら dataset レベル(`ChartKind::Sankey.color_from` / `color_to`)にフォールバック。
+/// - `color_from`: from 側 stop 上書き
+/// - `color_to`: to 側 stop 上書き
+/// - `color` は parse 時に解決(color_from/color_to が個別未指定なら両方に流し込む)ため IR には持たない。
 #[derive(Clone, Debug, PartialEq)]
 pub struct SankeyLink {
     pub from: String,
     pub to: String,
     pub flow: f64,
+    pub color_from: Option<Color>,
+    pub color_to: Option<Color>,
 }
 
 /// 系列ごとの描画種別。混合チャート(bar+line)で dataset 別 type を表す。

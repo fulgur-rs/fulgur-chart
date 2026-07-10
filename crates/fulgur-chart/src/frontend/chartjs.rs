@@ -1108,7 +1108,7 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
                             if let Some(pt) = pt.as_object() {
                                 check_object(
                                     pt,
-                                    &["from", "to", "flow"],
+                                    &["from", "to", "flow", "color", "colorFrom", "colorTo"],
                                     &format!("data.datasets[{i}].data[{j}]"),
                                 )?;
                             }
@@ -1859,6 +1859,12 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         from: String,
         to: String,
         flow: f64,
+        #[serde(default)]
+        color: Option<String>,
+        #[serde(rename = "colorFrom", default)]
+        color_from: Option<String>,
+        #[serde(rename = "colorTo", default)]
+        color_to: Option<String>,
     }
 
     let raw: W = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -1868,15 +1874,37 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     let ds = raw.data.datasets.into_iter().next().unwrap();
 
     // リンク構築 + flow 有限性チェック。入力順を保持する。
+    // per-link 色 precedence:
+    //   effective_from = flow.color_from ?? flow.color ?? None  (None なら dataset フォールバック)
+    //   effective_to   = flow.color_to   ?? flow.color ?? None  (None なら dataset フォールバック)
+    // 不正な色文字列は明示エラー(silent default にしない)。
     let mut links = Vec::with_capacity(ds.data.len());
-    for f in ds.data {
+    for (i, f) in ds.data.into_iter().enumerate() {
         if !f.flow.is_finite() || f.flow < 0.0 {
             return Err("sankey flow must be a non-negative finite number".to_string());
         }
+        let parse_flow_color = |name: &str, s: &str| -> Result<Color, String> {
+            parse_color(s)
+                .ok_or_else(|| format!("sankey data[{i}].{name} is not a valid color: {s}"))
+        };
+        let shared = match f.color.as_deref() {
+            Some(s) => Some(parse_flow_color("color", s)?),
+            None => None,
+        };
+        let cf = match f.color_from.as_deref() {
+            Some(s) => Some(parse_flow_color("colorFrom", s)?),
+            None => shared,
+        };
+        let ct = match f.color_to.as_deref() {
+            Some(s) => Some(parse_flow_color("colorTo", s)?),
+            None => shared,
+        };
         links.push(SankeyLink {
             from: f.from,
             to: f.to,
             flow: f.flow,
+            color_from: cf,
+            color_to: ct,
         });
     }
 

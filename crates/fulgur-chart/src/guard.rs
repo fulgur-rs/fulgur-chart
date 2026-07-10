@@ -1218,6 +1218,8 @@ mod tests {
             from: from.to_string(),
             to: to.to_string(),
             flow: 1.0,
+            color_from: None,
+            color_to: None,
         }
     }
 
@@ -1304,6 +1306,8 @@ mod tests {
             from: from.into(),
             to: to.into(),
             flow,
+            color_from: None,
+            color_to: None,
         }
     }
 

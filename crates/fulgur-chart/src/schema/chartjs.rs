@@ -1156,13 +1156,23 @@ pub struct SankeyDataset {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SankeyFlow {
     pub from: String,
     pub to: String,
     /// フロー量は非負(parser が flow < 0 を拒否するのに合わせる)。
     #[schemars(range(min = 0.0))]
     pub flow: f64,
+    /// per-link 色上書き(shorthand): colorFrom/colorTo が個別に指定されない場合、
+    /// この値が両端の stop 色として使われる。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    /// per-link の from 側 stop 色上書き。指定なしは dataset の colorFrom を使用。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_from: Option<ColorString>,
+    /// per-link の to 側 stop 色上書き。指定なしは dataset の colorTo を使用。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_to: Option<ColorString>,
 }
 
 /// sankey の colorMode。enum 化することで schema が値を列挙制約し、タイポ(例 "form")を

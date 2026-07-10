@@ -141,6 +141,8 @@ fn sankey_at_cap_linear_chain_renders_without_stack_overflow() {
             from: format!("n{i}"),
             to: format!("n{}", i + 1),
             flow: 1.0,
+            color_from: None,
+            color_to: None,
         })
         .collect();
     spec.series[0].links = links;
@@ -204,4 +206,98 @@ fn sankey_hover_color_accepted_by_strict_parser() {
         chartjs::parse(json, true).is_ok(),
         "strict parser must accept hoverColorFrom/hoverColorTo"
     );
+}
+
+#[test]
+fn sankey_per_link_color_short_form_overrides_both_stops() {
+    // per-link `color` は from/to 両 stop の shorthand (ribbon 塗りの上書き)。
+    // ノード矩形は dataset 色のまま — chartjs-chart-sankey 挙動 (design fulgur-chart-40h).
+    let with_override = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#36a2eb","colorTo":"#ff6384",
+        "data":[{"from":"A","to":"B","flow":1,"color":"#00ff00"}]
+    }]}}"##;
+    let svg = render(with_override);
+    let start = svg.find("<linearGradient").expect("gradient present");
+    let end = svg[start..]
+        .find("</linearGradient>")
+        .expect("gradient closed")
+        + start;
+    let grad = &svg[start..end];
+    assert!(
+        grad.contains("00ff00"),
+        "per-link color must fill gradient stops: {grad}"
+    );
+    assert!(
+        !grad.contains("36a2eb") && !grad.contains("ff6384"),
+        "dataset ribbon colors must not appear in gradient stops: {grad}"
+    );
+}
+
+#[test]
+fn sankey_per_link_color_from_overrides_only_from_stop() {
+    // per-link `colorFrom` は from stop のみ上書き。to stop は dataset colorTo のまま。
+    // ノード矩形は dataset 色のまま — gradient 内だけを検査する。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#111111","colorTo":"#222222",
+        "data":[{"from":"A","to":"B","flow":1,"colorFrom":"#abcdef"}]
+    }]}}"##;
+    let svg = render(json);
+    let start = svg.find("<linearGradient").expect("gradient present");
+    let end = svg[start..]
+        .find("</linearGradient>")
+        .expect("gradient closed")
+        + start;
+    let grad = &svg[start..end];
+    assert!(grad.contains("abcdef"), "from override in gradient: {grad}");
+    assert!(
+        grad.contains("222222"),
+        "to keeps dataset value in gradient: {grad}"
+    );
+    assert!(
+        !grad.contains("111111"),
+        "from dataset value replaced in gradient: {grad}"
+    );
+}
+
+#[test]
+fn sankey_per_link_color_from_wins_over_color_shorthand() {
+    // color と colorFrom を併用: colorFrom が勝つ (from 側)。to 側は color の値。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1,"color":"#aa0000","colorFrom":"#00aa00"}]
+    }]}}"##;
+    let svg = render(json);
+    assert!(svg.contains("00aa00"), "from uses explicit colorFrom");
+    assert!(svg.contains("aa0000"), "to uses shorthand color");
+}
+
+#[test]
+fn sankey_per_link_color_deterministic() {
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1,"color":"#123456"}]
+    }]}}"##;
+    assert_eq!(render(json), render(json));
+}
+
+#[test]
+fn sankey_per_link_color_from_invalid_rejected() {
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1,"colorFrom":"not-a-color"}]
+    }]}}"##;
+    let err = chartjs::parse(json, false).unwrap_err();
+    assert!(
+        err.contains("colorFrom"),
+        "error must mention colorFrom: {err}"
+    );
+}
+
+#[test]
+fn sankey_per_link_color_works_with_from_mode() {
+    // colorMode=from + per-link color: リンクごとの effective_from が単色塗りに使われる。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "colorMode":"from",
+        "data":[{"from":"A","to":"B","flow":1,"colorFrom":"#abcdef"}]
+    }]}}"##;
+    let svg = render(json);
+    assert!(!svg.contains("<linearGradient"), "from mode -> solid");
+    assert!(svg.contains("abcdef"), "per-link colorFrom fills path");
 }
