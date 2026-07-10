@@ -1958,7 +1958,12 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         // 値が存在するが文字列でない場合は silent-ignore せず明示エラー(Phase B の
         // typed struct 挙動を維持)。ただし schema 側で Option<ColorString> は nullable
         // なので、明示的な null は "未指定" と等価に扱う。
+        // また、parsing で from/to/flow を "color"/"colorFrom"/"colorTo" に再マップした
+        // 場合は同一キーがノードIDや flow 値と衝突するため、色としては読まない。
         let take_color = |name: &str| -> Result<Option<String>, String> {
+            if name == key_from || name == key_to || name == key_flow {
+                return Ok(None);
+            }
             match obj.get(name) {
                 None => Ok(None),
                 Some(v) if v.is_null() => Ok(None),

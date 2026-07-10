@@ -438,6 +438,24 @@ fn sankey_parsing_strict_rejects_typo_in_parsing_object() {
 }
 
 #[test]
+fn sankey_parsing_maps_from_to_reserved_color_key() {
+    // parsing.from="colorFrom" のように mapped key が固定色キーと衝突するケース。
+    // take_color は該当キーを色として読まないため、"A"/"B" がノードIDとして扱われる。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"from":"colorFrom"},
+        "data":[{"colorFrom":"A","to":"B","flow":1}]
+    }]}}"##;
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"));
+    assert!(!svg.contains("NaN"));
+    // ノードラベル "A"/"B" が描画されている(= colorFrom がノードIDとして解釈された)。
+    assert!(
+        svg.contains(">A<") && svg.contains(">B<"),
+        "node labels A/B render: {svg}"
+    );
+}
+
+#[test]
 fn sankey_per_link_color_null_treated_as_absent() {
     // schema 側 Option<ColorString> は nullable なので、明示的な `null` は "未指定"
     // と等価に扱う(dataset フォールバックに乗せる)。エラーにしない。
