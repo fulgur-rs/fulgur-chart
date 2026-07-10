@@ -781,6 +781,45 @@ fn strict_rect_rejects_nominal_color_with_aggregate() {
 }
 
 #[test]
+fn strict_rect_rejects_non_string_aggregate() {
+    // aggregate が数値など非文字列のとき、strict は明示 Err にする。
+    // (as_str で None になり silently 無視されるバグを pin する。)
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x"}, "y": {"field":"y"},
+            "color": {"field":"v","aggregate":1}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "non-string aggregate should be rejected in strict"
+    );
+}
+
+#[test]
+fn strict_rect_rejects_inferred_nominal_with_aggregate() {
+    // encoding.color.type 省略 + データが文字列 → 推論で nominal → aggregate は無効。
+    // 現状 check_unknown_keys は explicit nominal しか reject しないので、
+    // 推論経由のケースを pin する。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","c":"cat0"}]},
+        "encoding": {
+            "x": {"field":"x"}, "y": {"field":"y"},
+            "color": {"field":"c","aggregate":"sum"}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "inferred nominal + aggregate should be rejected in strict"
+    );
+    // 非 strict では既存の緩さを維持(aggregate 指定は silently 無視される)。
+    assert!(vegalite::parse(json, false).is_ok());
+}
+
+#[test]
 fn rect_mark_renders_svg_with_expected_rect_count() {
     // 2x2 grid, all cells present → 4 rects.
     let json = r#"{

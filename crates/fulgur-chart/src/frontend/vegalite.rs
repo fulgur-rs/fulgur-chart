@@ -170,6 +170,16 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             // Aggregate::None (last-write-wins) 扱い。strict Err は Task 6 で追加。
             _ => Aggregate::None,
         };
+        // strict: aggregate は quantitative color でのみ許容。type 省略時に実データから
+        // nominal と推論された場合も aggregate は無効(集計対象がカテゴリ)。explicit
+        // nominal + aggregate は check_unknown_keys で既に reject されているが、推論
+        // のケースはここで catch する。
+        if strict && aggregate != Aggregate::None && color_type == ColorType::Nominal {
+            return Err(format!(
+                "rect の color は実データから nominal と推論されました。aggregate: \"{}\" は指定できません(集計対象がカテゴリ)",
+                aggregate_hint.unwrap_or("")
+            ));
+        }
         kind = parse_rect_kind(
             &records,
             &x_field,
@@ -625,15 +635,22 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                 }
             }
             if let Some(color) = encoding.get("color").and_then(Value::as_object) {
-                let agg = color.get("aggregate").and_then(Value::as_str);
-                if let Some(a) = agg
-                    && a != "mean"
-                    && a != "sum"
-                {
-                    return Err(format!(
-                        "rect の encoding.color.aggregate: \"{a}\" は未対応です(mean/sum のみ)"
-                    ));
-                }
+                // aggregate は文字列 "mean" | "sum" のみ受理。非文字列(例: 数値)を
+                // silently 無視すると集計指定が黙って落ちるため、明示 Err にする。
+                let agg = match color.get("aggregate") {
+                    None => None,
+                    Some(Value::String(s)) if s == "mean" || s == "sum" => Some(s.as_str()),
+                    Some(Value::String(s)) => {
+                        return Err(format!(
+                            "rect の encoding.color.aggregate: \"{s}\" は未対応です(mean/sum のみ)"
+                        ));
+                    }
+                    Some(other) => {
+                        return Err(format!(
+                            "rect の encoding.color.aggregate は文字列 \"mean\" または \"sum\" のみ受理: {other}"
+                        ));
+                    }
+                };
                 let color_type = color.get("type").and_then(Value::as_str);
                 if let (Some(ct), Some(a)) = (color_type, agg)
                     && (ct == "nominal" || ct == "ordinal")

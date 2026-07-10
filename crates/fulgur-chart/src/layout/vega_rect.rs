@@ -58,8 +58,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let plot_top = OUTER_PAD + title_band;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND;
 
-    let plot_w = plot_right - plot_left;
-    let plot_h = plot_bottom - plot_top;
+    // Guard against negative dimensions when y-label width exceeds available space.
+    let plot_w = (plot_right - plot_left).max(0.0);
+    let plot_h = (plot_bottom - plot_top).max(0.0);
 
     let cell_w = if n_cols > 0 {
         plot_w / n_cols as f64

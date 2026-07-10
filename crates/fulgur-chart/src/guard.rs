@@ -266,6 +266,37 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         }
     }
 
+    // --- VegaRect ラベル・グリッドセル数 ---
+    // VegaRect のラベルは spec.categories/spec.series を経由せず ChartKind に直接
+    // 保持されるため、既存の max_label_bytes 検証(全カテゴリ・全系列名を走査)を
+    // すり抜ける。加えて layout/build_rect は x_labels.len() × y_labels.len() の
+    // dense grid を確保するため、sparse rect input(distinct ラベルは膨大だが
+    // 観測ペアは少数)でも積が primitive 上限を超えうる。ここで両者を明示的に押さえる。
+    if let crate::ir::ChartKind::VegaRect {
+        x_labels, y_labels, ..
+    } = &spec.kind
+    {
+        for label in x_labels.iter().chain(y_labels.iter()) {
+            if label.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "VegaRect のラベル長 {} バイトが上限 {} を超えています",
+                    label.len(),
+                    limits.max_label_bytes,
+                ));
+            }
+        }
+        let grid = x_labels.len().saturating_mul(y_labels.len());
+        if grid > limits.max_categorical_primitives {
+            return Err(format!(
+                "VegaRect の grid セル数 {} (x_labels {} × y_labels {}) が上限 {} を超えています",
+                grid,
+                x_labels.len(),
+                y_labels.len(),
+                limits.max_categorical_primitives,
+            ));
+        }
+    }
+
     // --- outlabeledPie バリデーション ---
     if let crate::ir::ChartKind::OutlabeledPie { ref outlabel, .. } = spec.kind {
         // Left/Right 凡例は未サポート（pie.rs と挙動を揃えるため明示エラー）。
@@ -1253,6 +1284,72 @@ mod tests {
         // 単一の大きい有限 flow は合計も有限なので受理される(下流も保存則で有限に収まる)。
         let ok = sankey_spec_with_links(vec![flow_link("A", "B", 1e308)]);
         assert!(validate_spec(&ok, &default_limits()).is_ok());
+    }
+
+    // ── VegaRect ガード ──
+
+    /// 最小の有効な VegaRect spec を vegalite フロントエンド経由で作るヘルパ。
+    fn rect_spec_2x2() -> ChartSpec {
+        crate::frontend::vegalite::parse(
+            r#"{
+                "mark": "rect",
+                "data": {"values": [
+                    {"x":"A","y":"X","v":1},
+                    {"x":"B","y":"X","v":2},
+                    {"x":"A","y":"Y","v":3},
+                    {"x":"B","y":"Y","v":4}
+                ]},
+                "encoding": {
+                    "x": {"field":"x"},
+                    "y": {"field":"y"},
+                    "color": {"field":"v","type":"quantitative"}
+                }
+            }"#,
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn vega_rect_oversized_label_is_rejected() {
+        // VegaRect のラベルは spec.categories 経由ではなく ChartKind::VegaRect の
+        // x_labels/y_labels に直接持たれる。既存 max_label_bytes 検証を通り抜けないよう
+        // guard が明示的に走査することを pin する。
+        let mut spec = rect_spec_2x2();
+        if let crate::ir::ChartKind::VegaRect { x_labels, .. } = &mut spec.kind {
+            x_labels[0] = "x".repeat(DEFAULT_MAX_LABEL_BYTES + 1);
+        }
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn vega_rect_grid_over_primitive_cap_is_rejected() {
+        // x_labels.len() × y_labels.len() が categorical primitive 上限を超える
+        // sparse rect(観測ペアはわずかだが distinct ラベルが膨大)を拒否する。
+        // build_rect が dense に grid を確保するため、この積を先取りで押さえる。
+        let mut spec = rect_spec_2x2();
+        if let crate::ir::ChartKind::VegaRect {
+            x_labels,
+            y_labels,
+            cells,
+        } = &mut spec.kind
+        {
+            *x_labels = (0..1001).map(|i| format!("x{i}")).collect();
+            *y_labels = (0..1001).map(|i| format!("y{i}")).collect();
+            // cells の形状不変条件は layout が debug_assert! で検証するが、
+            // guard 側は積さえ確認できればよいので dummy 形状で OK。
+            *cells = vec![vec![None; x_labels.len()]; y_labels.len()];
+        }
+        // 1001 × 1001 = 1,002,001 > 1,000,000
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn vega_rect_within_grid_cap_is_accepted() {
+        // 通常の小さい rect は validate_spec を通る。上のテストが誤って全 VegaRect を
+        // 拒否していないことを確認する回帰ガード。
+        let spec = rect_spec_2x2();
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
     }
 
     #[test]
