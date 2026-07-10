@@ -2033,15 +2033,15 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         .unwrap_or(green);
     // hoverColorFrom / hoverColorTo は静的レンダラでは描画されないため IR に流さないが、
     // 指定時は色値としてパース可能かは検証する(silent ignore を防ぐ)。
-    if let Some(s) = ds.hover_color_from.as_deref() {
-        if parse_color(s).is_none() {
-            return Err(format!("sankey hoverColorFrom is not a valid color: {s}"));
-        }
+    if let Some(s) = ds.hover_color_from.as_deref()
+        && parse_color(s).is_none()
+    {
+        return Err(format!("sankey hoverColorFrom is not a valid color: {s}"));
     }
-    if let Some(s) = ds.hover_color_to.as_deref() {
-        if parse_color(s).is_none() {
-            return Err(format!("sankey hoverColorTo is not a valid color: {s}"));
-        }
+    if let Some(s) = ds.hover_color_to.as_deref()
+        && parse_color(s).is_none()
+    {
+        return Err(format!("sankey hoverColorTo is not a valid color: {s}"));
     }
     // 未知値(タイポ)は silent default にせず明示エラーにする(schema の enum 制約と一致)。
     let color_mode = match ds.color_mode.as_deref() {
