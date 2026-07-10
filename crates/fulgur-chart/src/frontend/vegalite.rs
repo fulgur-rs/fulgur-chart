@@ -788,7 +788,7 @@ fn parse_rect_kind(
     let yf = require_field(y_field, "y")?;
     let cf = require_field(color_field, "color")?;
     let (x_labels, y_labels, cells) =
-        build_rect(records, xf, yf, cf, color_type, aggregate, palette);
+        build_rect(records, xf, yf, cf, color_type, aggregate, palette)?;
     Ok(ChartKind::VegaRect {
         x_labels,
         y_labels,
@@ -804,6 +804,10 @@ fn parse_rect_kind(
 /// - Quantitative + `Aggregate::None`: 同じ (x,y) は「最後の有限数値」を採用
 ///   (非数値/NaN は push 時にフィルタ済みなので上書きされない)
 /// - Quantitative + `Aggregate::Mean` / `Sum`: 同じ (x,y) の全値を集約
+// Result で return type がタプルを包む形になり type_complexity をトリガするが、
+// 単一 caller (`parse_rect_kind`) 専用のプライベート関数のため、
+// alias を切るより allow が事情を汲みやすい。
+#[allow(clippy::type_complexity)]
 fn build_rect(
     records: &[Map<String, Value>],
     x_field: &str,
@@ -812,9 +816,37 @@ fn build_rect(
     color_type: ColorType,
     aggregate: Aggregate,
     palette: &[Color],
-) -> (Vec<String>, Vec<String>, Vec<Vec<Option<Color>>>) {
+) -> Result<(Vec<String>, Vec<String>, Vec<Vec<Option<Color>>>), String> {
     let x_labels = distinct_categories(records, Some(x_field));
     let y_labels = distinct_categories(records, Some(y_field));
+
+    // guard::validate_spec と同じ上限を parse 時点で先取り。
+    // validate_spec は frontend::parse の後段で走るため、ここで dense grid を確保する
+    // (下の `vec![vec![...; x_labels.len()]; y_labels.len()]`) 前に checks しないと
+    // 病的な入力 (例: 1M distinct x labels) で allocation OOM になる。
+    // 直接 IR を組む callers 向けには guard::validate_spec の同一 checks を残してある。
+    let limits = crate::guard::InputLimits::default();
+    if x_labels.len() > limits.max_categories {
+        return Err(format!(
+            "VegaRect の x_labels 数 {} が既定上限 {} を超えています(parse 時 pre-allocation 検査)",
+            x_labels.len(),
+            limits.max_categories,
+        ));
+    }
+    if y_labels.len() > limits.max_categories {
+        return Err(format!(
+            "VegaRect の y_labels 数 {} が既定上限 {} を超えています(parse 時 pre-allocation 検査)",
+            y_labels.len(),
+            limits.max_categories,
+        ));
+    }
+    let grid = x_labels.len().saturating_mul(y_labels.len());
+    if grid > limits.max_categorical_primitives {
+        return Err(format!(
+            "VegaRect のグリッドセル数 {} が既定上限 {} を超えています(parse 時 pre-allocation 検査)",
+            grid, limits.max_categorical_primitives,
+        ));
+    }
 
     // O(1) label → index lookup。distinct_categories の Vec は first-seen で
     // 決定的であり、HashMap は lookup 専用なので iteration order には依存しない。
@@ -928,7 +960,7 @@ fn build_rect(
                 })
                 .collect();
 
-            (x_labels, y_labels, cells)
+            Ok((x_labels, y_labels, cells))
         }
         ColorType::Nominal => {
             // 色カテゴリの first-seen 順を採取。cat → palette index (mod len)。
@@ -953,7 +985,7 @@ fn build_rect(
                 };
                 cells[row][col] = Some(palette[ci % palette.len()]);
             }
-            (x_labels, y_labels, cells)
+            Ok((x_labels, y_labels, cells))
         }
     }
 }

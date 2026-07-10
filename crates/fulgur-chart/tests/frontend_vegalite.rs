@@ -1034,3 +1034,35 @@ fn rect_mark_inspect_model_reports_labels() {
     assert_eq!(model.counts.datasets, 1);
     assert_eq!(model.counts.legend_items, 0);
 }
+
+#[test]
+fn rect_mark_rejects_oversized_x_labels_at_parse_time() {
+    // x_labels の数が max_categories を超える spec は、guard::validate_spec を通す前に
+    // parse 時点で reject される(build_rect が dense に確保するため pre-allocation 検査)。
+    let n = fulgur_chart::guard::InputLimits::default().max_categories + 1;
+    let mut values = String::with_capacity(64 * n);
+    values.push('[');
+    for i in 0..n {
+        if i > 0 {
+            values.push(',');
+        }
+        values.push_str(&format!(r#"{{"x":"x{i}","y":"y","v":1}}"#));
+    }
+    values.push(']');
+    let json = format!(
+        r#"{{
+            "mark": "rect",
+            "data": {{"values": {values}}},
+            "encoding": {{
+                "x": {{"field":"x","type":"nominal"}},
+                "y": {{"field":"y","type":"nominal"}},
+                "color": {{"field":"v","type":"quantitative"}}
+            }}
+        }}"#
+    );
+    let err = vegalite::parse(&json, false).unwrap_err();
+    assert!(
+        err.contains("x_labels") && err.contains("pre-allocation"),
+        "expected pre-allocation guard error, got: {err}"
+    );
+}
