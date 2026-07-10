@@ -650,28 +650,41 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         // - nominal/ordinal color + aggregate は同時指定不可(集計対象がカテゴリ)。
         if matches!(read_mark_name(top), Some("rect")) {
             for axis in ["x", "y"] {
-                if let Some(ch) = encoding.get(axis).and_then(Value::as_object)
-                    && let Some(t) = ch.get("type").and_then(Value::as_str)
-                    && t != "nominal"
-                    && t != "ordinal"
-                {
-                    return Err(format!(
-                        "rect の encoding.{axis}.type: \"{t}\" は未対応です(nominal / ordinal のみ)"
-                    ));
+                if let Some(ch) = encoding.get(axis).and_then(Value::as_object) {
+                    match ch.get("type") {
+                        None => {}
+                        Some(Value::String(t)) if t == "nominal" || t == "ordinal" => {}
+                        Some(Value::String(t)) => {
+                            return Err(format!(
+                                "rect の encoding.{axis}.type: \"{t}\" は未対応です(nominal / ordinal のみ)"
+                            ));
+                        }
+                        Some(other) => {
+                            return Err(format!(
+                                "rect の encoding.{axis}.type は文字列 \"nominal\" または \"ordinal\" のみ受理: {other}"
+                            ));
+                        }
+                    }
                 }
             }
             if let Some(color) = encoding.get("color").and_then(Value::as_object) {
                 // color type は quantitative / nominal / ordinal のみ受理。
                 // 他 explicit hint (temporal / typo 等) は infer で silently 落ちて
                 // ユーザー意図と乖離するので strict では Err にする。
-                if let Some(t) = color.get("type").and_then(Value::as_str)
-                    && t != "quantitative"
-                    && t != "nominal"
-                    && t != "ordinal"
-                {
-                    return Err(format!(
-                        "rect の encoding.color.type: \"{t}\" は未対応です(quantitative / nominal / ordinal のみ)"
-                    ));
+                match color.get("type") {
+                    None => {}
+                    Some(Value::String(t))
+                        if t == "quantitative" || t == "nominal" || t == "ordinal" => {}
+                    Some(Value::String(t)) => {
+                        return Err(format!(
+                            "rect の encoding.color.type: \"{t}\" は未対応です(quantitative / nominal / ordinal のみ)"
+                        ));
+                    }
+                    Some(other) => {
+                        return Err(format!(
+                            "rect の encoding.color.type は文字列 \"quantitative\" / \"nominal\" / \"ordinal\" のみ受理: {other}"
+                        ));
+                    }
                 }
                 // aggregate は文字列 "mean" | "sum" のみ受理。非文字列(例: 数値)を
                 // silently 無視すると集計指定が黙って落ちるため、明示 Err にする。

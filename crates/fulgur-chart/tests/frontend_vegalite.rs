@@ -881,6 +881,42 @@ fn strict_rect_rejects_inferred_nominal_with_aggregate() {
 }
 
 #[test]
+fn strict_rect_rejects_non_string_axis_type() {
+    // Round 2 の non-string aggregate と同様、axis type の非文字列 (数値/bool/null 等)
+    // も strict では明示 Err にする(as_str で silently None に落ちるバグを pin)。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x","type":1},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "non-string x axis type should be rejected in strict"
+    );
+}
+
+#[test]
+fn strict_rect_rejects_non_string_color_type() {
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [{"x":"A","y":"X","v":1}]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":1}
+        }
+    }"#;
+    assert!(
+        vegalite::parse(json, true).is_err(),
+        "non-string color type should be rejected in strict"
+    );
+}
+
+#[test]
 fn rect_mark_renders_svg_with_expected_rect_count() {
     // 2x2 grid, all cells present → 4 rects.
     let json = r#"{
