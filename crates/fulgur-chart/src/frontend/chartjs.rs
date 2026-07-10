@@ -1106,7 +1106,17 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
                     )?;
                     // parsing 指定時は from/to/flow の代わりに parsing で指定された
                     // キー名を許可する(残る "color"/"colorFrom"/"colorTo" は固定)。
+                    // parsing サブオブジェクト自身も strict 検証: schema (SankeyParsing)
+                    // が deny_unknown_fields なので、`{"formm":"src"}` のようなタイプミスを
+                    // 黙って fallback に流さず、strict モードで明示的に拒否する。
                     let p = ds.get("parsing").and_then(|v| v.as_object());
+                    if let Some(p) = p {
+                        check_object(
+                            p,
+                            &["from", "to", "flow"],
+                            &format!("data.datasets[{i}].parsing"),
+                        )?;
+                    }
                     let mapped = |k: &str, dflt: &'static str| -> String {
                         p.and_then(|o| o.get(k))
                             .and_then(|v| v.as_str())
@@ -1946,10 +1956,12 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         }
         // per-link color は常に固定キー ("color"/"colorFrom"/"colorTo") で読む。
         // 値が存在するが文字列でない場合は silent-ignore せず明示エラー(Phase B の
-        // typed struct 挙動を維持)。
+        // typed struct 挙動を維持)。ただし schema 側で Option<ColorString> は nullable
+        // なので、明示的な null は "未指定" と等価に扱う。
         let take_color = |name: &str| -> Result<Option<String>, String> {
             match obj.get(name) {
                 None => Ok(None),
+                Some(v) if v.is_null() => Ok(None),
                 Some(v) => match v.as_str() {
                     Some(s) => Ok(Some(s.to_owned())),
                     None => Err(format!("sankey data[{i}].{name} must be a string")),

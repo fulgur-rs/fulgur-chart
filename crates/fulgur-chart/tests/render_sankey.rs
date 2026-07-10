@@ -420,3 +420,40 @@ fn sankey_parsing_strict_rejects_unmapped_default_key() {
         "strict must reject the shadow default key: {err}"
     );
 }
+
+#[test]
+fn sankey_parsing_strict_rejects_typo_in_parsing_object() {
+    // strict mode + parsing に未知キー (タイポ) → 明示エラー。fallback で黙って
+    // default キーを使うのではなく、schema (SankeyParsing の deny_unknown_fields)
+    // と同じ挙動にする。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"formm":"src"},
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(
+        err.contains("formm") || err.contains("parsing"),
+        "strict must reject typo in parsing object: {err}"
+    );
+}
+
+#[test]
+fn sankey_per_link_color_null_treated_as_absent() {
+    // schema 側 Option<ColorString> は nullable なので、明示的な `null` は "未指定"
+    // と等価に扱う(dataset フォールバックに乗せる)。エラーにしない。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#123456","colorTo":"#789abc",
+        "data":[{"from":"A","to":"B","flow":1,"color":null,"colorFrom":null,"colorTo":null}]
+    }]}}"##;
+    let svg = render(json);
+    let start = svg.find("<linearGradient").expect("gradient present");
+    let end = svg[start..]
+        .find("</linearGradient>")
+        .expect("gradient closed")
+        + start;
+    let grad = &svg[start..end];
+    assert!(
+        grad.contains("123456") && grad.contains("789abc"),
+        "null per-link colors must fall back to dataset colors: {grad}"
+    );
+}
