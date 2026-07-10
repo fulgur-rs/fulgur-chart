@@ -141,6 +141,8 @@ fn sankey_at_cap_linear_chain_renders_without_stack_overflow() {
             from: format!("n{i}"),
             to: format!("n{}", i + 1),
             flow: 1.0,
+            color_from: None,
+            color_to: None,
         })
         .collect();
     spec.series[0].links = links;
@@ -159,4 +161,317 @@ fn sankey_at_cap_linear_chain_renders_without_stack_overflow() {
     let svg = handle.join().expect("render thread must not overflow");
     assert!(svg.starts_with("<svg"));
     assert!(!svg.contains("NaN"));
+}
+
+#[test]
+fn sankey_accepts_hover_color_and_renders_identically() {
+    // hoverColorFrom / hoverColorTo は静的レンダラでは描画されないため、
+    // 指定した spec と指定しない spec の SVG が byte-identical になる。
+    let with_hover = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#36a2eb","colorTo":"#ff6384",
+        "hoverColorFrom":"#000000","hoverColorTo":"#ffffff",
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    let without_hover = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#36a2eb","colorTo":"#ff6384",
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    assert_eq!(render(with_hover), render(without_hover));
+}
+
+#[test]
+fn sankey_rejects_invalid_hover_color() {
+    let bad = r##"{"type":"sankey","data":{"datasets":[{
+        "hoverColorFrom":"not-a-color",
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    let err = chartjs::parse(bad, false).unwrap_err();
+    assert!(
+        err.contains("hoverColorFrom"),
+        "error must mention field: {err}"
+    );
+}
+
+#[test]
+fn sankey_hover_color_accepted_by_strict_parser() {
+    // The strict allowlist for `check_unknown_keys_sankey` must include
+    // `hoverColorFrom` / `hoverColorTo`, otherwise strict mode would reject
+    // chartjs-compatible JSON that carries them.
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#36a2eb","colorTo":"#ff6384",
+        "hoverColorFrom":"#000000","hoverColorTo":"#ffffff",
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict parser must accept hoverColorFrom/hoverColorTo"
+    );
+}
+
+#[test]
+fn sankey_per_link_color_short_form_overrides_both_stops() {
+    // per-link `color` は from/to 両 stop の shorthand (ribbon 塗りの上書き)。
+    // ノード矩形は dataset 色のまま — chartjs-chart-sankey 挙動 (design fulgur-chart-40h).
+    let with_override = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#36a2eb","colorTo":"#ff6384",
+        "data":[{"from":"A","to":"B","flow":1,"color":"#00ff00"}]
+    }]}}"##;
+    let svg = render(with_override);
+    let start = svg.find("<linearGradient").expect("gradient present");
+    let end = svg[start..]
+        .find("</linearGradient>")
+        .expect("gradient closed")
+        + start;
+    let grad = &svg[start..end];
+    assert!(
+        grad.contains("00ff00"),
+        "per-link color must fill gradient stops: {grad}"
+    );
+    assert!(
+        !grad.contains("36a2eb") && !grad.contains("ff6384"),
+        "dataset ribbon colors must not appear in gradient stops: {grad}"
+    );
+}
+
+#[test]
+fn sankey_per_link_color_from_overrides_only_from_stop() {
+    // per-link `colorFrom` は from stop のみ上書き。to stop は dataset colorTo のまま。
+    // ノード矩形は dataset 色のまま — gradient 内だけを検査する。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#111111","colorTo":"#222222",
+        "data":[{"from":"A","to":"B","flow":1,"colorFrom":"#abcdef"}]
+    }]}}"##;
+    let svg = render(json);
+    let start = svg.find("<linearGradient").expect("gradient present");
+    let end = svg[start..]
+        .find("</linearGradient>")
+        .expect("gradient closed")
+        + start;
+    let grad = &svg[start..end];
+    assert!(grad.contains("abcdef"), "from override in gradient: {grad}");
+    assert!(
+        grad.contains("222222"),
+        "to keeps dataset value in gradient: {grad}"
+    );
+    assert!(
+        !grad.contains("111111"),
+        "from dataset value replaced in gradient: {grad}"
+    );
+}
+
+#[test]
+fn sankey_per_link_color_from_wins_over_color_shorthand() {
+    // color と colorFrom を併用: colorFrom が勝つ (from 側)。to 側は color の値。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1,"color":"#aa0000","colorFrom":"#00aa00"}]
+    }]}}"##;
+    let svg = render(json);
+    assert!(svg.contains("00aa00"), "from uses explicit colorFrom");
+    assert!(svg.contains("aa0000"), "to uses shorthand color");
+}
+
+#[test]
+fn sankey_per_link_color_deterministic() {
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1,"color":"#123456"}]
+    }]}}"##;
+    assert_eq!(render(json), render(json));
+}
+
+#[test]
+fn sankey_per_link_color_from_invalid_rejected() {
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1,"colorFrom":"not-a-color"}]
+    }]}}"##;
+    let err = chartjs::parse(json, false).unwrap_err();
+    assert!(
+        err.contains("colorFrom"),
+        "error must mention colorFrom: {err}"
+    );
+}
+
+#[test]
+fn sankey_per_link_color_works_with_from_mode() {
+    // colorMode=from + per-link color: リンクごとの effective_from が単色塗りに使われる。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "colorMode":"from",
+        "data":[{"from":"A","to":"B","flow":1,"colorFrom":"#abcdef"}]
+    }]}}"##;
+    let svg = render(json);
+    assert!(!svg.contains("<linearGradient"), "from mode -> solid");
+    assert!(svg.contains("abcdef"), "per-link colorFrom fills path");
+}
+
+#[test]
+fn sankey_parsing_flow_only() {
+    // parsing.flow="value" だけを指定: from/to は default キー。
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"flow":"value"},
+        "data":[{"from":"A","to":"B","value":3}]
+    }]}}"#;
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"));
+    assert!(!svg.contains("NaN"));
+}
+
+#[test]
+fn sankey_parsing_all_three_keys() {
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"from":"src","to":"dst","flow":"value"},
+        "data":[{"src":"A","dst":"B","value":3},{"src":"B","dst":"C","value":2}]
+    }]}}"#;
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"));
+    assert!(!svg.contains("NaN"));
+}
+
+#[test]
+fn sankey_parsing_regression_no_parsing_matches_baseline() {
+    // parsing なし: 既存 spec の描画が完全一致(regression 検証)。
+    let baseline = r#"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"#;
+    let with_empty_parsing = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{},
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"#;
+    assert_eq!(render(baseline), render(with_empty_parsing));
+}
+
+#[test]
+fn sankey_parsing_missing_key_reports_error() {
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"flow":"value"},
+        "data":[{"from":"A","to":"B","flow":3}]
+    }]}}"#;
+    let err = chartjs::parse(json, false).unwrap_err();
+    assert!(
+        err.contains("value"),
+        "error mentions missing mapped key: {err}"
+    );
+}
+
+#[test]
+fn sankey_parsing_prefers_mapped_key_over_default() {
+    // parsing.from="src" を指定した場合、入力に "from" と "src" の両方があっても
+    // "src" のみが使われる。ここでは "from" だけ違う値にして、"src" 値のノードが
+    // 描画されることを間接的に確認する(labels 経由)。
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"from":"src"},
+        "labels":{"MAPPED":"MAPPED"},
+        "data":[{"src":"MAPPED","from":"IGNORED","to":"B","flow":1}]
+    }]}}"#;
+    let svg = render(json);
+    assert!(svg.contains("MAPPED"), "mapped key value used as node id");
+    assert!(
+        !svg.contains("IGNORED"),
+        "default 'from' ignored when parsing.from set"
+    );
+}
+
+#[test]
+fn sankey_parsing_with_per_link_color() {
+    // parsing は from/to/flow のみを remap し、color 関連キーは固定名のまま読まれる。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"flow":"value"},
+        "data":[{"from":"A","to":"B","value":1,"color":"#abcdef"}]
+    }]}}"##;
+    let svg = render(json);
+    assert!(
+        svg.contains("abcdef"),
+        "per-link color still applies with parsing"
+    );
+}
+
+#[test]
+fn sankey_parsing_deterministic() {
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"from":"src","to":"dst","flow":"v"},
+        "data":[{"src":"A","dst":"B","v":1}]
+    }]}}"#;
+    assert_eq!(render(json), render(json));
+}
+
+#[test]
+fn sankey_parsing_strict_accepts_mapped_keys() {
+    // strict mode must accept mapped key names when parsing declares them,
+    // otherwise chartjs-compatible JSON with parsing would fail strict validation.
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"flow":"value"},
+        "data":[{"from":"A","to":"B","value":1}]
+    }]}}"##;
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict parser must accept parsing-mapped keys"
+    );
+}
+
+#[test]
+fn sankey_parsing_strict_rejects_unmapped_default_key() {
+    // Under strict mode with parsing.from="src", the default key "from"
+    // is NOT in the allowlist and must be rejected as unknown.
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"from":"src"},
+        "data":[{"src":"A","from":"IGNORED","to":"B","flow":1}]
+    }]}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(
+        err.contains("from") || err.contains("data.datasets"),
+        "strict must reject the shadow default key: {err}"
+    );
+}
+
+#[test]
+fn sankey_parsing_strict_rejects_typo_in_parsing_object() {
+    // strict mode + parsing に未知キー (タイポ) → 明示エラー。fallback で黙って
+    // default キーを使うのではなく、schema (SankeyParsing の deny_unknown_fields)
+    // と同じ挙動にする。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"formm":"src"},
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(
+        err.contains("formm"),
+        "strict must reject typo 'formm' by name in parsing object: {err}"
+    );
+}
+
+#[test]
+fn sankey_parsing_maps_from_to_reserved_color_key() {
+    // parsing.from="colorFrom" のように mapped key が固定色キーと衝突するケース。
+    // take_color は該当キーを色として読まないため、"A"/"B" がノードIDとして扱われる。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"from":"colorFrom"},
+        "data":[{"colorFrom":"A","to":"B","flow":1}]
+    }]}}"##;
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"));
+    assert!(!svg.contains("NaN"));
+    // ノードラベル "A"/"B" が描画されている(= colorFrom がノードIDとして解釈された)。
+    assert!(
+        svg.contains(">A<") && svg.contains(">B<"),
+        "node labels A/B render: {svg}"
+    );
+}
+
+#[test]
+fn sankey_per_link_color_null_treated_as_absent() {
+    // schema 側 Option<ColorString> は nullable なので、明示的な `null` は "未指定"
+    // と等価に扱う(dataset フォールバックに乗せる)。エラーにしない。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#123456","colorTo":"#789abc",
+        "data":[{"from":"A","to":"B","flow":1,"color":null,"colorFrom":null,"colorTo":null}]
+    }]}}"##;
+    let svg = render(json);
+    let start = svg.find("<linearGradient").expect("gradient present");
+    let end = svg[start..]
+        .find("</linearGradient>")
+        .expect("gradient closed")
+        + start;
+    let grad = &svg[start..end];
+    assert!(
+        grad.contains("123456") && grad.contains("789abc"),
+        "null per-link colors must fall back to dataset colors: {grad}"
+    );
 }

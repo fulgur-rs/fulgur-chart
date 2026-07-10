@@ -988,17 +988,21 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let y2 = py(to_y_val);
         let height = (py(from_y_val + link.flow) - y).abs();
 
+        // per-link 上書きを反映 (None なら dataset レベル)。alpha は dataset のみ。
+        let eff_from = link.color_from.unwrap_or(color_from);
+        let eff_to = link.color_to.unwrap_or(color_to);
+
         let d = ribbon_path(x, y, x2, y2, height);
         match color_mode {
             SankeyColorMode::From => items.push(Prim::Path {
                 d,
-                fill: Some(with_alpha(color_from, alpha)),
+                fill: Some(with_alpha(eff_from, alpha)),
                 stroke: None,
                 stroke_width: 0.0,
             }),
             SankeyColorMode::To => items.push(Prim::Path {
                 d,
-                fill: Some(with_alpha(color_to, alpha)),
+                fill: Some(with_alpha(eff_to, alpha)),
                 stroke: None,
                 stroke_width: 0.0,
             }),
@@ -1006,8 +1010,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 d,
                 x0: x,
                 x1: x2,
-                stop0: with_alpha(color_from, alpha),
-                stop1: with_alpha(color_to, alpha),
+                stop0: with_alpha(eff_from, alpha),
+                stop1: with_alpha(eff_to, alpha),
             }),
         }
     }
@@ -1077,6 +1081,8 @@ mod tests {
                 from: f.to_string(),
                 to: t.to_string(),
                 flow: *fl,
+                color_from: None,
+                color_to: None,
             })
             .collect()
     }

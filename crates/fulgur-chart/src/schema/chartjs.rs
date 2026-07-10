@@ -1110,6 +1110,26 @@ pub struct SankeyData {
     pub labels: Option<Vec<String>>,
 }
 
+/// dataset.parsing による from/to/flow キー再マップ。
+///
+/// 指定したキーがある場合、入力 JSON の flow 要素はそのキーから値を読む。
+/// 例: `parsing: { flow: "value" }` を与えると `{ from, to, value }` の形式で受理する。
+/// 指定なしの場合は default キー名 (`from`/`to`/`flow`) を使う。
+///
+/// 注意: parsing 指定時は入力 JSON が本 schema の `SankeyFlow` と乖離する(schema 上は
+/// 常に `from`/`to`/`flow` を要求している)。schema-driven なクライアントで parsing を
+/// 使う場合、data 部分は事前検証を無効化する必要がある。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SankeyParsing {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SankeyDataset {
@@ -1122,6 +1142,10 @@ pub struct SankeyDataset {
     pub color_to: Option<ColorString>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_mode: Option<SankeyColorModeOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hover_color_from: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hover_color_to: Option<ColorString>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1149,16 +1173,28 @@ pub struct SankeyDataset {
     pub priority: Option<std::collections::HashMap<String, f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<std::collections::HashMap<String, u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parsing: Option<SankeyParsing>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SankeyFlow {
     pub from: String,
     pub to: String,
     /// フロー量は非負(parser が flow < 0 を拒否するのに合わせる)。
     #[schemars(range(min = 0.0))]
     pub flow: f64,
+    /// per-link 色上書き(shorthand): colorFrom/colorTo が個別に指定されない場合、
+    /// この値が両端の stop 色として使われる。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    /// per-link の from 側 stop 色上書き。指定なしは dataset の colorFrom を使用。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_from: Option<ColorString>,
+    /// per-link の to 側 stop 色上書き。指定なしは dataset の colorTo を使用。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_to: Option<ColorString>,
 }
 
 /// sankey の colorMode。enum 化することで schema が値を列挙制約し、タイポ(例 "form")を
