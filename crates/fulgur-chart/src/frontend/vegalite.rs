@@ -930,14 +930,17 @@ fn build_rect(
                         .map(|b| match (aggregate, b.as_slice()) {
                             (_, []) => None,
                             (Aggregate::Mean, vs) => {
-                                // 二段構えの mean:
-                                //  1. running mean (mean_i = mean_{i-1} + (v_i - mean_{i-1}) / i)
-                                //     — 同符号で f64::MAX 近傍の値でも intermediate sum overflow を
-                                //     避けられる。
-                                //  2. running mean が非有限 (逆符号の f64::MAX を混ぜて
-                                //     (v - mean) が -inf 等) に落ちたら、naive sum / len に
-                                //     フォールバック。両アルゴリズムでカバーできないケース
-                                //     だけ None セルにする。
+                                let n = vs.len() as f64;
+                                // 三段構えの mean fallback:
+                                //  1. running mean (Welford): 同符号 f64::MAX 近傍でも
+                                //     intermediate sum overflow を避ける。
+                                //  2. naive sum / n: [1e308, -1e308] のような単純逆符号ペアで
+                                //     running が (v - mean) overflow に落ちるケースをカバー
+                                //     (sum が 0 に相殺されれば finite)。
+                                //  3. divide-then-sum: [1e308, 1e308, -1e308, -1e308] のように
+                                //     naive sum も intermediate 段階で overflow するケース向け。
+                                //     各項を先に n で割ってから和を取ることで individual term が
+                                //     f64 有限範囲に収まる。
                                 let mut running = 0.0_f64;
                                 for (i, v) in vs.iter().enumerate() {
                                     running += (v - running) / (i + 1) as f64;
@@ -945,9 +948,14 @@ fn build_rect(
                                 if running.is_finite() {
                                     Some(running)
                                 } else {
-                                    let sum: f64 = vs.iter().sum();
-                                    let fallback = sum / vs.len() as f64;
-                                    fallback.is_finite().then_some(fallback)
+                                    let naive_sum: f64 = vs.iter().sum();
+                                    let naive = naive_sum / n;
+                                    if naive.is_finite() {
+                                        Some(naive)
+                                    } else {
+                                        let scaled_sum: f64 = vs.iter().map(|v| v / n).sum();
+                                        scaled_sum.is_finite().then_some(scaled_sum)
+                                    }
                                 }
                             }
                             (Aggregate::Sum, vs) => {

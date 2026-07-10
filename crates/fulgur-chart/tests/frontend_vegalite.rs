@@ -1095,6 +1095,37 @@ fn rect_mark_aggregate_mean_opposite_signs_uses_fallback() {
 }
 
 #[test]
+fn rect_mark_aggregate_mean_extreme_cancellation_uses_divide_then_sum() {
+    // [1e308, 1e308, -1e308, -1e308] の真の mean は 0 だが、
+    // running mean は -inf に、naive sum は inf に落ちる。三段目の
+    // divide-then-sum (v / n を先にする) で個々の項を有限範囲に収め、
+    // sum を取って正しい mean = 0 を得る。silently None にしない invariant を pin。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":1.0e308},
+            {"x":"A","y":"X","v":1.0e308},
+            {"x":"A","y":"X","v":-1.0e308},
+            {"x":"A","y":"X","v":-1.0e308}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative","aggregate":"mean"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let cells = match &spec.kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+    // Single finite cell (mean=0) → degenerate → HI (Tableau steel-blue).
+    // 重要なのは None に落ちないこと。
+    let ax = cells[0][0].expect("mean should be finite (0), not None from double-overflow");
+    assert_eq!((ax.r, ax.g, ax.b), (76, 120, 168));
+}
+
+#[test]
 fn rect_mark_rejects_excessive_records_at_parse_time() {
     // 小さい grid でも records.len() が上限を超えたら pre-aggregation で reject。
     // ここでは max_categorical_primitives + 1 件の (A,X,v) を作り、同一セルへの
