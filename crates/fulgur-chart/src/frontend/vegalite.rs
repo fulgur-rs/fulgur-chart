@@ -19,7 +19,21 @@ use std::collections::{HashMap, HashSet};
 ///
 /// `strict` が真のとき、上位/encoding/各チャネルのキーをホワイトリストで検査し、
 /// 最初の未知キーをそのパス付きで Err にする。非 strict は未知キーを無視する。
+///
+/// rect の pre-allocation guard には `InputLimits::default()` を用いる。
+/// caller-supplied limits を渡したい場合は [`parse_with_limits`] を使う。
 pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
+    parse_with_limits(json, strict, &crate::guard::InputLimits::default())
+}
+
+/// caller-supplied limits を使う variant。rect の pre-allocation guard
+/// (`build_rect` 入口) に caller の限度値が届くようにする。他 mark は既存挙動
+/// (`validate_spec` で caller limits を尊重、parse は上限チェックしない) のまま。
+pub fn parse_with_limits(
+    json: &str,
+    strict: bool,
+    limits: &crate::guard::InputLimits,
+) -> Result<ChartSpec, String> {
     if strict {
         check_unknown_keys(json)?;
     }
@@ -189,6 +203,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             color_type,
             aggregate,
             &theme.palette,
+            limits,
         )?;
     }
 
@@ -780,6 +795,9 @@ fn infer_color_type(
 /// `parse_mark` は sentinel を返し、この関数が実体で置き換える。
 /// x/y/color フィールドは `parse` の validation で確認済みだが、"パニックしない"
 /// invariant を守るため require_field で Result 伝播する(実質 unreachable の Err)。
+// parse (公開 API) からしか呼ばれない private thunk。fields をひとつの struct に
+// 束ねると build_rect との対応がぼやけるため、閾値を素直に上げる方が読みやすい。
+#[allow(clippy::too_many_arguments)]
 fn parse_rect_kind(
     records: &[Map<String, Value>],
     x_field: &Option<String>,
@@ -788,12 +806,13 @@ fn parse_rect_kind(
     color_type: ColorType,
     aggregate: Aggregate,
     palette: &[Color],
+    limits: &crate::guard::InputLimits,
 ) -> Result<ChartKind, String> {
     let xf = require_field(x_field, "x")?;
     let yf = require_field(y_field, "y")?;
     let cf = require_field(color_field, "color")?;
     let (x_labels, y_labels, cells) =
-        build_rect(records, xf, yf, cf, color_type, aggregate, palette)?;
+        build_rect(records, xf, yf, cf, color_type, aggregate, palette, limits)?;
     Ok(ChartKind::VegaRect {
         x_labels,
         y_labels,
@@ -812,7 +831,7 @@ fn parse_rect_kind(
 // Result で return type がタプルを包む形になり type_complexity をトリガするが、
 // 単一 caller (`parse_rect_kind`) 専用のプライベート関数のため、
 // alias を切るより allow が事情を汲みやすい。
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn build_rect(
     records: &[Map<String, Value>],
     x_field: &str,
@@ -821,13 +840,15 @@ fn build_rect(
     color_type: ColorType,
     aggregate: Aggregate,
     palette: &[Color],
+    limits: &crate::guard::InputLimits,
 ) -> Result<(Vec<String>, Vec<String>, Vec<Vec<Option<Color>>>), String> {
     // guard::validate_spec と同じ上限を parse 時点で先取り。
     // validate_spec は frontend::parse の後段で走るため、ここで dense grid を確保する
     // (下の `vec![vec![...; x_labels.len()]; y_labels.len()]`) 前に checks しないと
     // 病的な入力 (例: 1M distinct x labels) で allocation OOM になる。
     // 直接 IR を組む callers 向けには guard::validate_spec の同一 checks を残してある。
-    let limits = crate::guard::InputLimits::default();
+    // caller-supplied limits を尊重するため、`parse_with_limits` から受け取った
+    // reference を利用する。default 経路 (`parse`) は `InputLimits::default()` を渡す。
 
     // records.len() を primitive 上限で押さえる。小さい grid でも同一セルへの
     // 大量重複観測 (数百万件) で bucket に無制限に f64 が積まれ、grid caps を
@@ -836,7 +857,7 @@ fn build_rect(
     // で、病的な入力での余分な走査も避ける。
     if records.len() > limits.max_categorical_primitives {
         return Err(format!(
-            "VegaRect の records 数 {} が既定上限 {} を超えています(parse 時 pre-aggregation 検査)",
+            "VegaRect の records 数 {} が上限 {} を超えています(parse 時 pre-aggregation 検査)",
             records.len(),
             limits.max_categorical_primitives,
         ));
@@ -847,14 +868,14 @@ fn build_rect(
 
     if x_labels.len() > limits.max_categories {
         return Err(format!(
-            "VegaRect の x_labels 数 {} が既定上限 {} を超えています(parse 時 pre-allocation 検査)",
+            "VegaRect の x_labels 数 {} が上限 {} を超えています(parse 時 pre-allocation 検査)",
             x_labels.len(),
             limits.max_categories,
         ));
     }
     if y_labels.len() > limits.max_categories {
         return Err(format!(
-            "VegaRect の y_labels 数 {} が既定上限 {} を超えています(parse 時 pre-allocation 検査)",
+            "VegaRect の y_labels 数 {} が上限 {} を超えています(parse 時 pre-allocation 検査)",
             y_labels.len(),
             limits.max_categories,
         ));
@@ -862,7 +883,7 @@ fn build_rect(
     let grid = x_labels.len().saturating_mul(y_labels.len());
     if grid > limits.max_categorical_primitives {
         return Err(format!(
-            "VegaRect のグリッドセル数 {} が既定上限 {} を超えています(parse 時 pre-allocation 検査)",
+            "VegaRect のグリッドセル数 {} が上限 {} を超えています(parse 時 pre-allocation 検査)",
             grid, limits.max_categorical_primitives,
         ));
     }

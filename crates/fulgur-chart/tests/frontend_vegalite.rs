@@ -1127,3 +1127,58 @@ fn rect_mark_rejects_excessive_records_at_parse_time() {
         "expected pre-aggregation guard error, got: {err}"
     );
 }
+
+#[test]
+fn rect_mark_parse_with_limits_respects_relaxed_max_categorical_primitives() {
+    // default caps は max_categories = 100k / max_categorical_primitives = 1M。
+    // default だと max_categories + 1 = 100_001 x_labels は pre-allocation guard で
+    // reject されるが、relaxed limits (max_categories = n+10, max_categorical_primitives
+    // = n+10) を渡すと accept される。API-additive の parse_with_limits が caller
+    // limits を尊重することを pin する。
+    let default_limits = fulgur_chart::guard::InputLimits::default();
+    let n = default_limits.max_categories + 1;
+    let mut values = String::with_capacity(64 * n);
+    values.push('[');
+    for i in 0..n {
+        if i > 0 {
+            values.push(',');
+        }
+        values.push_str(&format!(r#"{{"x":"x{i}","y":"y","v":1}}"#));
+    }
+    values.push(']');
+    let json = format!(
+        r#"{{
+            "mark": "rect",
+            "data": {{"values": {values}}},
+            "encoding": {{
+                "x": {{"field":"x","type":"nominal"}},
+                "y": {{"field":"y","type":"nominal"}},
+                "color": {{"field":"v","type":"quantitative"}}
+            }}
+        }}"#
+    );
+
+    // Default parse は既存 pre-allocation guard で拒否する。
+    assert!(
+        vegalite::parse(&json, false).is_err(),
+        "default limits should reject n+1 x_labels"
+    );
+
+    // parse_with_limits に relaxed caps を渡すと受理される。
+    let relaxed = fulgur_chart::guard::InputLimits {
+        max_categories: n + 10,
+        max_categorical_primitives: n + 10,
+        ..default_limits
+    };
+    let spec = vegalite::parse_with_limits(&json, false, &relaxed).unwrap();
+    match spec.kind {
+        ChartKind::VegaRect { x_labels, .. } => {
+            assert_eq!(
+                x_labels.len(),
+                n,
+                "relaxed parse should retain all x_labels"
+            );
+        }
+        _ => panic!("expected VegaRect"),
+    }
+}
