@@ -301,3 +301,122 @@ fn sankey_per_link_color_works_with_from_mode() {
     assert!(!svg.contains("<linearGradient"), "from mode -> solid");
     assert!(svg.contains("abcdef"), "per-link colorFrom fills path");
 }
+
+#[test]
+fn sankey_parsing_flow_only() {
+    // parsing.flow="value" だけを指定: from/to は default キー。
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"flow":"value"},
+        "data":[{"from":"A","to":"B","value":3}]
+    }]}}"#;
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"));
+    assert!(!svg.contains("NaN"));
+}
+
+#[test]
+fn sankey_parsing_all_three_keys() {
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"from":"src","to":"dst","flow":"value"},
+        "data":[{"src":"A","dst":"B","value":3},{"src":"B","dst":"C","value":2}]
+    }]}}"#;
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"));
+    assert!(!svg.contains("NaN"));
+}
+
+#[test]
+fn sankey_parsing_regression_no_parsing_matches_baseline() {
+    // parsing なし: 既存 spec の描画が完全一致(regression 検証)。
+    let baseline = r#"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"#;
+    let with_empty_parsing = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{},
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"#;
+    assert_eq!(render(baseline), render(with_empty_parsing));
+}
+
+#[test]
+fn sankey_parsing_missing_key_reports_error() {
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"flow":"value"},
+        "data":[{"from":"A","to":"B","flow":3}]
+    }]}}"#;
+    let err = chartjs::parse(json, false).unwrap_err();
+    assert!(
+        err.contains("value"),
+        "error mentions missing mapped key: {err}"
+    );
+}
+
+#[test]
+fn sankey_parsing_prefers_mapped_key_over_default() {
+    // parsing.from="src" を指定した場合、入力に "from" と "src" の両方があっても
+    // "src" のみが使われる。ここでは "from" だけ違う値にして、"src" 値のノードが
+    // 描画されることを間接的に確認する(labels 経由)。
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"from":"src"},
+        "labels":{"MAPPED":"MAPPED"},
+        "data":[{"src":"MAPPED","from":"IGNORED","to":"B","flow":1}]
+    }]}}"#;
+    let svg = render(json);
+    assert!(svg.contains("MAPPED"), "mapped key value used as node id");
+    assert!(
+        !svg.contains("IGNORED"),
+        "default 'from' ignored when parsing.from set"
+    );
+}
+
+#[test]
+fn sankey_parsing_with_per_link_color() {
+    // parsing は from/to/flow のみを remap し、color 関連キーは固定名のまま読まれる。
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"flow":"value"},
+        "data":[{"from":"A","to":"B","value":1,"color":"#abcdef"}]
+    }]}}"##;
+    let svg = render(json);
+    assert!(
+        svg.contains("abcdef"),
+        "per-link color still applies with parsing"
+    );
+}
+
+#[test]
+fn sankey_parsing_deterministic() {
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"from":"src","to":"dst","flow":"v"},
+        "data":[{"src":"A","dst":"B","v":1}]
+    }]}}"#;
+    assert_eq!(render(json), render(json));
+}
+
+#[test]
+fn sankey_parsing_strict_accepts_mapped_keys() {
+    // strict mode must accept mapped key names when parsing declares them,
+    // otherwise chartjs-compatible JSON with parsing would fail strict validation.
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"flow":"value"},
+        "data":[{"from":"A","to":"B","value":1}]
+    }]}}"##;
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict parser must accept parsing-mapped keys"
+    );
+}
+
+#[test]
+fn sankey_parsing_strict_rejects_unmapped_default_key() {
+    // Under strict mode with parsing.from="src", the default key "from"
+    // is NOT in the allowlist and must be rejected as unknown.
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "parsing":{"from":"src"},
+        "data":[{"src":"A","from":"IGNORED","to":"B","flow":1}]
+    }]}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(
+        err.contains("from") || err.contains("data.datasets"),
+        "strict must reject the shadow default key: {err}"
+    );
+}

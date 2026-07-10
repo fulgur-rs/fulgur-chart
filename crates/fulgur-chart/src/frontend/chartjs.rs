@@ -1100,15 +1100,35 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
                             "labels",
                             "priority",
                             "column",
+                            "parsing",
                         ],
                         &format!("data.datasets[{i}]"),
                     )?;
+                    // parsing 指定時は from/to/flow の代わりに parsing で指定された
+                    // キー名を許可する(残る "color"/"colorFrom"/"colorTo" は固定)。
+                    let p = ds.get("parsing").and_then(|v| v.as_object());
+                    let mapped = |k: &str, dflt: &'static str| -> String {
+                        p.and_then(|o| o.get(k))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| dflt.to_string())
+                    };
+                    let key_from = mapped("from", "from");
+                    let key_to = mapped("to", "to");
+                    let key_flow = mapped("flow", "flow");
                     if let Some(points) = ds.get("data").and_then(|v| v.as_array()) {
                         for (j, pt) in points.iter().enumerate() {
                             if let Some(pt) = pt.as_object() {
                                 check_object(
                                     pt,
-                                    &["from", "to", "flow", "color", "colorFrom", "colorTo"],
+                                    &[
+                                        key_from.as_str(),
+                                        key_to.as_str(),
+                                        key_flow.as_str(),
+                                        "color",
+                                        "colorFrom",
+                                        "colorTo",
+                                    ],
                                     &format!("data.datasets[{i}].data[{j}]"),
                                 )?;
                             }
@@ -1820,7 +1840,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     struct DS {
         #[serde(default)]
         label: String,
-        data: Vec<Flow>,
+        data: Vec<serde_json::Value>,
         #[serde(rename = "colorFrom", default)]
         color_from: Option<String>,
         #[serde(rename = "colorTo", default)]
@@ -1853,18 +1873,17 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         priority: Option<HashMap<String, f64>>,
         #[serde(default)]
         column: Option<HashMap<String, u32>>,
+        #[serde(default)]
+        parsing: Option<Parsing>,
     }
     #[derive(Deserialize)]
-    struct Flow {
-        from: String,
-        to: String,
-        flow: f64,
+    struct Parsing {
         #[serde(default)]
-        color: Option<String>,
-        #[serde(rename = "colorFrom", default)]
-        color_from: Option<String>,
-        #[serde(rename = "colorTo", default)]
-        color_to: Option<String>,
+        from: Option<String>,
+        #[serde(default)]
+        to: Option<String>,
+        #[serde(default)]
+        flow: Option<String>,
     }
 
     let raw: W = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -1873,36 +1892,93 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     }
     let ds = raw.data.datasets.into_iter().next().unwrap();
 
-    // リンク構築 + flow 有限性チェック。入力順を保持する。
+    // parsing の effective key。未指定なら default 名 (from/to/flow) を使う。
+    // 指定時は入力 JSON からそのキー名で値を取り出す(chartjs 挙動)。
+    // per-link color/colorFrom/colorTo は parsing で remap しない(chartjs 互換)。
+    let parsing = ds.parsing.as_ref();
+    let parsing_active = ds.parsing.is_some();
+    let key_from = parsing.and_then(|p| p.from.as_deref()).unwrap_or("from");
+    let key_to = parsing.and_then(|p| p.to.as_deref()).unwrap_or("to");
+    let key_flow = parsing.and_then(|p| p.flow.as_deref()).unwrap_or("flow");
+
+    // リンク構築: 各要素を Value としてパースし、parsing で指定された effective key で
+    // from/to/flow を拾ってから正規化 Value を組み立てる。parsing 未指定なら key_* は
+    // default 名なので、既存 spec に対する挙動は変わらない。
     // per-link 色 precedence:
     //   effective_from = flow.color_from ?? flow.color ?? None  (None なら dataset フォールバック)
     //   effective_to   = flow.color_to   ?? flow.color ?? None  (None なら dataset フォールバック)
     // 不正な色文字列は明示エラー(silent default にしない)。
     let mut links = Vec::with_capacity(ds.data.len());
-    for (i, f) in ds.data.into_iter().enumerate() {
-        if !f.flow.is_finite() || f.flow < 0.0 {
+    for (i, raw_entry) in ds.data.into_iter().enumerate() {
+        let obj = raw_entry
+            .as_object()
+            .ok_or_else(|| format!("sankey data[{i}] must be an object"))?;
+        let take_str = |k: &str| -> Result<String, String> {
+            let hint = if parsing_active {
+                " (mapped via dataset.parsing)"
+            } else {
+                ""
+            };
+            let v = obj
+                .get(k)
+                .ok_or_else(|| format!("sankey data[{i}] missing key '{k}'{hint}"))?;
+            v.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("sankey data[{i}].{k} must be a string"))
+        };
+        let take_num = |k: &str| -> Result<f64, String> {
+            let hint = if parsing_active {
+                " (mapped via dataset.parsing)"
+            } else {
+                ""
+            };
+            let v = obj
+                .get(k)
+                .ok_or_else(|| format!("sankey data[{i}] missing key '{k}'{hint}"))?;
+            v.as_f64()
+                .ok_or_else(|| format!("sankey data[{i}].{k} must be a number"))
+        };
+        let from = take_str(key_from)?;
+        let to = take_str(key_to)?;
+        let flow = take_num(key_flow)?;
+        if !flow.is_finite() || flow < 0.0 {
             return Err("sankey flow must be a non-negative finite number".to_string());
         }
+        // per-link color は常に固定キー ("color"/"colorFrom"/"colorTo") で読む。
+        // 値が存在するが文字列でない場合は silent-ignore せず明示エラー(Phase B の
+        // typed struct 挙動を維持)。
+        let take_color = |name: &str| -> Result<Option<String>, String> {
+            match obj.get(name) {
+                None => Ok(None),
+                Some(v) => match v.as_str() {
+                    Some(s) => Ok(Some(s.to_owned())),
+                    None => Err(format!("sankey data[{i}].{name} must be a string")),
+                },
+            }
+        };
+        let color = take_color("color")?;
+        let color_from_str = take_color("colorFrom")?;
+        let color_to_str = take_color("colorTo")?;
         let parse_flow_color = |name: &str, s: &str| -> Result<Color, String> {
             parse_color(s)
                 .ok_or_else(|| format!("sankey data[{i}].{name} is not a valid color: {s}"))
         };
-        let shared = match f.color.as_deref() {
+        let shared = match color.as_deref() {
             Some(s) => Some(parse_flow_color("color", s)?),
             None => None,
         };
-        let cf = match f.color_from.as_deref() {
+        let cf = match color_from_str.as_deref() {
             Some(s) => Some(parse_flow_color("colorFrom", s)?),
             None => shared,
         };
-        let ct = match f.color_to.as_deref() {
+        let ct = match color_to_str.as_deref() {
             Some(s) => Some(parse_flow_color("colorTo", s)?),
             None => shared,
         };
         links.push(SankeyLink {
-            from: f.from,
-            to: f.to,
-            flow: f.flow,
+            from,
+            to,
+            flow,
             color_from: cf,
             color_to: ct,
         });

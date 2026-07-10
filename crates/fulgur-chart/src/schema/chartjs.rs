@@ -1110,6 +1110,26 @@ pub struct SankeyData {
     pub labels: Option<Vec<String>>,
 }
 
+/// dataset.parsing による from/to/flow キー再マップ。
+///
+/// 指定したキーがある場合、入力 JSON の flow 要素はそのキーから値を読む。
+/// 例: `parsing: { flow: "value" }` を与えると `{ from, to, value }` の形式で受理する。
+/// 指定なしの場合は default キー名 (`from`/`to`/`flow`) を使う。
+///
+/// 注意: parsing 指定時は入力 JSON が本 schema の `SankeyFlow` と乖離する(schema 上は
+/// 常に `from`/`to`/`flow` を要求している)。schema-driven なクライアントで parsing を
+/// 使う場合、data 部分は事前検証を無効化する必要がある。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SankeyParsing {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SankeyDataset {
@@ -1153,6 +1173,8 @@ pub struct SankeyDataset {
     pub priority: Option<std::collections::HashMap<String, f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<std::collections::HashMap<String, u32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parsing: Option<SankeyParsing>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
