@@ -266,6 +266,77 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         }
     }
 
+    // --- VegaRect ラベル・グリッドセル数 ---
+    // VegaRect のラベルは spec.categories/spec.series を経由せず ChartKind に直接
+    // 保持されるため、既存の max_label_bytes 検証(全カテゴリ・全系列名を走査)を
+    // すり抜ける。加えて layout/build_rect は x_labels.len() × y_labels.len() の
+    // dense grid を確保するため、sparse rect input(distinct ラベルは膨大だが
+    // 観測ペアは少数)でも積が primitive 上限を超えうる。ここで両者を明示的に押さえる。
+    if let crate::ir::ChartKind::VegaRect {
+        x_labels,
+        y_labels,
+        cells,
+    } = &spec.kind
+    {
+        for label in x_labels.iter().chain(y_labels.iter()) {
+            if label.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "VegaRect のラベル長 {} バイトが上限 {} を超えています",
+                    label.len(),
+                    limits.max_label_bytes,
+                ));
+            }
+        }
+        // rect ラベル数を bar/line 系と同じく max_categories で個別に押さえる。
+        // (spec.categories は空なので既存ループはバイパスされる。) 1M × 1 のような
+        // 非対称グリッドが primitive cap 単独では通過してしまうケースを塞ぐ。
+        if x_labels.len() > limits.max_categories {
+            return Err(format!(
+                "VegaRect の x_labels 数 {} が max_categories 上限 {} を超えています",
+                x_labels.len(),
+                limits.max_categories,
+            ));
+        }
+        if y_labels.len() > limits.max_categories {
+            return Err(format!(
+                "VegaRect の y_labels 数 {} が max_categories 上限 {} を超えています",
+                y_labels.len(),
+                limits.max_categories,
+            ));
+        }
+        // 直接 ChartSpec を組む callers (bindings 等) 向けに cells 形状を検証する。
+        // フロントエンドは build_rect で shape を保証しているが、guard は external
+        // callers を守る境界。renderer 側は debug_assert のみで release では黙って
+        // ミスレンダーするため、ここで明示 Err にする。
+        if cells.len() != y_labels.len() {
+            return Err(format!(
+                "VegaRect cells 行数 {} と y_labels 数 {} が不一致",
+                cells.len(),
+                y_labels.len(),
+            ));
+        }
+        for (row_i, row) in cells.iter().enumerate() {
+            if row.len() != x_labels.len() {
+                return Err(format!(
+                    "VegaRect cells 行 {} の列数 {} と x_labels 数 {} が不一致",
+                    row_i,
+                    row.len(),
+                    x_labels.len(),
+                ));
+            }
+        }
+        let grid = x_labels.len().saturating_mul(y_labels.len());
+        if grid > limits.max_categorical_primitives {
+            return Err(format!(
+                "VegaRect の grid セル数 {} (x_labels {} × y_labels {}) が上限 {} を超えています",
+                grid,
+                x_labels.len(),
+                y_labels.len(),
+                limits.max_categorical_primitives,
+            ));
+        }
+    }
+
     // --- outlabeledPie バリデーション ---
     if let crate::ir::ChartKind::OutlabeledPie { ref outlabel, .. } = spec.kind {
         // Left/Right 凡例は未サポート（pie.rs と挙動を揃えるため明示エラー）。
@@ -1253,6 +1324,144 @@ mod tests {
         // 単一の大きい有限 flow は合計も有限なので受理される(下流も保存則で有限に収まる)。
         let ok = sankey_spec_with_links(vec![flow_link("A", "B", 1e308)]);
         assert!(validate_spec(&ok, &default_limits()).is_ok());
+    }
+
+    // ── VegaRect ガード ──
+
+    /// 最小の有効な VegaRect spec を vegalite フロントエンド経由で作るヘルパ。
+    fn rect_spec_2x2() -> ChartSpec {
+        crate::frontend::vegalite::parse(
+            r#"{
+                "mark": "rect",
+                "data": {"values": [
+                    {"x":"A","y":"X","v":1},
+                    {"x":"B","y":"X","v":2},
+                    {"x":"A","y":"Y","v":3},
+                    {"x":"B","y":"Y","v":4}
+                ]},
+                "encoding": {
+                    "x": {"field":"x"},
+                    "y": {"field":"y"},
+                    "color": {"field":"v","type":"quantitative"}
+                }
+            }"#,
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn vega_rect_oversized_label_is_rejected() {
+        // VegaRect のラベルは spec.categories 経由ではなく ChartKind::VegaRect の
+        // x_labels/y_labels に直接持たれる。既存 max_label_bytes 検証を通り抜けないよう
+        // guard が明示的に走査することを pin する。
+        let mut spec = rect_spec_2x2();
+        if let crate::ir::ChartKind::VegaRect { x_labels, .. } = &mut spec.kind {
+            x_labels[0] = "x".repeat(DEFAULT_MAX_LABEL_BYTES + 1);
+        }
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn vega_rect_grid_over_primitive_cap_is_rejected() {
+        // x_labels.len() × y_labels.len() が categorical primitive 上限を超える
+        // sparse rect(観測ペアはわずかだが distinct ラベルが膨大)を拒否する。
+        // build_rect が dense に grid を確保するため、この積を先取りで押さえる。
+        let mut spec = rect_spec_2x2();
+        if let crate::ir::ChartKind::VegaRect {
+            x_labels,
+            y_labels,
+            cells,
+        } = &mut spec.kind
+        {
+            *x_labels = (0..1001).map(|i| format!("x{i}")).collect();
+            *y_labels = (0..1001).map(|i| format!("y{i}")).collect();
+            // cells の形状不変条件は layout が debug_assert! で検証するが、
+            // guard 側は積さえ確認できればよいので dummy 形状で OK。
+            *cells = vec![vec![None; x_labels.len()]; y_labels.len()];
+        }
+        // 1001 × 1001 = 1,002,001 > 1,000,000
+        assert!(validate_spec(&spec, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn vega_rect_within_grid_cap_is_accepted() {
+        // 通常の小さい rect は validate_spec を通る。上のテストが誤って全 VegaRect を
+        // 拒否していないことを確認する回帰ガード。
+        let spec = rect_spec_2x2();
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn vega_rect_asymmetric_x_over_max_categories_is_rejected() {
+        // x_labels = max_categories + 1, y_labels = 1 の非対称グリッドは
+        // primitive cap (1M) 単体だと通過してしまう (100k+1 × 1 < 1M) が、
+        // max_categories 単独ガードで拒否されるべき。
+        let limits = default_limits();
+        let n = limits.max_categories + 1;
+        let mut spec = rect_spec_2x2();
+        if let crate::ir::ChartKind::VegaRect {
+            x_labels,
+            y_labels,
+            cells,
+        } = &mut spec.kind
+        {
+            *x_labels = (0..n).map(|i| format!("x{i}")).collect();
+            *y_labels = vec!["y".to_string()];
+            *cells = vec![vec![None; n]];
+        }
+        let err = validate_spec(&spec, &limits).unwrap_err();
+        assert!(
+            err.contains("x_labels"),
+            "expected x_labels error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn vega_rect_asymmetric_y_over_max_categories_is_rejected() {
+        // 逆方向 (y のみ肥大化) も同じく個別ガードで拒否されること。
+        let limits = default_limits();
+        let n = limits.max_categories + 1;
+        let mut spec = rect_spec_2x2();
+        if let crate::ir::ChartKind::VegaRect {
+            x_labels,
+            y_labels,
+            cells,
+        } = &mut spec.kind
+        {
+            *x_labels = vec!["x".to_string()];
+            *y_labels = (0..n).map(|i| format!("y{i}")).collect();
+            *cells = vec![vec![None]; n];
+        }
+        let err = validate_spec(&spec, &limits).unwrap_err();
+        assert!(
+            err.contains("y_labels"),
+            "expected y_labels error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn vega_rect_cells_shape_mismatch_is_rejected() {
+        // 直接 ChartSpec を組む callers 向けの境界。cells 行数が y_labels 数と
+        // 不一致 (または各行の列数が x_labels 数と不一致) の場合、renderer の
+        // debug_assert に依存せず guard で明示 Err にする。
+        let mut spec = rect_spec_2x2();
+        if let crate::ir::ChartKind::VegaRect {
+            x_labels,
+            y_labels,
+            cells,
+        } = &mut spec.kind
+        {
+            *x_labels = vec!["A".to_string(), "B".to_string()];
+            *y_labels = vec!["X".to_string()];
+            // 意図的な不整合: 行は 1 だが列が 1 (x_labels は 2)。
+            *cells = vec![vec![None]];
+        }
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(
+            err.contains("cells") || err.contains("不一致"),
+            "expected shape mismatch error, got: {err}"
+        );
     }
 
     #[test]

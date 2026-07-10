@@ -13,6 +13,7 @@ pub enum VegaLiteSpec {
     Point(VlPointSpec),
     Circle(VlCircleSpec),
     Arc(VlArcSpec),
+    Rect(VlRectSpec),
 }
 
 // ────────────────────────────────────────────────
@@ -153,6 +154,26 @@ pub struct MarkArcObject {
 pub enum MarkArc {
     String(MarkArcName),
     Object(MarkArcObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkRectName {
+    Rect,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkRectObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkRectName,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkRect {
+    String(MarkRectName),
+    Object(MarkRectObject),
 }
 
 // ────────────────────────────────────────────────
@@ -298,4 +319,118 @@ pub struct VlArcEncoding {
     pub x: Option<VlChannel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub y: Option<VlChannel>,
+}
+
+// ────────────────────────────────────────────────
+// Rect / heatmap chart (mark: "rect")
+//
+// x/y はカテゴリ、color は quantitative(2色補間)または nominal(パレット割当)。
+// encoding.color.aggregate は "mean" / "sum" 列挙で、schema と runtime の受理範囲を揃える。
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRectSpec {
+    pub mark: MarkRect,
+    pub data: VlData,
+    pub encoding: VlRectEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRectEncoding {
+    pub x: VlRectAxisChannel,
+    pub y: VlRectAxisChannel,
+    pub color: VlRectColorChannel,
+}
+
+/// rect の x/y encoding が受理する type。quantitative は binned ヒートマップ
+/// 想定で MVP 外のため、schema レベルで nominal / ordinal のみ許可する。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlRectAxisType {
+    Nominal,
+    Ordinal,
+}
+
+/// rect の x/y チャネル。`field` は必須、`type` は nominal/ordinal のみ受理。
+/// (`VlChannel` は `type` に任意文字列を許容するが、rect の軸では quantitative
+/// は runtime で reject されるため、schema でも同じ範囲に絞っておく。)
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRectAxisChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlRectAxisType>,
+}
+
+/// rect の color.aggregate に許容される集約方式。frontend が受理する "mean"/"sum" と
+/// 対応する。runtime は `frontend::vegalite::check_unknown_keys` で同じ値だけを許可し、
+/// 他値は strict モードで Err になる。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlRectAggregate {
+    Mean,
+    Sum,
+}
+
+/// rect の color チャネルのうち quantitative variant が受理する type。
+/// `Option` と組合わせて `type` 省略も許容する (省略時は infer に委ねる)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlRectColorQuantitativeType {
+    Quantitative,
+}
+
+/// rect の color チャネルのうち nominal / ordinal を表現する categorical variant の type。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlRectColorCategoricalType {
+    Nominal,
+    Ordinal,
+}
+
+/// rect の color チャネル (quantitative variant)。
+/// `type` は省略可能 (省略時は infer)、`aggregate` は列挙で受理値を絞る。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRectColorQuantitativeChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlRectColorQuantitativeType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aggregate: Option<VlRectAggregate>,
+}
+
+/// rect の color チャネル (categorical variant)。
+/// `type` は必須 (`nominal` / `ordinal`)、`aggregate` は許容しない
+/// (categorical への aggregate は runtime で明示 Err になる)。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRectColorCategoricalChannel {
+    pub field: String,
+    #[serde(rename = "type")]
+    pub field_type: VlRectColorCategoricalType,
+}
+
+/// rect の color チャネル。
+///
+/// - Quantitative: `type` 省略 or `quantitative`、`aggregate` 許容。
+/// - Categorical: `type` は `nominal` / `ordinal`、`aggregate` 不可。
+///
+/// `untagged` で外から見ると同じ JSON 形だが、"quantitative-with-aggregate XOR
+/// nominal/ordinal-without-aggregate" の invariant を schema レベルで表現する。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlRectColorChannel {
+    Quantitative(VlRectColorQuantitativeChannel),
+    Categorical(VlRectColorCategoricalChannel),
 }

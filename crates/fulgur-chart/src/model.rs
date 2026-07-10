@@ -252,6 +252,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Radar => "radar",
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",
+        ChartKind::VegaRect { .. } => "vegaRect",
         ChartKind::Progress => "progress",
         ChartKind::BoxPlot => "boxplot",
         ChartKind::Sparkline => "sparkline",
@@ -295,6 +296,25 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
         })
         .collect();
     let legend_items = spec.series.iter().filter(|s| !s.name.is_empty()).count();
+    let mut counts = Counts {
+        datasets: spec.series.len(),
+        legend_items,
+        x_ticks: spec.categories.len(),
+        y_ticks: 0,
+    };
+    // VegaRect は series/categories が空で、ラベルは ChartKind::VegaRect の
+    // x_labels/y_labels に直接持たれる。既存の counts 算出だと datasets=0, x_ticks=0
+    // と誤報告になるため、rect 側の情報源で上書きする。build_model 側の compute_axes は
+    // VegaRect で None を返すので y_ticks は clobber されない。
+    if let ChartKind::VegaRect {
+        x_labels, y_labels, ..
+    } = &spec.kind
+    {
+        counts.datasets = 1;
+        counts.legend_items = 0; // rect には legend なし
+        counts.x_ticks = x_labels.len();
+        counts.y_ticks = y_labels.len();
+    }
     ChartModel {
         meta: Meta {
             r#type: chart_type_name(&spec.kind).to_string(),
@@ -303,12 +323,7 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
         },
         axes: None,
         series,
-        counts: Counts {
-            datasets: spec.series.len(),
-            legend_items,
-            x_ticks: spec.categories.len(),
-            y_ticks: 0,
-        },
+        counts,
         geometry: None,
     }
 }
