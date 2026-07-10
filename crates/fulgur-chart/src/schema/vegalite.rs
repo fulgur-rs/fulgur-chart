@@ -325,7 +325,7 @@ pub struct VlArcEncoding {
 // Rect / heatmap chart (mark: "rect")
 //
 // x/y はカテゴリ、color は quantitative(2色補間)または nominal(パレット割当)。
-// encoding.color.aggregate として "mean" / "sum" を受理する(schema 上は文字列)。
+// encoding.color.aggregate は "mean" / "sum" 列挙で、schema と runtime の受理範囲を揃える。
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -352,8 +352,19 @@ pub struct VlRectEncoding {
     pub color: VlRectColorChannel,
 }
 
+/// rect の color.aggregate に許容される集約方式。frontend が受理する "mean"/"sum" と
+/// 対応する。runtime は `frontend::vegalite::check_unknown_keys` で同じ値だけを許可し、
+/// 他値は strict モードで Err になる。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlRectAggregate {
+    Mean,
+    Sum,
+}
+
 /// rect の color チャネル。基本の `field`/`type` に加え、`aggregate` を許容する。
-/// `aggregate` は "mean" | "sum" のみ frontend で受理される(他値は strict で Err)。
+/// `aggregate` は列挙で受理値を絞ることで schema と runtime の受理範囲を揃える
+/// (以前は `Option<String>` で任意文字列が受理されていた)。
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VlRectColorChannel {
@@ -361,5 +372,5 @@ pub struct VlRectColorChannel {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub field_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub aggregate: Option<String>,
+    pub aggregate: Option<VlRectAggregate>,
 }

@@ -947,3 +947,90 @@ fn rect_hi_color_matches_vegalite_palette_head() {
         "vegalite palette[0] must remain (76, 120, 168); RECT_COLOR_HI depends on this"
     );
 }
+
+#[test]
+fn rect_mark_aggregate_mean_running_avoids_overflow() {
+    // [1e308, 1e308] の mean は数学的には 1e308。単純 sum → 除算だと intermediate が
+    // inf に overflow して cell が None に落ちる。running mean は finite を返す。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":1.0e308},
+            {"x":"A","y":"X","v":1.0e308}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative","aggregate":"mean"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let cells = match &spec.kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+    // 単一有限セル → degenerate → RECT_COLOR_HI (76, 120, 168)。
+    // 重要なのは None (overflow 起因) にならないこと。
+    let ax = cells[0][0].expect("(A,X) should not be None due to sum overflow");
+    assert_eq!((ax.r, ax.g, ax.b), (76, 120, 168));
+}
+
+#[test]
+fn rect_mark_range_overflow_treated_as_degenerate() {
+    // max - min が inf に overflow するケース → 全セル HI (白 埋没を防ぐ)。
+    // 現状 lerp が NaN → 0 → LO で silently 全白になるバグを pin する。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":-1.0e308},
+            {"x":"B","y":"X","v":1.0e308}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let cells = match &spec.kind {
+        fulgur_chart::ir::ChartKind::VegaRect { cells, .. } => cells.clone(),
+        _ => panic!("expected VegaRect"),
+    };
+    let ax = cells[0][0].expect("(A,X) should be Some (degenerate uses HI)");
+    let bx = cells[0][1].expect("(B,X) should be Some (degenerate uses HI)");
+    // Degenerate treatment → both cells = HI, not both = LO (白背景に埋没する古い挙動)。
+    assert_eq!((ax.r, ax.g, ax.b), (76, 120, 168));
+    assert_eq!((bx.r, bx.g, bx.b), (76, 120, 168));
+}
+
+#[test]
+fn rect_mark_inspect_model_reports_labels() {
+    // build_model_core は spec.series/categories が空だと datasets=0/x_ticks=0 になるが、
+    // VegaRect は x/y_labels に情報が入っているので特殊対応で正しい counts を返す。
+    let json = r#"{
+        "mark": "rect",
+        "data": {"values": [
+            {"x":"A","y":"X","v":1},
+            {"x":"B","y":"X","v":2},
+            {"x":"A","y":"Y","v":3}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"nominal"},
+            "y": {"field":"y","type":"nominal"},
+            "color": {"field":"v","type":"quantitative"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    let model = fulgur_chart::model::build_model_core(&spec);
+    assert_eq!(model.meta.r#type, "vegaRect");
+    assert_eq!(
+        model.counts.x_ticks, 2,
+        "x_ticks should reflect x_labels len"
+    );
+    assert_eq!(
+        model.counts.y_ticks, 2,
+        "y_ticks should reflect y_labels len"
+    );
+    assert_eq!(model.counts.datasets, 1);
+    assert_eq!(model.counts.legend_items, 0);
+}

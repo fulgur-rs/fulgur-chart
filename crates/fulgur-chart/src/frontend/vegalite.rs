@@ -13,6 +13,7 @@
 use crate::ir::*;
 use crate::palette::vegalite_theme;
 use serde_json::{Map, Value};
+use std::collections::HashMap;
 
 /// Vega-Lite サブセットを [`ChartSpec`] へ変換する。
 ///
@@ -815,6 +816,21 @@ fn build_rect(
     let x_labels = distinct_categories(records, Some(x_field));
     let y_labels = distinct_categories(records, Some(y_field));
 
+    // O(1) label → index lookup。distinct_categories の Vec は first-seen で
+    // 決定的であり、HashMap は lookup 専用なので iteration order には依存しない。
+    // 素朴な `.iter().position()` は records × distinct-labels の O(n²) になり、
+    // 100k 件級の入力で billions of string compare になるため事前計算する。
+    let x_idx: HashMap<&str, usize> = x_labels
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.as_str(), i))
+        .collect();
+    let y_idx: HashMap<&str, usize> = y_labels
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.as_str(), i))
+        .collect();
+
     match color_type {
         ColorType::Quantitative => {
             // (row, col) → Vec<f64> の bucket に有限な生値を蓄積してから aggregate を適用。
@@ -824,10 +840,8 @@ fn build_rect(
             for r in records {
                 let xk = field_category(r, Some(x_field));
                 let yk = field_category(r, Some(y_field));
-                let (Some(col), Some(row)) = (
-                    x_labels.iter().position(|l| l == &xk),
-                    y_labels.iter().position(|l| l == &yk),
-                ) else {
+                let (Some(&col), Some(&row)) = (x_idx.get(xk.as_str()), y_idx.get(yk.as_str()))
+                else {
                     continue;
                 };
                 if let Some(v) = r.get(color_field).and_then(Value::as_f64)
@@ -843,8 +857,21 @@ fn build_rect(
                     row.iter()
                         .map(|b| match (aggregate, b.as_slice()) {
                             (_, []) => None,
-                            (Aggregate::Mean, vs) => Some(vs.iter().sum::<f64>() / vs.len() as f64),
-                            (Aggregate::Sum, vs) => Some(vs.iter().sum()),
+                            (Aggregate::Mean, vs) => {
+                                // 累積和 → 除算は f64::MAX 近傍で inf にオーバーフロー。
+                                // running mean (mean_i = mean_{i-1} + (v_i - mean_{i-1}) / i) で
+                                // intermediate overflow を避け、非有限になった場合は明示 None にする。
+                                let mut mean = 0.0_f64;
+                                for (i, v) in vs.iter().enumerate() {
+                                    mean += (v - mean) / (i + 1) as f64;
+                                }
+                                mean.is_finite().then_some(mean)
+                            }
+                            (Aggregate::Sum, vs) => {
+                                // 大きな有限値の総和も inf になり得る。inf は None セル扱いを明示。
+                                let sum: f64 = vs.iter().sum();
+                                sum.is_finite().then_some(sum)
+                            }
                             // 集約なし: 同一 (x,y) セルの「最後の有限数値」を採用。
                             // Task 3/4 の last-write-wins から微差: 非数値/NaN を挟んだ場合、
                             // 現行は push 時にフィルタするため直前の有限数値が残る
@@ -871,12 +898,16 @@ fn build_rect(
                     }
                 }
             }
-            let range = if (max_v - min_v).abs() < f64::EPSILON {
+            // range = max - min が inf に overflow するケース(例: min=-1e308, max=1e308)は
+            // 下の lerp で NaN → 0 → LO (白) に silently 潰れるため degenerate 扱いにする。
+            let raw_range = max_v - min_v;
+            let range = if raw_range.abs() < f64::EPSILON || !raw_range.is_finite() {
                 1.0
             } else {
-                max_v - min_v
+                raw_range
             };
-            let degenerate = !min_v.is_finite() || (max_v - min_v).abs() < f64::EPSILON;
+            let degenerate =
+                !min_v.is_finite() || raw_range.abs() < f64::EPSILON || !raw_range.is_finite();
 
             let cells: Vec<Vec<Option<Color>>> = cell_values
                 .iter()
@@ -902,16 +933,21 @@ fn build_rect(
         ColorType::Nominal => {
             // 色カテゴリの first-seen 順を採取。cat → palette index (mod len)。
             let color_cats = distinct_categories(records, Some(color_field));
+            let color_idx: HashMap<&str, usize> = color_cats
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.as_str(), i))
+                .collect();
             let mut cells: Vec<Vec<Option<Color>>> =
                 vec![vec![None; x_labels.len()]; y_labels.len()];
             for r in records {
                 let xk = field_category(r, Some(x_field));
                 let yk = field_category(r, Some(y_field));
                 let ck = field_category(r, Some(color_field));
-                let (Some(col), Some(row), Some(ci)) = (
-                    x_labels.iter().position(|l| l == &xk),
-                    y_labels.iter().position(|l| l == &yk),
-                    color_cats.iter().position(|l| l == &ck),
+                let (Some(&col), Some(&row), Some(&ci)) = (
+                    x_idx.get(xk.as_str()),
+                    y_idx.get(yk.as_str()),
+                    color_idx.get(ck.as_str()),
                 ) else {
                     continue;
                 };
