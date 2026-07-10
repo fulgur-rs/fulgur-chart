@@ -160,3 +160,48 @@ fn sankey_at_cap_linear_chain_renders_without_stack_overflow() {
     assert!(svg.starts_with("<svg"));
     assert!(!svg.contains("NaN"));
 }
+
+#[test]
+fn sankey_accepts_hover_color_and_renders_identically() {
+    // hoverColorFrom / hoverColorTo は静的レンダラでは描画されないため、
+    // 指定した spec と指定しない spec の SVG が byte-identical になる。
+    let with_hover = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#36a2eb","colorTo":"#ff6384",
+        "hoverColorFrom":"#000000","hoverColorTo":"#ffffff",
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    let without_hover = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#36a2eb","colorTo":"#ff6384",
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    assert_eq!(render(with_hover), render(without_hover));
+}
+
+#[test]
+fn sankey_rejects_invalid_hover_color() {
+    let bad = r##"{"type":"sankey","data":{"datasets":[{
+        "hoverColorFrom":"not-a-color",
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    let err = chartjs::parse(bad, false).unwrap_err();
+    assert!(
+        err.contains("hoverColorFrom"),
+        "error must mention field: {err}"
+    );
+}
+
+#[test]
+fn sankey_hover_color_accepted_by_strict_parser() {
+    // The strict allowlist for `check_unknown_keys_sankey` must include
+    // `hoverColorFrom` / `hoverColorTo`, otherwise strict mode would reject
+    // chartjs-compatible JSON that carries them.
+    let json = r##"{"type":"sankey","data":{"datasets":[{
+        "colorFrom":"#36a2eb","colorTo":"#ff6384",
+        "hoverColorFrom":"#000000","hoverColorTo":"#ffffff",
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict parser must accept hoverColorFrom/hoverColorTo"
+    );
+}

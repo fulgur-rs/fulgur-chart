@@ -1123,6 +1123,10 @@ pub struct SankeyDataset {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_mode: Option<SankeyColorModeOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub hover_color_from: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hover_color_to: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub alpha: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_color: Option<ColorString>,
