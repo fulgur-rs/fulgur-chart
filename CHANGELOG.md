@@ -6,6 +6,71 @@
 
 ## [Unreleased]
 
+## [0.1.19](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.18...fulgur-chart-cli-v0.1.19) - 2026-07-11
+
+### Other
+
+- release
+
+## [0.13.0](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.12.0...fulgur-chart-v0.13.0) - 2026-07-11
+
+### Added
+
+- *(sankey)* dataset.parsing for from/to/flow key remap
+- *(sankey)* per-link color / colorFrom / colorTo overrides
+- *(sankey)* accept hoverColorFrom/hoverColorTo as no-op
+- *(vegalite)* add parse_with_limits API for caller-supplied InputLimits
+- *(layout)* implement vega_rect grid renderer
+- *(vegalite)* strict validation for mark: "rect"
+- *(vegalite)* aggregate mean/sum for rect color channel
+- *(vegalite)* nominal color for mark: "rect" + parse_rect_kind extraction
+- *(vegalite)* parse mark: "rect" with quantitative color
+- *(schema)* add Rect variant to Vega-Lite JSON Schema
+- *(ir)* add ChartKind::VegaRect variant for Vega-Lite rect mark
+- *(vegalite)* add Circle variant to JSON Schema (mark: "circle")
+- *(vegalite)* accept `mark: "circle"` in frontend parser
+- *(chart)* add decimate_segments with per-segment budget proration (fulgur-chart-vzd)
+- *(chart)* decimate huge sparklines (single-segment, auto-on)
+- *(chart)* advertise decimation in sparkline JSON schema (parity)
+- *(scene)* add has_opaque_background() predicate (a7c)
+
+### Fixed
+
+- *(sankey)* collapse hoverColor if-let nesting for clippy
+- *(sankey)* parsing-mapped color-key collision short-circuits color read
+- *(sankey)* strict-validate parsing keys, treat null per-link color as absent
+- *(vegalite)* reject non-string rect axis/color type hints in strict
+- *(vegalite)* tighten strict type validation and schema for rect
+- *(vegalite)* three-tier mean fallback for extreme cancellation
+- *(vegalite)* address Codex round-4 review on PR #126
+- *(vegalite)* add pre-allocation guard in build_rect for oversized inputs
+- *(vegalite)* address Codex round-2 review on PR #126
+- *(vegalite)* address AI review feedback on PR #126
+- *(vegalite)* reject quantitative color with non-numeric values + polish
+- *(vegalite)* apply mark-specific encoding allow-list in strict mode
+- *(vegalite)* forbid extra properties on object-form mark specs
+- *(vegalite)* accept `{"type": "<mark>"}` object form in all mark schemas
+- *(chart)* widen LTTB budget multiply to u64 to avoid wasm32 overflow (fulgur-chart-vzd)
+- *(chart)* prorate LTTB samples across gap segments (fulgur-chart-vzd)
+
+### Other
+
+- *(sankey)* tighten strict-typo assertion to require unknown key name
+- *(vegalite)* snapshot golden for mark: "rect" heatmap
+- *(vegalite)* pin unknown-mark fall-through under strict + add plan
+- *(vegalite)* tighten strict allow-list review nits
+- Merge pull request #124 from fulgur-rs/feat/vl-circle-mark
+- *(vegalite)* pin structural shape rejection + tighten circle SVG smoke
+- *(vegalite)* add SVG smoke test for mark: "circle"
+- *(vegalite)* switch circle section comment to English + doc VlCircleEncoding
+- *(chart)* add sparkline_large cases to membench baseline
+- *(chart)* add sparkline_large decimation cases
+- *(chart)* strengthen sparkline decimation tests (area fire-path, bezier-count proxy, rename)
+- *(raster)* explain why f32 coverage comparison is sound (a7c review)
+- pin opaque-bg zero-partial-alpha invariant (a7c)
+- *(webp)* skip alpha demultiply scan on opaque background (a7c)
+- *(png)* skip alpha demultiply scan on opaque background (a7c)
+
 ## [0.1.19](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.18...fulgur-chart-cli-v0.1.19) - 2026-07-10
 
 ### Other
