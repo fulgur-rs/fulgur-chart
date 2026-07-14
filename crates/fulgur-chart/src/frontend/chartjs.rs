@@ -1883,7 +1883,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         priority: Option<HashMap<String, f64>>,
         #[serde(default)]
         column: Option<HashMap<String, u32>>,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "deserialize_sankey_parsing_opt")]
         parsing: Option<Parsing>,
     }
     #[derive(Deserialize)]
@@ -1894,6 +1894,28 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         to: Option<String>,
         #[serde(default)]
         flow: Option<String>,
+    }
+
+    // chartjs-chart-sankey は `parsing: false` を「remap しない」意で受け付ける。
+    // fulgur-chart の data は既に {from,to,flow} 形式なので false は parsing 未指定と
+    // 等価。object → Some(Parsing) / false → None / true → 明示エラー。
+    fn deserialize_sankey_parsing_opt<'de, D>(d: D) -> Result<Option<Parsing>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Object(Parsing),
+            Bool(bool),
+        }
+        match Option::<Repr>::deserialize(d)? {
+            None | Some(Repr::Bool(false)) => Ok(None),
+            Some(Repr::Object(p)) => Ok(Some(p)),
+            Some(Repr::Bool(true)) => Err(serde::de::Error::custom(
+                "dataset.parsing accepts an object or `false`; `true` is not supported",
+            )),
+        }
     }
 
     let raw: W = serde_json::from_str(json).map_err(|e| e.to_string())?;

@@ -1130,6 +1130,56 @@ pub struct SankeyParsing {
     pub flow: Option<String>,
 }
 
+/// `parsing` は object または `false` を受理する。`false` は chartjs-chart-sankey の
+/// 「remap しない」慣習で、fulgur-chart の内部 flow フォーマット({from,to,flow})が既に
+/// 期待形なので parsing 未指定と等価に扱う。
+///
+/// variant 順に注意: `Keys` を先に置くことで空オブジェクト `{}` は `SankeyParsing`
+/// (all-None) として通り、`Disabled` にフォールバックしない。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SankeyParsingSpec {
+    Keys(SankeyParsing),
+    Disabled(SankeyParsingDisabled),
+}
+
+/// `false` のみを受理するマーカ型。schema では `{"type":"boolean","const":false}` を
+/// 出力し、schema-driven クライアントが `true` を送って runtime error になるのを防ぐ。
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(try_from = "bool", into = "bool")]
+pub struct SankeyParsingDisabled;
+
+impl TryFrom<bool> for SankeyParsingDisabled {
+    type Error = &'static str;
+    fn try_from(b: bool) -> Result<Self, Self::Error> {
+        if b {
+            Err("dataset.parsing accepts an object or `false`; `true` is not supported")
+        } else {
+            Ok(SankeyParsingDisabled)
+        }
+    }
+}
+
+impl From<SankeyParsingDisabled> for bool {
+    fn from(_: SankeyParsingDisabled) -> Self {
+        false
+    }
+}
+
+impl JsonSchema for SankeyParsingDisabled {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SankeyParsingDisabled".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "boolean",
+            "const": false,
+            "description": "Explicit `false` disables parsing key remapping (equivalent to omitting `parsing`)."
+        })
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SankeyDataset {
@@ -1174,7 +1224,7 @@ pub struct SankeyDataset {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub column: Option<std::collections::HashMap<String, u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parsing: Option<SankeyParsing>,
+    pub parsing: Option<SankeyParsingSpec>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
