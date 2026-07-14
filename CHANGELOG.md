@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+## [0.1.20](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.19...fulgur-chart-cli-v0.1.20) - 2026-07-14
+
+### Other
+
+- updated the following local packages: fulgur-chart
+
 ### Added
 
 - *(sankey)* accept `dataset.parsing: false` as a no-op (chartjs-chart-sankey compat)
