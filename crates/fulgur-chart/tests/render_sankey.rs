@@ -438,6 +438,48 @@ fn sankey_parsing_strict_rejects_typo_in_parsing_object() {
 }
 
 #[test]
+fn sankey_parsing_false_is_noop() {
+    // chartjs-chart-sankey は `parsing: false` を「remap しない」意で受け付ける。
+    // fulgur-chart の data は既に {from,to,flow} 内部形式のため、`false` は
+    // parsing 未指定と等価。描画結果が baseline と完全一致することで確認する。
+    let baseline = r#"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"#;
+    let with_false = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":false,
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"#;
+    assert_eq!(render(baseline), render(with_false));
+}
+
+#[test]
+fn sankey_parsing_false_strict_ok() {
+    // strict mode でも `parsing:false` は受理される(chartjs 互換の no-op)。
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":false,
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"#;
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict parser must accept parsing:false"
+    );
+}
+
+#[test]
+fn sankey_parsing_true_rejected() {
+    // `parsing: true` は chartjs でも未定義。明示エラーで拒否する。
+    let json = r#"{"type":"sankey","data":{"datasets":[{
+        "parsing":true,
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"#;
+    let err = chartjs::parse(json, false).unwrap_err();
+    assert!(
+        err.to_lowercase().contains("parsing"),
+        "error mentions parsing: {err}"
+    );
+}
+
+#[test]
 fn sankey_parsing_maps_from_to_reserved_color_key() {
     // parsing.from="colorFrom" のように mapped key が固定色キーと衝突するケース。
     // take_color は該当キーを色として読まないため、"A"/"B" がノードIDとして扱われる。

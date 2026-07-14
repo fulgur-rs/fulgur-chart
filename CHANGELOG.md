@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- *(sankey)* accept `dataset.parsing: false` as a no-op (chartjs-chart-sankey compat)
+
 ## [0.1.19](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.18...fulgur-chart-cli-v0.1.19) - 2026-07-11
 
 ### Other
