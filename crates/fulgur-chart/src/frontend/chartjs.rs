@@ -149,12 +149,13 @@ struct RawDataset {
 }
 
 /// `data`: 数値配列(カテゴリ系)、ネスト配列(boxplot)、または点オブジェクト配列(scatter/bubble)。
-/// untagged は順に試す: `Nums` → `[1,2]`、`Boxes` → `[[1,2,3,4,5]]`、`Points` → `[{x,y}]`。
+/// untagged は順に試す: `Nums` → `[1, null, 2]`、`Boxes` → `[[1,2,3,4,5], null]`、`Points` → `[{x,y}]`。
+/// `Nums` / `Boxes` は要素の `null` を許容し、frontend 境界で `f64::NAN` に写像する。
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum DataField {
-    Nums(Vec<f64>),
-    Boxes(Vec<Vec<f64>>),
+    Nums(Vec<Option<f64>>),
+    Boxes(Vec<Option<Vec<f64>>>),
     Points(Vec<RawPoint>),
 }
 
@@ -167,10 +168,10 @@ struct RawPoint {
 }
 
 impl DataField {
-    /// 数値配列なら採用、それ以外は空。カテゴリ系チャートの `values` 用。
+    /// 数値配列なら採用（`None` → `f64::NAN`)、それ以外は空。カテゴリ系チャートの `values` 用。
     fn into_values(self) -> Vec<f64> {
         match self {
-            DataField::Nums(v) => v,
+            DataField::Nums(v) => v.into_iter().map(|x| x.unwrap_or(f64::NAN)).collect(),
             _ => vec![],
         }
     }
@@ -191,29 +192,35 @@ impl DataField {
     }
 
     /// ネスト配列なら IR の `BoxPoint` へ変換する。boxplot の `box_points` 用。
-    /// 各行は厳密に [min, q1, median, q3, max] の 5 要素でなければならない。
-    /// 5 要素以外の行はバイト数ガードをバイパスできるため拒否し NaN 行として扱う。
+    /// `None` 行は全 NaN の BoxPoint に写像する（layout 側で欠損として扱われる)。
+    /// 各非 null 行は厳密に [min, q1, median, q3, max] の 5 要素でなければならない。
+    /// 5 要素以外の非 null 行はバイト数ガードをバイパスできるため拒否し NaN 行として扱う。
     fn into_box_points(self) -> Vec<crate::ir::BoxPoint> {
         match self {
             DataField::Boxes(rows) => rows
                 .into_iter()
-                .map(|row| {
-                    if row.len() != 5 {
-                        return crate::ir::BoxPoint {
-                            min: f64::NAN,
-                            q1: f64::NAN,
-                            median: f64::NAN,
-                            q3: f64::NAN,
-                            max: f64::NAN,
-                        };
-                    }
-                    crate::ir::BoxPoint {
-                        min: row[0],
-                        q1: row[1],
-                        median: row[2],
-                        q3: row[3],
-                        max: row[4],
-                    }
+                .map(|row| match row {
+                    None => crate::ir::BoxPoint {
+                        min: f64::NAN,
+                        q1: f64::NAN,
+                        median: f64::NAN,
+                        q3: f64::NAN,
+                        max: f64::NAN,
+                    },
+                    Some(cols) if cols.len() == 5 => crate::ir::BoxPoint {
+                        min: cols[0],
+                        q1: cols[1],
+                        median: cols[2],
+                        q3: cols[3],
+                        max: cols[4],
+                    },
+                    Some(_) => crate::ir::BoxPoint {
+                        min: f64::NAN,
+                        q1: f64::NAN,
+                        median: f64::NAN,
+                        q3: f64::NAN,
+                        max: f64::NAN,
+                    },
                 })
                 .collect(),
             _ => vec![],
@@ -2956,6 +2963,37 @@ mod tests {
         let nums: String = (0..10_001).map(|_| "1").collect::<Vec<_>>().join(",");
         let json = format!(r#"{{"type":"treemap","data":{{"datasets":[{{"tree":[{nums}]}}]}}}}"#);
         assert!(parse(&json, false).is_err());
+    }
+
+    #[test]
+    fn parse_line_null_becomes_nan_in_series() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, null, 3]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        assert_eq!(spec.series[0].values.len(), 3);
+        assert_eq!(spec.series[0].values[0], 1.0);
+        assert!(spec.series[0].values[1].is_nan());
+        assert_eq!(spec.series[0].values[2], 3.0);
+    }
+
+    #[test]
+    fn parse_bar_null_becomes_nan_in_series() {
+        let json = r#"{"type":"bar","data":{"labels":["a","b"],
+            "datasets":[{"data":[null, 5]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        assert!(spec.series[0].values[0].is_nan());
+        assert_eq!(spec.series[0].values[1], 5.0);
+    }
+
+    #[test]
+    fn parse_boxplot_null_row_becomes_nan_box_point() {
+        let json = r#"{"type":"boxplot","data":{"labels":["a","b"],
+            "datasets":[{"data":[[1,2,3,4,5], null]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        let bp = spec.series[0].box_points[1];
+        assert!(bp.min.is_nan());
+        assert!(bp.max.is_nan());
+        assert!(bp.median.is_nan());
     }
 
     #[test]
