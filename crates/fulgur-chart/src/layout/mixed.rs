@@ -134,33 +134,40 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             segs
         };
 
-        // area(背面): 有効点全体でひとつの閉多角形を描く(line.rs と同挙動)。
-        if ser.area && !valid.is_empty() {
+        // area(背面): 線と同じくセグメント単位で 1 つずつ閉多角形を描く(line.rs と同挙動)。
+        // gap を跨いだ塗りを防ぐ。非 null / 非 gap 系列では 1 セグメントで従来と同一のパス
+        // データを出力する(バイト不変)。
+        if ser.area {
             let baseline_y = frame
                 .ys
                 .map(0.0_f64.clamp(frame.ticks.min, frame.ticks.max));
-            let mut d = String::new();
-            for (k, &(x, y, _)) in valid.iter().enumerate() {
-                let cmd = if k == 0 { 'M' } else { 'L' };
-                write!(d, "{} {} {} ", cmd, fmt_num(x), fmt_num(y)).unwrap();
+            for seg in &segments {
+                if seg.is_empty() {
+                    continue;
+                }
+                let mut d = String::new();
+                for (k, &(x, y, _)) in seg.iter().enumerate() {
+                    let cmd = if k == 0 { 'M' } else { 'L' };
+                    write!(d, "{} {} {} ", cmd, fmt_num(x), fmt_num(y)).unwrap();
+                }
+                let (last_x, _, _) = seg[seg.len() - 1];
+                let (first_x, _, _) = seg[0];
+                write!(
+                    d,
+                    "L {} {} L {} {} Z",
+                    fmt_num(last_x),
+                    fmt_num(baseline_y),
+                    fmt_num(first_x),
+                    fmt_num(baseline_y)
+                )
+                .unwrap();
+                items.push(Prim::Path {
+                    d,
+                    fill: Some(ser.fill_at(0)),
+                    stroke: None,
+                    stroke_width: 0.0,
+                });
             }
-            let (last_x, _, _) = valid[valid.len() - 1];
-            let (first_x, _, _) = valid[0];
-            write!(
-                d,
-                "L {} {} L {} {} Z",
-                fmt_num(last_x),
-                fmt_num(baseline_y),
-                fmt_num(first_x),
-                fmt_num(baseline_y)
-            )
-            .unwrap();
-            items.push(Prim::Path {
-                d,
-                fill: Some(ser.fill_at(0)),
-                stroke: None,
-                stroke_width: 0.0,
-            });
         }
 
         // 線: セグメントごとに描く(gap で線が途切れる)。
@@ -261,6 +268,40 @@ mod tests {
     use crate::font::DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::text::TextMeasurer;
+
+    #[test]
+    fn mixed_line_with_null_and_fill_splits_area_at_gap() {
+        // 混合(bar+line)の line 系列で fill:true + 欠損があるとき、area は gap を跨がず
+        // 2 つの閉多角形に分割される(line.rs と同挙動)。
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a","b","c","d","e"],
+               "datasets":[
+                 {"type":"line","data":[1, 2, null, 4, 5], "fill": true}
+               ]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let area_paths = scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p,
+                    Prim::Path {
+                        fill: Some(_),
+                        stroke: None,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            area_paths, 2,
+            "mixed line area should split into 2 polygons at the gap"
+        );
+    }
 
     #[test]
     fn mixed_bar_and_line_skip_nan() {

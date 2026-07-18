@@ -167,6 +167,18 @@ struct RawPoint {
     r: Option<f64>,
 }
 
+/// 全フィールドが NaN の欠損 `BoxPoint`。boxplot の null 行(row=null, 全 None の
+/// フラット配列、5 要素でない非 null 行)を layout 側の欠損として一貫に扱うための共通値。
+fn nan_box_point() -> crate::ir::BoxPoint {
+    crate::ir::BoxPoint {
+        min: f64::NAN,
+        q1: f64::NAN,
+        median: f64::NAN,
+        q3: f64::NAN,
+        max: f64::NAN,
+    }
+}
+
 impl DataField {
     /// 数値配列なら採用（`None` → `f64::NAN`)、それ以外は空。カテゴリ系チャートの `values` 用。
     fn into_values(self) -> Vec<f64> {
@@ -195,18 +207,18 @@ impl DataField {
     /// `None` 行は全 NaN の BoxPoint に写像する（layout 側で欠損として扱われる)。
     /// 各非 null 行は厳密に [min, q1, median, q3, max] の 5 要素でなければならない。
     /// 5 要素以外の非 null 行はバイト数ガードをバイパスできるため拒否し NaN 行として扱う。
+    ///
+    /// 加えて全要素が `None` のフラット配列(`data:[null, null]` 等)も受理する:
+    /// untagged enum は `Boxes` より先に `Nums` にマッチするため、スキーマ有効な
+    /// 「行が全て null の boxplot」は `Nums(Vec<None>)` として届く。layout は
+    /// 全 NaN 行を欠損として扱うので、空チャートではなく null 行数と同じ長さの
+    /// 全 NaN box 列に写像する。
     fn into_box_points(self) -> Vec<crate::ir::BoxPoint> {
         match self {
             DataField::Boxes(rows) => rows
                 .into_iter()
                 .map(|row| match row {
-                    None => crate::ir::BoxPoint {
-                        min: f64::NAN,
-                        q1: f64::NAN,
-                        median: f64::NAN,
-                        q3: f64::NAN,
-                        max: f64::NAN,
-                    },
+                    None => nan_box_point(),
                     Some(cols) if cols.len() == 5 => crate::ir::BoxPoint {
                         min: cols[0],
                         q1: cols[1],
@@ -214,15 +226,12 @@ impl DataField {
                         q3: cols[3],
                         max: cols[4],
                     },
-                    Some(_) => crate::ir::BoxPoint {
-                        min: f64::NAN,
-                        q1: f64::NAN,
-                        median: f64::NAN,
-                        q3: f64::NAN,
-                        max: f64::NAN,
-                    },
+                    Some(_) => nan_box_point(),
                 })
                 .collect(),
+            DataField::Nums(v) if v.iter().all(Option::is_none) => {
+                vec![nan_box_point(); v.len()]
+            }
             _ => vec![],
         }
     }
@@ -499,9 +508,19 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
 
     // データ形状とチャート種の整合を検査する。点ベース(scatter/bubble)は {x,y(,r)}
     // 配列、カテゴリ系は数値配列を要する。非空の不一致は空チャート化せず明示エラーに。
+    // 例外: boxplot の全 None Nums(`data:[null, null]` 等)は untagged 順で `Nums` にマッチする
+    // スキーマ有効な入力で、`into_box_points` が全 NaN 行に写像するため mismatch 扱いしない。
     for ds in &raw.data.datasets {
         let mismatched = match &ds.data {
-            DataField::Nums(v) => (is_point_based || is_boxplot) && !v.is_empty(),
+            DataField::Nums(v) => {
+                if is_point_based {
+                    !v.is_empty()
+                } else if is_boxplot {
+                    !v.is_empty() && !v.iter().all(Option::is_none)
+                } else {
+                    false
+                }
+            }
             DataField::Boxes(v) => !is_boxplot && !v.is_empty(),
             DataField::Points(v) => !is_point_based && !v.is_empty(),
         };
@@ -510,6 +529,22 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 "チャート種 {} とデータ形状が一致しません",
                 raw.chart_type
             ));
+        }
+    }
+
+    // sparkline は現状 layout 側で欠損を扱えないため(NaN 値が y=0 や不正な control point に
+    // マップされる)、data 内の null は parse 時に拒否する。ライン/バー/boxplot のみで
+    // null を受理する Task17 のスコープに合わせるための保険。将来 sparkline も対応した
+    // 段階でこのガードを外す。
+    if matches!(kind, crate::ir::ChartKind::Sparkline) {
+        for ds in &raw.data.datasets {
+            if let DataField::Nums(v) = &ds.data
+                && v.iter().any(Option::is_none)
+            {
+                return Err(
+                    "sparkline は data 内の null を受け付けません (対応は別 issue)".to_string(),
+                );
+            }
         }
     }
 
@@ -2994,6 +3029,40 @@ mod tests {
         assert!(bp.min.is_nan());
         assert!(bp.max.is_nan());
         assert!(bp.median.is_nan());
+    }
+
+    #[test]
+    fn parse_boxplot_all_null_data_accepted() {
+        // untagged enum は Boxes より先に Nums に match するため、行が全て null の
+        // boxplot(スキーマ有効入力)は Nums(Vec<None>) として届く。全 NaN 行の box 列
+        // として受理されるべき(空チャート化させない)。
+        let json = r#"{"type":"boxplot","data":{"labels":["a","b"],
+            "datasets":[{"data":[null, null]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        assert_eq!(spec.series[0].box_points.len(), 2);
+        for bp in &spec.series[0].box_points {
+            assert!(bp.min.is_nan() && bp.max.is_nan());
+        }
+    }
+
+    #[test]
+    fn parse_boxplot_single_null_data_accepted() {
+        let json = r#"{"type":"boxplot","data":{"labels":["a"],
+            "datasets":[{"data":[null]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        assert_eq!(spec.series[0].box_points.len(), 1);
+        assert!(spec.series[0].box_points[0].min.is_nan());
+    }
+
+    #[test]
+    fn parse_sparkline_rejects_null() {
+        // sparkline は layout 側で NaN 欠損を扱えないため、data 内の null は parse 段階で拒否。
+        let json = r#"{"type":"sparkline","data":{"datasets":[{"data":[1, null, 3]}]}}"#;
+        let err = parse(json, false).expect_err("sparkline should reject null");
+        assert!(
+            err.contains("sparkline"),
+            "error should mention sparkline: {err}"
+        );
     }
 
     #[test]
