@@ -124,11 +124,17 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     } else {
         // dodge 配置(従来の stacked=false の挙動)
         // value_stacked=true のとき値域は value_domain が担当するため geometry は変わらない。
+        // 非有限値(null→NaN も含む)はギャップとしてスキップ。
         for i in 0..spec.categories.len() {
             let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
             for (sidx, ser) in spec.series.iter().enumerate() {
                 let bx = band_left + band_w * BAND_PAD_RATIO + sidx as f64 * bar_w;
-                let v = ser.values.get(i).copied().unwrap_or(0.0);
+                let Some(&v) = ser.values.get(i) else {
+                    continue;
+                };
+                if !v.is_finite() {
+                    continue;
+                }
                 let vy = frame.ys.map(v);
                 let y_top = vy.min(baseline_y);
                 let h = (vy - baseline_y).abs();
@@ -469,9 +475,15 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
         } else {
             // dodge 配置(従来の stacked=false 挙動)
+            // 非有限値(null→NaN も含む)はギャップとしてスキップ。
             for (sidx, ser) in spec.series.iter().enumerate() {
                 let by = band_top + band_h * BAND_PAD_RATIO + sidx as f64 * bar_h;
-                let v = ser.values.get(i).copied().unwrap_or(0.0);
+                let Some(&v) = ser.values.get(i) else {
+                    continue;
+                };
+                if !v.is_finite() {
+                    continue;
+                }
                 let vx = xs.map(v);
                 let x = vx.min(baseline_x);
                 let w = (vx - baseline_x).abs();
@@ -482,7 +494,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     h: (bar_h * BAR_FILL_RATIO).max(0.0),
                     fill: ser.fill_at(i),
                 });
-                if spec.data_labels && ser.values.get(i).is_some() && v.is_finite() {
+                if spec.data_labels {
                     let cy = by + (bar_h * BAR_FILL_RATIO) / 2.0 + label_font * TEXT_BASELINE_RATIO;
                     // 正は棒右端の右(Start)、負は左端の左(End)に LABEL_GAP 分離す。
                     let (lx, anchor) = if v >= base_v {
@@ -637,5 +649,61 @@ mod geom_tests {
         assert_eq!(cat0.len(), 2);
         assert_eq!(cat0[0].x, cat0[1].x);
         assert_eq!(cat0[0].w, cat0[1].w);
+    }
+
+    #[test]
+    fn vertical_dodge_skips_nan_value() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10, null, 30]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        assert!(
+            !boxes.iter().any(|b| b.index == 1),
+            "NaN category should have no BarBox: {:?}",
+            boxes
+        );
+        assert!(boxes.iter().any(|b| b.index == 0));
+        assert!(boxes.iter().any(|b| b.index == 2));
+    }
+
+    #[test]
+    fn horizontal_dodge_skips_nan_value() {
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10, null, 30]}]},
+               "options":{"indexAxis":"y"}}"#,
+            false,
+        )
+        .unwrap();
+        let scene = super::build(&spec, &m);
+        let rects: Vec<_> = scene
+            .items
+            .iter()
+            .filter(|p| matches!(p, crate::scene::Prim::Rect { .. }))
+            .collect();
+        let spec_no_null = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10, 20, 30]}]},
+               "options":{"indexAxis":"y"}}"#,
+            false,
+        )
+        .unwrap();
+        let scene_full = super::build(&spec_no_null, &m);
+        let rects_full: Vec<_> = scene_full
+            .items
+            .iter()
+            .filter(|p| matches!(p, crate::scene::Prim::Rect { .. }))
+            .collect();
+        assert_eq!(
+            rects_full.len() - rects.len(),
+            1,
+            "NaN カテゴリで rect が 1 個減るはず"
+        );
     }
 }
