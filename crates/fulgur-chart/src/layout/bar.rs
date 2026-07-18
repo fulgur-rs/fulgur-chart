@@ -27,8 +27,8 @@ pub struct BarBox {
 
 /// 縦棒の全データ矩形を build_vertical と同一の式で算出する単一の真実源。
 /// レンダラ(`build_vertical`)とモデル(`model::Geometry`)の両方がこれを呼ぶ。
-/// 非積み上げ: category 外側 × series 内側で全 (i,sidx) を生成(欠損値は `unwrap_or(0.0)`、
-///   present な非有限値は build_vertical と同様 NaN 矩形になる)。
+/// 非積み上げ (dodge): category 外側 × series 内側で有限値のみ box を生成する。
+///   欠損値 (get() None) と非有限値 (NaN / ±∞) は skip され、box は emit されない。
 /// 積み上げ: category 外側 × series 内側で有限値のみ値空間に積む。
 pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec<BarBox> {
     let n = spec.categories.len().max(1);
@@ -215,7 +215,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 ink,
                 b.value,
             ));
-        } else if ser.values.get(b.index).is_some() && b.value.is_finite() {
+        } else {
             // 正は上端の少し上(- LABEL_GAP)、負は下端の下にラベル。負側は
             // LABEL_GAP ではなく + label_font(≒1行高)を足すのは、SVG の y が
             // ベースラインで字面が上に伸びるため、僅かな隙間だと棒下端に重なるから。

@@ -13,7 +13,8 @@ const MARKER_R: f64 = 3.0;
 /// line チャートのモデル幾何用の全マーカー点（`model::build_model` が参照）。
 /// レンダリング経路の `build()` は点を独立に計算しデシメーションするため、巨大データでは
 /// この全点列と実際の描画点は乖離する（モデルは chart.js 数値照合用＝間引きなしが正しい）。
-/// カテゴリごとに `line_category_x + ys.map` で計算し、欠損値は 0.0 扱い。
+/// 欠損値 (get() None) と非有限値 (NaN / ±∞) は skip し point は emit しない
+/// (bar の `vertical_bar_boxes` と同じ null 挙動)。
 pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
@@ -22,8 +23,13 @@ pub fn line_points(
     let mut pts = Vec::new();
     for (sidx, ser) in spec.series.iter().enumerate() {
         for i in 0..spec.categories.len() {
+            let Some(&v) = ser.values.get(i) else {
+                continue;
+            };
+            if !v.is_finite() {
+                continue;
+            }
             let x = common::line_category_x(spec, frame, i, n);
-            let v = ser.values.get(i).copied().unwrap_or(0.0);
             pts.push(crate::layout::scatter::PointBox {
                 series: sidx,
                 index: i,
