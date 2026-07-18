@@ -1,0 +1,7 @@
+{
+  "type": "boxplot",
+  "data": {
+    "labels": ["A","B","C"],
+    "datasets": [{"data":[[1,2,3,4,5], null, [10,20,30,40,50]]}]
+  }
+}
