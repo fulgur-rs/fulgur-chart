@@ -147,6 +147,21 @@ pub enum LegendPos {
     None,
 }
 
+/// Radar / polarArea の r スケール。既存の `AxisSpec` は cartesian 向けに
+/// title/offset/grid を含むため再利用しない。cartesian の
+/// `suggestedMin/suggestedMax/beginAtZero` と同じセマンティクス:
+/// - `min` / `max`: hard override (データ範囲外でも従う)
+/// - `suggested_min` / `suggested_max`: expand-only (データ範囲を広げる方向のみ)
+/// - `begin_at_zero`: true でドメインに 0 を含める
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RadialAxis {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub suggested_min: Option<f64>,
+    pub suggested_max: Option<f64>,
+    pub begin_at_zero: bool,
+}
+
 /// outlabeledPie / outlabeledDoughnut の引き出しラベル設定。
 #[derive(Clone, Debug, PartialEq)]
 pub struct OutlabelConfig {
@@ -397,6 +412,8 @@ pub struct ChartSpec {
     pub theme: Theme,
     /// line/area 用デシメーション設定(frontend で解決済み)。
     pub decimation: Decimation,
+    /// Radar / polarArea 専用の r スケール。他 kind では常に None。
+    pub radial_axis: Option<RadialAxis>,
 }
 
 #[cfg(test)]
@@ -514,5 +531,71 @@ mod tests {
         assert_eq!(group.children.len(), 1);
         assert_eq!(group.children[0].value, 3.0);
         assert!(leaf.children.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod radial_axis_tests {
+    use super::*;
+
+    /// ChartSpec を最小構成で組んで `radial_axis` フィールドの既定を検証する。
+    /// `ChartSpec` は `Default` を実装していないので、リテラル構築し `radial_axis: None`
+    /// を明示せずに初期化パスをすべて通ることを確認する。
+    fn minimal_spec() -> ChartSpec {
+        ChartSpec {
+            kind: ChartKind::Line,
+            series: vec![],
+            categories: vec![],
+            x_axis: AxisSpec {
+                title: None,
+                min: None,
+                max: None,
+                suggested_min: None,
+                suggested_max: None,
+                begin_at_zero: false,
+                offset: false,
+                grid: true,
+            },
+            y_axis: AxisSpec {
+                title: None,
+                min: None,
+                max: None,
+                suggested_min: None,
+                suggested_max: None,
+                begin_at_zero: false,
+                offset: false,
+                grid: true,
+            },
+            legend: LegendPos::None,
+            title: None,
+            width: 600.0,
+            height: 400.0,
+            data_labels: false,
+            theme: Theme::default(),
+            decimation: Decimation::default(),
+            radial_axis: None,
+        }
+    }
+
+    #[test]
+    fn radial_axis_default_is_none_on_chart_spec() {
+        let spec = minimal_spec();
+        assert!(spec.radial_axis.is_none());
+    }
+
+    #[test]
+    fn radial_axis_stores_all_five_knobs() {
+        let a = RadialAxis {
+            min: Some(0.0),
+            max: Some(100.0),
+            suggested_min: Some(-5.0),
+            suggested_max: Some(120.0),
+            begin_at_zero: true,
+        };
+        assert_eq!(a.min, Some(0.0));
+        assert_eq!(a.max, Some(100.0));
+        assert_eq!(a.suggested_min, Some(-5.0));
+        assert_eq!(a.suggested_max, Some(120.0));
+        assert!(a.begin_at_zero);
     }
 }

@@ -708,6 +708,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         data_labels,
         theme,
         decimation,
+        radial_axis: None,
     })
 }
 
@@ -1466,6 +1467,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 
@@ -1824,6 +1826,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 
@@ -2166,6 +2169,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 
@@ -2389,6 +2393,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 
@@ -2551,6 +2556,7 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 
