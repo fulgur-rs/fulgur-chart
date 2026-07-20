@@ -412,6 +412,30 @@ pub struct XYRPoint {
 // Radar chart
 // ────────────────────────────────────────────────
 
+// Radar / polarArea 共有の radial linear scale。cartesian AxisOptions とは別立て:
+// radial では意味を持たない stacked / offset / title / grid を混ぜない。
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RadialLinearAxisOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub begin_at_zero: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RadialLinearScales {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r: Option<RadialLinearAxisOptions>,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RadarSpec {
@@ -460,6 +484,8 @@ pub struct RadarOptions {
     pub plugins: Option<CommonPlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scales: Option<RadialLinearScales>,
 }
 
 // ────────────────────────────────────────────────
@@ -1275,7 +1301,7 @@ pub enum SankeySizeOption {
 
 #[cfg(test)]
 mod tests {
-    use super::ChartJsSpec;
+    use super::{ChartJsSpec, RadarOptions};
 
     /// sankey の dataset 契約(ちょうど 1 個)が生成 JSON Schema に minItems/maxItems=1
     /// として現れること。parser の `datasets.len() != 1` チェックと一致させ、schema 駆動の
@@ -1302,5 +1328,46 @@ mod tests {
             json.contains("\"maximum\":32768"),
             "sankey の寸法に maximum:32768 が必要"
         );
+    }
+
+    #[test]
+    fn radar_options_accepts_scales_r_all_knobs() {
+        let json = r##"{
+            "plugins": {},
+            "scales": { "r": {
+                "min": 0, "max": 100,
+                "suggestedMin": -5, "suggestedMax": 120,
+                "beginAtZero": true
+            }}
+        }"##;
+        let v: RadarOptions = serde_json::from_str(json).unwrap();
+        let r = v.scales.unwrap().r.unwrap();
+        assert_eq!(r.min, Some(0.0));
+        assert_eq!(r.max, Some(100.0));
+        assert_eq!(r.suggested_min, Some(-5.0));
+        assert_eq!(r.suggested_max, Some(120.0));
+        assert_eq!(r.begin_at_zero, Some(true));
+    }
+
+    #[test]
+    fn radar_scales_rejects_typo_in_r_axis() {
+        let json = r##"{
+            "scales": { "r": { "beginAtZeroo": true } }
+        }"##;
+        // RadarOptions doesn't derive Debug (mirrors other schema structs); use
+        // `.err().unwrap()` so we don't need `T: Debug` for `unwrap_err()`.
+        let err = serde_json::from_str::<RadarOptions>(json)
+            .err()
+            .expect("expected deserialization error");
+        assert!(err.to_string().contains("beginAtZeroo"), "err: {err}");
+    }
+
+    #[test]
+    fn radar_scales_rejects_unknown_axis() {
+        let json = r##"{ "scales": { "x": { "min": 0 } } }"##;
+        let err = serde_json::from_str::<RadarOptions>(json)
+            .err()
+            .expect("expected deserialization error");
+        assert!(err.to_string().contains("x"), "err: {err}");
     }
 }
