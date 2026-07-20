@@ -532,18 +532,26 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         }
     }
 
-    // sparkline は現状 layout 側で欠損を扱えないため(NaN 値が y=0 や不正な control point に
-    // マップされる)、data 内の null は parse 時に拒否する。ライン/バー/boxplot のみで
-    // null を受理する Task17 のスコープに合わせるための保険。将来 sparkline も対応した
-    // 段階でこのガードを外す。
-    if matches!(kind, crate::ir::ChartKind::Sparkline) {
+    // line/bar/mixed/boxplot 以外の数値系チャートは layout 側で NaN/欠損を扱う保証が
+    // ないため(sparkline は y=0 に丸まり、radar/polarArea/gauge/progress/pie 等は
+    // 不正な control point や 0 頂点として描画されうる)、data 内の null は parse 時に
+    // 拒否する。将来対応した種別を追加した段階で allowlist を広げる。
+    let supports_null_data = matches!(
+        kind,
+        crate::ir::ChartKind::Line
+            | crate::ir::ChartKind::Bar { .. }
+            | crate::ir::ChartKind::Mixed
+            | crate::ir::ChartKind::BoxPlot
+    );
+    if !supports_null_data {
         for ds in &raw.data.datasets {
             if let DataField::Nums(v) = &ds.data
                 && v.iter().any(Option::is_none)
             {
-                return Err(
-                    "sparkline は data 内の null を受け付けません (対応は別 issue)".to_string(),
-                );
+                return Err(format!(
+                    "{} は data 内の null を受け付けません",
+                    raw.chart_type
+                ));
             }
         }
     }
@@ -3062,6 +3070,38 @@ mod tests {
         assert!(
             err.contains("sparkline"),
             "error should mention sparkline: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_pie_rejects_null() {
+        // pie は layout 側で NaN スライスを扱えない(0 頂点・不正な弧になる)ため
+        // data 内の null は parse 段階で拒否。
+        let json = r#"{"type":"pie","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, null, 3]}]}}"#;
+        let err = parse(json, false).expect_err("pie should reject null");
+        assert!(err.contains("pie"), "error should mention pie: {err}");
+    }
+
+    #[test]
+    fn parse_radar_rejects_null() {
+        // radar は layout 側で NaN 頂点を 0 に丸めるため、data 内の null は parse
+        // 段階で拒否する(silent に 0 頂点で描画されないように)。
+        let json = r#"{"type":"radar","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, null, 3]}]}}"#;
+        let err = parse(json, false).expect_err("radar should reject null");
+        assert!(err.contains("radar"), "error should mention radar: {err}");
+    }
+
+    #[test]
+    fn parse_polar_area_rejects_null() {
+        // polarArea も radar と同じく NaN を安全に扱えないため parse 段階で拒否。
+        let json = r#"{"type":"polarArea","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, null, 3]}]}}"#;
+        let err = parse(json, false).expect_err("polarArea should reject null");
+        assert!(
+            err.contains("polarArea"),
+            "error should mention polarArea: {err}"
         );
     }
 
