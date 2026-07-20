@@ -37,7 +37,7 @@ pub enum ChartJsSpec {
     Sparkline(SparklineSpec),
     Gauge(GaugeSpec),
     #[serde(rename = "polarArea")]
-    PolarArea(PieSpec),
+    PolarArea(PolarAreaSpec),
     #[serde(rename = "radialGauge")]
     RadialGauge(RadialGaugeSpec),
     #[serde(rename = "outlabeledPie")]
@@ -297,6 +297,40 @@ pub struct PieOptions {
     pub plugins: Option<CommonPlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOptions>,
+}
+
+// ────────────────────────────────────────────────
+// PolarArea chart
+// Pie とデータ形状は共通(PieData を再利用)だが r スケールを持つため
+// options を分けている。PieOptions に scales を足すと pie/doughnut が
+// 黙って scales を受理してしまい "schema 受理 → 効かない" パリティ破れになる。
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PolarAreaSpec {
+    pub data: PieData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<PolarAreaOptions>,
+    /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
+    pub width: Option<f64>,
+    /// Canvas height in px. Defaults to fulgur's built-in size when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
+    pub height: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PolarAreaOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<CommonPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scales: Option<RadialLinearScales>,
 }
 
 // ────────────────────────────────────────────────
@@ -1369,5 +1403,37 @@ mod tests {
             .err()
             .expect("expected deserialization error");
         assert!(err.to_string().contains("x"), "err: {err}");
+    }
+
+    #[test]
+    fn polar_area_spec_accepts_scales_r() {
+        let json = r##"{
+            "type": "polarArea",
+            "data": { "labels": ["A","B"], "datasets": [{"data":[1,2]}] },
+            "options": { "scales": { "r": { "beginAtZero": true, "max": 100 } } }
+        }"##;
+        let v: ChartJsSpec = serde_json::from_str(json).unwrap();
+        match v {
+            ChartJsSpec::PolarArea(spec) => {
+                let r = spec.options.unwrap().scales.unwrap().r.unwrap();
+                assert_eq!(r.max, Some(100.0));
+                assert_eq!(r.begin_at_zero, Some(true));
+            }
+            _ => panic!("expected PolarArea"),
+        }
+    }
+
+    #[test]
+    fn pie_spec_still_rejects_scales() {
+        let json = r##"{
+            "type": "pie",
+            "data": { "labels": ["A","B"], "datasets": [{"data":[1,2]}] },
+            "options": { "scales": { "r": { "min": 0 } } }
+        }"##;
+        let err = serde_json::from_str::<ChartJsSpec>(json)
+            .err()
+            .expect("expected pie to reject options.scales");
+        let msg = format!("{err}");
+        assert!(msg.contains("scales"), "err: {msg}");
     }
 }
