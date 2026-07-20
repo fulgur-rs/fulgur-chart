@@ -57,7 +57,15 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     continue;
                 }
                 let bx = band_left + band_w * BAND_PAD_RATIO + bar_slot as f64 * bar_w;
-                let v = ser.values.get(i).copied().unwrap_or(0.0);
+                // 欠損 / 非有限値はスロットを空けて次系列へ(dodge の色・位置整合を保つ)。
+                let Some(&v) = ser.values.get(i) else {
+                    bar_slot += 1;
+                    continue;
+                };
+                if !v.is_finite() {
+                    bar_slot += 1;
+                    continue;
+                }
                 let vy = frame.ys.map(v);
                 let y_top = vy.min(baseline_y);
                 let h = (vy - baseline_y).abs();
@@ -68,7 +76,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     h,
                     fill: ser.fill_at(i),
                 });
-                if spec.data_labels && ser.values.get(i).is_some() && v.is_finite() {
+                if spec.data_labels {
                     let cx = bx + (bar_w * BAR_FILL_RATIO) / 2.0;
                     let label_y = if v >= base_v {
                         y_top - common::LABEL_GAP
@@ -94,54 +102,88 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         if ser.series_type != SeriesType::Line {
             continue;
         }
-        // 点列: カテゴリ中心 → (x, y)。
-        let pts: Vec<(f64, f64)> = (0..spec.categories.len())
-            .map(|i| {
+        // 有効点列: (x, y, 元カテゴリインデックス)。欠損・非有限値を除外。
+        // 元インデックスは gap 検出とラベル lookup に使う。
+        let valid: Vec<(f64, f64, usize)> = (0..spec.categories.len())
+            .filter_map(|i| {
+                let v = ser.values.get(i).copied()?;
+                if !v.is_finite() {
+                    return None;
+                }
                 let x = common::category_center(&frame, i, n);
-                let v = ser.values.get(i).copied().unwrap_or(0.0);
-                (x, frame.ys.map(v))
+                Some((x, frame.ys.map(v), i))
             })
             .collect();
 
-        // area（背面・半透明）。
-        if ser.area && !pts.is_empty() {
+        // 元インデックスが連続しない箇所でセグメントを分割する
+        // (chart.js の spanGaps=false 既定と同じ「欠損で線が途切れる」挙動)。
+        let segments: Vec<Vec<(f64, f64, usize)>> = {
+            let mut segs: Vec<Vec<(f64, f64, usize)>> = Vec::new();
+            let mut cur: Vec<(f64, f64, usize)> = Vec::new();
+            let mut prev_cat: Option<usize> = None;
+            for &(x, y, cat) in &valid {
+                if prev_cat.is_some_and(|pc| cat != pc + 1) && !cur.is_empty() {
+                    segs.push(std::mem::take(&mut cur));
+                }
+                cur.push((x, y, cat));
+                prev_cat = Some(cat);
+            }
+            if !cur.is_empty() {
+                segs.push(cur);
+            }
+            segs
+        };
+
+        // area(背面): 線と同じくセグメント単位で 1 つずつ閉多角形を描く(line.rs と同挙動)。
+        // gap を跨いだ塗りを防ぐ。非 null / 非 gap 系列では 1 セグメントで従来と同一のパス
+        // データを出力する(バイト不変)。
+        if ser.area {
             let baseline_y = frame
                 .ys
                 .map(0.0_f64.clamp(frame.ticks.min, frame.ticks.max));
-            let mut d = String::new();
-            for (k, (x, y)) in pts.iter().enumerate() {
-                let cmd = if k == 0 { 'M' } else { 'L' };
-                write!(d, "{} {} {} ", cmd, fmt_num(*x), fmt_num(*y)).unwrap();
+            for seg in &segments {
+                if seg.is_empty() {
+                    continue;
+                }
+                let mut d = String::new();
+                for (k, &(x, y, _)) in seg.iter().enumerate() {
+                    let cmd = if k == 0 { 'M' } else { 'L' };
+                    write!(d, "{} {} {} ", cmd, fmt_num(x), fmt_num(y)).unwrap();
+                }
+                let (last_x, _, _) = seg[seg.len() - 1];
+                let (first_x, _, _) = seg[0];
+                write!(
+                    d,
+                    "L {} {} L {} {} Z",
+                    fmt_num(last_x),
+                    fmt_num(baseline_y),
+                    fmt_num(first_x),
+                    fmt_num(baseline_y)
+                )
+                .unwrap();
+                items.push(Prim::Path {
+                    d,
+                    fill: Some(ser.fill_at(0)),
+                    stroke: None,
+                    stroke_width: 0.0,
+                });
             }
-            let (last_x, _) = pts[pts.len() - 1];
-            let (first_x, _) = pts[0];
-            write!(
-                d,
-                "L {} {} L {} {} Z",
-                fmt_num(last_x),
-                fmt_num(baseline_y),
-                fmt_num(first_x),
-                fmt_num(baseline_y)
-            )
-            .unwrap();
-            items.push(Prim::Path {
-                d,
-                fill: Some(ser.fill_at(0)),
-                stroke: None,
-                stroke_width: 0.0,
-            });
         }
 
-        // 線。
-        if pts.len() >= 2 {
+        // 線: セグメントごとに描く(gap で線が途切れる)。
+        for seg in &segments {
+            if seg.len() < 2 {
+                continue;
+            }
+            let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
             if ser.tension <= 0.0 {
                 items.push(Prim::Polyline {
-                    points: pts.clone(),
+                    points: xy,
                     stroke: ser.stroke_at(0),
                     stroke_width: ser.stroke_width,
                 });
             } else {
-                let d = catmull_rom_path(&pts, ser.tension);
+                let d = catmull_rom_path(&xy, ser.tension);
                 items.push(Prim::Path {
                     d,
                     fill: None,
@@ -151,11 +193,11 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
         }
 
-        // マーカー。
-        for (cx, cy) in &pts {
+        // マーカー: 有効点のみ。
+        for &(cx, cy, _) in &valid {
             items.push(Prim::Circle {
-                cx: *cx,
-                cy: *cy,
+                cx,
+                cy,
                 r: MARKER_R,
                 fill: ser.stroke_at(0),
                 stroke: ser.stroke_at(0),
@@ -163,21 +205,18 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             });
         }
 
-        // データラベル(点の上)。
+        // データラベル(点の上、マーカー半径ぶん+余白だけ上)。
+        // 元カテゴリインデックスで ser.values を引くことで filter 後のずれを防ぐ。
         if spec.data_labels {
-            for (i, (x, y)) in pts.iter().enumerate() {
-                if let Some(&v) = ser.values.get(i)
-                    && v.is_finite()
-                {
-                    items.push(common::value_label(
-                        *x,
-                        *y - MARKER_R - common::LABEL_GAP,
-                        label_font,
-                        Anchor::Middle,
-                        spec.theme.text_color,
-                        v,
-                    ));
-                }
+            for &(x, y, cat) in &valid {
+                items.push(common::value_label(
+                    x,
+                    y - MARKER_R - common::LABEL_GAP,
+                    label_font,
+                    Anchor::Middle,
+                    spec.theme.text_color,
+                    ser.values[cat],
+                ));
             }
         }
     }
@@ -221,4 +260,86 @@ fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
         .unwrap();
     }
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::font::DEFAULT_FONT;
+    use crate::frontend::chartjs;
+    use crate::text::TextMeasurer;
+
+    #[test]
+    fn mixed_line_with_null_and_fill_splits_area_at_gap() {
+        // 混合(bar+line)の line 系列で fill:true + 欠損があるとき、area は gap を跨がず
+        // 2 つの閉多角形に分割される(line.rs と同挙動)。
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a","b","c","d","e"],
+               "datasets":[
+                 {"type":"line","data":[1, 2, null, 4, 5], "fill": true}
+               ]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let area_paths = scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p,
+                    Prim::Path {
+                        fill: Some(_),
+                        stroke: None,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            area_paths, 2,
+            "mixed line area should split into 2 polygons at the gap"
+        );
+    }
+
+    #[test]
+    fn mixed_bar_and_line_skip_nan() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a","b","c"],
+               "datasets":[
+                 {"type":"bar","data":[10, null, 30]},
+                 {"type":"line","data":[1, null, 3]}
+               ]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        for prim in &scene.items {
+            match prim {
+                Prim::Rect { x, y, w, h, .. } => {
+                    assert!(
+                        x.is_finite() && y.is_finite() && w.is_finite() && h.is_finite(),
+                        "Rect must not contain NaN: {x} {y} {w} {h}"
+                    );
+                }
+                Prim::Circle { cx, cy, .. } => {
+                    assert!(
+                        cx.is_finite() && cy.is_finite(),
+                        "Circle must not contain NaN: {cx} {cy}"
+                    );
+                }
+                Prim::Polyline { points, .. } => {
+                    for (px, py) in points {
+                        assert!(
+                            px.is_finite() && py.is_finite(),
+                            "Polyline point must not contain NaN: {px} {py}"
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }

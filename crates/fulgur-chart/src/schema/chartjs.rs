@@ -86,7 +86,7 @@ pub struct BarDataset {
     /// Per-dataset chart type for mixed bar+line charts. Only "bar" or "line" are valid.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub dataset_type: Option<BarOrLine>,
-    pub data: Vec<f64>,
+    pub data: Vec<Option<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -181,7 +181,7 @@ pub struct LineData {
 pub struct LineDataset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    pub data: Vec<f64>,
+    pub data: Vec<Option<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -690,7 +690,7 @@ pub struct BoxplotDataset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Each data point is `[min, q1, median, q3, max]` — a five-number summary.
-    pub data: Vec<Vec<f64>>,
+    pub data: Vec<Option<Vec<f64>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1275,7 +1275,29 @@ pub enum SankeySizeOption {
 
 #[cfg(test)]
 mod tests {
-    use super::ChartJsSpec;
+    use super::{BarDataset, BoxplotDataset, ChartJsSpec, LineDataset};
+
+    #[test]
+    fn line_dataset_accepts_null_in_data() {
+        let json = r#"{"data":[1,null,3]}"#;
+        let d: LineDataset = serde_json::from_str(json).unwrap();
+        assert_eq!(d.data, vec![Some(1.0), None, Some(3.0)]);
+    }
+
+    #[test]
+    fn bar_dataset_accepts_null_in_data() {
+        let json = r#"{"data":[10,null,30]}"#;
+        let d: BarDataset = serde_json::from_str(json).unwrap();
+        assert_eq!(d.data, vec![Some(10.0), None, Some(30.0)]);
+    }
+
+    #[test]
+    fn boxplot_dataset_accepts_null_row() {
+        let json = r#"{"data":[[1,2,3,4,5], null, [10,20,30,40,50]]}"#;
+        let d: BoxplotDataset = serde_json::from_str(json).unwrap();
+        assert_eq!(d.data.len(), 3);
+        assert!(d.data[1].is_none());
+    }
 
     /// sankey の dataset 契約(ちょうど 1 個)が生成 JSON Schema に minItems/maxItems=1
     /// として現れること。parser の `datasets.len() != 1` チェックと一致させ、schema 駆動の
