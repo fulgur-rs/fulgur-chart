@@ -349,16 +349,40 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         });
     }
 
-    // 3. x ベースライン。
-    items.push(Prim::Line {
-        x1: frame.plot_left,
-        y1: frame.plot_bottom,
-        x2: frame.plot_right,
-        y2: frame.plot_bottom,
-        stroke: ink,
-        stroke_width: 1.0,
-        dash: Vec::new(),
-    });
+    // 3. x ベースライン。border.display / border.color / border.width / border.dash を反映。
+    let border = &spec.x_axis.border;
+    if border.display {
+        let border_color = border.color.unwrap_or(ink);
+        items.push(Prim::Line {
+            x1: frame.plot_left,
+            y1: frame.plot_bottom,
+            x2: frame.plot_right,
+            y2: frame.plot_bottom,
+            stroke: border_color,
+            stroke_width: border.width,
+            dash: border.dash.clone(),
+        });
+    }
+
+    // 3b. y 軸目盛(tick 刻み)。draw_ticks=true のとき、plot_left から外側へ短線を描く。
+    // 色は grid.color を継承する(Chart.js 既定と同じ挙動: grid.color が gridline と tick の両方を制御)。
+    const TICK_LEN: f64 = 4.0;
+    let ticks_cfg = &spec.y_axis.grid;
+    if ticks_cfg.draw_ticks {
+        let tick_color = ticks_cfg.color.unwrap_or(ink);
+        for &t in &frame.ticks.ticks {
+            let y = frame.ys.map(t);
+            items.push(Prim::Line {
+                x1: frame.plot_left - TICK_LEN,
+                y1: y,
+                x2: frame.plot_left,
+                y2: y,
+                stroke: tick_color,
+                stroke_width: ticks_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
+    }
 
     // 4. x カテゴリラベル（auto-skip: ラベル幅 > スロット幅なら間引く）。
     let n = spec.categories.len().max(1);
@@ -735,5 +759,133 @@ mod tests {
             thick,
             "grid.line_width=3.0 は stroke_width に反映されるべき"
         );
+    }
+
+    #[test]
+    fn border_display_false_produces_no_baseline() {
+        // baseline (ink 色) と 最下段 gridline (theme.grid_color 色) は
+        // 幾何 (y=plot_bottom, x=plot_left..plot_right) が一致するため、
+        // baseline のみを識別するには stroke 色でも絞り込む必要がある。
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.border.display = false;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let ink = spec.theme.text_color;
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let baseline_count = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { y1, y2, x1, x2, stroke, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && (*y1 - frame.plot_bottom).abs() < 0.01
+                            && (*x1 - frame.plot_left).abs() < 0.01
+                            && (*x2 - frame.plot_right).abs() < 0.01
+                            && stroke.r == ink.r && stroke.g == ink.g && stroke.b == ink.b
+                )
+            })
+            .count();
+        assert_eq!(baseline_count, 0, "border.display=false → baseline なし");
+    }
+
+    #[test]
+    fn border_dash_reaches_baseline() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.border.dash = vec![4.0, 4.0];
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let has_dashed_baseline = items.iter().any(|p| {
+            matches!(p,
+                Prim::Line { y1, y2, dash, .. }
+                    if (y1 - y2).abs() < 0.01
+                        && (*y1 - frame.plot_bottom).abs() < 0.01
+                        && dash == &vec![4.0, 4.0]
+            )
+        });
+        assert!(
+            has_dashed_baseline,
+            "border.dash が baseline に伝わっていない"
+        );
+    }
+
+    #[test]
+    fn border_color_and_width_reach_baseline() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.border.color = Some(Color {
+            r: 0,
+            g: 100,
+            b: 0,
+            a: 1.0,
+        });
+        spec.x_axis.border.width = 2.5;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let has_custom_baseline = items.iter().any(|p| {
+            matches!(p,
+                Prim::Line { y1, y2, stroke, stroke_width, .. }
+                    if (y1 - y2).abs() < 0.01
+                        && (*y1 - frame.plot_bottom).abs() < 0.01
+                        && stroke.r == 0 && stroke.g == 100 && stroke.b == 0
+                        && (stroke_width - 2.5).abs() < 1e-9
+            )
+        });
+        assert!(has_custom_baseline);
+    }
+
+    #[test]
+    fn grid_draw_ticks_true_adds_tick_marks() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.grid.draw_ticks = true;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        // tick 短線: x1 = plot_left - 4, x2 = plot_left, y1 == y2
+        let tick_count = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && ((*x2 - *x1) - 4.0).abs() < 1e-9
+                            && (*x2 - frame.plot_left).abs() < 0.01
+                )
+            })
+            .count();
+        assert!(
+            tick_count > 0,
+            "draw_ticks=true で tick 刻み描画されるべき: 実際 {tick_count}"
+        );
+        assert_eq!(
+            tick_count,
+            frame.ticks.ticks.len(),
+            "tick 数は y ticks 数と一致"
+        );
+    }
+
+    #[test]
+    fn grid_draw_ticks_false_produces_no_tick_marks() {
+        let spec = make_bar_spec(3, 400.0); // default: draw_ticks=false
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let tick_count = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && ((*x2 - *x1) - 4.0).abs() < 1e-9
+                            && (*x2 - frame.plot_left).abs() < 0.01
+                )
+            })
+            .count();
+        assert_eq!(tick_count, 0, "draw_ticks=false は tick 刻みを描かない");
     }
 }

@@ -320,7 +320,9 @@ fn axis_grid_from(opts: Option<&GridLineOptions>) -> AxisGrid {
         Some(ScalarOrArray::Many(v)) => *v.first().unwrap_or(&1.0),
         None => 1.0,
     };
-    let draw_ticks = g.draw_ticks.unwrap_or(true);
+    // fulgur は Chart.js の既定 (true) から意図的に乖離: 未指定なら false。
+    // 既存スナップショット保護のため。詳細は `AxisGrid::default` のドキュメント参照。
+    let draw_ticks = g.draw_ticks.unwrap_or(false);
     AxisGrid {
         display,
         color,
@@ -3177,7 +3179,9 @@ mod tests {
         let g = axis_grid_from(None);
         assert!(g.display);
         assert!((g.line_width - 1.0).abs() < 1e-9);
-        assert!(g.draw_ticks);
+        // fulgur の意図的乖離: draw_ticks 既定は false(Chart.js は true)。
+        // 詳細は `AxisGrid::default` のドキュメント参照。
+        assert!(!g.draw_ticks);
         assert!(g.color.is_none());
     }
 

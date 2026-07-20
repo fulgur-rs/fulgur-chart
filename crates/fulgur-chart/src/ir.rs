@@ -142,6 +142,12 @@ pub struct AxisTitle {
 }
 
 /// 軸のグリッド線設定。chart.js `scales.*.grid` に対応。
+///
+/// `draw_ticks` の既定は fulgur では `false`(Chart.js は `true`)。
+/// これは v0 以来 fulgur が軸目盛の短線を描画してこなかった経緯を尊重し、
+/// 既存 fixture のスナップショットが Task 9 で回帰しないようにするための
+/// **意図的な乖離**。Chart.js の既定に合わせたいユーザは
+/// `"grid": {"drawTicks": true}` で明示的にオプトインする。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AxisGrid {
     pub display: bool,
@@ -156,7 +162,9 @@ impl Default for AxisGrid {
             display: true,
             color: None,
             line_width: 1.0,
-            draw_ticks: true,
+            // fulgur の後方互換: Chart.js の既定 (true) からの意図的乖離。
+            // 既存チャートに tick 短線が突然生えるのを避けるための選択。
+            draw_ticks: false,
         }
     }
 }
@@ -576,11 +584,14 @@ mod tests {
     }
 
     #[test]
-    fn axis_grid_default_is_chartjs_shape() {
+    fn axis_grid_default_matches_fulgur_backward_compat() {
+        // fulgur の既定は Chart.js と一部乖離: draw_ticks=false。
+        // v0 以来 tick 短線を描いてこなかったため、既存スナップショットを保護する
+        // 選択的な既定値の反転。ユーザは drawTicks:true で明示オプトインする。
         let g = AxisGrid::default();
         assert!(g.display);
         assert!((g.line_width - 1.0).abs() < 1e-9);
-        assert!(g.draw_ticks);
+        assert!(!g.draw_ticks);
         assert!(g.color.is_none());
     }
 
