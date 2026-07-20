@@ -2,6 +2,9 @@
 
 use crate::color::parse_color;
 use crate::ir::*;
+use crate::schema::common::{
+    AxisBorderOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions, GridLineOptions,
+};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -235,6 +238,97 @@ impl<T: Clone> ScalarOrArray<T> {
             ScalarOrArray::One(v) => vec![v],
             ScalarOrArray::Many(v) => v,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// schema → IR ヘルパ (Task 6)
+//
+// `options.scales.<axis>` の typed オプション(schema::common)を、IR の
+// `AxisTitle` / `AxisGrid` / `AxisBorder` へ変換する純関数群。Task 7 で
+// `axis_from` / `ChartSpec` 構築側から呼び出されるが、v1 現時点では未配線
+// (`#[allow(dead_code)]` は Task 7 で除去)。
+// ---------------------------------------------------------------------------
+
+/// `axis.title` を IR の [`AxisTitle`] に変換する。
+///
+/// 以下のいずれかで [`None`] を返す:
+/// - `opts` 自体が [`None`]
+/// - `display == Some(false)` (明示的に非表示)
+/// - `text` が [`None`] または空文字 (描画すべき文字列がない)
+///
+/// `align` は schema の [`SchemaAxisTitleAlign`] を IR の
+/// [`crate::ir::AxisTitleAlign`] にマップする。指定なしは `Center`。
+#[allow(dead_code)]
+fn axis_title_from(opts: Option<&AxisTitleOptions>) -> Option<AxisTitle> {
+    let o = opts?;
+    if o.display == Some(false) {
+        return None;
+    }
+    let text = o.text.as_deref()?;
+    if text.is_empty() {
+        return None;
+    }
+    let align = match o.align {
+        Some(SchemaAxisTitleAlign::Start) => AxisTitleAlign::Start,
+        Some(SchemaAxisTitleAlign::End) => AxisTitleAlign::End,
+        _ => AxisTitleAlign::Center,
+    };
+    Some(AxisTitle {
+        text: text.to_string(),
+        color: o.color.as_deref().and_then(parse_color),
+        font_size: o.font.as_ref().and_then(|f| f.size),
+        align,
+    })
+}
+
+/// `axis.grid` を IR の [`AxisGrid`] に変換する。
+///
+/// - `opts` が [`None`] のときは [`AxisGrid::default()`] (display=true, width=1.0)
+/// - v1 仕様: `drawOnChartArea=false` は `display=false` と同義として扱う
+///   (chart area 外だけに grid を残す挙動は v1 で未サポート)
+/// - `color` / `line_width` の [`ScalarOrArray`] は先頭要素だけを見る
+///   (per-tick 配列は v1 未描画; 受理のみ)
+#[allow(dead_code)]
+fn axis_grid_from(opts: Option<&GridLineOptions>) -> AxisGrid {
+    use crate::schema::common::ScalarOrArray;
+    let Some(g) = opts else {
+        return AxisGrid::default();
+    };
+    let display = g.display.unwrap_or(true) && g.draw_on_chart_area.unwrap_or(true);
+    let color = match &g.color {
+        Some(ScalarOrArray::One(s)) => parse_color(s),
+        Some(ScalarOrArray::Many(v)) => v.first().and_then(|s| parse_color(s)),
+        None => None,
+    };
+    let line_width = match &g.line_width {
+        Some(ScalarOrArray::One(w)) => *w,
+        Some(ScalarOrArray::Many(v)) => *v.first().unwrap_or(&1.0),
+        None => 1.0,
+    };
+    let draw_ticks = g.draw_ticks.unwrap_or(true);
+    AxisGrid {
+        display,
+        color,
+        line_width,
+        draw_ticks,
+    }
+}
+
+/// `axis.border` を IR の [`AxisBorder`] に変換する。
+///
+/// `opts` が [`None`] のときは [`AxisBorder::default()`]。値ごとの既定値は
+/// `display=true` / `width=1.0` / `dash=[]` / `color=None`。
+#[allow(dead_code)]
+fn axis_border_from(opts: Option<&AxisBorderOptions>) -> AxisBorder {
+    let Some(b) = opts else {
+        return AxisBorder::default();
+    };
+    AxisBorder {
+        display: b.display.unwrap_or(true),
+        color: b.color.as_deref().and_then(parse_color),
+        width: b.width.unwrap_or(1.0),
+        dash: b.dash.clone().unwrap_or_default(),
     }
 }
 
@@ -3023,5 +3117,147 @@ mod tests {
             t[0].value
         );
         assert!(t[0].value > 0.0);
+    }
+
+    // ----- Task 6: Schema→IR ヘルパ (axis_title_from / axis_grid_from / axis_border_from) -----
+
+    #[test]
+    fn axis_title_from_returns_none_when_display_false() {
+        let opts = AxisTitleOptions {
+            display: Some(false),
+            text: Some("Y".into()),
+            ..Default::default()
+        };
+        assert!(axis_title_from(Some(&opts)).is_none());
+    }
+
+    #[test]
+    fn axis_title_from_returns_none_when_text_missing_or_empty() {
+        let opts_no_text = AxisTitleOptions {
+            display: Some(true),
+            text: None,
+            ..Default::default()
+        };
+        assert!(axis_title_from(Some(&opts_no_text)).is_none());
+        let opts_empty = AxisTitleOptions {
+            display: Some(true),
+            text: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(axis_title_from(Some(&opts_empty)).is_none());
+    }
+
+    #[test]
+    fn axis_title_from_maps_text_and_align() {
+        let opts = AxisTitleOptions {
+            display: Some(true),
+            text: Some("Y (円)".into()),
+            align: Some(SchemaAxisTitleAlign::End),
+            ..Default::default()
+        };
+        let t = axis_title_from(Some(&opts)).expect("title");
+        assert_eq!(t.text, "Y (円)");
+        assert_eq!(t.align, crate::ir::AxisTitleAlign::End);
+        assert!(t.color.is_none());
+        assert!(t.font_size.is_none());
+    }
+
+    #[test]
+    fn axis_title_from_maps_color_and_font_size() {
+        use crate::schema::common::FontSpec;
+        let opts = AxisTitleOptions {
+            display: Some(true),
+            text: Some("A".into()),
+            color: Some("#123456".into()),
+            font: Some(FontSpec {
+                size: Some(14.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let t = axis_title_from(Some(&opts)).expect("title");
+        assert!(t.color.is_some());
+        assert_eq!(t.font_size, Some(14.0));
+    }
+
+    #[test]
+    fn axis_grid_from_defaults_when_none() {
+        let g = axis_grid_from(None);
+        assert!(g.display);
+        assert!((g.line_width - 1.0).abs() < 1e-9);
+        assert!(g.draw_ticks);
+        assert!(g.color.is_none());
+    }
+
+    #[test]
+    fn axis_grid_from_display_false_kills_grid() {
+        let opts = GridLineOptions {
+            display: Some(false),
+            ..Default::default()
+        };
+        assert!(!axis_grid_from(Some(&opts)).display);
+    }
+
+    #[test]
+    fn axis_grid_from_draw_on_chart_area_false_kills_grid_in_v1() {
+        let opts = GridLineOptions {
+            display: Some(true),
+            draw_on_chart_area: Some(false),
+            ..Default::default()
+        };
+        assert!(
+            !axis_grid_from(Some(&opts)).display,
+            "v1: drawOnChartArea=false は display=false と同義"
+        );
+    }
+
+    #[test]
+    fn axis_grid_from_scalar_line_width() {
+        use crate::schema::common::ScalarOrArray;
+        let opts = GridLineOptions {
+            line_width: Some(ScalarOrArray::One(2.5)),
+            ..Default::default()
+        };
+        assert!((axis_grid_from(Some(&opts)).line_width - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_grid_from_array_line_width_uses_first() {
+        use crate::schema::common::ScalarOrArray;
+        let opts = GridLineOptions {
+            line_width: Some(ScalarOrArray::Many(vec![3.0, 5.0])),
+            ..Default::default()
+        };
+        assert!((axis_grid_from(Some(&opts)).line_width - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_border_from_defaults_when_none() {
+        let b = axis_border_from(None);
+        assert!(b.display);
+        assert!((b.width - 1.0).abs() < 1e-9);
+        assert!(b.color.is_none());
+        assert!(b.dash.is_empty());
+    }
+
+    #[test]
+    fn axis_border_from_dash_and_width_flow_through() {
+        let opts = AxisBorderOptions {
+            dash: Some(vec![4.0, 4.0]),
+            width: Some(2.0),
+            ..Default::default()
+        };
+        let b = axis_border_from(Some(&opts));
+        assert_eq!(b.dash, vec![4.0, 4.0]);
+        assert!((b.width - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_border_from_display_false() {
+        let opts = AxisBorderOptions {
+            display: Some(false),
+            ..Default::default()
+        };
+        assert!(!axis_border_from(Some(&opts)).display);
     }
 }
