@@ -70,3 +70,44 @@ fn radar_snapshot() {
     );
     insta::assert_snapshot!(svg);
 }
+
+#[test]
+fn radar_max_override_shifts_polygon() {
+    // Same data, different scales.r.max → different SVG (polygon points scale differently).
+    let default_svg = render(
+        r#"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[80,80,80]}]}}"#,
+    );
+    let bounded_svg = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[80,80,80]}]},"options":{"scales":{"r":{"max":200}}}}"##,
+    );
+    assert_ne!(
+        default_svg, bounded_svg,
+        "scales.r.max=200 should shift polygon vs default nice(0..80)"
+    );
+}
+
+#[test]
+fn radar_min_override_does_not_panic() {
+    let svg = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[0,50,100]}]},"options":{"scales":{"r":{"min":50}}}}"##,
+    );
+    assert!(!svg.contains("NaN"));
+    assert!(svg.starts_with("<svg"));
+}
+
+#[test]
+fn radar_snapshot_stable_without_scales() {
+    // Cross-check: existing snapshot path is preserved (radial_axis == None).
+    let default_svg = render(RADAR);
+    let empty_scales_svg = render(
+        r#"{"type":"radar","data":{"labels":["速度","力","技"],
+        "datasets":[{"label":"A","data":[60,80,40]},{"label":"B","data":[50,30,90]}]}}"#,
+    );
+    assert_eq!(
+        default_svg, empty_scales_svg,
+        "identical input should yield identical SVG"
+    );
+}

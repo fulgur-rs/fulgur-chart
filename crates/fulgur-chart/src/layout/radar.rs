@@ -164,20 +164,58 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 各スポークの角度(上始点・時計回り。SVG は y 下向きなので sin が下方向に効き時計回り)。
     let angle = |i: usize| -PI / 2.0 + i as f64 * (2.0 * PI / n as f64);
 
-    // 4. 値スケール。全系列の有限・非負値の最大から nice_ticks(0..max)。
+    // 4. 値スケール。radial_axis があれば min/max/suggested*/beginAtZero を反映する。
+    //    無ければ従来通り nice_ticks(0.0, max_val) — snapshot 破壊回避。
+    let mut data_min = f64::INFINITY;
     let mut max_val = 0.0_f64;
     for ser in &spec.series {
         for &v in &ser.values {
-            if v.is_finite() && v >= 0.0 && v > max_val {
-                max_val = v;
+            if v.is_finite() {
+                if v < data_min {
+                    data_min = v;
+                }
+                if v >= 0.0 && v > max_val {
+                    max_val = v;
+                }
             }
         }
     }
-    let nice = nice_ticks(0.0, max_val, 10);
-    // 値→半径。nice.max<=0 の縮退は中心へ落とす。
+
+    let nice = if let Some(ra) = &spec.radial_axis {
+        // scatter.rs:189-209 と同パターン: min/max hard override、
+        // suggested* は expand-only、beginAtZero は 0 を含める。
+        let mut lo = ra
+            .min
+            .unwrap_or_else(|| if data_min.is_finite() { data_min } else { 0.0 });
+        let mut hi = ra.max.unwrap_or(max_val);
+        if let Some(s) = ra.suggested_min
+            && s < lo
+        {
+            lo = s;
+        }
+        if let Some(s) = ra.suggested_max
+            && s > hi
+        {
+            hi = s;
+        }
+        if ra.begin_at_zero && ra.min.is_none() {
+            lo = lo.min(0.0);
+        }
+        if !hi.is_finite() || hi <= lo {
+            hi = lo + 1.0;
+        }
+        nice_ticks(lo, hi, 10)
+    } else {
+        // 既存 default: byte-identical を維持。
+        nice_ticks(0.0, max_val, 10)
+    };
+    // 値→半径。nice.max<=nice.min の縮退は中心へ落とす。
+    // TODO(6z6): negative grid ticks under radial_axis
+    // (現状 t <= 0.0 の tick は下のグリッド描画でスキップされる — min<0 のケースは未対応)。
+    let span = nice.max - nice.min;
     let rr = |v: f64| -> f64 {
-        if nice.max > 0.0 {
-            (v / nice.max) * radius
+        if span > 0.0 {
+            (((v - nice.min) / span).clamp(0.0, 1.0)) * radius
         } else {
             0.0
         }
