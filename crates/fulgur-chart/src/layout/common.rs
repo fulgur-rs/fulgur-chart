@@ -323,17 +323,21 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
     }
 
     // 2. 横グリッド + y 軸ラベル。
+    let grid_cfg = &spec.y_axis.grid;
+    let grid_color = grid_cfg.color.unwrap_or(spec.theme.grid_color);
     for &t in &frame.ticks.ticks {
         let y = frame.ys.map(t);
-        items.push(Prim::Line {
-            x1: frame.plot_left,
-            y1: y,
-            x2: frame.plot_right,
-            y2: y,
-            stroke: spec.theme.grid_color,
-            stroke_width: 1.0,
-            dash: Vec::new(),
-        });
+        if grid_cfg.display {
+            items.push(Prim::Line {
+                x1: frame.plot_left,
+                y1: y,
+                x2: frame.plot_right,
+                y2: y,
+                stroke: grid_color,
+                stroke_width: grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
         items.push(Prim::Text {
             x: frame.plot_left - 6.0,
             y: y + label_font * TEXT_BASELINE_RATIO,
@@ -658,6 +662,78 @@ mod tests {
         assert!(
             min <= 0.0,
             "suggested_min=50 はデータの下端(0.0)を縮小してはいけない: 実際 min={min}"
+        );
+    }
+
+    #[test]
+    fn grid_display_false_produces_no_grid_lines() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.grid.display = false;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        // Baseline (border) は 1 本残る。gridline は 0。プロット両端の x を持つ y=const な水平線を数える。
+        let horizontal_lines = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { y1, y2, x1, x2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && ((*x1 - frame.plot_left).abs() < 0.01
+                                && (*x2 - frame.plot_right).abs() < 0.01)
+                )
+            })
+            .count();
+        assert_eq!(
+            horizontal_lines, 1,
+            "grid.display=false → gridline 0 本、baseline 1 本のみ"
+        );
+    }
+
+    #[test]
+    fn grid_color_override_reaches_prim() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.grid.color = Some(Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let red_gridline = items.iter().any(|p| {
+            matches!(p,
+                Prim::Line { stroke: Color { r: 255, g: 0, b: 0, .. }, y1, y2, .. }
+                    if (y1 - y2).abs() < 0.01
+            )
+        });
+        assert!(
+            red_gridline,
+            "grid.color=red は Prim::Line の stroke に反映されるべき"
+        );
+    }
+
+    #[test]
+    fn grid_line_width_reaches_prim() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.grid.line_width = 3.0;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        // 少なくとも 1 本の水平線が stroke_width=3.0 のはず。
+        let thick = items.iter().any(|p| {
+            matches!(p,
+                Prim::Line { stroke_width, y1, y2, .. }
+                    if (stroke_width - 3.0).abs() < 1e-9 && (y1 - y2).abs() < 0.01
+            )
+        });
+        assert!(
+            thick,
+            "grid.line_width=3.0 は stroke_width に反映されるべき"
         );
     }
 }
