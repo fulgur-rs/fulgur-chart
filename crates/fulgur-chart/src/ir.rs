@@ -123,6 +123,64 @@ pub fn color_at(colors: &[Color], i: usize) -> Color {
     }
 }
 
+/// 軸タイトルの配置位置。chart.js の `title.align` に対応。
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum AxisTitleAlign {
+    Start,
+    #[default]
+    Center,
+    End,
+}
+
+/// 軸タイトル。`text` は必須で、色/フォントサイズ/配置は任意。
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisTitle {
+    pub text: String,
+    pub color: Option<Color>,
+    pub font_size: Option<f64>,
+    pub align: AxisTitleAlign,
+}
+
+/// 軸のグリッド線設定。chart.js `scales.*.grid` に対応。
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisGrid {
+    pub display: bool,
+    pub color: Option<Color>,
+    pub line_width: f64,
+    pub draw_ticks: bool,
+}
+
+impl Default for AxisGrid {
+    fn default() -> Self {
+        Self {
+            display: true,
+            color: None,
+            line_width: 1.0,
+            draw_ticks: true,
+        }
+    }
+}
+
+/// 軸のボーダー(基線)設定。chart.js `scales.*.border` に対応。
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisBorder {
+    pub display: bool,
+    pub color: Option<Color>,
+    pub width: f64,
+    pub dash: Vec<f64>,
+}
+
+impl Default for AxisBorder {
+    fn default() -> Self {
+        Self {
+            display: true,
+            color: None,
+            width: 1.0,
+            dash: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AxisSpec {
     pub title: Option<String>,
@@ -514,5 +572,29 @@ mod tests {
         assert_eq!(group.children.len(), 1);
         assert_eq!(group.children[0].value, 3.0);
         assert!(leaf.children.is_empty());
+    }
+
+    #[test]
+    fn axis_grid_default_is_chartjs_shape() {
+        let g = AxisGrid::default();
+        assert!(g.display);
+        assert!((g.line_width - 1.0).abs() < 1e-9);
+        assert!(g.draw_ticks);
+        assert!(g.color.is_none());
+    }
+
+    #[test]
+    fn axis_border_default_is_chartjs_shape() {
+        let b = AxisBorder::default();
+        assert!(b.display);
+        assert!((b.width - 1.0).abs() < 1e-9);
+        assert!(b.color.is_none());
+        assert!(b.dash.is_empty());
+    }
+
+    #[test]
+    fn axis_title_align_default_is_center() {
+        let a: AxisTitleAlign = Default::default();
+        assert_eq!(a, AxisTitleAlign::Center);
     }
 }
