@@ -111,3 +111,30 @@ fn radar_snapshot_stable_without_scales() {
         "identical input should yield identical SVG"
     );
 }
+
+#[test]
+fn radar_snapshot_fixed_domain() {
+    // r.min=0, r.max=100 で 2 系列を固定ドメインで描画。
+    // データ最大 (80) が radius の 80% ちょうどになる。
+    let svg = render(
+        r##"{"type":"radar","data":{"labels":["速度","力","技","知","運"],
+        "datasets":[
+            {"label":"A","data":[60,80,40,55,20]},
+            {"label":"B","data":[50,30,90,45,65]}]},
+        "options":{"plugins":{"title":{"display":true,"text":"固定 0-100"}},
+                   "scales":{"r":{"min":0,"max":100}}}}"##,
+    );
+    insta::assert_snapshot!(svg);
+}
+
+#[test]
+fn radar_snapshot_begin_at_zero_with_suggested_range() {
+    // suggestedMin/suggestedMax でドメインを広げつつ beginAtZero=true で下端を 0 に固定。
+    // radar は負値未対応のため正値のみを使用。
+    let svg = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c","d"],
+        "datasets":[{"label":"delta","data":[20,30,10,5]}]},
+        "options":{"scales":{"r":{"suggestedMin":15,"suggestedMax":50,"beginAtZero":true}}}}"##,
+    );
+    insta::assert_snapshot!(svg);
+}

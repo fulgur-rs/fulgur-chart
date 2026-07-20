@@ -131,6 +131,20 @@ fn polar_area_min_override_clamps_below() {
 }
 
 #[test]
+fn polar_area_snapshot_suggested_max_expands_domain() {
+    // suggestedMax=200 でデータ最大 (80) より広いドメインに拡張。
+    // 各 slice 半径は v/200 (default v/80 に対して 40% 縮小)。
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["春","夏","秋","冬"],
+        "datasets":[{"data":[30,80,50,20],
+                     "backgroundColor":["#ff6384","#36a2eb","#ffce56","#4bc0c0"]}]},
+        "options":{"plugins":{"title":{"display":true,"text":"suggestedMax=200"}},
+                   "scales":{"r":{"suggestedMax":200}}}}"##,
+    );
+    insta::assert_snapshot!(svg);
+}
+
+#[test]
 fn polar_area_snapshot_stable_without_scales() {
     // Second render of the exact snapshot fixture; must equal the first render.
     let a = render(
