@@ -497,14 +497,19 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
     }
 
     // 6. Y 軸タイトル(回転テキスト)。プロット左端外側、キャンバス左端(OUTER_PAD)寄りに
-    // -90deg で描く。align は plot_top/center/plot_bottom を選ぶ。
+    // -90deg で描く。Chart.js の core.scale.js は `_alignStartEnd(align, bottom, top)` を
+    // Y 軸に使う: 回転タイトルは bottom-to-top で読むため "start"=下端、"end"=上端が読みの起点/終点。
+    // 加えて anchor + -90deg の幾何:
+    //   Anchor::Start + -90deg → アンカーから上方向へ伸びる → cy=plot_bottom と組み合わせる
+    //   Anchor::End   + -90deg → アンカーから下方向へ伸びる → cy=plot_top    と組み合わせる
+    // これで文字列は常にプロット領域内へ収まる。
     if let Some(title) = &spec.y_axis.title {
         let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
         let color = title.color.unwrap_or(ink);
         let cy_center = (frame.plot_top + frame.plot_bottom) / 2.0;
         let (cy, anchor) = match title.align {
-            crate::ir::AxisTitleAlign::Start => (frame.plot_top, Anchor::Start),
-            crate::ir::AxisTitleAlign::End => (frame.plot_bottom, Anchor::End),
+            crate::ir::AxisTitleAlign::Start => (frame.plot_bottom, Anchor::Start),
+            crate::ir::AxisTitleAlign::End => (frame.plot_top, Anchor::End),
             crate::ir::AxisTitleAlign::Center => (cy_center, Anchor::Middle),
         };
         let x = OUTER_PAD + font / 2.0;
@@ -966,7 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn y_axis_title_align_start_positions_at_plot_top() {
+    fn y_axis_title_align_start_positions_at_plot_bottom() {
         let mut spec = make_bar_spec(3, 400.0);
         spec.y_axis.title = Some(AxisTitle {
             text: "T".into(),
@@ -981,10 +986,35 @@ mod tests {
         let found = items.iter().any(|p| {
             matches!(p,
                 Prim::Text { content, y, rotate_deg: Some(_), .. }
-                    if content == "T" && (y - frame.plot_top).abs() < 0.1
+                    if content == "T" && (y - frame.plot_bottom).abs() < 0.1
             )
         });
-        assert!(found, "align=Start は y=plot_top で描画");
+        assert!(
+            found,
+            "Chart.js 準拠: align=Start は Y 軸下端(bottom-to-top 読みの起点)"
+        );
+    }
+
+    #[test]
+    fn y_axis_title_align_end_positions_at_plot_top() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.title = Some(AxisTitle {
+            text: "E".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::End,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let found = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, y, rotate_deg: Some(_), .. }
+                    if content == "E" && (y - frame.plot_top).abs() < 0.1
+            )
+        });
+        assert!(found, "Chart.js 準拠: align=End は Y 軸上端");
     }
 
     #[test]

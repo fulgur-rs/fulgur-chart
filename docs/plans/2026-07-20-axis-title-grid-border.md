@@ -915,14 +915,21 @@ let y_axis_w = max_w as f64 + 10.0 + y_title_w;
 ```
 
 `draw_frame` の末尾(凡例の後):
+
+Chart.js の `core.scale.js` は Y 軸タイトルに `_alignStartEnd(align, bottom, top)` を使う
+(第 2 引数=start, 第 3 引数=end)。回転タイトルは bottom-to-top で読むため
+**"start"=下端 (plot_bottom)** / **"end"=上端 (plot_top)** が読みの起点/終点。
+anchor + -90deg の幾何(Anchor::Start→アンカーから上方向、Anchor::End→下方向)と組み合わせ、
+文字列が常にプロット領域内へ収まるようにする。
+
 ```rust
 if let Some(title) = &spec.y_axis.title {
     let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
     let color = title.color.unwrap_or(ink);
     let cy_center = (frame.plot_top + frame.plot_bottom) / 2.0;
     let (cy, anchor) = match title.align {
-        AxisTitleAlign::Start => (frame.plot_top, Anchor::Start),
-        AxisTitleAlign::End => (frame.plot_bottom, Anchor::End),
+        AxisTitleAlign::Start => (frame.plot_bottom, Anchor::Start),
+        AxisTitleAlign::End => (frame.plot_top, Anchor::End),
         AxisTitleAlign::Center => (cy_center, Anchor::Middle),
     };
     let x = OUTER_PAD + font / 2.0;
@@ -994,6 +1001,14 @@ let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_tit
 ```
 
 `draw_frame` の末尾に Y タイトルと並べて:
+
+**Chart.js の軸別 align 非対称に注意**:
+Chart.js `core.scale.js` は X 軸に `_alignStartEnd(align, left, right)` を使う
+(第 2 引数=start=left, 第 3 引数=end=right)。X 軸タイトルは水平テキストで
+左から右へ読むため **"start"=左端 (plot_left)** / **"end"=右端 (plot_right)** で
+自然な読み方向と一致する。**X 軸は swap 不要**(Y 軸は bottom-to-top 読みなので
+"start"=bottom で swap が必要だった。Task 10 のコメント参照)。
+
 ```rust
 if let Some(title) = &spec.x_axis.title {
     let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
