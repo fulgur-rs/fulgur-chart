@@ -14,6 +14,8 @@ pub const LEGEND_BAND: f64 = 26.0;
 /// 縦置き凡例(Left/Right)の 1 行の高さ(px)。
 pub const LEGEND_ROW_H: f64 = 18.0;
 pub const X_LABEL_BAND: f64 = 22.0;
+/// X 軸タイトル帯の高さ(px)。ラベル帯の下側にさらに確保し、`plot_bottom` を上へ押し上げる。
+pub const AXIS_TITLE_BAND: f64 = 20.0;
 pub const TEXT_BASELINE_RATIO: f64 = 0.35;
 pub const X_LABEL_CENTER_RATIO: f64 = 0.7;
 /// データラベルの軸方向ギャップ(棒の端からラベルまでの余白, px)。
@@ -253,7 +255,13 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     let plot_left = base_left.max(OUTER_PAD + legend_left + edge_pad_left * scale);
     let plot_right = (base_right - edge_pad_right * scale).max(plot_left);
     let plot_top = OUTER_PAD + title_band + legend_top;
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
+    // X 軸タイトルがあれば、x カテゴリラベル帯の下側にさらにタイトル帯を確保して plot_bottom を上へ押し上げる。
+    let x_title_h = if spec.x_axis.title.is_some() {
+        AXIS_TITLE_BAND
+    } else {
+        0.0
+    };
+    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
 
     // y スケール（上下反転）。
     let ys = LinearScale::new(ticks.min, ticks.max, plot_bottom, plot_top);
@@ -521,6 +529,31 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             fill: color,
             content: title.text.clone(),
             rotate_deg: Some(-90.0),
+        });
+    }
+
+    // 7. X 軸タイトル(水平テキスト)。X ラベル帯のさらに下に置く。
+    // Chart.js の core.scale.js は X 軸で `_alignStartEnd(align, left, right)` を使い、
+    // 左→右の自然な対応(Start=left, End=right)になる。Y 軸のような入れ替えは不要。
+    if let Some(title) = &spec.x_axis.title {
+        let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+        let color = title.color.unwrap_or(ink);
+        let (cx, anchor) = match title.align {
+            crate::ir::AxisTitleAlign::Start => (frame.plot_left, Anchor::Start),
+            crate::ir::AxisTitleAlign::End => (frame.plot_right, Anchor::End),
+            crate::ir::AxisTitleAlign::Center => {
+                ((frame.plot_left + frame.plot_right) / 2.0, Anchor::Middle)
+            }
+        };
+        let y = frame.plot_bottom + X_LABEL_BAND + font * 0.9;
+        items.push(Prim::Text {
+            x: cx,
+            y,
+            size: font,
+            anchor,
+            fill: color,
+            content: title.text.clone(),
+            rotate_deg: None,
         });
     }
 }
@@ -1063,5 +1096,111 @@ mod tests {
             )
         });
         assert!(!any_rotated, "title=None なら rotated text は無し");
+    }
+
+    #[test]
+    fn x_axis_title_shifts_plot_bottom_up() {
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let a = make_bar_spec(3, 400.0);
+        let mut b = make_bar_spec(3, 400.0);
+        b.x_axis.title = Some(AxisTitle {
+            text: "時刻".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        let fa = compute(&a, &m);
+        let fb = compute(&b, &m);
+        assert!(
+            fb.plot_bottom < fa.plot_bottom,
+            "X タイトルぶん plot_bottom が上にシフトすべき: fa={} fb={}",
+            fa.plot_bottom,
+            fb.plot_bottom
+        );
+    }
+
+    #[test]
+    fn x_axis_title_renders_horizontal_text() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.title = Some(AxisTitle {
+            text: "時刻".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let has_horizontal_title = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, rotate_deg, .. }
+                    if content == "時刻" && rotate_deg.is_none()
+            )
+        });
+        assert!(has_horizontal_title, "X タイトルは rotate なしで描画");
+    }
+
+    #[test]
+    fn x_axis_title_align_start_positions_at_plot_left() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.title = Some(AxisTitle {
+            text: "T".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Start,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let found = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, x, rotate_deg: None, .. }
+                    if content == "T" && (x - frame.plot_left).abs() < 0.1
+            )
+        });
+        assert!(found, "Chart.js 準拠: X の Start は plot_left");
+    }
+
+    #[test]
+    fn x_axis_title_align_end_positions_at_plot_right() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.title = Some(AxisTitle {
+            text: "T".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::End,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let found = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, x, rotate_deg: None, .. }
+                    if content == "T" && (x - frame.plot_right).abs() < 0.1
+            )
+        });
+        assert!(found, "Chart.js 準拠: X の End は plot_right");
+    }
+
+    #[test]
+    fn no_x_axis_title_produces_no_extra_horizontal_text_below_labels() {
+        // plot_bottom がシフトしないことは x_axis_title_shifts_plot_bottom_up で担保。
+        // ここでは title=None で下側バンドの余分な text が生えないことを assert する。
+        let spec = make_bar_spec(3, 400.0); // title=None
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        // plot_bottom + X_LABEL_BAND + font * 0.9 に近い y を持つ text がないこと
+        let expected_y = frame.plot_bottom + X_LABEL_BAND + spec.theme.font_size * 1.1 * 0.9;
+        let stray = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { y, rotate_deg: None, .. } if (y - expected_y).abs() < 1.0
+            )
+        });
+        assert!(!stray, "title=None なら x-title 位置に余分な text は無い");
     }
 }
