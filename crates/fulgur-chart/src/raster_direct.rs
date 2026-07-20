@@ -683,18 +683,22 @@ fn render_prim(
             y2,
             stroke,
             stroke_width,
+            dash,
         } => {
             let mut b = PathBuilder::new();
             b.move_to(*x1 as f32, *y1 as f32);
             b.line_to(*x2 as f32, *y2 as f32);
             let Some(path) = b.finish() else { return };
-            pixmap.stroke_path(
-                &path,
-                &solid_paint(*stroke),
-                &make_stroke(*stroke_width),
-                transform,
-                None,
-            );
+            let mut stroke_style = make_stroke(*stroke_width);
+            // 空 Vec は実線。tiny-skia の StrokeDash::new は even 長 &全 >=0 の場合のみ Some を返す。
+            // 不正な dash は落として実線にフォールバックする(SVG 側は生値を出すので出力差は許容)。
+            if !dash.is_empty() {
+                let dash_f32: Vec<f32> = dash.iter().map(|v| *v as f32).collect();
+                if let Some(sd) = tiny_skia::StrokeDash::new(dash_f32, 0.0) {
+                    stroke_style.dash = Some(sd);
+                }
+            }
+            pixmap.stroke_path(&path, &solid_paint(*stroke), &stroke_style, transform, None);
         }
 
         Prim::Polyline {

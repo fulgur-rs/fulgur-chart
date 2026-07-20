@@ -27,6 +27,9 @@ pub enum Prim {
         y2: f64,
         stroke: Color,
         stroke_width: f64,
+        /// 破線パターン(空なら実線)。SVG `stroke-dasharray` と tiny-skia `StrokeDash` に渡す。
+        /// 空 `Vec` = 実線(後方互換のデフォルト)。
+        dash: Vec<f64>,
     },
     /// 折れ線（塗りなし）。
     Polyline {
@@ -225,6 +228,7 @@ mod tests {
                     a: 1.0,
                 },
                 stroke_width: 1.0,
+                dash: Vec::new(),
             }],
         };
         assert!(!s.has_opaque_background());

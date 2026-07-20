@@ -332,6 +332,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             y2: y,
             stroke: spec.theme.grid_color,
             stroke_width: 1.0,
+            dash: Vec::new(),
         });
         items.push(Prim::Text {
             x: frame.plot_left - 6.0,
@@ -352,6 +353,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         y2: frame.plot_bottom,
         stroke: ink,
         stroke_width: 1.0,
+        dash: Vec::new(),
     });
 
     // 4. x カテゴリラベル（auto-skip: ラベル幅 > スロット幅なら間引く）。

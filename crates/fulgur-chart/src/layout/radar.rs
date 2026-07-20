@@ -216,6 +216,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             y2: cy + radius * a.sin(),
             stroke: spec.theme.grid_color,
             stroke_width: 1.0,
+            dash: Vec::new(),
         });
     }
 

@@ -332,6 +332,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             y2: plot_bottom,
             stroke: spec.theme.grid_color,
             stroke_width: 1.0,
+            dash: Vec::new(),
         });
         items.push(Prim::Text {
             x,
@@ -352,6 +353,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         y2: plot_bottom,
         stroke: ink,
         stroke_width: 1.0,
+        dash: Vec::new(),
     });
 
     // 4. カテゴリ band と 横棒。

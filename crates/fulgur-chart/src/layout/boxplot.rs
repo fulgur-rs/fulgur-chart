@@ -127,6 +127,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     y2,
                     stroke,
                     stroke_width: stroke_w,
+                    dash: Vec::new(),
                 });
             }
 
@@ -137,6 +138,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 y2: y_median,
                 stroke,
                 stroke_width: median_w,
+                dash: Vec::new(),
             });
 
             items.push(Prim::Line {
@@ -146,6 +148,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 y2: y_max,
                 stroke,
                 stroke_width: stroke_w,
+                dash: Vec::new(),
             });
             items.push(Prim::Line {
                 x1: cx - cap_w / 2.0,
@@ -154,6 +157,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 y2: y_max,
                 stroke,
                 stroke_width: stroke_w,
+                dash: Vec::new(),
             });
 
             items.push(Prim::Line {
@@ -163,6 +167,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 y2: y_min,
                 stroke,
                 stroke_width: stroke_w,
+                dash: Vec::new(),
             });
             items.push(Prim::Line {
                 x1: cx - cap_w / 2.0,
@@ -171,6 +176,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 y2: y_min,
                 stroke,
                 stroke_width: stroke_w,
+                dash: Vec::new(),
             });
         }
     }

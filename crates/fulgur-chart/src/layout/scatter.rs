@@ -276,6 +276,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             y2: y,
             stroke: spec.theme.grid_color,
             stroke_width: 1.0,
+            dash: Vec::new(),
         });
         items.push(Prim::Text {
             x: plot_left - 6.0,
@@ -298,6 +299,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             y2: plot_bottom,
             stroke: spec.theme.grid_color,
             stroke_width: 1.0,
+            dash: Vec::new(),
         });
         items.push(Prim::Text {
             x,
@@ -318,6 +320,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         y2: plot_bottom,
         stroke: ink,
         stroke_width: 1.0,
+        dash: Vec::new(),
     });
     items.push(Prim::Line {
         x1: plot_left,
@@ -326,6 +329,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         y2: plot_bottom,
         stroke: ink,
         stroke_width: 1.0,
+        dash: Vec::new(),
     });
 
     // 5. 点(円)。共有 scatter_points(単一真実源)から描画。
