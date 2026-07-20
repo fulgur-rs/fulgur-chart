@@ -89,6 +89,86 @@ pub enum DecimationAlgorithmName {
     Lttb,
 }
 
+/// Chart.js の共通 font オブジェクト。v1 では size のみ描画に反映される。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FontSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// number | "bold" 等。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum AxisTitleAlign {
+    Start,
+    Center,
+    End,
+}
+
+/// options.scales.<axis>.title (Chart.js 準拠, camelCase)。
+/// padding/font.family などは受理のみで v1 未描画。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AxisTitleOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<FontSpec>,
+    /// v1 では未使用(受理のみ)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<AxisTitleAlign>,
+}
+
+/// options.scales.<axis>.grid (Chart.js 準拠)。
+/// tick_length/offset/color per-tick 配列などは v1 未描画(受理のみ)。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GridLineOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ScalarOrArray<ColorString>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_width: Option<ScalarOrArray<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draw_on_chart_area: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draw_ticks: Option<bool>,
+    /// v1 では未使用(受理のみ)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_length: Option<f64>,
+    /// v1 では未使用(受理のみ)。chart.js は band 中心/端で grid を描く挙動の切替。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<bool>,
+}
+
+/// options.scales.<axis>.border (Chart.js 準拠)。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AxisBorderOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash: Option<Vec<f64>>,
+}
+
 /// Axis options for options.scales.x / options.scales.y.
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -114,4 +194,31 @@ pub struct AxisOptions {
     pub suggested_min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_max: Option<f64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn axis_title_options_accepts_full_shape() {
+        let v: AxisTitleOptions = serde_json::from_str(
+            r##"{"display":true,"text":"Y (円)","color":"#333","font":{"size":14},"align":"center"}"##,
+        ).unwrap();
+        assert_eq!(v.text.as_deref(), Some("Y (円)"));
+        assert!(matches!(v.align, Some(AxisTitleAlign::Center)));
+    }
+
+    #[test]
+    fn grid_line_options_rejects_unknown_key() {
+        let e = serde_json::from_str::<GridLineOptions>(r##"{"colorx":"#eee"}"##);
+        assert!(e.is_err(), "unknown key must be rejected");
+    }
+
+    #[test]
+    fn axis_border_options_accepts_dash_array() {
+        let v: AxisBorderOptions =
+            serde_json::from_str(r##"{"color":"#000","width":2,"dash":[4,4]}"##).unwrap();
+        assert_eq!(v.dash.as_deref(), Some(&[4.0, 4.0][..]));
+    }
 }
