@@ -104,7 +104,7 @@ pub struct FontSpec {
     pub style: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AxisTitleAlign {
     Start,
@@ -220,5 +220,20 @@ mod tests {
         let v: AxisBorderOptions =
             serde_json::from_str(r##"{"color":"#000","width":2,"dash":[4,4]}"##).unwrap();
         assert_eq!(v.dash.as_deref(), Some(&[4.0, 4.0][..]));
+    }
+
+    #[test]
+    fn grid_line_options_camel_case_field_names() {
+        let v: GridLineOptions = serde_json::from_str(
+            r##"{"lineWidth":2,"drawOnChartArea":false,"drawTicks":false,"tickLength":6}"##,
+        )
+        .unwrap();
+        match v.line_width {
+            Some(ScalarOrArray::One(w)) => assert!((w - 2.0).abs() < 1e-9),
+            _ => panic!("expected ScalarOrArray::One(2.0) for lineWidth"),
+        }
+        assert_eq!(v.draw_on_chart_area, Some(false));
+        assert_eq!(v.draw_ticks, Some(false));
+        assert_eq!(v.tick_length, Some(6.0));
     }
 }
