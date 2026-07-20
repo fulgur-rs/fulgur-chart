@@ -172,7 +172,16 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             max_w = w;
         }
     }
-    let y_axis_w = max_w as f64 + 10.0;
+    // y 軸タイトル(回転テキスト)の帯幅。text 幅(font_size)+ ベースラインギャップ(6px)。
+    // Task 6 で spec.y_axis.title は display=false / text 空のとき None に潰されているので、
+    // ここでは Some の場合だけ帯幅を足す。
+    let y_title_w = spec
+        .y_axis
+        .title
+        .as_ref()
+        .map(|t| t.font_size.unwrap_or(spec.theme.font_size * 1.1) + 6.0)
+        .unwrap_or(0.0);
+    let y_axis_w = max_w as f64 + 10.0 + y_title_w;
 
     // 凡例の有無。
     let legend = has_legend(spec);
@@ -486,6 +495,29 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             label_font,
         );
     }
+
+    // 6. Y 軸タイトル(回転テキスト)。プロット左端外側、キャンバス左端(OUTER_PAD)寄りに
+    // -90deg で描く。align は plot_top/center/plot_bottom を選ぶ。
+    if let Some(title) = &spec.y_axis.title {
+        let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+        let color = title.color.unwrap_or(ink);
+        let cy_center = (frame.plot_top + frame.plot_bottom) / 2.0;
+        let (cy, anchor) = match title.align {
+            crate::ir::AxisTitleAlign::Start => (frame.plot_top, Anchor::Start),
+            crate::ir::AxisTitleAlign::End => (frame.plot_bottom, Anchor::End),
+            crate::ir::AxisTitleAlign::Center => (cy_center, Anchor::Middle),
+        };
+        let x = OUTER_PAD + font / 2.0;
+        items.push(Prim::Text {
+            x,
+            y: cy,
+            size: font,
+            anchor,
+            fill: color,
+            content: title.text.clone(),
+            rotate_deg: Some(-90.0),
+        });
+    }
 }
 
 /// 縦置き凡例(Left/Right)の帯幅: swatch(12) + gap(4) + 最大ラベル幅 + パディング(16)。
@@ -564,7 +596,8 @@ mod tests {
     use super::*;
     use crate::font::DEFAULT_FONT;
     use crate::ir::{
-        AxisBorder, AxisGrid, AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType,
+        AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, LegendPos,
+        Point, Series, SeriesType,
     };
     use crate::text::TextMeasurer;
 
@@ -887,5 +920,118 @@ mod tests {
             })
             .count();
         assert_eq!(tick_count, 0, "draw_ticks=false は tick 刻みを描かない");
+    }
+
+    #[test]
+    fn y_axis_title_shifts_plot_left_right() {
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let spec_no_title = make_bar_spec(3, 400.0);
+        let mut spec_with_title = make_bar_spec(3, 400.0);
+        spec_with_title.y_axis.title = Some(AxisTitle {
+            text: "売上 (円)".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        let f_no = compute(&spec_no_title, &m);
+        let f_ti = compute(&spec_with_title, &m);
+        assert!(
+            f_ti.plot_left > f_no.plot_left,
+            "Y 軸タイトル分だけ plot_left が右にシフトすべき: no={} ti={}",
+            f_no.plot_left,
+            f_ti.plot_left
+        );
+    }
+
+    #[test]
+    fn y_axis_title_renders_rotated_text() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.title = Some(AxisTitle {
+            text: "売上".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let has_rotated = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, rotate_deg: Some(deg), .. }
+                    if content == "売上" && (deg.abs() - 90.0).abs() < 0.1
+            )
+        });
+        assert!(has_rotated, "Y 軸タイトルは -90deg で描画されるべき");
+    }
+
+    #[test]
+    fn y_axis_title_align_start_positions_at_plot_top() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.title = Some(AxisTitle {
+            text: "T".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Start,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let found = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, y, rotate_deg: Some(_), .. }
+                    if content == "T" && (y - frame.plot_top).abs() < 0.1
+            )
+        });
+        assert!(found, "align=Start は y=plot_top で描画");
+    }
+
+    #[test]
+    fn y_axis_title_color_and_font_size_override() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.title = Some(AxisTitle {
+            text: "X".into(),
+            color: Some(Color {
+                r: 128,
+                g: 0,
+                b: 128,
+                a: 1.0,
+            }),
+            font_size: Some(20.0),
+            align: AxisTitleAlign::Center,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let found = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, size, fill, rotate_deg: Some(_), .. }
+                    if content == "X"
+                        && (size - 20.0).abs() < 1e-9
+                        && fill.r == 128 && fill.b == 128
+            )
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn no_y_axis_title_produces_no_rotated_text() {
+        let spec = make_bar_spec(3, 400.0); // title=None default
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let any_rotated = items.iter().any(|p| {
+            matches!(
+                p,
+                Prim::Text {
+                    rotate_deg: Some(_),
+                    ..
+                }
+            )
+        });
+        assert!(!any_rotated, "title=None なら rotated text は無し");
     }
 }
