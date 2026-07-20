@@ -1282,3 +1282,61 @@ fn schema_rejects_unknown_decimation_algorithm() {
     let v: serde_json::Value = serde_json::from_str(json).unwrap();
     assert!(serde_json::from_value::<fulgur_chart::schema::ChartJsSpec>(v).is_err());
 }
+
+#[test]
+fn radar_scales_r_populates_radial_axis() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{"min":-10,"max":50,"suggestedMin":-20,"suggestedMax":80,"beginAtZero":true}}}}"##,
+        false,
+    ).unwrap();
+    let r = spec.radial_axis.expect("radar should populate radial_axis");
+    assert_eq!(r.min, Some(-10.0));
+    assert_eq!(r.max, Some(50.0));
+    assert_eq!(r.suggested_min, Some(-20.0));
+    assert_eq!(r.suggested_max, Some(80.0));
+    assert!(r.begin_at_zero);
+}
+
+#[test]
+fn polar_area_scales_r_populates_radial_axis() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r##"{"type":"polarArea","data":{"labels":["a","b"],"datasets":[{"data":[10,20]}]},
+             "options":{"scales":{"r":{"max":100}}}}"##,
+        false,
+    )
+    .unwrap();
+    let r = spec
+        .radial_axis
+        .expect("polarArea should populate radial_axis");
+    assert_eq!(r.max, Some(100.0));
+    assert!(r.begin_at_zero, "polarArea beginAtZero default true");
+}
+
+#[test]
+fn radar_without_scales_leaves_radial_axis_none() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r#"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]}}"#,
+        false,
+    )
+    .unwrap();
+    assert!(
+        spec.radial_axis.is_none(),
+        "backward compat: no scales → None"
+    );
+}
+
+#[test]
+fn non_radial_charts_leave_radial_axis_none() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+             "options":{"scales":{"y":{"beginAtZero":true}}}}"##,
+        false,
+    )
+    .unwrap();
+    assert!(spec.radial_axis.is_none());
+}

@@ -672,6 +672,28 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    // scales.r: radar / polarArea かつ scales.r が明示されているときのみ populate。
+    // 他 kind、および scales.r 未指定時は None を保ち後方互換を維持する。
+    let is_radial = matches!(kind, ChartKind::Radar | ChartKind::PolarArea);
+    let radial_axis = if is_radial {
+        scales_val
+            .and_then(|s| s.get("r"))
+            .and_then(|a| a.as_object())
+            .map(|r| RadialAxis {
+                min: r.get("min").and_then(|v| v.as_f64()),
+                max: r.get("max").and_then(|v| v.as_f64()),
+                suggested_min: r.get("suggestedMin").and_then(|v| v.as_f64()),
+                suggested_max: r.get("suggestedMax").and_then(|v| v.as_f64()),
+                // radar / polarArea の既存挙動は 0 起点なので default true。
+                begin_at_zero: r
+                    .get("beginAtZero")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+            })
+    } else {
+        None
+    };
+
     Ok(ChartSpec {
         kind,
         series,
@@ -708,7 +730,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         data_labels,
         theme,
         decimation,
-        radial_axis: None,
+        radial_axis,
     })
 }
 
