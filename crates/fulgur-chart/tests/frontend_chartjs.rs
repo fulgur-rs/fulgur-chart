@@ -1367,6 +1367,16 @@ fn strict_mode_rejects_scales_r_on_bar() {
 }
 
 #[test]
+fn strict_mode_rejects_scales_r_on_doughnut() {
+    // doughnut は pie と PieSpec を共有する。scales.r は radar/polarArea 専用。
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"doughnut","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"r":{"min":0}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("r") && err.contains("scales"), "err: {err}");
+}
+
+#[test]
 fn strict_mode_rejects_scales_r_typo_on_radar() {
     use fulgur_chart::frontend::chartjs;
     let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
