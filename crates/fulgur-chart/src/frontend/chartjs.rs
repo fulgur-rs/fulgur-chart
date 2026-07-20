@@ -258,12 +258,11 @@ impl<T: Clone> ScalarOrArray<T> {
 }
 
 // ---------------------------------------------------------------------------
-// schema → IR ヘルパ (Task 6)
+// schema → IR ヘルパ
 //
 // `options.scales.<axis>` の typed オプション(schema::common)を、IR の
-// `AxisTitle` / `AxisGrid` / `AxisBorder` へ変換する純関数群。Task 7 で
-// `axis_from` / `ChartSpec` 構築側から呼び出されるが、v1 現時点では未配線
-// (`#[allow(dead_code)]` は Task 7 で除去)。
+// `AxisTitle` / `AxisGrid` / `AxisBorder` へ変換する純関数群。
+// `ChartSpec` 構築時に `axis_from` 経路で呼び出される。
 // ---------------------------------------------------------------------------
 
 /// `axis.title` を IR の [`AxisTitle`] に変換する。
