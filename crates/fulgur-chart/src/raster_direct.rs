@@ -2313,6 +2313,46 @@ mod tests {
         );
     }
 
+    /// dash 指定のある `Prim::Line` は実線とは異なるピクセルを出力すること。
+    /// `tiny_skia::StrokeDash::new` は不正入力で `None` を返して静かに実線へ
+    /// フォールバックするため、raster 側の dash 適用が誤って落ちても snapshot 系
+    /// テストでは検知できない可能性がある。ここで silent regression を防ぐ最小
+    /// 回帰(pixmap 差分)を張る。ハッシュには依存せず「解が違う」ことだけを主張する。
+    #[test]
+    fn line_dash_produces_different_pixmap_than_solid() {
+        let black = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        };
+        let make_scene = |dash: Vec<f64>| Scene {
+            width: 250.0,
+            height: 100.0,
+            items: vec![Prim::Line {
+                x1: 10.0,
+                y1: 50.0,
+                x2: 200.0,
+                y2: 50.0,
+                stroke: black,
+                stroke_width: 2.0,
+                dash,
+            }],
+        };
+        let solid = make_scene(Vec::new());
+        let dashed = make_scene(vec![8.0, 8.0]);
+
+        let f = face();
+        let pm_solid = scene_to_pixmap(&solid, 1.0, &f, &PNG_LIMITS).unwrap();
+        let pm_dashed = scene_to_pixmap(&dashed, 1.0, &f, &PNG_LIMITS).unwrap();
+
+        assert_ne!(
+            pm_solid.data(),
+            pm_dashed.data(),
+            "dashed line は solid line と異なるピクセルを出力すべき (raster 側 dash の silent regression 防止)"
+        );
+    }
+
     /// 128 点以上の line チャート(マーカー = 一様な fill-only circle)も stamp path を
     /// 踏み、参照と視覚的に同等(差分 2% 未満)。
     #[test]
