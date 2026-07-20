@@ -1,0 +1,29 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": ["Jan", "Feb", "Mar", "Apr"],
+    "datasets": [
+      {
+        "label": "Sales",
+        "data": [10, 25, 18, 30],
+        "backgroundColor": "#4a90e2"
+      }
+    ]
+  },
+  "options": {
+    "scales": {
+      "x": {
+        "title": { "display": true, "text": "月", "align": "center" }
+      },
+      "y": {
+        "title": {
+          "display": true,
+          "text": "売上 (万円)",
+          "align": "center",
+          "color": "#333",
+          "font": { "size": 13 }
+        }
+      }
+    }
+  }
+}
