@@ -181,10 +181,13 @@ pub struct AxisOptions {
     pub max: Option<f64>,
     /// Axis title configuration (parsed but not yet mapped to IR).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<serde_json::Value>,
+    pub title: Option<AxisTitleOptions>,
     /// Grid line configuration (parsed but not yet mapped to IR).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub grid: Option<serde_json::Value>,
+    pub grid: Option<GridLineOptions>,
+    /// Axis border/base-line configuration (parsed but not yet mapped to IR).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<AxisBorderOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub begin_at_zero: Option<bool>,
     /// When true, category points/bands are centered (band center) instead of edge-to-edge.
@@ -235,5 +238,28 @@ mod tests {
         assert_eq!(v.draw_on_chart_area, Some(false));
         assert_eq!(v.draw_ticks, Some(false));
         assert_eq!(v.tick_length, Some(6.0));
+    }
+
+    #[test]
+    fn axis_options_accepts_typed_title_grid_border() {
+        let v: AxisOptions = serde_json::from_str(
+            r##"{"title":{"text":"X"},"grid":{"color":"#eee"},"border":{"width":2}}"##,
+        )
+        .unwrap();
+        assert!(v.title.is_some());
+        assert!(v.grid.is_some());
+        assert!(v.border.is_some());
+    }
+
+    #[test]
+    fn axis_options_rejects_unknown_border_field() {
+        let e = serde_json::from_str::<AxisOptions>(r##"{"border":{"colorr":"#000"}}"##);
+        assert!(e.is_err(), "unknown key in border must be rejected");
+    }
+
+    #[test]
+    fn axis_options_rejects_typo_in_title() {
+        let e = serde_json::from_str::<AxisOptions>(r##"{"title":{"txt":"X"}}"##);
+        assert!(e.is_err(), "unknown key in title must be rejected");
     }
 }
