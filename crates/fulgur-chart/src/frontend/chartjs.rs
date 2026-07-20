@@ -57,8 +57,10 @@ struct RawOptions {
 }
 
 /// `options.scales` の受け皿。x/y の 2 軸のみを typed に扱う。
+/// `deny_unknown_fields` は付けない: 非 strict モードでは `scales.r`(radar/polar)や
+/// `scales.x1`/`y1`(multi-axis)を silently 無視する必要がある(Chart.js 互換)。
+/// strict モードでの未知キー拒否は上流の `check_unknown_keys` が担当する。
 #[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
 struct RawScales {
     #[serde(default)]
     x: Option<AxisOptions>,

@@ -1287,3 +1287,30 @@ fn schema_rejects_unknown_decimation_algorithm() {
     let v: serde_json::Value = serde_json::from_str(json).unwrap();
     assert!(serde_json::from_value::<fulgur_chart::schema::ChartJsSpec>(v).is_err());
 }
+
+#[test]
+fn scales_r_axis_silently_accepted_in_non_strict() {
+    // radar/polar chart で使う `scales.r` を非 strict で silently 通す(Chart.js 互換)。
+    let json = r##"{
+      "type":"line",
+      "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+      "options":{"scales":{"r":{"beginAtZero":true}}}
+    }"##;
+    assert!(
+        chartjs::parse(json, false).is_ok(),
+        "non-strict should silently accept scales.r"
+    );
+}
+
+#[test]
+fn scales_r_axis_rejected_in_strict() {
+    let json = r##"{
+      "type":"line",
+      "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+      "options":{"scales":{"r":{"beginAtZero":true}}}
+    }"##;
+    assert!(
+        chartjs::parse(json, true).is_err(),
+        "strict should reject unknown scale axis"
+    );
+}
