@@ -1282,3 +1282,135 @@ fn schema_rejects_unknown_decimation_algorithm() {
     let v: serde_json::Value = serde_json::from_str(json).unwrap();
     assert!(serde_json::from_value::<fulgur_chart::schema::ChartJsSpec>(v).is_err());
 }
+
+#[test]
+fn radar_scales_r_populates_radial_axis() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{"min":-10,"max":50,"suggestedMin":-20,"suggestedMax":80,"beginAtZero":true}}}}"##,
+        false,
+    ).unwrap();
+    let r = spec.radial_axis.expect("radar should populate radial_axis");
+    assert_eq!(r.min, Some(-10.0));
+    assert_eq!(r.max, Some(50.0));
+    assert_eq!(r.suggested_min, Some(-20.0));
+    assert_eq!(r.suggested_max, Some(80.0));
+    assert!(r.begin_at_zero);
+}
+
+#[test]
+fn polar_area_scales_r_populates_radial_axis() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r##"{"type":"polarArea","data":{"labels":["a","b"],"datasets":[{"data":[10,20]}]},
+             "options":{"scales":{"r":{"max":100}}}}"##,
+        false,
+    )
+    .unwrap();
+    let r = spec
+        .radial_axis
+        .expect("polarArea should populate radial_axis");
+    assert_eq!(r.max, Some(100.0));
+    assert!(r.begin_at_zero, "polarArea beginAtZero default true");
+}
+
+#[test]
+fn radar_without_scales_leaves_radial_axis_none() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r#"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]}}"#,
+        false,
+    )
+    .unwrap();
+    assert!(
+        spec.radial_axis.is_none(),
+        "backward compat: no scales → None"
+    );
+}
+
+#[test]
+fn non_radial_charts_leave_radial_axis_none() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+             "options":{"scales":{"y":{"beginAtZero":true}}}}"##,
+        false,
+    )
+    .unwrap();
+    assert!(spec.radial_axis.is_none());
+}
+
+#[test]
+fn strict_mode_allows_scales_r_on_radar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":{"min":0,"max":100,"suggestedMin":-5,"suggestedMax":120,"beginAtZero":true}}}}"##;
+    chartjs::parse(json, true).expect("strict mode should accept scales.r on radar");
+}
+
+#[test]
+fn strict_mode_allows_scales_r_on_polar_area() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"polarArea","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+        "options":{"scales":{"r":{"max":50}}}}"##;
+    chartjs::parse(json, true).expect("strict mode should accept scales.r on polarArea");
+}
+
+#[test]
+fn strict_mode_rejects_scales_r_on_bar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"r":{"min":0}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("r") && err.contains("scales"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_scales_r_on_doughnut() {
+    // doughnut は pie と PieSpec を共有する。scales.r は radar/polarArea 専用。
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"doughnut","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"r":{"min":0}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("r") && err.contains("scales"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_scales_r_typo_on_radar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":{"beginAtZeroo":true}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("beginAtZeroo"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_scales_xy_on_radar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"x":{"min":0}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("x") && err.contains("scales"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_non_object_scales_r_on_radar() {
+    // Codex Fix 7: axis 値が object でない (例: "r": 5) 場合は strict で拒否する。
+    // 従来は as_object() の None 分岐で無音スキップされていたため typo/型ミスが漏れていた。
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":5}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("r") && err.contains("object"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_non_object_scales_y_on_bar() {
+    // Fix 7 は cartesian にも適用される。
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"y":"foo"}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("y") && err.contains("object"), "err: {err}");
+}

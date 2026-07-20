@@ -150,20 +150,83 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 
     let angle_per = 2.0 * PI / n as f64;
+    // 既存 default パス (radial_axis == None) 用の max_v は byte-identical を維持するため
+    // 既存の v > 0 フィルタを保つ。
     let max_v = values
         .iter()
         .filter(|v| v.is_finite() && **v > 0.0)
         .cloned()
         .fold(f64::NEG_INFINITY, f64::max);
 
+    // ドメイン [lo, hi] を解決。radial_axis 有り → override、無し → 既存 [0, max_v]。
+    // 既存 default path (radial_axis == None) は byte-identical を維持。
+    let (lo, hi) = if let Some(ra) = &spec.radial_axis {
+        // Codex Fix 8: radial_axis ブランチでは data_min / data_max を「全 finite 値」から求める。
+        // v > 0 フィルタだと min: -10, data: [0] のケースで max_v = -inf になり hi が壊れる。
+        let mut data_min = f64::INFINITY;
+        let mut data_max = f64::NEG_INFINITY;
+        for &v in values.iter() {
+            if v.is_finite() {
+                if v < data_min {
+                    data_min = v;
+                }
+                if v > data_max {
+                    data_max = v;
+                }
+            }
+        }
+        // Codex Fix 6: beginAtZero=false かつ min 未指定なら lo は data_min から。
+        // (chart.js の semantics: beginAtZero: false はドメインをデータ範囲密着にする)
+        let mut lo = ra.min.unwrap_or_else(|| {
+            if !ra.begin_at_zero && data_min.is_finite() {
+                data_min
+            } else {
+                0.0
+            }
+        });
+        let mut hi = ra.max.unwrap_or(data_max);
+        if let Some(s) = ra.suggested_min
+            && s < lo
+        {
+            lo = s;
+        }
+        if let Some(s) = ra.suggested_max
+            && s > hi
+        {
+            hi = s;
+        }
+        if ra.begin_at_zero && ra.min.is_none() {
+            lo = lo.min(0.0);
+        }
+        // Fixes 1 + 4 (coderabbit + gemini): 縮退時 (hi <= lo, NaN, inf) は 1 ユニット救済。
+        // radar.rs:204-206 と同一パターン。
+        if !hi.is_finite() || hi <= lo {
+            hi = lo + 1.0;
+        }
+        (lo, hi)
+    } else {
+        (0.0, max_v)
+    };
+    let span = hi - lo;
+
     let mut labels: Vec<Prim> = Vec::new();
 
-    if max_v.is_finite() && max_v > 0.0 {
+    if span.is_finite() && span > 0.0 {
         let mut a0 = -PI / 2.0;
         for (i, &v) in values.iter().enumerate() {
             let a1 = a0 + angle_per;
-            let r = if v.is_finite() && v > 0.0 {
-                (max_radius * (v / max_v)).clamp(0.0, max_radius)
+            // radial_axis 無しの場合は既存挙動: v > 0 のみ描く (max_v > 0 が
+            // 外側条件で保証されている; v/max_v == (v-0)/(max_v-0))。
+            // 有りの場合は下限クランプ + 上限クランプ。
+            let r = if v.is_finite() {
+                let ratio = if spec.radial_axis.is_some() {
+                    ((v - lo) / span).clamp(0.0, 1.0)
+                } else if v > 0.0 {
+                    (v / hi).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                max_radius * ratio
             } else {
                 0.0
             };

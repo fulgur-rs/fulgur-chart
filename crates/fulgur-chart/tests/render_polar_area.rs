@@ -100,3 +100,72 @@ fn polar_area_snapshot() {
     );
     insta::assert_snapshot!(svg);
 }
+
+#[test]
+fn polar_area_max_override_does_not_panic() {
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B"],
+        "datasets":[{"data":[100,50]}]},"options":{"scales":{"r":{"max":200}}}}"##,
+    );
+    assert!(!svg.contains("NaN"));
+    assert!(svg.starts_with("<svg"));
+    // Two data points ⇒ at least 2 arc paths.
+    let radii: Vec<f64> = svg
+        .split('A')
+        .skip(1)
+        .filter_map(|seg| seg.split_whitespace().next()?.parse::<f64>().ok())
+        .collect();
+    assert!(radii.len() >= 2, "expected ≥2 arcs, got {}", radii.len());
+    let ratio = radii[1] / radii[0];
+    assert!((ratio - 0.5).abs() < 0.1, "ratio={ratio}");
+}
+
+#[test]
+fn polar_area_min_override_clamps_below() {
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[10,50,100]}]},"options":{"scales":{"r":{"min":50,"max":100}}}}"##,
+    );
+    assert!(!svg.contains("NaN"));
+    assert!(svg.starts_with("<svg"));
+}
+
+#[test]
+fn polar_area_snapshot_suggested_max_expands_domain() {
+    // suggestedMax=200 でデータ最大 (80) より広いドメインに拡張。
+    // 各 slice 半径は v/200 (default v/80 に対して 40% 縮小)。
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["春","夏","秋","冬"],
+        "datasets":[{"data":[30,80,50,20],
+                     "backgroundColor":["#ff6384","#36a2eb","#ffce56","#4bc0c0"]}]},
+        "options":{"plugins":{"title":{"display":true,"text":"suggestedMax=200"}},
+                   "scales":{"r":{"suggestedMax":200}}}}"##,
+    );
+    insta::assert_snapshot!(svg);
+}
+
+#[test]
+fn polar_area_snapshot_stable_without_scales() {
+    // Second render of the exact snapshot fixture; must equal the first render.
+    let a = render(
+        r##"{"type":"polarArea","data":{"labels":["春","夏","秋","冬"],"datasets":[{"data":[30,80,50,20],"backgroundColor":["#ff6384","#36a2eb","#ffce56","#4bc0c0"]}]},"options":{"plugins":{"title":{"display":true,"text":"季節別データ"}}}}"##,
+    );
+    let b = render(
+        r##"{"type":"polarArea","data":{"labels":["春","夏","秋","冬"],"datasets":[{"data":[30,80,50,20],"backgroundColor":["#ff6384","#36a2eb","#ffce56","#4bc0c0"]}]},"options":{"plugins":{"title":{"display":true,"text":"季節別データ"}}}}"##,
+    );
+    assert_eq!(a, b);
+}
+
+#[test]
+fn polar_area_min_equal_to_data_max_does_not_produce_nan() {
+    // 縮退ケース: min == data の最大 → hi = lo + 1.0 で救済され、有効な SVG が返る。
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[100,100,100]}]},"options":{"scales":{"r":{"min":100}}}}"##,
+    );
+    assert!(
+        !svg.contains("NaN"),
+        "degenerate min == data_max should not produce NaN"
+    );
+    assert!(svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"));
+}
