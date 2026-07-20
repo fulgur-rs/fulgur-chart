@@ -1012,3 +1012,23 @@ git commit -m "chore: fmt/clippy cleanup for 6z6"
 ## Post-implementation
 
 REQUIRED SUB-SKILL: `superpowers:verification-before-completion` → `superpowers:finishing-a-development-branch` → `bd close fulgur-chart-6z6`
+
+---
+
+## Deviations from initial plan (post-mortem)
+
+実装中に、当初プラン (Task 4 / Task 8) の記述と実際のコードが乖離した箇所があるため、履歴の正確性のためにここに残す (プラン本文は書き換えない — post-mortem のため)。
+
+- **Task 4 Step 3:** サンプルスニペットは無条件で `Some(RadialAxis { begin_at_zero: true, ... })` を組み立てているが、実装では `raw.options.scales` に `r` エントリが存在するときのみ `Some(...)` を作り、それ以外は `None` を保つよう変更した。理由: `scales` を書いていない既存 fixture (radar/polarArea) について後段の layout が `radial_axis.is_some()` を分岐条件に使うため、`None` を維持しないと byte-identical snapshot 経路が壊れる。
+- **Task 8 Step 1 fixture:** `radar_snapshot_begin_at_zero_with_negative_data` は負値 (`-20`, `-5`) を含むが、`frontend/chartjs.rs:617` (`レーダーチャートは負の値に未対応です`) がこれを parse 時に拒否する。実装では負値を含まない `data:[20,30,10,5]` に差し替え、テスト名も `radar_snapshot_begin_at_zero_with_suggested_range` にリネームした。負値サポートは別 issue で検討する。
+
+### AI review 後追い (2026-07-20 c6478c2)
+
+7 件の指摘 (coderabbit / gemini / Codex Review) を 1 コミットで受け入れた。抜粋:
+
+- Fix 5 (Codex, radar): `min` / `max` の hard override は nice_ticks で丸めず raw `[lo, hi]` で `rr` を作る。`radial_axis == None` パスは既存の nice.min / nice.max を維持し byte-identical。
+- Fix 6 (Codex, polarArea): `beginAtZero: false` かつ `min` 未指定なら `lo = data_min`。従来は常に `lo = 0.0`。
+- Fix 8 (Codex, polarArea): `radial_axis` ブランチでは `data_min` / `data_max` を全 finite 値から求める。`v > 0` フィルタだと `min: -10, data: [0]` で `max_v = -inf` になり `hi` が壊れる。
+- Fix 1 + 4 (coderabbit + gemini, polarArea): 縮退時 `hi <= lo || !hi.is_finite()` → `hi = lo + 1.0`。radar.rs と同一パターンで NaN 混入を防ぐ。
+- Fix 7 (Codex, strict): `options.scales.<axis>` が非 object のときは無音スキップせず明示エラー。radial / cartesian 双方に適用。
+

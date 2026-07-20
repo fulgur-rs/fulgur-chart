@@ -181,7 +181,11 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
     }
 
-    let nice = if let Some(ra) = &spec.radial_axis {
+    // rr_lo / rr_hi は「値→半径」マッピングに使う raw ドメイン。
+    // radial_axis 有り時は nice_ticks で丸めない (Codex Fix 5: max: 95 の hard override が
+    // nice.max=100 に丸められて内側に落ちるバグを避ける)。
+    // radial_axis 無し時は既存の byte-identical パスを維持するため nice.min / nice.max を使う。
+    let (nice, rr_lo, rr_hi) = if let Some(ra) = &spec.radial_axis {
         // scatter.rs:189-209 と同パターン: min/max hard override、
         // suggested* は expand-only、beginAtZero は 0 を含める。
         let mut lo = ra
@@ -204,18 +208,21 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         if !hi.is_finite() || hi <= lo {
             hi = lo + 1.0;
         }
-        nice_ticks(lo, hi, 10)
+        let n = nice_ticks(lo, hi, 10);
+        (n, lo, hi)
     } else {
         // 既存 default: byte-identical を維持。
-        nice_ticks(0.0, max_val, 10)
+        let n = nice_ticks(0.0, max_val, 10);
+        let (mn, mx) = (n.min, n.max);
+        (n, mn, mx)
     };
-    // 値→半径。nice.max<=nice.min の縮退は中心へ落とす。
+    // 値→半径。span<=0 の縮退は中心へ落とす。
     // TODO(6z6): negative grid ticks under radial_axis
     // (現状 t <= 0.0 の tick は下のグリッド描画でスキップされる — min<0 のケースは未対応)。
-    let span = nice.max - nice.min;
+    let span = rr_hi - rr_lo;
     let rr = |v: f64| -> f64 {
         if span > 0.0 {
-            (((v - nice.min) / span).clamp(0.0, 1.0)) * radius
+            (((v - rr_lo) / span).clamp(0.0, 1.0)) * radius
         } else {
             0.0
         }

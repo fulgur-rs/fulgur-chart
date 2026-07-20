@@ -138,3 +138,47 @@ fn radar_snapshot_begin_at_zero_with_suggested_range() {
     );
     insta::assert_snapshot!(svg);
 }
+
+#[test]
+fn radar_max_override_places_data_max_at_outer_edge() {
+    // Codex Fix 5 のリグレッションテスト。
+    // max: 95 で data: [95] のとき、頂点は radius 100% (outer edge) に置かれるべき。
+    // nice_ticks で nice.max=100 に丸められると 95% の位置に落ちるバグを検出する。
+    //
+    // 検証: value 95 with max=95 と value 100 with max=100 は data/max 比率が同じ (=1.0)
+    // なので頂点位置は同一のはず。path の最初の "M x y" 座標を抽出して一致を確認する。
+    let svg_95 = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[95,95,95]}]},"options":{"scales":{"r":{"min":0,"max":95}}}}"##,
+    );
+    let svg_100 = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[100,100,100]}]},"options":{"scales":{"r":{"min":0,"max":100}}}}"##,
+    );
+    let extract_first_m = |s: &str| -> Option<(String, String)> {
+        // 系列多角形の path から最初の "M x y" を拾う。
+        // グリッド path は fill="none"、系列 path は fill="#XXXXXX" で判別する。
+        // path 属性順は d → fill → stroke → stroke-width → fill-opacity (scene renderer 生成)。
+        for chunk in s.split(r#"<path d=""#).skip(1) {
+            let end = chunk.find('"')?;
+            let d = &chunk[..end];
+            let attrs = &chunk[end..];
+            // fill が "none" 以外 (=系列 path) のみ対象。
+            if attrs.contains(r#"fill="none""#) {
+                continue;
+            }
+            let rest = d.strip_prefix("M ")?;
+            let mut it = rest.split_whitespace();
+            let x = it.next()?.to_string();
+            let y = it.next()?.to_string();
+            return Some((x, y));
+        }
+        None
+    };
+    let a = extract_first_m(&svg_95).expect("series path in max=95 svg");
+    let b = extract_first_m(&svg_100).expect("series path in max=100 svg");
+    assert_eq!(
+        a, b,
+        "value 95 with max=95 と value 100 with max=100 は outer edge 100% で同一座標のはず: a={a:?} b={b:?}"
+    );
+}

@@ -1013,8 +1013,14 @@ fn check_unknown_keys(
                     "offset",
                 ]
             };
+            // Codex Fix 7: axis 値が object でない (例: "r": 5) 場合は strict で拒否する。
+            // 従来は as_object() の None 分岐で無音スキップされていた。chart.js では
+            // 非 object の axis 値は常にエラーなので radial (r) / cartesian (x/y) 双方に適用。
             for axis in allowed_axes {
-                if let Some(ax) = scales.get(*axis).and_then(|v| v.as_object()) {
+                if let Some(ax_val) = scales.get(*axis) {
+                    let ax = ax_val.as_object().ok_or_else(|| {
+                        format!("options.scales.{axis} は object でなければなりません")
+                    })?;
                     check_object(ax, allowed_axis_keys, &format!("options.scales.{axis}"))?;
                 }
             }

@@ -155,3 +155,17 @@ fn polar_area_snapshot_stable_without_scales() {
     );
     assert_eq!(a, b);
 }
+
+#[test]
+fn polar_area_min_equal_to_data_max_does_not_produce_nan() {
+    // 縮退ケース: min == data の最大 → hi = lo + 1.0 で救済され、有効な SVG が返る。
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[100,100,100]}]},"options":{"scales":{"r":{"min":100}}}}"##,
+    );
+    assert!(
+        !svg.contains("NaN"),
+        "degenerate min == data_max should not produce NaN"
+    );
+    assert!(svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"));
+}

@@ -1393,3 +1393,24 @@ fn strict_mode_rejects_scales_xy_on_radar() {
     let err = chartjs::parse(json, true).unwrap_err();
     assert!(err.contains("x") && err.contains("scales"), "err: {err}");
 }
+
+#[test]
+fn strict_mode_rejects_non_object_scales_r_on_radar() {
+    // Codex Fix 7: axis 値が object でない (例: "r": 5) 場合は strict で拒否する。
+    // 従来は as_object() の None 分岐で無音スキップされていたため typo/型ミスが漏れていた。
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":5}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("r") && err.contains("object"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_non_object_scales_y_on_bar() {
+    // Fix 7 は cartesian にも適用される。
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"y":"foo"}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("y") && err.contains("object"), "err: {err}");
+}
