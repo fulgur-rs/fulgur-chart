@@ -183,7 +183,7 @@ impl Default for AxisBorder {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AxisSpec {
-    pub title: Option<String>,
+    pub title: Option<AxisTitle>,
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub suggested_min: Option<f64>,
@@ -193,7 +193,8 @@ pub struct AxisSpec {
     /// (bar の既定挙動)。false は edge-to-edge(line の既定)。現状 line レイアウトの
     /// x 軸のみが消費する(y は line の値軸なので無描画)。
     pub offset: bool,
-    pub grid: bool,
+    pub grid: AxisGrid,
+    pub border: AxisBorder,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -684,7 +684,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             suggested_max: suggested_max_x,
             begin_at_zero: x_begin_at_zero,
             offset: x_offset,
-            grid: true,
+            grid: AxisGrid::default(),
+            border: AxisBorder::default(),
         },
         y_axis: AxisSpec {
             title: None,
@@ -694,7 +695,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             suggested_max: suggested_max_y,
             begin_at_zero: y_begin_at_zero,
             offset: y_offset,
-            grid: true,
+            grid: AxisGrid::default(),
+            border: AxisBorder::default(),
         },
         legend: legend_pos(&raw.options.plugins.legend),
         title: raw
@@ -1430,7 +1432,11 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         suggested_max: None,
         begin_at_zero: false,
         offset: false,
-        grid: false,
+        grid: AxisGrid {
+            display: false,
+            ..Default::default()
+        },
+        border: AxisBorder::default(),
     };
 
     let series = vec![Series {
@@ -1801,7 +1807,11 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             suggested_max: None,
             begin_at_zero: false,
             offset: false,
-            grid: false,
+            grid: AxisGrid {
+                display: false,
+                ..Default::default()
+            },
+            border: AxisBorder::default(),
         },
         y_axis: AxisSpec {
             title: None,
@@ -1811,7 +1821,11 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             suggested_max: None,
             begin_at_zero: false,
             offset: false,
-            grid: false,
+            grid: AxisGrid {
+                display: false,
+                ..Default::default()
+            },
+            border: AxisBorder::default(),
         },
         legend: legend_pos(&raw.options.plugins.legend),
         title: raw
@@ -2403,7 +2417,15 @@ fn zero_axis() -> AxisSpec {
         suggested_max: None,
         begin_at_zero: false,
         offset: false,
-        grid: false,
+        grid: AxisGrid {
+            display: false,
+            draw_ticks: false,
+            ..Default::default()
+        },
+        border: AxisBorder {
+            display: false,
+            ..Default::default()
+        },
     }
 }
 

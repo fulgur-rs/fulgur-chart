@@ -533,7 +533,9 @@ pub fn value_label(x: f64, y: f64, size: f64, anchor: Anchor, fill: Color, v: f6
 mod tests {
     use super::*;
     use crate::font::DEFAULT_FONT;
-    use crate::ir::{AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType};
+    use crate::ir::{
+        AxisBorder, AxisGrid, AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType,
+    };
     use crate::text::TextMeasurer;
 
     fn make_bar_spec(n: usize, width: f64) -> ChartSpec {
@@ -568,7 +570,8 @@ mod tests {
                 suggested_max: None,
                 begin_at_zero: true,
                 offset: false,
-                grid: true,
+                grid: AxisGrid::default(),
+                border: AxisBorder::default(),
             },
             y_axis: AxisSpec {
                 title: None,
@@ -578,7 +581,8 @@ mod tests {
                 suggested_max: None,
                 begin_at_zero: true,
                 offset: false,
-                grid: true,
+                grid: AxisGrid::default(),
+                border: AxisBorder::default(),
             },
             legend: LegendPos::None,
             title: None,

@@ -413,7 +413,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 mod tests {
     use super::*;
     use crate::font::DEFAULT_FONT;
-    use crate::ir::{AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType};
+    use crate::ir::{
+        AxisBorder, AxisGrid, AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType,
+    };
     use crate::text::TextMeasurer;
 
     fn make_scatter_spec(points: &[(f64, f64)]) -> ChartSpec {
@@ -447,7 +449,8 @@ mod tests {
                 suggested_max: None,
                 begin_at_zero: false,
                 offset: false,
-                grid: true,
+                grid: AxisGrid::default(),
+                border: AxisBorder::default(),
             },
             y_axis: AxisSpec {
                 title: None,
@@ -457,7 +460,8 @@ mod tests {
                 suggested_max: None,
                 begin_at_zero: false,
                 offset: false,
-                grid: true,
+                grid: AxisGrid::default(),
+                border: AxisBorder::default(),
             },
             legend: LegendPos::None,
             title: None,
