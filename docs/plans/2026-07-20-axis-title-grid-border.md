@@ -650,6 +650,10 @@ x_axis: AxisSpec {
 
 同様に y_axis, および同ファイル内の他の AxisSpec 構築箇所も更新。
 
+**Sub-step: `check_unknown_keys` の sub-object 検査を撤廃**
+
+現状 `frontend/chartjs.rs::check_unknown_keys` は `options.scales.<axis>.<key>` の axis-level キーだけを検査し、その配下 (`title.txt` のような sub-object 内タイポ) は silent で受理する。Task 7 で `raw.options.scales` を typed `Scales` 参照に置き換えたあとは、schema 側 `AxisTitleOptions` / `GridLineOptions` / `AxisBorderOptions` の `deny_unknown_fields` が sub-object 検査を担うため、この silent 受理は自動的に消える。逆に言うと Task 7 でこの typed 参照置換を怠ると silent なタイポ受理が恒久化するので、必ず raw scales path を撤去すること。
+
 **Step 4: テスト通す**
 
 `cargo test -p fulgur-chart frontend::chartjs` → 全 pass。回帰なし。

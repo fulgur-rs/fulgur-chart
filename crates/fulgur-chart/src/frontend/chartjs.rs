@@ -973,6 +973,7 @@ fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
                             "max",
                             "title",
                             "grid",
+                            "border",
                             "beginAtZero",
                             "suggestedMin",
                             "suggestedMax",
@@ -2867,6 +2868,24 @@ mod tests {
         assert!(
             result.is_ok(),
             "strict mode should accept outlabels plugin: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn strict_allows_border_on_scales() {
+        // schema は options.scales.<axis>.border を typed で受理するので、
+        // strict モードでも allow-list に "border" が含まれていなければならない。
+        // schema/strict 契約の分岐(schema 通過→strict 拒否)を防ぐ回帰テスト。
+        let json = r#"{
+            "type": "bar",
+            "data": {"labels":["a"],"datasets":[{"data":[1]}]},
+            "options": {"scales":{"x":{"border":{"width":2}}}}
+        }"#;
+        let result = parse(json, true);
+        assert!(
+            result.is_ok(),
+            "strict モードで options.scales.x.border を許可すべき: {:?}",
             result
         );
     }

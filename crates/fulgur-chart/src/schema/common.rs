@@ -242,13 +242,17 @@ mod tests {
 
     #[test]
     fn axis_options_accepts_typed_title_grid_border() {
+        // is_some() だけだと配線ミス(例: title の中身が読めていない/border.width が別 field
+        // に流れている)を検出できない。値まで assert して回帰を防ぐ。
+        // grid.color は Option<ScalarOrArray<ColorString>> でワンライナに書きにくいため
+        // is_some() のままにしている(シリアライズ経路が生きていることだけを確認)。
         let v: AxisOptions = serde_json::from_str(
             r##"{"title":{"text":"X"},"grid":{"color":"#eee"},"border":{"width":2}}"##,
         )
         .unwrap();
-        assert!(v.title.is_some());
-        assert!(v.grid.is_some());
-        assert!(v.border.is_some());
+        assert_eq!(v.title.as_ref().and_then(|t| t.text.as_deref()), Some("X"));
+        assert!(v.grid.is_some(), "grid のシリアライズ経路が生きている");
+        assert_eq!(v.border.as_ref().and_then(|b| b.width), Some(2.0));
     }
 
     #[test]
