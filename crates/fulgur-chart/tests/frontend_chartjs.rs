@@ -480,16 +480,20 @@ fn dataset_type_on_non_mixable_base_errors() {
 }
 
 #[test]
-fn strict_rejects_scales_typo() {
-    // stacked は描画に効くので、typo を strict で取りこぼさない。
+fn scales_typo_rejected_in_both_modes() {
+    // Task 7 で `RawOptions.scales` を typed `AxisOptions` (`deny_unknown_fields`) 経由に
+    // 差し替えたため、scales.{x,y} 直下のタイポは strict/non-strict どちらでも
+    // deserialize 段で拒否される。stacked は描画に効くので silent 素通りは避けたい。
     let typo = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"y":{"stakced":true}}}}"#;
     assert!(chartjs::parse(typo, true).is_err());
-    assert!(chartjs::parse(typo, false).is_ok());
-    // 正しい stacked キーは strict でも通る。
+    assert!(chartjs::parse(typo, false).is_err());
+    // 正しい stacked キーは strict/non-strict どちらでも通る(タイポ以外を締め付けていない
+    // ことの回帰チェック)。
     let ok = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"y":{"stacked":true}}}}"#;
     assert!(chartjs::parse(ok, true).is_ok());
+    assert!(chartjs::parse(ok, false).is_ok());
 }
 
 #[test]
