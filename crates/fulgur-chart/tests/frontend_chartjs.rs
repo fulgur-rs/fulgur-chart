@@ -1340,3 +1340,46 @@ fn non_radial_charts_leave_radial_axis_none() {
     .unwrap();
     assert!(spec.radial_axis.is_none());
 }
+
+#[test]
+fn strict_mode_allows_scales_r_on_radar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":{"min":0,"max":100,"suggestedMin":-5,"suggestedMax":120,"beginAtZero":true}}}}"##;
+    chartjs::parse(json, true).expect("strict mode should accept scales.r on radar");
+}
+
+#[test]
+fn strict_mode_allows_scales_r_on_polar_area() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"polarArea","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+        "options":{"scales":{"r":{"max":50}}}}"##;
+    chartjs::parse(json, true).expect("strict mode should accept scales.r on polarArea");
+}
+
+#[test]
+fn strict_mode_rejects_scales_r_on_bar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"r":{"min":0}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("r") && err.contains("scales"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_scales_r_typo_on_radar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":{"beginAtZeroo":true}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("beginAtZeroo"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_scales_xy_on_radar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"x":{"min":0}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("x") && err.contains("scales"), "err: {err}");
+}

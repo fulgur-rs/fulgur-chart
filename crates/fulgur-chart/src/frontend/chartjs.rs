@@ -316,7 +316,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 chart_type.as_deref(),
                 Some("outlabeledPie") | Some("outlabeledDoughnut")
             );
-            check_unknown_keys(json, allow_outlabels)?;
+            let allow_radial_scale =
+                matches!(chart_type.as_deref(), Some("radar") | Some("polarArea"));
+            check_unknown_keys(json, allow_outlabels, allow_radial_scale)?;
         }
     }
 
@@ -886,7 +888,11 @@ fn legend_pos(l: &Option<RawLegend>) -> LegendPos {
 // IR へ未マップでも、設計で v1 サポート対象に挙げたキーは strict でも受理する
 // （strict が弾くのは未知キーであり、認識済み・未完成キーではない）:
 //   datalabels=Task16(最小データラベル) / scales=Task9 / pointRadius=Task13。
-fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
+fn check_unknown_keys(
+    json: &str,
+    allow_outlabels: bool,
+    allow_radial_scale: bool,
+) -> Result<(), String> {
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return Ok(()), // 不正 JSON は後段パースに委ねる
@@ -984,25 +990,32 @@ fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
         // scales 配下も検査する。stacked は描画に効く load-bearing キーなので、
         // typo(例 stakced)を strict で取りこぼさないようにする。各軸は設計が認める
         // サブセットのみ許可(stacked のみ実装、他は認識済み・未実装)。
+        // radar/polarArea は直交軸を持たず、動径軸 `r` のみを受け付ける。
         if let Some(scales) = options.get("scales").and_then(|v| v.as_object()) {
-            check_object(scales, &["x", "y"], "options.scales")?;
-            for axis in ["x", "y"] {
-                if let Some(ax) = scales.get(axis).and_then(|v| v.as_object()) {
-                    check_object(
-                        ax,
-                        &[
-                            "stacked",
-                            "min",
-                            "max",
-                            "title",
-                            "grid",
-                            "beginAtZero",
-                            "suggestedMin",
-                            "suggestedMax",
-                            "offset",
-                        ],
-                        &format!("options.scales.{axis}"),
-                    )?;
+            let allowed_axes: &[&str] = if allow_radial_scale {
+                &["r"]
+            } else {
+                &["x", "y"]
+            };
+            check_object(scales, allowed_axes, "options.scales")?;
+            let allowed_axis_keys: &[&str] = if allow_radial_scale {
+                &["min", "max", "suggestedMin", "suggestedMax", "beginAtZero"]
+            } else {
+                &[
+                    "stacked",
+                    "min",
+                    "max",
+                    "title",
+                    "grid",
+                    "beginAtZero",
+                    "suggestedMin",
+                    "suggestedMax",
+                    "offset",
+                ]
+            };
+            for axis in allowed_axes {
+                if let Some(ax) = scales.get(*axis).and_then(|v| v.as_object()) {
+                    check_object(ax, allowed_axis_keys, &format!("options.scales.{axis}"))?;
                 }
             }
         }
