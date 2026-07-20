@@ -170,8 +170,16 @@ pub struct AxisBorderOptions {
 }
 
 /// Axis options for options.scales.x / options.scales.y.
+///
+/// `deny_unknown_fields` is intentionally NOT set here. Chart.js のスケールには
+/// v1 で未モデル化のフィールド(`ticks`/`type`/`time`/`position`/`reverse`/`grid.z`
+/// など)が多数あり、これらを deserialize 段でハードエラーにすると non-strict
+/// モードでの Chart.js JSON 互換が壊れる。strict モードのタイポ検出は
+/// `frontend/chartjs.rs::check_unknown_keys` の allow-list が担い、
+/// sub-object(`title`/`grid`/`border`/`font`)は各構造体の
+/// `deny_unknown_fields` でタイポを弾く二段構えを維持している。
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AxisOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stacked: Option<bool>,
@@ -265,5 +273,27 @@ mod tests {
     fn axis_options_rejects_typo_in_title() {
         let e = serde_json::from_str::<AxisOptions>(r##"{"title":{"txt":"X"}}"##);
         assert!(e.is_err(), "unknown key in title must be rejected");
+    }
+
+    #[test]
+    fn axis_options_silently_accepts_unmodeled_chartjs_fields() {
+        // Chart.js の未実装フィールドは non-strict で silently 通す方針。
+        // strict モードのタイポ検出は frontend の check_unknown_keys が担当する。
+        // AxisOptions は Debug を実装しないため、失敗時はエラー側だけを表示する。
+        let v = serde_json::from_str::<AxisOptions>(
+            r##"{"ticks":{"stepSize":5},"type":"linear","position":"bottom","reverse":true}"##,
+        );
+        assert!(
+            v.is_ok(),
+            "unmodeled Chart.js fields should not hard-error: {:?}",
+            v.err()
+        );
+    }
+
+    #[test]
+    fn axis_options_still_rejects_subobject_typo_in_title() {
+        // sub-object 側は deny_unknown_fields が生きているので typo は落ちる。
+        let e = serde_json::from_str::<AxisOptions>(r##"{"title":{"txt":"X"}}"##);
+        assert!(e.is_err());
     }
 }
