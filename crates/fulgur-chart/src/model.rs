@@ -3,7 +3,8 @@
 
 use serde::Serialize;
 
-use crate::ir::{ChartKind, ChartSpec, Color};
+use crate::ir::{ChartKind, ChartSpec, Color, XPositions};
+use crate::temporal::TemporalTick;
 use crate::text::TextMeasurer;
 
 /// 解決済み色を正規化 rgba 文字列にする(plan の正規化規約に従う)。
@@ -182,14 +183,14 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
             let frame = crate::layout::common::compute(spec, m);
             let pw = frame.plot_right - frame.plot_left;
             let ph = frame.plot_bottom - frame.plot_top;
-            if pw <= 0.0 || ph <= 0.0 || spec.width <= 0.0 || spec.height <= 0.0 {
+            if pw <= 0.0 || ph <= 0.0 || frame.scene_width <= 0.0 || frame.scene_height <= 0.0 {
                 return None;
             }
             let plot_area = RectN {
-                x: frame.plot_left / spec.width,
-                y: frame.plot_top / spec.height,
-                w: pw / spec.width,
-                h: ph / spec.height,
+                x: frame.plot_left / frame.scene_width,
+                y: frame.plot_top / frame.scene_height,
+                w: pw / frame.scene_width,
+                h: ph / frame.scene_height,
             };
             let elements = crate::layout::line::line_points(spec, &frame)
                 .iter()
@@ -359,6 +360,20 @@ fn category_axis(labels: &[String]) -> AxisModel {
     }
 }
 
+fn temporal_axis(unix_millis: &[i64], ticks: &[TemporalTick]) -> AxisModel {
+    AxisModel {
+        kind: "temporal".to_string(),
+        labels: Some(ticks.iter().map(|tick| tick.label.clone()).collect()),
+        min: unix_millis.first().map(|value| *value as f64),
+        max: unix_millis.last().map(|value| *value as f64),
+        step: ticks
+            .windows(2)
+            .next()
+            .map(|window| (window[1].unix_millis - window[0].unix_millis) as f64),
+        ticks: Some(ticks.iter().map(|tick| tick.unix_millis as f64).collect()),
+    }
+}
+
 /// 直交チャートの (x 軸, y 軸, y 目盛り数) を計算する。値(線形)軸は描画上の向きに
 /// 関わらず常に `y` に載せ、カテゴリ軸を `x` に載せる — JS 抽出器の正規化規約
 /// (線形値軸→y・カテゴリ→x)と揃え、apples-to-apples 照合を可能にするため。
@@ -367,6 +382,17 @@ fn category_axis(labels: &[String]) -> AxisModel {
 fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisModel, usize)> {
     use crate::scale::nice_ticks;
     match &spec.kind {
+        ChartKind::Line if matches!(spec.x_positions, XPositions::Temporal { .. }) => {
+            let frame = crate::layout::common::compute(spec, m);
+            let XPositions::Temporal { unix_millis } = &spec.x_positions else {
+                unreachable!("guard requires temporal positions");
+            };
+            Some((
+                temporal_axis(unix_millis, &frame.temporal_ticks),
+                linear_axis(&frame.ticks),
+                frame.ticks.ticks.len(),
+            ))
+        }
         // 縦棒・線・mixed: 値軸=y(layout::common::compute と共有)、カテゴリ=x。
         ChartKind::Bar {
             horizontal: false, ..
@@ -419,8 +445,19 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
 pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
     let mut model = build_model_core(spec);
     if let Some((x, y, y_ticks)) = compute_axes(spec, m) {
+        if matches!(
+            (&spec.kind, &spec.x_positions),
+            (ChartKind::Line, XPositions::Temporal { .. })
+        ) {
+            model.counts.x_ticks = x.ticks.as_ref().map_or(0, Vec::len);
+        }
         model.counts.y_ticks = y_ticks;
         model.axes = Some(Axes { x, y });
+    }
+    if matches!(spec.kind, ChartKind::Line) {
+        let frame = crate::layout::common::compute(spec, m);
+        model.meta.width = frame.scene_width;
+        model.meta.height = frame.scene_height;
     }
     model.geometry = compute_geometry(spec, m);
     model
