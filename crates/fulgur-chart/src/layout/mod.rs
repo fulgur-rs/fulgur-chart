@@ -8,6 +8,7 @@ pub mod gauge;
 pub mod line;
 pub mod matrix;
 pub mod mixed;
+pub mod monotone;
 pub mod outlabeled_pie;
 pub mod pie;
 pub mod polar_area;
