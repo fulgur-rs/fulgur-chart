@@ -12,7 +12,7 @@
 //! - **フォントファイルサイズ**: --font はユーザ自身が渡す。不正フォントは
 //!   ttf_parser::Face::parse が Err を返すので別途処理済み。
 
-use crate::ir::ChartSpec;
+use crate::ir::{ChartKind, ChartSpec, XPositions};
 use crate::num::fmt_num;
 
 // --- デフォルト上限定数 ---
@@ -207,6 +207,29 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
             spec.categories.len(),
             limits.max_categories,
         ));
+    }
+
+    if let XPositions::Temporal { unix_millis } = &spec.x_positions {
+        if unix_millis.len() != spec.categories.len() {
+            return Err(format!(
+                "temporal x position count {} does not match category count {}",
+                unix_millis.len(),
+                spec.categories.len()
+            ));
+        }
+        if spec
+            .series
+            .iter()
+            .any(|series| series.values.len() != unix_millis.len())
+        {
+            return Err("temporal x position count does not match every line series".to_string());
+        }
+        if unix_millis.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("temporal x positions must be strictly increasing".to_string());
+        }
+        if !matches!(spec.kind, ChartKind::Line) {
+            return Err("temporal x positions are only supported for line charts".to_string());
+        }
     }
 
     // --- series × categories の積(bar/line チャートのプリミティブ数) ---
@@ -622,6 +645,7 @@ fn estimate_outlabel_expanded_bytes(spec: &ChartSpec, template: &str) -> usize {
 mod tests {
     use super::*;
     use crate::frontend::chartjs;
+    use crate::ir::XPositions;
 
     fn base_spec() -> ChartSpec {
         chartjs::parse(
@@ -633,6 +657,29 @@ mod tests {
 
     fn default_limits() -> InputLimits {
         InputLimits::default()
+    }
+
+    #[test]
+    fn temporal_positions_must_match_categories() {
+        let mut spec = base_spec();
+        spec.categories = vec!["a".into(), "b".into()];
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![1],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("temporal x position count"));
+    }
+
+    #[test]
+    fn temporal_positions_must_be_strictly_increasing() {
+        let mut spec = base_spec();
+        spec.categories = vec!["a".into(), "b".into()];
+        spec.series[0].values = vec![1.0, 2.0];
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![2, 2],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("strictly increasing"));
     }
 
     #[test]
@@ -693,7 +740,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -729,7 +776,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -759,7 +806,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -788,7 +835,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],

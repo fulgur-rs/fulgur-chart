@@ -534,7 +534,7 @@ mod tests {
     use crate::font::DEFAULT_FONT;
     use crate::ir::{
         AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, Color,
-        LegendPos, Point, Series, SeriesType,
+        LegendPos, LineInterpolation, Point, Series, SeriesType, SizeMode, XPositions,
     };
     use crate::text::TextMeasurer;
 
@@ -543,6 +543,7 @@ mod tests {
         ChartSpec {
             kind: ChartKind::Scatter,
             categories: vec![],
+            x_positions: XPositions::Category,
             series: vec![Series {
                 name: String::new(),
                 values: vec![],
@@ -554,7 +555,7 @@ mod tests {
                 stroke: vec![],
                 stroke_width: 1.0,
                 area: false,
-                tension: 0.0,
+                interpolation: LineInterpolation::Linear,
                 series_type: SeriesType::Bar,
                 point_radius: None,
                 box_points: vec![],
@@ -584,9 +585,11 @@ mod tests {
                 border: AxisBorder::default(),
             },
             legend: LegendPos::None,
+            legend_title: None,
             title: None,
             width: 600.0,
             height: 400.0,
+            size_mode: SizeMode::Canvas,
             data_labels: false,
             theme: crate::ir::Theme::default(),
             decimation: crate::ir::Decimation::default(),

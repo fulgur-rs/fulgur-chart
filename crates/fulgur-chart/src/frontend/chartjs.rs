@@ -754,7 +754,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 stroke,
                 stroke_width: ds.border_width.unwrap_or(default_border_width(series_type)),
                 area: ds.fill.is_filled(),
-                tension: normalize_tension(ds.tension),
+                interpolation: line_interpolation(normalize_tension(ds.tension)),
                 series_type,
                 point_radius: ds.point_radius,
                 box_points,
@@ -813,6 +813,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         kind,
         series,
         categories: raw.data.labels,
+        x_positions: XPositions::Category,
         x_axis: AxisSpec {
             title: axis_title_from(x_opts.and_then(|a| a.title.as_ref())),
             min: None,
@@ -836,6 +837,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             border: axis_border_from(y_opts.and_then(|a| a.border.as_ref())),
         },
         legend: legend_pos(&raw.options.plugins.legend),
+        legend_title: None,
         title: raw
             .options
             .plugins
@@ -844,6 +846,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             .map(|t| t.text),
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
+        size_mode: SizeMode::Canvas,
         data_labels,
         theme,
         decimation,
@@ -924,6 +927,14 @@ fn normalize_tension(tension: f64) -> f64 {
         0.0
     } else {
         tension.min(1.0)
+    }
+}
+
+fn line_interpolation(tension: f64) -> LineInterpolation {
+    if tension <= 0.0 {
+        LineInterpolation::Linear
+    } else {
+        LineInterpolation::CatmullRom { tension }
     }
 }
 
@@ -1584,7 +1595,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         stroke: vec![],
         stroke_width: 0.0,
         area: false,
-        tension: 0.0,
+        interpolation: LineInterpolation::Linear,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -1596,9 +1607,11 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         kind: ChartKind::Treemap,
         series,
         categories: vec![],
+        x_positions: XPositions::Category,
         x_axis: no_axis.clone(),
         y_axis: no_axis,
         legend: crate::ir::LegendPos::None,
+        legend_title: None,
         title: raw
             .options
             .plugins
@@ -1607,6 +1620,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
             .map(|t| t.text),
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
+        size_mode: SizeMode::Canvas,
         data_labels: false,
         theme,
         decimation: Decimation::default(),
@@ -1923,7 +1937,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             stroke: stroke_color.clone(),
             stroke_width: ds.border_width.unwrap_or(0.0),
             area: false,
-            tension: 0.0,
+            interpolation: LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -1936,6 +1950,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         kind: ChartKind::Matrix { color_lo, color_hi },
         series,
         categories: x_cats,
+        x_positions: XPositions::Category,
         x_axis: AxisSpec {
             title: None,
             min: None,
@@ -1965,6 +1980,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             border: AxisBorder::default(),
         },
         legend: legend_pos(&raw.options.plugins.legend),
+        legend_title: None,
         title: raw
             .options
             .plugins
@@ -1973,6 +1989,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             .map(|t| t.text),
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
+        size_mode: SizeMode::Canvas,
         data_labels: false,
         theme,
         decimation: Decimation::default(),
@@ -2277,7 +2294,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         stroke: vec![],
         stroke_width: 0.0,
         area: false,
-        tension: 0.0,
+        interpolation: LineInterpolation::Linear,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -2304,9 +2321,11 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         },
         series,
         categories: vec![],
+        x_positions: XPositions::Category,
         x_axis: zero_axis(),
         y_axis: zero_axis(),
         legend: crate::ir::LegendPos::None,
+        legend_title: None,
         title: raw
             .options
             .plugins
@@ -2315,6 +2334,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
             .map(|t| t.text),
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
+        size_mode: SizeMode::Canvas,
         data_labels: false,
         theme,
         decimation: Decimation::default(),
@@ -2520,7 +2540,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         stroke: vec![],
         stroke_width: 0.0,
         area: false,
-        tension: 0.0,
+        interpolation: LineInterpolation::Linear,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -2532,12 +2552,15 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         kind,
         series,
         categories: vec![],
+        x_positions: XPositions::Category,
         x_axis: zero_axis(),
         y_axis: zero_axis(),
         legend: LegendPos::None,
+        legend_title: None,
         title,
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
+        size_mode: SizeMode::Canvas,
         data_labels: false,
         theme,
         decimation: Decimation::default(),
@@ -2702,12 +2725,15 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         },
         series: vec![],
         categories: vec![],
+        x_positions: XPositions::Category,
         x_axis: zero_axis(),
         y_axis: zero_axis(),
         legend: LegendPos::None,
+        legend_title: None,
         title,
         width: raw.width.unwrap_or(500.0),
         height: raw.height.unwrap_or(300.0),
+        size_mode: SizeMode::Canvas,
         data_labels: false,
         theme,
         decimation: Decimation::default(),
@@ -2946,14 +2972,17 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(spec.series[0].tension, 1.0);
+        assert_eq!(
+            spec.series[0].interpolation,
+            LineInterpolation::CatmullRom { tension: 1.0 }
+        );
 
         let spec = parse(
             r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2,3],"tension":-2}]}}"#,
             false,
         )
         .unwrap();
-        assert_eq!(spec.series[0].tension, 0.0);
+        assert_eq!(spec.series[0].interpolation, LineInterpolation::Linear);
     }
 
     #[test]

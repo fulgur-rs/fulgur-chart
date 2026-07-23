@@ -71,6 +71,32 @@ pub enum SeriesType {
     Line,
 }
 
+#[derive(Clone, Debug, PartialEq, Default)]
+pub enum XPositions {
+    #[default]
+    Category,
+    Temporal {
+        unix_millis: Vec<i64>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum LineInterpolation {
+    #[default]
+    Linear,
+    CatmullRom {
+        tension: f64,
+    },
+    Monotone,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum SizeMode {
+    #[default]
+    Canvas,
+    PlotArea,
+}
+
 /// 色は**データ点ごと**に持てる（pie のスライス別色が標準形のため）。
 /// 長さ 1 のときは全点へブロードキャストする。`fill_at`/`stroke_at` で安全に参照する。
 #[derive(Clone, Debug, PartialEq)]
@@ -82,8 +108,8 @@ pub struct Series {
     pub fill: Vec<Color>,   // len==1 でブロードキャスト、または点ごと
     pub stroke: Vec<Color>, // 同上
     pub stroke_width: f64,
-    pub area: bool,   // line のとき塗りつぶすか
-    pub tension: f64, // 0.0 = 直線
+    pub area: bool, // line のとき塗りつぶすか
+    pub interpolation: LineInterpolation,
     /// 描画種別。混合チャートでのみ意味を持つ(単一種別では未使用)。
     pub series_type: SeriesType,
     /// scatter のマーカー半径(chart.js pointRadius)。None なら既定値。
@@ -452,12 +478,15 @@ pub struct ChartSpec {
     pub kind: ChartKind,
     pub series: Vec<Series>,
     pub categories: Vec<String>,
+    pub x_positions: XPositions,
     pub x_axis: AxisSpec,
     pub y_axis: AxisSpec,
     pub legend: LegendPos,
+    pub legend_title: Option<String>,
     pub title: Option<String>,
     pub width: f64,
     pub height: f64,
+    pub size_mode: SizeMode,
     /// データラベルを描画するか(frontend で解決済み)。
     pub data_labels: bool,
     /// 視覚トークンのテーマ(frontend で解決済み)。
@@ -475,6 +504,13 @@ mod tests {
     }
 
     #[test]
+    fn new_line_contracts_have_backward_compatible_defaults() {
+        assert_eq!(XPositions::default(), XPositions::Category);
+        assert_eq!(LineInterpolation::default(), LineInterpolation::Linear);
+        assert_eq!(SizeMode::default(), SizeMode::Canvas);
+    }
+
+    #[test]
     fn fill_at_broadcasts_single_color() {
         let s = Series {
             name: "x".into(),
@@ -484,7 +520,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -505,7 +541,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -527,7 +563,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],

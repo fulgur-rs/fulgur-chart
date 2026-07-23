@@ -146,20 +146,23 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 continue;
             }
             let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
-            if ser.tension <= 0.0 {
-                items.push(Prim::Polyline {
-                    points: xy,
-                    stroke: ser.stroke_at(0),
-                    stroke_width: ser.stroke_width,
-                });
-            } else {
-                let d = catmull_rom_path(&xy, ser.tension);
-                items.push(Prim::Path {
-                    d,
-                    fill: None,
-                    stroke: Some(ser.stroke_at(0)),
-                    stroke_width: ser.stroke_width,
-                });
+            match ser.interpolation {
+                crate::ir::LineInterpolation::Linear | crate::ir::LineInterpolation::Monotone => {
+                    items.push(Prim::Polyline {
+                        points: xy,
+                        stroke: ser.stroke_at(0),
+                        stroke_width: ser.stroke_width,
+                    });
+                }
+                crate::ir::LineInterpolation::CatmullRom { tension } => {
+                    let d = catmull_rom_path(&xy, tension);
+                    items.push(Prim::Path {
+                        d,
+                        fill: None,
+                        stroke: Some(ser.stroke_at(0)),
+                        stroke_width: ser.stroke_width,
+                    });
+                }
             }
         }
 
