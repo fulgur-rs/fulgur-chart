@@ -1307,15 +1307,12 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
             }
         }
         if let Some(color) = encoding.get("color").and_then(Value::as_object) {
-            if color.contains_key("title") {
-                return Err(
-                    "encoding.color.title is only supported for temporal line charts".to_string(),
-                );
-            }
-            if color.contains_key("scale") {
-                return Err(
-                    "encoding.color.scale is only supported for temporal line charts".to_string(),
-                );
+            for option in ["title", "scale"] {
+                if color.contains_key(option) {
+                    return Err(format!(
+                        "encoding.color.{option} is only supported for temporal line charts"
+                    ));
+                }
             }
         }
     }
@@ -1451,7 +1448,10 @@ fn validate_line_channel_types(encoding: &Map<String, Value>) -> Result<(), Stri
             continue;
         };
         let Some(field_type) = field_type.as_str() else {
-            continue;
+            return Err(format!(
+                "encoding.{channel_name}.type must be a string, got {}",
+                json_value_type(field_type)
+            ));
         };
         if !supported.contains(&field_type) {
             return Err(format!(

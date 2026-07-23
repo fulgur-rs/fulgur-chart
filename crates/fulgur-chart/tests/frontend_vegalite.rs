@@ -364,6 +364,13 @@ fn strict_line_rejects_unsupported_channel_type_values() {
         err.contains("encoding.color.type"),
         "unexpected error: {err}"
     );
+
+    let err = vegalite::parse(
+        &DOGFOOD_SHAPE.replace(r#""type":"temporal""#, r#""type":42"#),
+        true,
+    )
+    .unwrap_err();
+    assert!(err.contains("encoding.x.type"), "unexpected error: {err}");
 }
 
 #[test]
