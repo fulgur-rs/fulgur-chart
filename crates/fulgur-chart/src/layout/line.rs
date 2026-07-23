@@ -19,7 +19,6 @@ pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
 ) -> Vec<crate::layout::scatter::PointBox> {
-    let n = spec.categories.len().max(1);
     let mut pts = Vec::new();
     for (sidx, ser) in spec.series.iter().enumerate() {
         for i in 0..spec.categories.len() {
@@ -29,7 +28,7 @@ pub fn line_points(
             if !v.is_finite() {
                 continue;
             }
-            let x = common::line_category_x(spec, frame, i, n);
+            let x = common::line_x(spec, frame, i);
             pts.push(crate::layout::scatter::PointBox {
                 series: sidx,
                 index: i,
@@ -49,8 +48,6 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let mut items: Vec<Prim> = Vec::new();
     common::draw_frame(&mut items, spec, &frame, m);
 
-    let n = spec.categories.len().max(1);
-
     for ser in &spec.series {
         // 有効点列: (x, y, 元カテゴリインデックス)。欠損・非有限値を除外。
         // 元インデックスはラベル lookup と gap 検出に使う。
@@ -60,7 +57,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if !v.is_finite() {
                     return None;
                 }
-                let x = common::line_category_x(spec, &frame, i, n);
+                let x = common::line_x(spec, &frame, i);
                 Some((x, frame.ys.map(v), i))
             })
             .collect();
@@ -211,8 +208,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 
     Scene {
-        width: spec.width,
-        height: spec.height,
+        width: frame.scene_width,
+        height: frame.scene_height,
         items,
     }
 }
@@ -297,6 +294,40 @@ mod tests {
     }
 
     #[test]
+    fn plot_area_line_scene_uses_outer_frame_size() {
+        let mut spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10,20,30]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.x_positions = crate::ir::XPositions::Temporal {
+            unix_millis: vec![0, 86_400_000, 3 * 86_400_000],
+        };
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        spec.width = 720.0;
+        spec.height = 320.0;
+        spec.theme.background = Some(crate::ir::Color {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 1.0,
+        });
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let scene = crate::layout::build_scene(&spec, &m);
+        assert_eq!(
+            (scene.width, scene.height),
+            (frame.scene_width, frame.scene_height)
+        );
+        assert!(matches!(
+            scene.items.first(),
+            Some(Prim::Rect { w, h, .. })
+                if (*w, *h) == (frame.scene_width, frame.scene_height)
+        ));
+    }
+
+    #[test]
     fn line_frame_stays_valid_when_edge_labels_exceed_width() {
         // 狭い幅 + 長い端ラベルでも edge 余白で描画領域が反転しない(plot_right >= plot_left)。
         let mut spec = chartjs::parse(
@@ -316,8 +347,8 @@ mod tests {
         );
         // line_x は有限かつ先頭<=末尾(NaN や順序反転を生まない)。
         let n = spec.categories.len();
-        let x0 = common::line_x(&frame, 0, n);
-        let x_last = common::line_x(&frame, n - 1, n);
+        let x0 = common::line_x(&spec, &frame, 0);
+        let x_last = common::line_x(&spec, &frame, n - 1);
         assert!(x0.is_finite() && x_last.is_finite());
         assert!(x_last >= x0);
     }

@@ -53,8 +53,8 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             Prim::Rect {
                 x: 0.0,
                 y: 0.0,
-                w: spec.width,
-                h: spec.height,
+                w: scene.width,
+                h: scene.height,
                 fill,
             },
         );
