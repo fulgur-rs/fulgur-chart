@@ -1,6 +1,6 @@
 use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::{chartjs, vegalite};
-use fulgur_chart::ir::XPositions;
+use fulgur_chart::ir::{SizeMode, XPositions};
 use fulgur_chart::layout::common;
 use fulgur_chart::model::build_model;
 use fulgur_chart::temporal::parse_rfc3339_millis;
@@ -41,6 +41,32 @@ fn snapshot_scatter_model() {
 #[test]
 fn snapshot_bar_horizontal_model() {
     insta::assert_yaml_snapshot!(model_yaml("bar-horizontal"));
+}
+
+#[test]
+fn categorical_line_model_keeps_spec_dimensions_and_legacy_normalization() {
+    let json = r#"{
+        "type":"line",
+        "data":{"labels":["A","B","C"],"datasets":[{"data":[1,2,3]}]}
+    }"#;
+    let mut spec = chartjs::parse(json, false).unwrap();
+    spec.size_mode = SizeMode::PlotArea;
+    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let frame = common::compute(&spec, &m);
+    let model = build_model(&spec, &m);
+    let geometry = model.geometry.as_ref().unwrap();
+    let plot_width = frame.plot_right - frame.plot_left;
+    let plot_height = frame.plot_bottom - frame.plot_top;
+
+    assert!(matches!(spec.x_positions, XPositions::Category));
+    assert_eq!(
+        (model.meta.width, model.meta.height),
+        (spec.width, spec.height)
+    );
+    assert_eq!(geometry.plot_area.x, frame.plot_left / spec.width);
+    assert_eq!(geometry.plot_area.y, frame.plot_top / spec.height);
+    assert_eq!(geometry.plot_area.w, plot_width / spec.width);
+    assert_eq!(geometry.plot_area.h, plot_height / spec.height);
 }
 
 #[test]
