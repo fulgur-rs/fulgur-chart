@@ -162,6 +162,11 @@ pub fn render_chart_to_png_with(
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
+    crate::guard::validate_plot_area_scene_with_measurer(
+        spec,
+        &crate::guard::InputLimits::default(),
+        &measurer,
+    )?;
     let scene = crate::layout::build_scene(spec, &measurer);
     scene_to_png_with_face(&scene, scale, &face, compression)
 }
@@ -186,6 +191,11 @@ pub fn render_chart_to_webp(
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
+    crate::guard::validate_plot_area_scene_with_measurer(
+        spec,
+        &crate::guard::InputLimits::default(),
+        &measurer,
+    )?;
     let scene = crate::layout::build_scene(spec, &measurer);
     // WebP 専用の上限(軸・面積)で pixmap 確保前に弾き OOM を防ぐ(→ WEBP_LIMITS)。
     let mut pixmap = scene_to_pixmap(&scene, scale, &face, &WEBP_LIMITS)?;

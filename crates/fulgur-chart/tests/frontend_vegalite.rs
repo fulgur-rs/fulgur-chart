@@ -321,6 +321,42 @@ fn non_strict_temporal_line_rejects_unsupported_interpolation() {
 }
 
 #[test]
+fn non_strict_temporal_line_rejects_non_boolean_point() {
+    let err = vegalite::parse(
+        &DOGFOOD_SHAPE.replace(r#""point":true"#, r#""point":"true""#),
+        false,
+    )
+    .unwrap_err();
+    assert!(err.contains("mark.point"), "unexpected error: {err}");
+}
+
+#[test]
+fn non_strict_temporal_line_rejects_out_of_range_grid_opacity() {
+    for replacement in ["-0.5", "1.5", "\"opaque\""] {
+        let err = vegalite::parse(
+            &DOGFOOD_SHAPE.replace(
+                r#""gridOpacity":0.15"#,
+                &format!(r#""gridOpacity":{replacement}"#),
+            ),
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("config.axis.gridOpacity"),
+            "unexpected error: {err}"
+        );
+    }
+}
+
+#[test]
+fn temporal_line_treats_null_color_scale_as_absent() {
+    let json = DOGFOOD_SHAPE.replace(r#""scale":{"scheme":"tableau10"}"#, r#""scale":null"#);
+    for strict in [false, true] {
+        vegalite::parse(&json, strict).unwrap();
+    }
+}
+
+#[test]
 fn non_strict_temporal_line_rejects_unsupported_color_scheme() {
     for (json, expected) in [
         (
