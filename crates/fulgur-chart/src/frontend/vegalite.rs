@@ -10,10 +10,12 @@
 //!
 //! すべて決定的（distinct 値の抽出は first-seen 順、HashMap 不使用）でパニックしない。
 
+use crate::color::parse_color;
 use crate::ir::*;
 use crate::palette::vegalite_theme;
+use crate::temporal::parse_rfc3339_millis;
 use serde_json::{Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Vega-Lite サブセットを [`ChartSpec`] へ変換する。
 ///
@@ -54,6 +56,13 @@ pub fn parse_with_limits(
     let y_field = channel_field(encoding, "y");
     let color_field = channel_field(encoding, "color");
     let theta_field = channel_field(encoding, "theta");
+    let temporal_line =
+        matches!(kind, ChartKind::Line) && channel_type(encoding, "x") == Some("temporal");
+    let temporal_x_domain = if temporal_line {
+        Some(temporal_domain(&records, require_field(&x_field, "x")?)?)
+    } else {
+        None
+    };
 
     // 必須 encoding field の指定・存在・型を検証する。これを通せば field_f64/
     // field_category が 0/空へ黙って丸めることはなくなる(typo・欠損・型違いを明示エラーに)。
@@ -61,7 +70,9 @@ pub fn parse_with_limits(
         ChartKind::Bar { .. } | ChartKind::Line => {
             let xf = require_field(&x_field, "x")?;
             let yf = require_field(&y_field, "y")?;
-            validate_category(&records, xf)?;
+            if !temporal_line {
+                validate_category(&records, xf)?;
+            }
             validate_numeric(&records, yf)?;
             if let Some(cf) = color_field.as_deref() {
                 validate_category(&records, cf)?;
@@ -123,7 +134,7 @@ pub fn parse_with_limits(
 
     // 色分け line で疎なカテゴリ(一部 (category,color) 組が欠落)は、欠損を 0 埋めすると
     // 実在しないゼロ点へ折れ線が接続され誤りになる。IR は欠損表現を持たないため拒否する。
-    if matches!(kind, ChartKind::Line) && color_field.is_some() {
+    if matches!(kind, ChartKind::Line) && color_field.is_some() && !temporal_line {
         let cats = distinct_categories(&records, x_field.as_deref());
         let groups = distinct_categories(&records, color_field.as_deref());
         for group in &groups {
@@ -142,7 +153,15 @@ pub fn parse_with_limits(
         }
     }
 
-    let theme = vegalite_theme();
+    let mut theme = vegalite_theme();
+    if temporal_line {
+        if let Some(background) = top.get("background") {
+            let Some(background) = background.as_str().and_then(parse_color) else {
+                return Err("background must be a valid color".to_string());
+            };
+            theme.background = Some(background);
+        }
+    }
 
     // rect ヒートマップの場合、kind に cells を差し替え、series/categories は空。
     if matches!(kind, ChartKind::VegaRect { .. }) {
@@ -208,6 +227,18 @@ pub fn parse_with_limits(
     }
 
     let series = match &kind {
+        ChartKind::Line if temporal_line => build_temporal_line(
+            &records,
+            &x_field,
+            &y_field,
+            &color_field,
+            temporal_x_domain
+                .as_deref()
+                .ok_or_else(|| "temporal line domain is missing".to_string())?,
+            &theme,
+            line_point_enabled(top),
+            line_interpolation(top),
+        )?,
         ChartKind::Pie { .. } => build_pie(
             &records,
             &x_field,
@@ -222,6 +253,10 @@ pub fn parse_with_limits(
     };
 
     let categories = match &kind {
+        ChartKind::Line if temporal_line => temporal_x_domain
+            .as_deref()
+            .map(|domain| domain.iter().map(|(_, label)| label.clone()).collect())
+            .unwrap_or_default(),
         ChartKind::Pie { .. } => {
             // pie のカテゴリは color.field 優先、なければ x.field。
             let cat_field = color_field.as_deref().or(x_field.as_deref());
@@ -234,6 +269,7 @@ pub fn parse_with_limits(
 
     // scatter/rect は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点（chartjs と一致）。
     let y_begin_at_zero = !matches!(kind, ChartKind::Scatter | ChartKind::VegaRect { .. });
+    let grid = temporal_line.then(|| temporal_axis_grid(top, theme.grid_color));
 
     // VL トップレベルの width/height/title を反映する(無ければ既定 800x450・無題)。
     // title は文字列、または `{"text": "..."}` オブジェクトを受ける。
@@ -261,35 +297,63 @@ pub fn parse_with_limits(
         kind,
         series,
         categories,
-        x_positions: XPositions::Category,
+        x_positions: temporal_x_domain.map_or(XPositions::Category, |domain| {
+            XPositions::Temporal {
+                unix_millis: domain.into_iter().map(|(millis, _)| millis).collect(),
+            }
+        }),
         x_axis: AxisSpec {
-            title: None,
+            title: temporal_line.then(|| AxisTitle {
+                text: channel_title(encoding, "x", x_field.as_deref().unwrap_or_default()),
+                color: None,
+                font_size: None,
+                align: AxisTitleAlign::Center,
+            }),
             min: None,
             max: None,
             suggested_min: None, // Vega-Lite の scale.domainMin は未実装
             suggested_max: None, // Vega-Lite の scale.domainMax は未実装
             begin_at_zero: false,
             offset: false,
-            grid: AxisGrid::default(),
+            grid: grid.clone().unwrap_or_default(),
             border: AxisBorder::default(),
         },
         y_axis: AxisSpec {
-            title: None,
+            title: temporal_line.then(|| AxisTitle {
+                text: channel_title(encoding, "y", y_field.as_deref().unwrap_or_default()),
+                color: None,
+                font_size: None,
+                align: AxisTitleAlign::Center,
+            }),
             min: None,
             max: None,
             suggested_min: None, // Vega-Lite の scale.domainMin は未実装
             suggested_max: None, // Vega-Lite の scale.domainMax は未実装
             begin_at_zero: y_begin_at_zero,
             offset: false,
-            grid: AxisGrid::default(),
+            grid: grid.unwrap_or_default(),
             border: AxisBorder::default(),
         },
-        legend: LegendPos::Top,
-        legend_title: None,
+        legend: if temporal_line {
+            LegendPos::Right
+        } else {
+            LegendPos::Top
+        },
+        legend_title: temporal_line
+            .then(|| {
+                color_field
+                    .as_deref()
+                    .map(|field| channel_title(encoding, "color", field))
+            })
+            .flatten(),
         title,
         width,
         height,
-        size_mode: SizeMode::Canvas,
+        size_mode: if temporal_line {
+            SizeMode::PlotArea
+        } else {
+            SizeMode::Canvas
+        },
         data_labels: false,
         theme,
         decimation: Decimation::default(),
@@ -356,6 +420,44 @@ fn channel_field(encoding: &Map<String, Value>, channel: &str) -> Option<String>
         .and_then(|o| o.get("field"))
         .and_then(Value::as_str)
         .map(str::to_owned)
+}
+
+/// encoding チャネルの `type` 文字列を借用で取り出す。
+fn channel_type<'a>(encoding: &'a Map<String, Value>, name: &str) -> Option<&'a str> {
+    encoding
+        .get(name)
+        .and_then(Value::as_object)
+        .and_then(|channel| channel.get("type"))
+        .and_then(Value::as_str)
+}
+
+/// encoding チャネルの `title`、または field 名を返す。
+fn channel_title(encoding: &Map<String, Value>, name: &str, fallback_field: &str) -> String {
+    encoding
+        .get(name)
+        .and_then(Value::as_object)
+        .and_then(|channel| channel.get("title"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| fallback_field.to_owned())
+}
+
+/// RFC 3339 timestamp を UTC millisecond に正規化し、昇順 domain を返す。
+/// 同一 instant は最初に見た入力ラベルを保持する。
+fn temporal_domain(
+    records: &[Map<String, Value>],
+    field: &str,
+) -> Result<Vec<(i64, String)>, String> {
+    let mut domain = BTreeMap::new();
+    for record in records {
+        let raw = record
+            .get(field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("field {field} must be an RFC 3339 timestamp string"))?;
+        let millis = parse_rfc3339_millis(field, raw)?;
+        domain.entry(millis).or_insert_with(|| raw.to_owned());
+    }
+    Ok(domain.into_iter().collect())
 }
 
 /// 必須チャネルの field 指定を取り出す。未指定なら Err。
@@ -502,6 +604,127 @@ fn build_categorical(
             }
         })
         .collect()
+}
+
+/// temporal x の line 系列を組む。x は正規化済みの instant 昇順、color は名前順。
+fn build_temporal_line(
+    records: &[Map<String, Value>],
+    x_field: &Option<String>,
+    y_field: &Option<String>,
+    color_field: &Option<String>,
+    domain: &[(i64, String)],
+    theme: &Theme,
+    point: bool,
+    interpolation: LineInterpolation,
+) -> Result<Vec<Series>, String> {
+    let mut group_names = match color_field {
+        Some(_) => distinct_categories(records, color_field.as_deref()),
+        None => vec![y_field.clone().unwrap_or_default()],
+    };
+    if color_field.is_some() {
+        group_names.sort_unstable();
+    }
+
+    group_names
+        .iter()
+        .enumerate()
+        .map(|(index, group)| {
+            let values = domain
+                .iter()
+                .map(|(millis, _)| {
+                    let mut present = false;
+                    let mut sum = 0.0;
+                    for record in records {
+                        let record_millis = record
+                            .get(x_field.as_deref().unwrap_or_default())
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                "temporal line timestamp validation was not preserved".to_string()
+                            })
+                            .and_then(|raw| {
+                                parse_rfc3339_millis(x_field.as_deref().unwrap_or_default(), raw)
+                            })?;
+                        let group_matches = match color_field {
+                            Some(_) => field_category(record, color_field.as_deref()) == *group,
+                            None => true,
+                        };
+                        if record_millis == *millis && group_matches {
+                            present = true;
+                            sum += field_f64(record, y_field.as_deref());
+                        }
+                    }
+                    if present {
+                        Ok(sum)
+                    } else {
+                        Err(
+                            "temporal colored line data contains a sparse timestamp/group pair"
+                                .to_string(),
+                        )
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let color = palette_pick(&theme.palette, index);
+            Ok(Series {
+                name: group.clone(),
+                values,
+                points: vec![],
+                fill: vec![color],
+                stroke: vec![color],
+                stroke_width: 2.0,
+                area: false,
+                interpolation,
+                series_type: SeriesType::Line,
+                point_radius: Some(if point { 3.0 } else { 0.0 }),
+                box_points: vec![],
+                tree: vec![],
+                links: vec![],
+            })
+        })
+        .collect()
+}
+
+fn line_point_enabled(top: &Map<String, Value>) -> bool {
+    top.get("mark")
+        .and_then(Value::as_object)
+        .and_then(|mark| mark.get("point"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn line_interpolation(top: &Map<String, Value>) -> LineInterpolation {
+    match top
+        .get("mark")
+        .and_then(Value::as_object)
+        .and_then(|mark| mark.get("interpolate"))
+        .and_then(Value::as_str)
+    {
+        Some("monotone") => LineInterpolation::Monotone,
+        _ => LineInterpolation::Linear,
+    }
+}
+
+fn temporal_axis_grid(top: &Map<String, Value>, theme_grid_color: Color) -> AxisGrid {
+    let axis = top
+        .get("config")
+        .and_then(Value::as_object)
+        .and_then(|config| config.get("axis"))
+        .and_then(Value::as_object);
+    let opacity = axis
+        .and_then(|axis| axis.get("gridOpacity"))
+        .and_then(Value::as_f64);
+    let mut grid_color = theme_grid_color;
+    if let Some(opacity) = opacity {
+        grid_color.a *= opacity as f32;
+    }
+    AxisGrid {
+        display: axis
+            .and_then(|axis| axis.get("grid"))
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        color: opacity.map(|_| grid_color),
+        line_width: 1.0,
+        draw_ticks: true,
+    }
 }
 
 /// point（scatter）の系列を組む。
