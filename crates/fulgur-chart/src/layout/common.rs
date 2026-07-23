@@ -244,6 +244,25 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     } else {
         0.0
     };
+    // PlotArea の幅はこの時点で確定しているため、scene 寸法より先に temporal tick を
+    // 作れる。末尾ラベルが plot_right 上に中央寄せされても scene から切れないよう、
+    // その半幅を右側の最低余白として使う。
+    let plot_area_temporal_ticks = if matches!(spec.size_mode, SizeMode::PlotArea) {
+        match &spec.x_positions {
+            XPositions::Temporal { unix_millis } => unix_millis
+                .first()
+                .zip(unix_millis.last())
+                .map(|(&min, &max)| temporal_ticks(min, max, spec.width))
+                .unwrap_or_default(),
+            XPositions::Category => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    let temporal_edge_pad_right = plot_area_temporal_ticks
+        .last()
+        .map(|tick| m.width(&tick.label, spec.theme.font_size as f32) as f64 / 2.0)
+        .unwrap_or(0.0);
     // line(edge-to-edge)では先頭/末尾の点が plot_left/plot_right に乗り、中央寄せの
     // x ラベルが点の外側へ半幅はみ出してキャンバス端でクリップされる。chart.js が
     // chartArea を edge ラベル半幅ぶん内側へ取るのと同様に edge 余白を確保する。
@@ -308,7 +327,8 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             let plot_top = OUTER_PAD + title_band;
             let plot_right = plot_left + spec.width;
             let plot_bottom = plot_top + spec.height;
-            let scene_width = plot_right + OUTER_PAD + legend_right;
+            let trailing_band = (OUTER_PAD + legend_right).max(temporal_edge_pad_right);
+            let scene_width = plot_right + trailing_band;
             let scene_height = plot_bottom + X_LABEL_BAND + x_title_h + OUTER_PAD + legend_bottom;
             (
                 scene_width,
@@ -929,6 +949,29 @@ mod tests {
         assert_eq!(frame.plot_bottom - frame.plot_top, 320.0);
         assert!(frame.scene_width > 720.0);
         assert!(frame.scene_height > 320.0);
+    }
+
+    #[test]
+    fn plot_area_scene_contains_last_temporal_tick_label() {
+        let spec = temporal_spec(vec![100, 900]);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let (x, label) = items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Text { x, content, .. } if content == ".900" => Some((*x, content)),
+                _ => None,
+            })
+            .expect("last temporal tick label");
+        let right = x + m.width(label, spec.theme.font_size as f32) as f64 / 2.0;
+        assert!(
+            right <= frame.scene_width,
+            "label right {right} exceeds scene width {}",
+            frame.scene_width
+        );
     }
 
     #[test]
