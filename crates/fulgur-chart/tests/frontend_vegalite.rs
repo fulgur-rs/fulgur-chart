@@ -1,5 +1,7 @@
 use fulgur_chart::frontend::vegalite;
-use fulgur_chart::ir::ChartKind;
+use fulgur_chart::ir::{ChartKind, LegendPos, LineInterpolation, SizeMode, XPositions};
+use fulgur_chart::palette::VEGALITE_PALETTE;
+use fulgur_chart::temporal::parse_rfc3339_millis;
 
 const BAR_SPEC: &str = r#"{
     "mark": "bar",
@@ -26,6 +28,137 @@ const DOGFOOD_SHAPE: &str = r##"{
   "config":{"view":{"stroke":null},
             "axis":{"grid":true,"gridOpacity":0.15}}
 }"##;
+
+const DOGFOOD_MULTI_SERIES: &str = r##"{
+  "mark":{"type":"line","point":true,"interpolate":"monotone"},
+  "data":{"values":[
+    {"timestamp":"2026-07-01T19:00:00Z","metric":"regressions","value":3},
+    {"timestamp":"2026-06-29T19:00:00Z","metric":"candidates","value":2},
+    {"timestamp":"2026-07-01T19:00:00Z","metric":"allowlist","value":6},
+    {"timestamp":"2026-06-29T19:00:00Z","metric":"regressions","value":1},
+    {"timestamp":"2026-07-01T19:00:00Z","metric":"candidates","value":5},
+    {"timestamp":"2026-06-29T19:00:00Z","metric":"allowlist","value":4}
+  ]},
+  "encoding":{
+    "x":{"field":"timestamp","type":"temporal","title":"date"},
+    "y":{"field":"value","type":"quantitative","title":"subtests"},
+    "color":{"field":"metric","type":"nominal","title":"metric"}
+  }
+}"##;
+
+#[test]
+fn temporal_line_sorts_x_and_nominal_color_domain() {
+    let spec = vegalite::parse(DOGFOOD_MULTI_SERIES, true).unwrap();
+    let expected = vec![
+        parse_rfc3339_millis("timestamp", "2026-06-29T19:00:00Z").unwrap(),
+        parse_rfc3339_millis("timestamp", "2026-07-01T19:00:00Z").unwrap(),
+    ];
+    assert_eq!(
+        spec.x_positions,
+        XPositions::Temporal {
+            unix_millis: expected
+        }
+    );
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["allowlist", "candidates", "regressions"]
+    );
+    assert_eq!(
+        spec.series.iter().map(|s| s.stroke[0]).collect::<Vec<_>>(),
+        VEGALITE_PALETTE[..3]
+    );
+    assert_eq!(spec.series[0].values, vec![4.0, 6.0]);
+}
+
+#[test]
+fn temporal_line_aggregates_offset_equivalent_timestamps() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T19:00:00Z","metric":"a","value":2},
+            {"timestamp":"2026-07-02T04:00:00+09:00","metric":"a","value":3}
+        ]},
+        "encoding":{"x":{"field":"timestamp","type":"temporal"},"y":{"field":"value"},"color":{"field":"metric"}}
+    }"#;
+    let spec = vegalite::parse(json, true).unwrap();
+    assert_eq!(spec.categories, vec!["2026-07-01T19:00:00Z"]);
+    assert_eq!(spec.series[0].values, vec![5.0]);
+    assert_eq!(
+        spec.x_positions,
+        XPositions::Temporal {
+            unix_millis: vec![parse_rfc3339_millis("timestamp", "2026-07-01T19:00:00Z").unwrap()]
+        }
+    );
+}
+
+#[test]
+fn temporal_line_rejects_invalid_timestamp_values() {
+    for timestamp in [r#""not-a-date""#, "null", "42"] {
+        let json = format!(
+            r#"{{"mark":"line","data":{{"values":[{{"timestamp":{timestamp},"value":1}}]}},"encoding":{{"x":{{"field":"timestamp","type":"temporal"}},"y":{{"field":"value"}}}}}}"#
+        );
+        let err = vegalite::parse(&json, true).unwrap_err();
+        assert!(err.contains("timestamp"), "unexpected error: {err}");
+        assert!(err.is_ascii(), "error must be English: {err}");
+    }
+}
+
+#[test]
+fn temporal_line_rejects_sparse_pairs_after_sorting() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-02T00:00:00Z","metric":"a","value":1},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"b","value":2},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"a","value":3}
+        ]},
+        "encoding":{"x":{"field":"timestamp","type":"temporal"},"y":{"field":"value"},"color":{"field":"metric"}}
+    }"#;
+    let err = vegalite::parse(json, true).unwrap_err();
+    assert!(err.contains("sparse"), "unexpected error: {err}");
+}
+
+#[test]
+fn temporal_line_populates_positioned_ir_metadata() {
+    let spec = vegalite::parse(DOGFOOD_SHAPE, true).unwrap();
+    assert_eq!(
+        spec.x_axis.title.as_ref().map(|title| title.text.as_str()),
+        Some("date")
+    );
+    assert_eq!(
+        spec.y_axis.title.as_ref().map(|title| title.text.as_str()),
+        Some("subtests")
+    );
+    assert_eq!(spec.legend, LegendPos::Right);
+    assert_eq!(spec.legend_title.as_deref(), Some("metric"));
+    assert_eq!(spec.size_mode, SizeMode::PlotArea);
+    assert_eq!(spec.series[0].stroke_width, 2.0);
+    assert_eq!(spec.series[0].interpolation, LineInterpolation::Monotone);
+    assert_eq!(spec.series[0].point_radius, Some(3.0));
+    assert!(spec.x_axis.grid.draw_ticks);
+    assert!(spec.y_axis.grid.draw_ticks);
+    assert_eq!(spec.x_axis.grid.color.unwrap().a, 0.15);
+    assert_eq!(spec.y_axis.grid.color.unwrap().a, 0.15);
+    assert_eq!(spec.theme.background.unwrap().a, 1.0);
+    assert_eq!(
+        (
+            spec.theme.background.unwrap().r,
+            spec.theme.background.unwrap().g,
+            spec.theme.background.unwrap().b
+        ),
+        (255, 255, 255)
+    );
+}
+
+#[test]
+fn temporal_line_rejects_invalid_background_color() {
+    let json = DOGFOOD_SHAPE.replace("\"white\"", "\"not-a-color\"");
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert_eq!(err, "background must be a valid color");
+}
 
 #[test]
 fn dogfood_shape_is_accepted_by_typed_schema_and_strict_parser() {
