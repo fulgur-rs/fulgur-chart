@@ -102,6 +102,10 @@ pub struct FontSpec {
     pub weight: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    /// Chart.js `font.lineHeight` (number | string)。v1 では受理のみ(描画未対応)。
+    /// non-strict Chart.js JSON 互換維持のため、typo 検出よりも tolerance を優先する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +157,20 @@ pub struct GridLineOptions {
     /// v1 では未使用(受理のみ)。chart.js は band 中心/端で grid を描く挙動の切替。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<bool>,
+    /// Chart.js `grid.z` (レンダリング Z-順)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z: Option<serde_json::Value>,
+    /// Chart.js `grid.tickColor` (tick 短線色を gridline とは独立に指定)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_color: Option<serde_json::Value>,
+    /// Chart.js `grid.tickWidth` (tick 短線の太さを gridline とは独立に指定)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_width: Option<serde_json::Value>,
+    /// Chart.js `grid.tickBorderDash` / `tickBorderDashOffset` (tick 短線の破線)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_border_dash: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_border_dash_offset: Option<serde_json::Value>,
 }
 
 /// options.scales.<axis>.border (Chart.js 準拠)。
@@ -167,6 +185,12 @@ pub struct AxisBorderOptions {
     pub width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dash: Option<Vec<f64>>,
+    /// Chart.js `border.dashOffset` (破線オフセット)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash_offset: Option<serde_json::Value>,
+    /// Chart.js `border.z` (レンダリング Z-順)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z: Option<serde_json::Value>,
 }
 
 /// Axis options for options.scales.x / options.scales.y.
@@ -231,6 +255,53 @@ mod tests {
         let v: AxisBorderOptions =
             serde_json::from_str(r##"{"color":"#000","width":2,"dash":[4,4]}"##).unwrap();
         assert_eq!(v.dash.as_deref(), Some(&[4.0, 4.0][..]));
+    }
+
+    /// Chart.js が公式に定義する v1 未描画の追加フィールドは、typo 検出を維持しつつ
+    /// non-strict モードで silently 受理して既存 Chart.js JSON 互換を保つ。
+    /// (typo は key 名が Chart.js docs にないものが該当し、`deny_unknown_fields` が捕捉する。)
+    #[test]
+    fn schema_accepts_documented_chartjs_v1_noop_fields() {
+        // FontSpec: Chart.js docs で定義される lineHeight。
+        let f: FontSpec = serde_json::from_str(r##"{"size":14,"lineHeight":1.2}"##).unwrap();
+        assert_eq!(f.size, Some(14.0));
+        assert!(f.line_height.is_some());
+
+        // GridLineOptions: Chart.js docs で定義される z / tickColor / tickWidth /
+        // tickBorderDash{,Offset}。全て v1 では未描画だが parse 通過が必要。
+        let g: GridLineOptions = serde_json::from_str(
+            r##"{"z":1,"tickColor":"#ccc","tickWidth":2,"tickBorderDash":[3,3],"tickBorderDashOffset":1.5}"##,
+        )
+        .unwrap();
+        assert!(g.z.is_some());
+        assert!(g.tick_color.is_some());
+        assert!(g.tick_width.is_some());
+        assert!(g.tick_border_dash.is_some());
+        assert!(g.tick_border_dash_offset.is_some());
+
+        // AxisBorderOptions: Chart.js docs で定義される dashOffset / z。
+        let b: AxisBorderOptions =
+            serde_json::from_str(r##"{"width":2,"dash":[4,4],"dashOffset":1.5,"z":2}"##).unwrap();
+        assert!(b.dash_offset.is_some());
+        assert!(b.z.is_some());
+    }
+
+    /// `deny_unknown_fields` が sub-object タイポを検出し続けることの回帰テスト。
+    /// tolerance を広げても未定義キーは弾くことを担保する(silently 通ってしまうと typo が難読化する)。
+    #[test]
+    fn schema_still_rejects_true_unknown_sub_object_keys() {
+        assert!(
+            serde_json::from_str::<GridLineOptions>(r##"{"colorx":"#eee"}"##).is_err(),
+            "grid の typo (colorx) は変わらず拒否されるべき"
+        );
+        assert!(
+            serde_json::from_str::<AxisBorderOptions>(r##"{"colorr":"#000"}"##).is_err(),
+            "border の typo (colorr) は変わらず拒否されるべき"
+        );
+        assert!(
+            serde_json::from_str::<FontSpec>(r##"{"weightt":"bold"}"##).is_err(),
+            "font の typo (weightt) は変わらず拒否されるべき"
+        );
     }
 
     #[test]
