@@ -434,6 +434,29 @@ mod tests {
     }
 
     #[test]
+    fn two_day_utc_ticks_remain_epoch_aligned_across_month_boundary() {
+        // d3-time's UTC ticker passes `unixDay` (epoch-based), not `utcDay`,
+        // into the tick interval table. A two-day interval therefore remains
+        // continuous across a month boundary rather than resetting on July 1.
+        let ticks = temporal_ticks(
+            millis("2026-06-29T12:00:00Z"),
+            millis("2026-07-05T12:00:00Z"),
+            80.0,
+        );
+        assert_eq!(
+            ticks
+                .iter()
+                .map(|tick| tick.unix_millis)
+                .collect::<Vec<_>>(),
+            vec![
+                millis("2026-06-30T00:00:00Z"),
+                millis("2026-07-02T00:00:00Z"),
+                millis("2026-07-04T00:00:00Z"),
+            ]
+        );
+    }
+
+    #[test]
     fn reversed_and_singleton_ranges_are_bounded() {
         let ticks = temporal_ticks(3_000, 1_000, 720.0);
         assert_eq!(

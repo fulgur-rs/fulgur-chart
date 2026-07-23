@@ -114,12 +114,7 @@ pub struct Geometry {
 }
 
 fn model_dimensions(spec: &ChartSpec, m: &TextMeasurer) -> (f64, f64) {
-    if matches!(spec.size_mode, SizeMode::PlotArea)
-        && matches!(
-            spec.kind,
-            ChartKind::Bar { .. } | ChartKind::Line | ChartKind::Mixed
-        )
-    {
+    if matches!(spec.size_mode, SizeMode::PlotArea) && matches!(spec.kind, ChartKind::Line) {
         let frame = crate::layout::common::compute(spec, m);
         (frame.scene_width, frame.scene_height)
     } else {
@@ -797,6 +792,53 @@ mod tests {
         let model = build_model(&spec, &m);
 
         assert_eq!((model.meta.width, model.meta.height), (800.0, 450.0));
+    }
+
+    fn assert_plot_area_legacy_scene_model_dimensions(json: &str) {
+        let mut spec = chartjs::parse(json, false).unwrap();
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = crate::layout::build_scene(&spec, &m);
+        let model = build_model(&spec, &m);
+
+        assert_eq!((scene.width, scene.height), (spec.width, spec.height));
+        assert_eq!(
+            (model.meta.width, model.meta.height),
+            (scene.width, scene.height)
+        );
+        if let Some(geometry) = model.geometry {
+            let frame = crate::layout::common::compute(&spec, &m);
+            assert_eq!(
+                geometry.plot_area,
+                RectN {
+                    x: frame.plot_left / spec.width,
+                    y: frame.plot_top / spec.height,
+                    w: (frame.plot_right - frame.plot_left) / spec.width,
+                    h: (frame.plot_bottom - frame.plot_top) / spec.height,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn plot_area_vertical_bar_model_matches_legacy_renderer_size() {
+        assert_plot_area_legacy_scene_model_dimensions(
+            r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#,
+        );
+    }
+
+    #[test]
+    fn plot_area_horizontal_bar_model_matches_legacy_renderer_size() {
+        assert_plot_area_legacy_scene_model_dimensions(
+            r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},"options":{"indexAxis":"y"}}"#,
+        );
+    }
+
+    #[test]
+    fn plot_area_mixed_model_matches_legacy_renderer_size() {
+        assert_plot_area_legacy_scene_model_dimensions(
+            r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]},{"type":"line","data":[2,1]}]}}"#,
+        );
     }
 
     /// クロス言語フィクスチャ: ここの行は
