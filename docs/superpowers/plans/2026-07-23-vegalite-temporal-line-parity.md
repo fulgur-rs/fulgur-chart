@@ -360,7 +360,6 @@ fn dogfood_range_uses_two_day_ticks() {
     let min = parse_rfc3339_millis("x", "2026-06-05T19:55:20Z").unwrap();
     let max = parse_rfc3339_millis("x", "2026-07-22T19:18:38Z").unwrap();
     let ticks = temporal_ticks(min, max, 720.0);
-    assert!(ticks.len() <= 24);
     assert!(
         ticks.windows(2).all(|w| w[1].unix_millis - w[0].unix_millis
             == 2 * 86_400_000)
@@ -419,13 +418,18 @@ pub fn parse_rfc3339_millis(field: &str, raw: &str) -> Result<i64, String> {
 }
 ```
 
-Define the tick table in milliseconds and select the first interval for which
-the aligned tick count is no greater than
-`clamp(floor(plot_width / 30), 2, 24)`. Guard the output with a hard maximum of
-24 entries.
+Set the desired count to `ceil(plot_width / 40)`. Reproduce D3's adjacent
+duration ratio selection over 1/5/15/30 seconds, 1/5/15/30 minutes,
+1/3/6/12 hours, 1/2 days, one week, 1/3 months, and one year. Beyond the
+table, use a nice 1/2/5 multiple of years. Use UTC Sunday, month, and year
+calendar boundaries and generate the complete in-domain range without a
+24-entry cap.
 
-Format labels from UTC dates as `Mon DD` at the first visible tick in a month
-and `DD` otherwise. Do not consult system locale or timezone.
+Implement D3's dynamic time formatter deterministically in UTC: sub-day time
+forms, weekday/day for ordinary dates, month/day for Sunday week boundaries,
+full month names for month boundaries, and years for year boundaries. Keep
+label-overlap suppression in layout, independent of tick/grid generation. Do
+not consult system locale or timezone.
 
 **Step 5: Implement exact dogfood y tick policy**
 
@@ -644,7 +648,7 @@ git push
   - Task 2 `parse_rfc3339_millis`
   - Task 3 supported schema keys
 - Produces:
-  - `temporal_domain(records, field) -> Result<Vec<(i64, String)>, String>`
+  - one-pass temporal aggregation keyed by normalized instant and group
   - a fully populated temporal `ChartSpec`
 
 **Step 1: Claim and write conversion RED tests**
@@ -703,31 +707,35 @@ fn channel_title(
     name: &str,
     fallback_field: &str,
 ) -> String;
-fn temporal_domain(
+fn build_temporal_line(
     records: &[Map<String, Value>],
-    field: &str,
-) -> Result<Vec<(i64, String)>, String>;
+    /* fields, theme, options, limits */
+) -> Result<TemporalLineData, String>;
 ```
 
-`temporal_domain` parses all values, inserts by normalized milliseconds into a
-sorted `BTreeMap`, and retains one source label per instant.
+`build_temporal_line` reads timestamp, y, and group once per record. It retains
+one source label per instant in a sorted `BTreeMap`, aggregates in a map keyed
+by `(normalized instant, group index)`, and applies caller-supplied limits
+before dense allocation. All dynamic error fragments use the shared
+byte-bounded truncation helper.
 
 **Step 4: Build temporal colored series**
 
 For line + temporal x:
 
-1. Build the sorted temporal domain.
-2. Sort nominal group names with `sort_unstable`.
-3. For each group and instant, sum matching y values.
-4. Reject a missing pair instead of inserting zero.
-5. Assign palette colors after sorting.
+1. Normalize and aggregate all records in one pass.
+2. Reject record/category/series/product limit excess before dense allocation.
+3. Sort nominal group names with `sort_unstable`.
+4. For each group and instant, perform one aggregate-map lookup.
+5. Reject a missing pair instead of inserting zero.
+6. Assign palette colors after sorting.
 
 Populate:
 
 ```rust
 x_positions: XPositions::Temporal { unix_millis },
 size_mode: SizeMode::PlotArea,
-legend: LegendPos::Right,
+legend: color_field.map_or(LegendPos::None, |_| LegendPos::Right),
 legend_title: color_field.map(|f| channel_title(encoding, "color", f)),
 ```
 
@@ -1195,8 +1203,9 @@ fn temporal_axis(unix_millis: &[i64], ticks: &[TemporalTick]) -> AxisModel {
 ```
 
 In `compute_axes`, return this axis for temporal lines. In `build_model`, use
-`common::compute` to set `model.meta.width/height` from actual scene dimensions
-and to compute positioned line geometry.
+`SizeMode` (not temporal/category x type) as the geometry and metadata size
+source. `PlotArea` common-layout charts use `Frame::scene_width/scene_height`;
+`Canvas` retains the legacy `spec.width/spec.height` normalization.
 
 **Step 5: Accept and inspect the snapshot**
 

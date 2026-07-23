@@ -419,8 +419,12 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
 
     // 1. タイトル。
     if let Some(title) = &spec.title {
+        let title_x = match spec.size_mode {
+            SizeMode::Canvas => spec.width / 2.0,
+            SizeMode::PlotArea => (frame.plot_left + frame.plot_right) / 2.0,
+        };
         items.push(Prim::Text {
-            x: spec.width / 2.0,
+            x: title_x,
             y: OUTER_PAD + TITLE_FONT,
             size: TITLE_FONT,
             anchor: Anchor::Middle,
@@ -928,6 +932,21 @@ mod tests {
     }
 
     #[test]
+    fn plot_area_chart_title_is_centered_over_plot() {
+        let mut spec = temporal_dogfood_spec();
+        spec.title = Some("plot title".into());
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let title_x = items.iter().find_map(|item| match item {
+            Prim::Text { x, content, .. } if content == "plot title" => Some(*x),
+            _ => None,
+        });
+        assert_eq!(title_x, Some((frame.plot_left + frame.plot_right) / 2.0));
+    }
+
+    #[test]
     fn singleton_temporal_domain_maps_to_plot_center() {
         let spec = temporal_spec(vec![42]);
         let frame = compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
@@ -996,7 +1015,7 @@ mod tests {
         for tick in &frame.temporal_ticks {
             assert!(labels.contains(&tick.label.as_str()));
         }
-        assert!(labels.contains(&"Jan 01"));
+        assert!(labels.contains(&"1970"));
         assert!(
             spec.categories
                 .iter()

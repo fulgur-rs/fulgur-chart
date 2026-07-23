@@ -13,7 +13,7 @@
 use crate::color::parse_color;
 use crate::ir::*;
 use crate::palette::vegalite_theme;
-use crate::temporal::parse_rfc3339_millis;
+use crate::temporal::{bounded_error_fragment, parse_rfc3339_millis};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -28,9 +28,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     parse_with_limits(json, strict, &crate::guard::InputLimits::default())
 }
 
-/// caller-supplied limits を使う variant。rect の pre-allocation guard
-/// (`build_rect` 入口) に caller の限度値が届くようにする。他 mark は既存挙動
-/// (`validate_spec` で caller limits を尊重、parse は上限チェックしない) のまま。
+/// caller-supplied limits を使う variant。rect と temporal line は allocation-heavy
+/// な dense product を構築する前に caller の限度値を検査する。
 pub fn parse_with_limits(
     json: &str,
     strict: bool,
@@ -58,11 +57,6 @@ pub fn parse_with_limits(
     let theta_field = channel_field(encoding, "theta");
     let temporal_line =
         matches!(kind, ChartKind::Line) && channel_type(encoding, "x") == Some("temporal");
-    let temporal_x_domain = if temporal_line {
-        Some(temporal_domain(&records, require_field(&x_field, "x")?)?)
-    } else {
-        None
-    };
 
     // 必須 encoding field の指定・存在・型を検証する。これを通せば field_f64/
     // field_category が 0/空へ黙って丸めることはなくなる(typo・欠損・型違いを明示エラーに)。
@@ -72,10 +66,10 @@ pub fn parse_with_limits(
             let yf = require_field(&y_field, "y")?;
             if !temporal_line {
                 validate_category(&records, xf)?;
-            }
-            validate_numeric(&records, yf)?;
-            if let Some(cf) = color_field.as_deref() {
-                validate_category(&records, cf)?;
+                validate_numeric(&records, yf)?;
+                if let Some(cf) = color_field.as_deref() {
+                    validate_category(&records, cf)?;
+                }
             }
         }
         ChartKind::Scatter => {
@@ -224,45 +218,54 @@ pub fn parse_with_limits(
         )?;
     }
 
-    let series = match &kind {
-        ChartKind::Line if temporal_line => build_temporal_line(
+    let temporal_data = if temporal_line {
+        Some(build_temporal_line(
             &records,
             &x_field,
             &y_field,
             &color_field,
-            temporal_x_domain
-                .as_deref()
-                .ok_or_else(|| "temporal line domain is missing".to_string())?,
             &theme,
             line_point_enabled(top),
             line_interpolation(top),
-        )?,
-        ChartKind::Pie { .. } => build_pie(
-            &records,
-            &x_field,
-            &y_field,
-            &color_field,
-            &theta_field,
-            &theme,
-        ),
-        ChartKind::Scatter => build_scatter(&records, &x_field, &y_field, &color_field, &theme),
-        ChartKind::VegaRect { .. } => vec![],
-        _ => build_categorical(&kind, &records, &x_field, &y_field, &color_field, &theme),
+            limits,
+        )?)
+    } else {
+        None
     };
-
-    let categories = match &kind {
-        ChartKind::Line if temporal_line => temporal_x_domain
-            .as_deref()
-            .map(|domain| domain.iter().map(|(_, label)| label.clone()).collect())
-            .unwrap_or_default(),
-        ChartKind::Pie { .. } => {
-            // pie のカテゴリは color.field 優先、なければ x.field。
-            let cat_field = color_field.as_deref().or(x_field.as_deref());
-            distinct_categories(&records, cat_field)
+    let (series, categories, temporal_x_domain) = if let Some(data) = temporal_data {
+        let unix_millis = data.domain.iter().map(|(millis, _)| *millis).collect();
+        let categories = data.domain.into_iter().map(|(_, label)| label).collect();
+        (data.series, categories, Some(unix_millis))
+    } else {
+        match &kind {
+            ChartKind::Pie { .. } => {
+                // pie のカテゴリは color.field 優先、なければ x.field。
+                let cat_field = color_field.as_deref().or(x_field.as_deref());
+                (
+                    build_pie(
+                        &records,
+                        &x_field,
+                        &y_field,
+                        &color_field,
+                        &theta_field,
+                        &theme,
+                    ),
+                    distinct_categories(&records, cat_field),
+                    None,
+                )
+            }
+            ChartKind::Scatter => (
+                build_scatter(&records, &x_field, &y_field, &color_field, &theme),
+                vec![],
+                None,
+            ),
+            ChartKind::VegaRect { .. } => (vec![], vec![], None),
+            _ => (
+                build_categorical(&kind, &records, &x_field, &y_field, &color_field, &theme),
+                distinct_categories(&records, x_field.as_deref()),
+                None,
+            ),
         }
-        ChartKind::Scatter => vec![],
-        ChartKind::VegaRect { .. } => vec![],
-        _ => distinct_categories(&records, x_field.as_deref()),
     };
 
     // scatter/rect は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点（chartjs と一致）。
@@ -295,10 +298,8 @@ pub fn parse_with_limits(
         kind,
         series,
         categories,
-        x_positions: temporal_x_domain.map_or(XPositions::Category, |domain| {
-            XPositions::Temporal {
-                unix_millis: domain.into_iter().map(|(millis, _)| millis).collect(),
-            }
+        x_positions: temporal_x_domain.map_or(XPositions::Category, |unix_millis| {
+            XPositions::Temporal { unix_millis }
         }),
         x_axis: AxisSpec {
             title: temporal_line.then(|| AxisTitle {
@@ -332,8 +333,10 @@ pub fn parse_with_limits(
             grid: grid.unwrap_or_default(),
             border: AxisBorder::default(),
         },
-        legend: if temporal_line {
+        legend: if temporal_line && color_field.is_some() {
             LegendPos::Right
+        } else if temporal_line {
+            LegendPos::None
         } else {
             LegendPos::Top
         },
@@ -440,29 +443,11 @@ fn channel_title(encoding: &Map<String, Value>, name: &str, fallback_field: &str
         .unwrap_or_else(|| fallback_field.to_owned())
 }
 
-/// RFC 3339 timestamp を UTC millisecond に正規化し、昇順 domain を返す。
-/// 同一 instant は最初に見た入力ラベルを保持する。
-fn temporal_domain(
-    records: &[Map<String, Value>],
-    field: &str,
-) -> Result<Vec<(i64, String)>, String> {
-    let mut domain = BTreeMap::new();
-    for record in records {
-        let raw = record
-            .get(field)
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("field {field} must be an RFC 3339 timestamp string"))?;
-        let millis = parse_rfc3339_millis(field, raw)?;
-        domain.entry(millis).or_insert_with(|| raw.to_owned());
-    }
-    Ok(domain.into_iter().collect())
-}
-
 /// 必須チャネルの field 指定を取り出す。未指定なら Err。
 fn require_field<'a>(field: &'a Option<String>, channel: &str) -> Result<&'a str, String> {
     field
         .as_deref()
-        .ok_or_else(|| format!("encoding.{channel}.field が必要です"))
+        .ok_or_else(|| format!("encoding.{channel}.field is required"))
 }
 
 /// 参照フィールドが全レコードに存在し、かつカテゴリ値(文字列/数値/真偽)であることを
@@ -604,82 +589,217 @@ fn build_categorical(
         .collect()
 }
 
-/// temporal x の line 系列を組む。x は正規化済みの instant 昇順、color は名前順。
+#[derive(Debug)]
+struct TemporalLineData {
+    domain: Vec<(i64, String)>,
+    series: Vec<Series>,
+}
+
+/// temporal line を単一 record pass で正規化・集約する。
+///
+/// timestamp/y/group は各 record につき一度だけ読み、aggregate は
+/// `(normalized instant, normalized group index)` で引く。出力 series は
+/// `O(records + groups * domain)` で構築する。
 #[allow(clippy::too_many_arguments)]
 fn build_temporal_line(
     records: &[Map<String, Value>],
     x_field: &Option<String>,
     y_field: &Option<String>,
     color_field: &Option<String>,
-    domain: &[(i64, String)],
     theme: &Theme,
     point: bool,
     interpolation: LineInterpolation,
-) -> Result<Vec<Series>, String> {
-    let mut group_names = match color_field {
-        Some(_) => distinct_categories(records, color_field.as_deref()),
-        None => vec![y_field.clone().unwrap_or_default()],
-    };
-    if color_field.is_some() {
-        group_names.sort_unstable();
+    limits: &crate::guard::InputLimits,
+) -> Result<TemporalLineData, String> {
+    let x_field = require_field(x_field, "x")?;
+    let y_field = require_field(y_field, "y")?;
+    if records.len() > limits.max_total_data_points {
+        return Err(format!(
+            "temporal line record count {} exceeds max_total_data_points limit {} (pre-aggregation)",
+            records.len(),
+            limits.max_total_data_points
+        ));
     }
 
-    group_names
-        .iter()
+    let mut domain = BTreeMap::<i64, String>::new();
+    let mut group_names = if color_field.is_some() {
+        Vec::new()
+    } else {
+        vec![String::new()]
+    };
+    let mut group_indexes = HashMap::<String, usize>::new();
+    let mut aggregates = HashMap::<(i64, usize), f64>::new();
+    preflight_temporal_shape(0, group_names.len(), limits)?;
+
+    for record in records {
+        let raw_timestamp = match record.get(x_field) {
+            Some(Value::String(raw)) => raw,
+            Some(other) => {
+                return Err(format!(
+                    "field {} must be an RFC 3339 timestamp string, got {}",
+                    bounded_error_fragment(x_field),
+                    json_value_type(other)
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "field {} is missing; expected an RFC 3339 timestamp string",
+                    bounded_error_fragment(x_field)
+                ));
+            }
+        };
+        let millis = parse_rfc3339_millis(x_field, raw_timestamp)?;
+        if !domain.contains_key(&millis) {
+            let next_domain_len = domain.len().saturating_add(1);
+            preflight_temporal_shape(next_domain_len, group_names.len(), limits)?;
+            if raw_timestamp.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "temporal x label length {} bytes exceeds limit {}",
+                    raw_timestamp.len(),
+                    limits.max_label_bytes
+                ));
+            }
+            domain.insert(millis, raw_timestamp.clone());
+        }
+
+        let value = match record.get(y_field) {
+            Some(Value::Number(number)) => number.as_f64().ok_or_else(|| {
+                format!(
+                    "field {} contains a number outside the supported range",
+                    bounded_error_fragment(y_field)
+                )
+            })?,
+            Some(other) => {
+                return Err(format!(
+                    "field {} must be numeric, got {}",
+                    bounded_error_fragment(y_field),
+                    json_value_type(other)
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "field {} is missing; expected a numeric value",
+                    bounded_error_fragment(y_field)
+                ));
+            }
+        };
+
+        let group_index = if let Some(color_field) = color_field.as_deref() {
+            let group = temporal_group(record.get(color_field), color_field)?;
+            if group.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "temporal legend label length {} bytes exceeds limit {}",
+                    group.len(),
+                    limits.max_label_bytes
+                ));
+            }
+            if let Some(&index) = group_indexes.get(&group) {
+                index
+            } else {
+                let index = group_names.len();
+                let next_group_len = index.saturating_add(1);
+                preflight_temporal_shape(domain.len(), next_group_len, limits)?;
+                group_names.push(group.clone());
+                group_indexes.insert(group, index);
+                index
+            }
+        } else {
+            0
+        };
+        *aggregates.entry((millis, group_index)).or_insert(0.0) += value;
+    }
+
+    let domain = domain.into_iter().collect::<Vec<_>>();
+    let mut ordered_groups = group_names
+        .into_iter()
         .enumerate()
-        .map(|(index, group)| {
-            let values = domain
-                .iter()
-                .map(|(millis, _)| {
-                    let mut present = false;
-                    let mut sum = 0.0;
-                    for record in records {
-                        let record_millis = record
-                            .get(x_field.as_deref().unwrap_or_default())
-                            .and_then(Value::as_str)
-                            .ok_or_else(|| {
-                                "temporal line timestamp validation was not preserved".to_string()
-                            })
-                            .and_then(|raw| {
-                                parse_rfc3339_millis(x_field.as_deref().unwrap_or_default(), raw)
-                            })?;
-                        let group_matches = match color_field {
-                            Some(_) => field_category(record, color_field.as_deref()) == *group,
-                            None => true,
-                        };
-                        if record_millis == *millis && group_matches {
-                            present = true;
-                            sum += field_f64(record, y_field.as_deref());
-                        }
-                    }
-                    if present {
-                        Ok(sum)
-                    } else {
-                        Err(
-                            "temporal colored line data contains a sparse timestamp/group pair"
-                                .to_string(),
-                        )
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let color = palette_pick(&theme.palette, index);
-            Ok(Series {
-                name: group.clone(),
-                values,
-                points: vec![],
-                fill: vec![color],
-                stroke: vec![color],
-                stroke_width: 2.0,
-                area: false,
-                interpolation,
-                series_type: SeriesType::Line,
-                point_radius: Some(if point { 3.0 } else { 0.0 }),
-                box_points: vec![],
-                tree: vec![],
-                links: vec![],
+        .map(|(index, name)| (name, index))
+        .collect::<Vec<_>>();
+    if color_field.is_some() {
+        ordered_groups.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    }
+    let mut series = Vec::with_capacity(ordered_groups.len());
+    for (palette_index, (name, group_index)) in ordered_groups.into_iter().enumerate() {
+        let values = domain
+            .iter()
+            .map(|(millis, _)| {
+                aggregates
+                    .get(&(*millis, group_index))
+                    .copied()
+                    .ok_or_else(|| {
+                        "temporal colored line data contains a sparse timestamp/group pair"
+                            .to_string()
+                    })
             })
-        })
-        .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        let color = palette_pick(&theme.palette, palette_index);
+        series.push(Series {
+            name,
+            values,
+            points: vec![],
+            fill: vec![color],
+            stroke: vec![color],
+            stroke_width: 2.0,
+            area: false,
+            interpolation,
+            series_type: SeriesType::Line,
+            point_radius: Some(if point { 3.0 } else { 0.0 }),
+            box_points: vec![],
+            tree: vec![],
+            links: vec![],
+        });
+    }
+    Ok(TemporalLineData { domain, series })
+}
+
+fn temporal_group(value: Option<&Value>, field: &str) -> Result<String, String> {
+    match value {
+        Some(Value::String(value)) => Ok(value.clone()),
+        Some(Value::Number(value)) => Ok(value.to_string()),
+        Some(Value::Bool(value)) => Ok(value.to_string()),
+        Some(other) => Err(format!(
+            "field {} must be a string, number, or boolean group, got {}",
+            bounded_error_fragment(field),
+            json_value_type(other)
+        )),
+        None => Err(format!(
+            "field {} is missing; expected a group value",
+            bounded_error_fragment(field)
+        )),
+    }
+}
+
+fn preflight_temporal_shape(
+    domain_len: usize,
+    group_len: usize,
+    limits: &crate::guard::InputLimits,
+) -> Result<(), String> {
+    if domain_len > limits.max_categories {
+        return Err(format!(
+            "temporal category count {domain_len} exceeds max_categories limit {} (pre-allocation)",
+            limits.max_categories
+        ));
+    }
+    if group_len > limits.max_series {
+        return Err(format!(
+            "temporal series count {group_len} exceeds max_series limit {} (pre-allocation)",
+            limits.max_series
+        ));
+    }
+    let product = domain_len.saturating_mul(group_len);
+    if product > limits.max_categorical_primitives {
+        return Err(format!(
+            "temporal dense product {product} exceeds max_categorical_primitives limit {} (pre-allocation)",
+            limits.max_categorical_primitives
+        ));
+    }
+    if product > limits.max_total_data_points {
+        return Err(format!(
+            "temporal dense product {product} exceeds max_total_data_points limit {} (pre-allocation)",
+            limits.max_total_data_points
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -695,13 +815,16 @@ mod temporal_line_tests {
             &Some("timestamp".to_string()),
             &Some("value".to_string()),
             &None,
-            &[(0, "1970-01-01T00:00:00Z".to_string())],
             &vegalite_theme(),
             false,
             LineInterpolation::Linear,
+            &crate::guard::InputLimits::default(),
         )
         .unwrap_err();
-        assert_eq!(err, "temporal line timestamp validation was not preserved");
+        assert_eq!(
+            err,
+            "field timestamp is missing; expected an RFC 3339 timestamp string"
+        );
     }
 
     #[test]
@@ -1120,7 +1243,11 @@ fn check_line_object(
 ) -> Result<(), String> {
     for key in object.keys() {
         if !allowed.contains(&key.as_str()) {
-            return Err(format!("unknown key: {path}.{key}"));
+            return Err(format!(
+                "unknown key: {}.{}",
+                bounded_error_fragment(path),
+                bounded_error_fragment(key)
+            ));
         }
     }
     Ok(())
@@ -1175,11 +1302,15 @@ fn check_object(obj: &Map<String, Value>, allowed: &[&str], path: &str) -> Resul
     for key in obj.keys() {
         if !allowed.contains(&key.as_str()) {
             let full = if path.is_empty() {
-                key.clone()
+                bounded_error_fragment(key)
             } else {
-                format!("{path}.{key}")
+                format!(
+                    "{}.{}",
+                    bounded_error_fragment(path),
+                    bounded_error_fragment(key)
+                )
             };
-            return Err(format!("未知のキー: {full}"));
+            return Err(format!("unknown key: {full}"));
         }
     }
     Ok(())

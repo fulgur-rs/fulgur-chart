@@ -44,7 +44,7 @@ fn snapshot_bar_horizontal_model() {
 }
 
 #[test]
-fn categorical_line_model_keeps_spec_dimensions_and_legacy_normalization() {
+fn plot_area_categorical_line_model_uses_scene_dimensions() {
     let json = r#"{
         "type":"line",
         "data":{"labels":["A","B","C"],"datasets":[{"data":[1,2,3]}]}
@@ -61,12 +61,12 @@ fn categorical_line_model_keeps_spec_dimensions_and_legacy_normalization() {
     assert!(matches!(spec.x_positions, XPositions::Category));
     assert_eq!(
         (model.meta.width, model.meta.height),
-        (spec.width, spec.height)
+        (frame.scene_width, frame.scene_height)
     );
-    assert_eq!(geometry.plot_area.x, frame.plot_left / spec.width);
-    assert_eq!(geometry.plot_area.y, frame.plot_top / spec.height);
-    assert_eq!(geometry.plot_area.w, plot_width / spec.width);
-    assert_eq!(geometry.plot_area.h, plot_height / spec.height);
+    assert_eq!(geometry.plot_area.x, frame.plot_left / frame.scene_width);
+    assert_eq!(geometry.plot_area.y, frame.plot_top / frame.scene_height);
+    assert_eq!(geometry.plot_area.w, plot_width / frame.scene_width);
+    assert_eq!(geometry.plot_area.h, plot_height / frame.scene_height);
 }
 
 #[test]

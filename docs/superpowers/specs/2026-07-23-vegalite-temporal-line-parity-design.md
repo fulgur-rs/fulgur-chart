@@ -210,9 +210,11 @@ without redesigning the Chart.js legend contract.
 
 For a temporal Vega line:
 
-- position defaults to `LegendPos::Right`
+- position defaults to `LegendPos::Right` when a color channel exists
 - title defaults to the color field name when channel title is absent
 - title is included in right legend width and is drawn above its entries
+- without a color channel, legend position is `None`, the single series name
+  is empty, and no synthetic y-field legend entry is produced
 
 Existing specs set `legend_title` to `None`, preserving their output.
 
@@ -221,22 +223,25 @@ Existing specs set `legend_title` to `None`, preserving their output.
 The Vega-Lite frontend performs these steps:
 
 1. Parse and validate the supported line mark and channel options.
-2. Parse every temporal x value as RFC 3339 and normalize it to Unix
-   milliseconds.
+2. In one record pass, parse every temporal x value as RFC 3339, normalize its
+   color group once, read y once, and aggregate by `(normalized instant,
+   normalized group)`.
 3. Sort and deduplicate the shared temporal domain.
-4. Build every series against that domain and retain the existing dense-series
-   validation.
-5. Sort nominal color values lexicographically, matching Vega-Lite's default
+4. Enforce caller-supplied record, category, series, and dense-product limits
+   before allocating the dense series product.
+5. Build every series in `O(records + groups * domain)` and retain the existing
+   dense-series validation.
+6. Sort nominal color values lexicographically, matching Vega-Lite's default
    nominal domain ordering for this spec.
-6. Assign `tableau10` colors after sorting, producing:
+7. Assign `tableau10` colors after sorting, producing:
    - `allowlist` → `#4c78a8`
    - `candidates` → `#f58518`
    - `regressions` → `#e45756`
-7. Populate x and y axis titles from channel titles, falling back to field
+8. Populate x and y axis titles from channel titles, falling back to field
    names.
-8. Populate the right legend and legend title from the color channel.
-9. Apply axis grid visibility and opacity to both axes.
-10. Set the Vega line width to 2 px. Map `point: true` to an explicit 3 px
+9. Populate the right legend and legend title only when a color channel exists.
+10. Apply axis grid visibility and opacity to both axes.
+11. Set the Vega line width to 2 px. Map `point: true` to an explicit 3 px
     radius and `point: false` or absence to an explicit zero radius.
 
 For backward compatibility, a line series with no explicit point radius keeps
@@ -261,21 +266,31 @@ cannot cause division by zero because they are aggregated before layout.
 
 ### Tick generation
 
-Tick generation is deterministic and UTC-only. The target tick count is
-`clamp(floor(plot_width / 30), 2, 24)`. The generator selects the smallest
-interval from a bounded table of fixed UTC intervals whose tick count does not
-exceed that target. The table covers seconds through weeks, which includes the
-dogfood range. Ticks align to interval boundaries in UTC.
+Tick generation is deterministic and UTC-only. The desired tick count is
+`ceil(plot_width / 40)`. As in D3, the generator compares the target duration
+with the adjacent interval durations and selects the closer ratio from:
+
+- seconds: 1, 5, 15, 30
+- minutes: 1, 5, 15, 30
+- hours: 1, 3, 6, 12
+- days: 1, 2
+- weeks: 1
+- months: 1, 3
+- years: 1
+
+Domains beyond this table use a D3-style nice 1/2/5 multiple of years. Seconds
+through days use UTC epoch alignment, weeks align to UTC Sundays, and
+month/year intervals use UTC calendar boundaries. Ticks cover the complete
+domain; there is no 24-entry truncation.
 
 For the current June 5 through July 22 fixture, this produces two-day grid/tick
 positions. Label auto-skip may hide alternating labels while retaining every
-grid line and tick. Labels use compact deterministic UTC forms:
-
-- first visible tick in a month: `Jun 07`
-- later ticks in that month: `09`, `11`, and so on
-- first visible tick in a new month: `Jul 01`
-
-Formatting is deliberately smaller than Vega's full locale-aware formatter.
+grid line and tick. Labels use the UTC equivalent of D3's dynamic time
+formatter: fractional seconds, seconds, minutes, and hours use time forms;
+ordinary days use weekday plus day (`Mon 15`); UTC Sunday boundaries use month
+plus day (`Jul 14`); month boundaries use the full month; and year boundaries
+use the year. English names are fixed in code, so output does not consult the
+OS locale or timezone.
 
 ### Grid and axes
 
@@ -359,15 +374,18 @@ New errors are returned before allocation-heavy layout work:
 Non-strict mode still ignores unrelated unknown keys, but it does not ignore an
 invalid value for a recognized semantic field.
 
-No error includes the full JSON input. Timestamp errors include only the field
-name and offending scalar value, subject to the existing input-length guard.
+No error includes the full JSON input. A shared byte-bounded truncation helper
+limits field names, property names, key paths, and offending timestamp scalar
+values. Temporal x/y value errors use English in strict and non-strict modes.
 
 ## Guard and resource accounting
 
-- Parsed temporal positions count exactly like existing categories; they do
-  not increase the logical point limit.
-- `unix_millis` allocation occurs only after record and category limits pass.
-- Date tick generation is bounded by plot width and a hard maximum tick count.
+- Each timestamp, y value, and group is normalized once per record.
+- Record, series, category, total-point, and dense-product limits run before
+  the dense `groups * domain` allocation.
+- The aggregate map is keyed by normalized instant and group.
+- Date tick density is selected from plot width; full-domain tick generation is
+  safe because guarded production plot widths are bounded.
 - Monotone interpolation is linear in rendered points and runs after existing
   line decimation.
 - Decimation retains x values and original category indices together so
@@ -392,7 +410,9 @@ name and offending scalar value, subject to the existing input-length guard.
 
 - gaps of one and three days produce a 1:3 x-distance ratio
 - a singleton temporal domain maps to plot center
-- tick generation is deterministic and bounded
+- short sub-day, multi-month, multi-year, reversed, and singleton domains use
+  deterministic UTC ticks and dynamic labels
+- full-domain generation is not truncated at 24 ticks
 - the dogfood date range selects two-day ticks
 - labels auto-skip without removing grid lines
 - `gridOpacity = 0.15` reaches scene primitives

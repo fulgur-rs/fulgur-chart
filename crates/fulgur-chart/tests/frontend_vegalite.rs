@@ -109,8 +109,10 @@ fn temporal_line_without_color_builds_one_named_series() {
     }"#;
     let spec = vegalite::parse(json, true).unwrap();
     assert_eq!(spec.series.len(), 1);
-    assert_eq!(spec.series[0].name, "value");
+    assert_eq!(spec.series[0].name, "");
     assert_eq!(spec.series[0].values, vec![2.0, 3.0]);
+    assert_eq!(spec.legend, LegendPos::None);
+    assert_eq!(spec.legend_title, None);
 }
 
 #[test]
@@ -123,6 +125,66 @@ fn temporal_line_rejects_invalid_timestamp_values() {
         assert!(err.contains("timestamp"), "unexpected error: {err}");
         assert!(err.is_ascii(), "error must be English: {err}");
     }
+}
+
+#[test]
+fn temporal_line_errors_are_english_in_strict_and_non_strict_modes() {
+    let cases = [
+        r#"{"timestamp":null,"value":1}"#,
+        r#"{"timestamp":42,"value":1}"#,
+        r#"{"value":1}"#,
+        r#"{"timestamp":"2026-07-01T00:00:00Z","value":null}"#,
+        r#"{"timestamp":"2026-07-01T00:00:00Z","value":"one"}"#,
+        r#"{"timestamp":"2026-07-01T00:00:00Z"}"#,
+    ];
+    for strict in [false, true] {
+        for record in cases {
+            let json = format!(
+                r#"{{"mark":"line","data":{{"values":[{record}]}},"encoding":{{"x":{{"field":"timestamp","type":"temporal"}},"y":{{"field":"value","type":"quantitative"}}}}}}"#
+            );
+            let err = vegalite::parse(&json, strict).unwrap_err();
+            assert!(err.is_ascii(), "strict={strict}: {err}");
+            assert!(err.len() < 240, "strict={strict}: {err}");
+            assert!(
+                err.contains("timestamp") || err.contains("value"),
+                "strict={strict}: {err}"
+            );
+        }
+    }
+}
+
+#[test]
+fn temporal_line_errors_bound_long_fields_and_unknown_key_paths() {
+    let long_field = format!("field-{}-FIELD_TAIL", "x".repeat(600));
+    let field_json = format!(
+        r#"{{"mark":"line","data":{{"values":[{{"value":1}}]}},"encoding":{{"x":{{"field":"{long_field}","type":"temporal"}},"y":{{"field":"value"}}}}}}"#
+    );
+    let field_err = vegalite::parse(&field_json, false).unwrap_err();
+    assert!(field_err.len() < 240, "{field_err}");
+    assert!(!field_err.contains("FIELD_TAIL"), "{field_err}");
+
+    let long_key = format!("key-{}-KEY_TAIL", "y".repeat(600));
+    let key_json = DOGFOOD_SHAPE.replace(
+        r#""title":"date""#,
+        &format!(r#""title":"date","{long_key}":true"#),
+    );
+    let key_err = vegalite::parse(&key_json, true).unwrap_err();
+    assert!(key_err.len() < 240, "{key_err}");
+    assert!(!key_err.contains("KEY_TAIL"), "{key_err}");
+}
+
+#[test]
+fn temporal_line_custom_limits_reject_dense_product_before_allocation() {
+    let limits = fulgur_chart::guard::InputLimits {
+        max_series: 1,
+        max_categories: 10,
+        max_categorical_primitives: 10,
+        max_total_data_points: 10,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let err = vegalite::parse_with_limits(DOGFOOD_MULTI_SERIES, true, &limits).unwrap_err();
+    assert!(err.contains("series"), "{err}");
+    assert!(err.contains("pre-allocation"), "{err}");
 }
 
 #[test]
