@@ -451,6 +451,29 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
             limits.max_label_bytes,
         ));
     }
+    if let Some(title) = &spec.legend_title
+        && title.len() > limits.max_label_bytes
+    {
+        return Err(format!(
+            "legend title length {} bytes exceeds limit {}",
+            title.len(),
+            limits.max_label_bytes,
+        ));
+    }
+    for (axis, title) in [
+        ("x", spec.x_axis.title.as_ref()),
+        ("y", spec.y_axis.title.as_ref()),
+    ] {
+        if let Some(title) = title
+            && title.text.len() > limits.max_label_bytes
+        {
+            return Err(format!(
+                "{axis}-axis title length {} bytes exceeds limit {}",
+                title.text.len(),
+                limits.max_label_bytes,
+            ));
+        }
+    }
     for cat in &spec.categories {
         if cat.len() > limits.max_label_bytes {
             return Err(format!(
@@ -706,6 +729,59 @@ mod tests {
     #[test]
     fn valid_spec_passes() {
         assert!(validate_spec(&base_spec(), &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn axis_and_legend_titles_accept_exact_label_limit() {
+        use crate::ir::{AxisTitle, AxisTitleAlign};
+
+        let limits = InputLimits {
+            max_label_bytes: 4,
+            ..default_limits()
+        };
+        let mut spec = base_spec();
+        spec.legend_title = Some("xxxx".into());
+        spec.x_axis.title = Some(AxisTitle {
+            text: "xxxx".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        spec.y_axis.title = Some(AxisTitle {
+            text: "xxxx".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        assert!(validate_spec(&spec, &limits).is_ok());
+    }
+
+    #[test]
+    fn axis_and_legend_titles_reject_over_label_limit() {
+        use crate::ir::{AxisTitle, AxisTitleAlign};
+
+        let limits = InputLimits {
+            max_label_bytes: 4,
+            ..default_limits()
+        };
+        let title = AxisTitle {
+            text: "xxxxx".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        };
+        for mut spec in [base_spec(), base_spec(), base_spec()] {
+            if spec.x_axis.title.is_none() && spec.y_axis.title.is_none() {
+                spec.legend_title = Some("xxxxx".into());
+                assert!(validate_spec(&spec, &limits).is_err());
+                spec.legend_title = None;
+            }
+            spec.x_axis.title = Some(title.clone());
+            assert!(validate_spec(&spec, &limits).is_err());
+            spec.x_axis.title = None;
+            spec.y_axis.title = Some(title.clone());
+            assert!(validate_spec(&spec, &limits).is_err());
+        }
     }
 
     #[test]
