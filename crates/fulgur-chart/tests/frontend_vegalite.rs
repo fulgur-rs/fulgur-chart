@@ -7,6 +7,59 @@ const BAR_SPEC: &str = r#"{
     "encoding": {"x": {"field":"cat","type":"nominal"}, "y": {"field":"val","type":"quantitative"}}
 }"#;
 
+const DOGFOOD_SHAPE: &str = r##"{
+  "$schema":"https://vega.github.io/schema/vega-lite/v5.json",
+  "title":"qtest nightly trend",
+  "width":720,
+  "height":320,
+  "background":"white",
+  "data":{"values":[
+    {"timestamp":"2026-07-21T19:21:53Z","metric":"regressions","value":0}
+  ]},
+  "mark":{"type":"line","point":true,"interpolate":"monotone"},
+  "encoding":{
+    "x":{"field":"timestamp","type":"temporal","title":"date"},
+    "y":{"field":"value","type":"quantitative","title":"subtests"},
+    "color":{"field":"metric","type":"nominal","title":"metric",
+             "scale":{"scheme":"tableau10"}}
+  },
+  "config":{"view":{"stroke":null},
+            "axis":{"grid":true,"gridOpacity":0.15}}
+}"##;
+
+#[test]
+fn dogfood_shape_is_accepted_by_typed_schema_and_strict_parser() {
+    let _: fulgur_chart::schema::VegaLiteSpec = serde_json::from_str(DOGFOOD_SHAPE).unwrap();
+    assert!(vegalite::parse(DOGFOOD_SHAPE, true).is_ok());
+}
+
+#[test]
+fn strict_temporal_line_rejects_interpolatee_with_full_key_path() {
+    let json = DOGFOOD_SHAPE.replace("\"interpolate\"", "\"interpolatee\"");
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(err.contains("mark.interpolatee"), "unexpected error: {err}");
+}
+
+#[test]
+fn strict_temporal_line_rejects_grid_opacit_with_full_key_path() {
+    let json = DOGFOOD_SHAPE.replace("\"gridOpacity\"", "\"gridOpacit\"");
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(
+        err.contains("config.axis.gridOpacit"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn strict_temporal_line_rejects_scheeme_with_full_key_path() {
+    let json = DOGFOOD_SHAPE.replace("\"scheme\"", "\"scheeme\"");
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(
+        err.contains("encoding.color.scale.scheeme"),
+        "unexpected error: {err}"
+    );
+}
+
 #[test]
 fn bar_categorical_single_series() {
     let spec = vegalite::parse(BAR_SPEC, false).unwrap();
