@@ -770,18 +770,17 @@ mod tests {
             font_size: None,
             align: AxisTitleAlign::Center,
         };
-        for mut spec in [base_spec(), base_spec(), base_spec()] {
-            if spec.x_axis.title.is_none() && spec.y_axis.title.is_none() {
-                spec.legend_title = Some("xxxxx".into());
-                assert!(validate_spec(&spec, &limits).is_err());
-                spec.legend_title = None;
-            }
-            spec.x_axis.title = Some(title.clone());
-            assert!(validate_spec(&spec, &limits).is_err());
-            spec.x_axis.title = None;
-            spec.y_axis.title = Some(title.clone());
-            assert!(validate_spec(&spec, &limits).is_err());
-        }
+        let mut legend_spec = base_spec();
+        legend_spec.legend_title = Some("xxxxx".into());
+        assert!(validate_spec(&legend_spec, &limits).is_err());
+
+        let mut x_spec = base_spec();
+        x_spec.x_axis.title = Some(title.clone());
+        assert!(validate_spec(&x_spec, &limits).is_err());
+
+        let mut y_spec = base_spec();
+        y_spec.y_axis.title = Some(title);
+        assert!(validate_spec(&y_spec, &limits).is_err());
     }
 
     #[test]
