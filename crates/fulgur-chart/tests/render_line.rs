@@ -189,6 +189,26 @@ fn small_line_markers_unchanged() {
     );
 }
 
+#[test]
+fn explicit_point_radius_zero_suppresses_markers() {
+    assert_eq!(
+        circle_count(
+            r#"{"type":"line","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3],"pointRadius":0}]}}"#
+        ),
+        0
+    );
+}
+
+#[test]
+fn explicit_point_radius_none_retains_markers() {
+    assert_eq!(
+        circle_count(
+            r#"{"type":"line","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]}}"#
+        ),
+        3
+    );
+}
+
 /// scene 内の各 Polyline の点列を順に返す（セグメント数・各セグメント点数・座標有限性の検証用）。
 fn polylines(spec: &fulgur_chart::ir::ChartSpec) -> Vec<Vec<(f64, f64)>> {
     let m = TextMeasurer::new(DEFAULT_FONT).unwrap();

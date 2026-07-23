@@ -1,6 +1,6 @@
 //! line / area チャート。共有フレーム(common)の上に折れ線・面・マーカーを重ねる。
 
-use super::common;
+use super::{common, monotone::monotone_path};
 use crate::ir::ChartSpec;
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
@@ -144,7 +144,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
             let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
             match ser.interpolation {
-                crate::ir::LineInterpolation::Linear | crate::ir::LineInterpolation::Monotone => {
+                crate::ir::LineInterpolation::Linear => {
                     items.push(Prim::Polyline {
                         points: xy,
                         stroke: ser.stroke_at(0),
@@ -160,6 +160,14 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                         stroke_width: ser.stroke_width,
                     });
                 }
+                crate::ir::LineInterpolation::Monotone => {
+                    items.push(Prim::Path {
+                        d: monotone_path(&xy),
+                        fill: None,
+                        stroke: Some(ser.stroke_at(0)),
+                        stroke_width: ser.stroke_width,
+                    });
+                }
             }
         }
 
@@ -170,9 +178,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // 同順・同内容)。
         for seg in &segments {
             let r = match (decimated, ser.point_radius) {
-                (false, _) => Some(MARKER_R),
-                (true, Some(r)) if r > 0.0 => Some(r),
-                (true, Some(_)) => None,
+                (_, Some(r)) if r > 0.0 => Some(r),
+                (_, Some(_)) => None,
+                (false, None) => Some(MARKER_R),
                 // 間引き既定: 線になる(≥2点)なら帯を抑制、単点(孤立点)は描画。
                 (true, None) if seg.len() < 2 => Some(MARKER_R),
                 (true, None) => None,
