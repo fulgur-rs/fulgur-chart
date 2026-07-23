@@ -20,6 +20,7 @@ png = { workspace = true }
 schemars = { workspace = true }
 ttf-parser = { workspace = true }
 image = { workspace = true }
+time = { workspace = true }
 dhat = { version = "0.3.3", optional = true }
 
 [features]
