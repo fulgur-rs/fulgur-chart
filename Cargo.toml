@@ -22,3 +22,4 @@ ttf-parser = "0.25"
 insta = { version = "1", features = ["yaml"] }
 schemars = { version = "1.2", features = ["preserve_order"] }
 image = { version = "0.25", default-features = false, features = ["webp"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }

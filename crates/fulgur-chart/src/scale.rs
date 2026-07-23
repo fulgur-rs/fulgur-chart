@@ -93,6 +93,98 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
     }
 }
 
+/// Vega-Lite のdogfood line chart用に、ゼロ基準と半step余白を持つ目盛りを返す。
+pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTicks {
+    let target = if plot_height.is_finite() && plot_height > 0.0 {
+        (plot_height / 40.0).floor().clamp(2.0, 10.0) as usize
+    } else {
+        2
+    };
+    if !data_min.is_finite() || !data_max.is_finite() || data_min > data_max {
+        return nice_ticks(data_min, data_max, target);
+    }
+
+    let span = (data_max - data_min).max(f64::EPSILON);
+    if !span.is_finite() {
+        return nice_ticks(data_min, data_max, target);
+    }
+    let padding = span * 0.05;
+
+    if data_min >= 0.0 {
+        let padded_max = data_max + padding;
+        let step = nice_step((padded_max / target as f64).max(f64::EPSILON));
+        let half_step = step / 2.0;
+        let max = (padded_max / half_step).ceil() * half_step;
+        if !max.is_finite() {
+            return nice_ticks(data_min, data_max, target);
+        }
+        return NiceTicks {
+            min: 0.0,
+            max,
+            step,
+            ticks: full_step_ticks(0.0, max, step),
+        };
+    }
+
+    if data_max <= 0.0 {
+        let padded_min = data_min - padding;
+        let step = nice_step((-padded_min / target as f64).max(f64::EPSILON));
+        let half_step = step / 2.0;
+        let min = (padded_min / half_step).floor() * half_step;
+        if !min.is_finite() {
+            return nice_ticks(data_min, data_max, target);
+        }
+        return NiceTicks {
+            min,
+            max: 0.0,
+            step,
+            ticks: full_step_ticks(min, 0.0, step),
+        };
+    }
+
+    let padded_min = data_min - padding;
+    let padded_max = data_max + padding;
+    let step = nice_step(((padded_max - padded_min) / target as f64).max(f64::EPSILON));
+    let half_step = step / 2.0;
+    let min = (padded_min / half_step).floor() * half_step;
+    let max = (padded_max / half_step).ceil() * half_step;
+    if !min.is_finite() || !max.is_finite() {
+        return nice_ticks(data_min, data_max, target);
+    }
+    NiceTicks {
+        min,
+        max,
+        step,
+        ticks: full_step_ticks(min, max, step),
+    }
+}
+
+fn nice_step(raw_step: f64) -> f64 {
+    let magnitude = 10f64.powf(raw_step.log10().floor());
+    let normalized = raw_step / magnitude;
+    magnitude
+        * if normalized <= 1.0 {
+            1.0
+        } else if normalized <= 2.0 {
+            2.0
+        } else if normalized <= 5.0 {
+            5.0
+        } else {
+            10.0
+        }
+}
+
+fn full_step_ticks(min: f64, max: f64, step: f64) -> Vec<f64> {
+    let first = (min / step).ceil() * step;
+    if !first.is_finite() || first > max {
+        return Vec::new();
+    }
+    let count = ((max - first) / step).floor() as usize;
+    (0..=count)
+        .map(|index| first + index as f64 * step)
+        .collect()
+}
+
 /// nice 丸めが使えない場合のフォールバック: データ範囲を等分して目盛りを返す。
 fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
     let min = if data_min.is_finite() { data_min } else { 0.0 };
@@ -137,6 +229,44 @@ fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vega_dogfood_domain_is_zero_to_sixty_five() {
+        let ticks = vega_nice_ticks(0.0, 61.0, 320.0);
+        assert_eq!((ticks.min, ticks.max, ticks.step), (0.0, 65.0, 10.0));
+        assert_eq!(ticks.ticks, vec![0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0]);
+    }
+
+    #[test]
+    fn vega_nice_ticks_mirrors_negative_and_pads_mixed_domains() {
+        let negative = vega_nice_ticks(-61.0, -1.0, 320.0);
+        assert_eq!(
+            (negative.min, negative.max, negative.step),
+            (-65.0, 0.0, 10.0)
+        );
+        assert_eq!(
+            negative.ticks,
+            vec![-60.0, -50.0, -40.0, -30.0, -20.0, -10.0, 0.0]
+        );
+
+        let mixed = vega_nice_ticks(-10.0, 10.0, 320.0);
+        assert!(mixed.min <= -10.0);
+        assert!(mixed.max >= 10.0);
+        assert!(
+            mixed
+                .ticks
+                .iter()
+                .all(|tick| *tick >= mixed.min && *tick <= mixed.max)
+        );
+    }
+
+    #[test]
+    fn vega_nice_ticks_falls_back_for_invalid_input() {
+        let ticks = vega_nice_ticks(f64::NAN, 61.0, 320.0);
+        assert!(ticks.min.is_finite());
+        assert!(ticks.max.is_finite());
+        assert!(!ticks.ticks.is_empty());
+    }
 
     #[test]
     fn nice_ticks_round_numbers() {
