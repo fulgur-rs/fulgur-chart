@@ -7,9 +7,11 @@ use fulgur_chart::{
     font::DEFAULT_FONT,
     frontend,
     guard::{self, InputLimits},
-    ir::ChartSpec,
+    ir::{ChartKind, ChartSpec, SizeMode},
+    layout,
     raster_direct::{self, PngCompression},
     render,
+    text::TextMeasurer,
 };
 
 // ---------------------------------------------------------------------------
@@ -211,8 +213,19 @@ pub fn render(
 /// u32 飽和）と一致させ、予算判定が実際の確保サイズとずれないようにする。
 fn webp_output_area(spec: &ChartSpec, scale: f32) -> u64 {
     let scale = if scale > 0.0 { scale } else { 1.0 };
-    let w = (spec.width as f32 * scale).round().max(1.0) as u32;
-    let h = (spec.height as f32 * scale).round().max(1.0) as u32;
+    // Vega-Lite temporal line の PlotArea 寸法は、軸・ラベル・凡例を含む外側の
+    // scene へ展開される。renderer が確保する pixmap と同じ scene 寸法で予算判定する。
+    let (width, height) = if matches!(spec.size_mode, SizeMode::PlotArea)
+        && matches!(spec.kind, ChartKind::Line)
+    {
+        let measurer = TextMeasurer::new(DEFAULT_FONT).expect("bundled default font must be valid");
+        let frame = layout::common::compute(spec, &measurer);
+        (frame.scene_width, frame.scene_height)
+    } else {
+        (spec.width, spec.height)
+    };
+    let w = (width as f32 * scale).round().max(1.0) as u32;
+    let h = (height as f32 * scale).round().max(1.0) as u32;
     w as u64 * h as u64
 }
 
@@ -302,6 +315,40 @@ mod tests {
             1.0,
             Compression::default(),
             webp_on(100),
+        )
+        .unwrap_err();
+        assert!(matches!(err, RenderError::Validate(_)));
+        assert!(err.message().contains("server limit"));
+    }
+
+    #[test]
+    fn webp_plot_area_budget_uses_expanded_scene_dimensions() {
+        let spec = parse_and_validate(
+            r#"{
+                "data":{"values":[
+                    {"timestamp":"1970-01-01T00:00:00.100Z","value":1},
+                    {"timestamp":"1970-01-01T00:00:00.900Z","value":2}
+                ]},
+                "mark":{"type":"line"},
+                "encoding":{
+                    "x":{"field":"timestamp","type":"temporal"},
+                    "y":{"field":"value","type":"quantitative"}
+                },
+                "width":720,
+                "height":320
+            }"#,
+            "vegalite",
+            false,
+        )
+        .unwrap();
+        let plot_area = spec.width as u64 * spec.height as u64;
+
+        let err = render(
+            &spec,
+            OutputFormat::Webp,
+            1.0,
+            Compression::default(),
+            webp_on(plot_area),
         )
         .unwrap_err();
         assert!(matches!(err, RenderError::Validate(_)));
