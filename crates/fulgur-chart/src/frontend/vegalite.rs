@@ -611,15 +611,30 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         return Ok(()); // object でなければ後段パースに委ねる
     };
 
-    check_object(
-        top,
-        &[
+    let top_allowed: &[&str] = match read_mark_name(top) {
+        Some("line") => &[
+            "mark",
+            "data",
+            "encoding",
+            "$schema",
+            "width",
+            "height",
+            "title",
+            "background",
+            "config",
+        ],
+        _ => &[
             "mark", "data", "encoding", "$schema", "width", "height", "title",
         ],
-        "",
-    )?;
+    };
+    check_object(top, top_allowed, "")?;
 
     if let Some(encoding) = top.get("encoding").and_then(Value::as_object) {
+        if matches!(read_mark_name(top), Some("line")) {
+            check_line_keys(top, encoding)?;
+            return Ok(());
+        }
+
         // mark 別 encoding allow-list を選ぶ。mark 名が読めない/未対応なら
         // 現状挙動(全キー拒否せずスルー)を保つ = 後段パースに委ねる。
         let allowed: &[&str] = match read_mark_name(top) {
@@ -719,6 +734,153 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+/// line の追加サブセットを strict に検査する。既存 mark の緩い互換性を変えないため、
+/// line 専用のキーと値だけをここで型検査する。
+fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> Result<(), String> {
+    if let Some(mark) = top.get("mark").and_then(Value::as_object) {
+        check_line_object(mark, &["type", "point", "interpolate"], "mark")?;
+        check_line_string(mark, "type", "mark.type")?;
+        check_line_bool(mark, "point", "mark.point")?;
+        if let Some(interpolate) = mark.get("interpolate") {
+            match interpolate {
+                Value::String(value) if value == "linear" || value == "monotone" => {}
+                Value::String(value) => {
+                    return Err(format!(
+                        "mark.interpolate must be \"linear\" or \"monotone\", got \"{value}\""
+                    ));
+                }
+                other => {
+                    return Err(format!("mark.interpolate must be a string, got {other}"));
+                }
+            }
+        }
+    }
+
+    check_line_object(encoding, &["x", "y", "color"], "encoding")?;
+    for channel in ["x", "y"] {
+        if let Some(value) = encoding.get(channel) {
+            let channel_object = value
+                .as_object()
+                .ok_or_else(|| format!("encoding.{channel} must be an object"))?;
+            check_line_object(
+                channel_object,
+                &["field", "type", "title"],
+                &format!("encoding.{channel}"),
+            )?;
+            check_line_string(
+                channel_object,
+                "field",
+                &format!("encoding.{channel}.field"),
+            )?;
+            check_line_string(channel_object, "type", &format!("encoding.{channel}.type"))?;
+            check_line_string(
+                channel_object,
+                "title",
+                &format!("encoding.{channel}.title"),
+            )?;
+        }
+    }
+    if let Some(value) = encoding.get("color") {
+        let color = value
+            .as_object()
+            .ok_or_else(|| "encoding.color must be an object".to_string())?;
+        check_line_object(
+            color,
+            &["field", "type", "title", "scale"],
+            "encoding.color",
+        )?;
+        check_line_string(color, "field", "encoding.color.field")?;
+        check_line_string(color, "type", "encoding.color.type")?;
+        check_line_string(color, "title", "encoding.color.title")?;
+        if let Some(scale) = color.get("scale") {
+            let scale = scale
+                .as_object()
+                .ok_or_else(|| "encoding.color.scale must be an object".to_string())?;
+            check_line_object(scale, &["scheme"], "encoding.color.scale")?;
+            match scale.get("scheme") {
+                Some(Value::String(value)) if value == "tableau10" => {}
+                Some(Value::String(value)) => {
+                    return Err(format!(
+                        "encoding.color.scale.scheme must be \"tableau10\", got \"{value}\""
+                    ));
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "encoding.color.scale.scheme must be a string, got {other}"
+                    ));
+                }
+                None => return Err("encoding.color.scale.scheme is required".to_string()),
+            }
+        }
+    }
+
+    check_line_string(top, "background", "background")?;
+    if let Some(config) = top.get("config") {
+        let config = config
+            .as_object()
+            .ok_or_else(|| "config must be an object".to_string())?;
+        check_line_object(config, &["view", "axis"], "config")?;
+        if let Some(view) = config.get("view") {
+            let view = view
+                .as_object()
+                .ok_or_else(|| "config.view must be an object".to_string())?;
+            check_line_object(view, &["stroke"], "config.view")?;
+        }
+        if let Some(axis) = config.get("axis") {
+            let axis = axis
+                .as_object()
+                .ok_or_else(|| "config.axis must be an object".to_string())?;
+            check_line_object(axis, &["grid", "gridOpacity"], "config.axis")?;
+            check_line_bool(axis, "grid", "config.axis.grid")?;
+            if let Some(grid_opacity) = axis.get("gridOpacity") {
+                let Some(value) = grid_opacity.as_f64() else {
+                    return Err(format!(
+                        "config.axis.gridOpacity must be a number, got {grid_opacity}"
+                    ));
+                };
+                if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                    return Err(format!(
+                        "config.axis.gridOpacity must be between 0.0 and 1.0, got {value}"
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn check_line_object(
+    object: &Map<String, Value>,
+    allowed: &[&str],
+    path: &str,
+) -> Result<(), String> {
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(format!("unknown key: {path}.{key}"));
+        }
+    }
+    Ok(())
+}
+
+fn check_line_string(object: &Map<String, Value>, key: &str, path: &str) -> Result<(), String> {
+    if let Some(value) = object.get(key)
+        && !value.is_string()
+    {
+        return Err(format!("{path} must be a string, got {value}"));
+    }
+    Ok(())
+}
+
+fn check_line_bool(object: &Map<String, Value>, key: &str, path: &str) -> Result<(), String> {
+    if let Some(value) = object.get(key)
+        && !value.is_boolean()
+    {
+        return Err(format!("{path} must be a boolean, got {value}"));
+    }
     Ok(())
 }
 
