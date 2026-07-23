@@ -190,6 +190,10 @@ pub enum SizeMode {
 All existing Chart.js inputs and existing categorical Vega-Lite behavior use
 `Canvas`. The supported Vega-Lite temporal line uses `PlotArea`, where
 `ChartSpec.width` and `height` are the requested plot dimensions.
+Only `ChartKind::Line + SizeMode::PlotArea` uses the actual expanded scene
+dimensions in model metadata and geometry normalization. Bar and Mixed retain
+their legacy `spec.width/spec.height` model dimensions and normalization,
+including if `SizeMode::PlotArea` is assigned manually.
 
 `Frame` gains outer canvas dimensions. In `PlotArea` mode:
 

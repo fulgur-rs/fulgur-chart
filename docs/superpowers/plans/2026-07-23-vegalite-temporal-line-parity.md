@@ -1203,9 +1203,10 @@ fn temporal_axis(unix_millis: &[i64], ticks: &[TemporalTick]) -> AxisModel {
 ```
 
 In `compute_axes`, return this axis for temporal lines. In `build_model`, use
-`SizeMode` (not temporal/category x type) as the geometry and metadata size
-source. `PlotArea` common-layout charts use `Frame::scene_width/scene_height`;
-`Canvas` retains the legacy `spec.width/spec.height` normalization.
+the actual expanded `Frame::scene_width/scene_height` for geometry and metadata
+only when `ChartKind::Line + SizeMode::PlotArea`. `Canvas`, Bar, and Mixed
+retain the legacy `spec.width/spec.height` model dimensions and normalization,
+even if a Bar or Mixed spec is manually assigned `SizeMode::PlotArea`.
 
 **Step 5: Accept and inspect the snapshot**
 
