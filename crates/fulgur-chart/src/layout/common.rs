@@ -55,6 +55,21 @@ fn has_legend(spec: &ChartSpec) -> bool {
     ) && spec.series.iter().any(|s| !s.name.is_empty())
 }
 
+/// `legend_title` を描画・予約する supported semantics。
+///
+/// Vega-Lite temporal line が生成する PlotArea + Right legend だけを対象にし、
+/// Canvas/category の既存 scene は `legend_title` の有無にかかわらず維持する。
+fn temporal_plot_right_legend_title(spec: &ChartSpec) -> Option<&str> {
+    if matches!(spec.x_positions, XPositions::Temporal { .. })
+        && matches!(spec.size_mode, SizeMode::PlotArea)
+        && spec.legend == LegendPos::Right
+    {
+        spec.legend_title.as_deref()
+    } else {
+        None
+    }
+}
+
 /// 値ドメイン(begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
 /// 縦棒(compute)と横棒(build_horizontal)が同一の値域計算を共有する。
 pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
@@ -223,13 +238,8 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         0.0
     };
     let legend_right = if legend && spec.legend == LegendPos::Right {
-        let names = if matches!(spec.size_mode, SizeMode::PlotArea) {
-            let mut names = series_names.clone();
-            names.extend(spec.legend_title.iter().cloned());
-            names
-        } else {
-            series_names.clone()
-        };
+        let mut names = series_names.clone();
+        names.extend(temporal_plot_right_legend_title(spec).map(str::to_owned));
         legend_band_width_vertical(m, &names, spec.theme.font_size)
     } else {
         0.0
@@ -621,9 +631,8 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             .map(|s| (s.name.clone(), s.fill_at(0)))
             .collect();
         let mut names: Vec<String> = entries.iter().map(|(n, _)| n.clone()).collect();
-        if matches!(spec.size_mode, SizeMode::PlotArea) {
-            names.extend(spec.legend_title.iter().cloned());
-        }
+        let legend_title = temporal_plot_right_legend_title(spec);
+        names.extend(legend_title.map(str::to_owned));
         let band_w = legend_band_width_vertical(m, &names, label_font);
         let band_x = if spec.legend == LegendPos::Left {
             OUTER_PAD
@@ -635,7 +644,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         draw_vertical_legend(
             items,
             &entries,
-            spec.legend_title.as_deref(),
+            legend_title,
             band_x,
             frame.plot_top,
             frame.plot_bottom,
@@ -1005,6 +1014,20 @@ mod tests {
             _ => None,
         });
         assert!(legend_title_y.unwrap() < legend_entry_y.unwrap());
+    }
+
+    #[test]
+    fn categorical_canvas_ignores_legend_title_without_changing_scene() {
+        let mut baseline = make_bar_spec(3, 600.0);
+        baseline.series[0].name = "series".into();
+        baseline.legend = LegendPos::Right;
+        let mut titled = baseline.clone();
+        titled.legend_title = Some("unsupported title".into());
+
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let baseline_scene = crate::layout::build_scene(&baseline, &m);
+        let titled_scene = crate::layout::build_scene(&titled, &m);
+        assert_eq!(titled_scene, baseline_scene);
     }
 
     #[test]
