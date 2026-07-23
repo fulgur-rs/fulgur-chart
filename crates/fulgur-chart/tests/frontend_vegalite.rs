@@ -61,6 +61,43 @@ fn strict_temporal_line_rejects_scheeme_with_full_key_path() {
 }
 
 #[test]
+fn strict_temporal_line_type_errors_do_not_echo_nested_payloads() {
+    let payload_marker = "FULL_PAYLOAD_MARKER_".repeat(32);
+    let invalid_interpolate = format!(r#"{{"marker":"{payload_marker}"}}"#);
+    let json = DOGFOOD_SHAPE.replace("\"monotone\"", &invalid_interpolate);
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(err.contains("mark.interpolate"), "unexpected error: {err}");
+    assert!(err.len() < 200, "unbounded error: {err}");
+    assert!(
+        !err.contains(&payload_marker),
+        "error echoed nested payload: {err}"
+    );
+}
+
+#[test]
+fn strict_temporal_line_rejects_unsupported_explicit_values() {
+    let err =
+        vegalite::parse(&DOGFOOD_SHAPE.replace("\"monotone\"", "\"step\""), true).unwrap_err();
+    assert!(err.contains("mark.interpolate"), "unexpected error: {err}");
+
+    let err = vegalite::parse(
+        &DOGFOOD_SHAPE.replace("\"tableau10\"", "\"category10\""),
+        true,
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("encoding.color.scale.scheme"),
+        "unexpected error: {err}"
+    );
+
+    let err = vegalite::parse(&DOGFOOD_SHAPE.replace("0.15", "1.5"), true).unwrap_err();
+    assert!(
+        err.contains("config.axis.gridOpacity"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn bar_categorical_single_series() {
     let spec = vegalite::parse(BAR_SPEC, false).unwrap();
     assert!(matches!(spec.kind, ChartKind::Bar { .. }));

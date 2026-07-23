@@ -748,13 +748,14 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
         if let Some(interpolate) = mark.get("interpolate") {
             match interpolate {
                 Value::String(value) if value == "linear" || value == "monotone" => {}
-                Value::String(value) => {
-                    return Err(format!(
-                        "mark.interpolate must be \"linear\" or \"monotone\", got \"{value}\""
-                    ));
+                Value::String(_) => {
+                    return Err("mark.interpolate must be \"linear\" or \"monotone\"".to_string());
                 }
                 other => {
-                    return Err(format!("mark.interpolate must be a string, got {other}"));
+                    return Err(format!(
+                        "mark.interpolate must be a string, got {}",
+                        json_value_type(other)
+                    ));
                 }
             }
         }
@@ -803,14 +804,13 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
             check_line_object(scale, &["scheme"], "encoding.color.scale")?;
             match scale.get("scheme") {
                 Some(Value::String(value)) if value == "tableau10" => {}
-                Some(Value::String(value)) => {
-                    return Err(format!(
-                        "encoding.color.scale.scheme must be \"tableau10\", got \"{value}\""
-                    ));
+                Some(Value::String(_)) => {
+                    return Err("encoding.color.scale.scheme must be \"tableau10\"".to_string());
                 }
                 Some(other) => {
                     return Err(format!(
-                        "encoding.color.scale.scheme must be a string, got {other}"
+                        "encoding.color.scale.scheme must be a string, got {}",
+                        json_value_type(other)
                     ));
                 }
                 None => return Err("encoding.color.scale.scheme is required".to_string()),
@@ -839,13 +839,12 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
             if let Some(grid_opacity) = axis.get("gridOpacity") {
                 let Some(value) = grid_opacity.as_f64() else {
                     return Err(format!(
-                        "config.axis.gridOpacity must be a number, got {grid_opacity}"
+                        "config.axis.gridOpacity must be a number, got {}",
+                        json_value_type(grid_opacity)
                     ));
                 };
                 if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                    return Err(format!(
-                        "config.axis.gridOpacity must be between 0.0 and 1.0, got {value}"
-                    ));
+                    return Err("config.axis.gridOpacity must be between 0.0 and 1.0".to_string());
                 }
             }
         }
@@ -871,7 +870,10 @@ fn check_line_string(object: &Map<String, Value>, key: &str, path: &str) -> Resu
     if let Some(value) = object.get(key)
         && !value.is_string()
     {
-        return Err(format!("{path} must be a string, got {value}"));
+        return Err(format!(
+            "{path} must be a string, got {}",
+            json_value_type(value)
+        ));
     }
     Ok(())
 }
@@ -880,9 +882,23 @@ fn check_line_bool(object: &Map<String, Value>, key: &str, path: &str) -> Result
     if let Some(value) = object.get(key)
         && !value.is_boolean()
     {
-        return Err(format!("{path} must be a boolean, got {value}"));
+        return Err(format!(
+            "{path} must be a boolean, got {}",
+            json_value_type(value)
+        ));
     }
     Ok(())
+}
+
+fn json_value_type(value: &Value) -> &'static str {
+    match value {
+        Value::Object(_) => "object",
+        Value::Array(_) => "array",
+        Value::String(_) => "string",
+        Value::Number(_) => "number",
+        Value::Bool(_) => "boolean",
+        Value::Null => "null",
+    }
 }
 
 /// top.mark の名前を string / object 両形で取り出す。取れなければ None。
