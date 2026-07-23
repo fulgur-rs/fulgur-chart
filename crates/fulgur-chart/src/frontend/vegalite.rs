@@ -226,7 +226,7 @@ pub fn parse_with_limits(
             &y_field,
             &color_field,
             &theme,
-            line_point_enabled(top),
+            line_point_enabled(top)?,
             line_interpolation(top)?,
             limits,
         )?)
@@ -271,7 +271,11 @@ pub fn parse_with_limits(
 
     // scatter/rect は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点（chartjs と一致）。
     let y_begin_at_zero = !matches!(kind, ChartKind::Scatter | ChartKind::VegaRect { .. });
-    let grid = temporal_line.then(|| temporal_axis_grid(top, theme.grid_color));
+    let grid = if temporal_line {
+        Some(temporal_axis_grid(top, theme.grid_color)?)
+    } else {
+        None
+    };
 
     // VL トップレベルの width/height/title を反映する(無ければ既定 800x450・無題)。
     // title は文字列、または `{"text": "..."}` オブジェクトを受ける。
@@ -958,12 +962,19 @@ mod temporal_line_tests {
     }
 }
 
-fn line_point_enabled(top: &Map<String, Value>) -> bool {
-    top.get("mark")
+fn line_point_enabled(top: &Map<String, Value>) -> Result<bool, String> {
+    match top
+        .get("mark")
         .and_then(Value::as_object)
         .and_then(|mark| mark.get("point"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    {
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(other) => Err(format!(
+            "mark.point must be a boolean, got {}",
+            json_value_type(other)
+        )),
+        None => Ok(false),
+    }
 }
 
 fn line_interpolation(top: &Map<String, Value>) -> Result<LineInterpolation, String> {
@@ -990,6 +1001,7 @@ fn validate_temporal_color_scheme(encoding: &Map<String, Value>) -> Result<(), S
         .get("color")
         .and_then(Value::as_object)
         .and_then(|color| color.get("scale"))
+        .filter(|scale| !scale.is_null())
     else {
         return Ok(());
     };
@@ -1009,20 +1021,35 @@ fn validate_temporal_color_scheme(encoding: &Map<String, Value>) -> Result<(), S
     }
 }
 
-fn temporal_axis_grid(top: &Map<String, Value>, theme_grid_color: Color) -> AxisGrid {
+fn temporal_axis_grid(
+    top: &Map<String, Value>,
+    theme_grid_color: Color,
+) -> Result<AxisGrid, String> {
     let axis = top
         .get("config")
         .and_then(Value::as_object)
         .and_then(|config| config.get("axis"))
         .and_then(Value::as_object);
-    let opacity = axis
-        .and_then(|axis| axis.get("gridOpacity"))
-        .and_then(Value::as_f64);
+    let opacity = match axis.and_then(|axis| axis.get("gridOpacity")) {
+        Some(value) => {
+            let Some(opacity) = value.as_f64() else {
+                return Err(format!(
+                    "config.axis.gridOpacity must be a number, got {}",
+                    json_value_type(value)
+                ));
+            };
+            if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
+                return Err("config.axis.gridOpacity must be between 0.0 and 1.0".to_string());
+            }
+            Some(opacity)
+        }
+        None => None,
+    };
     let mut grid_color = theme_grid_color;
     if let Some(opacity) = opacity {
         grid_color.a *= opacity as f32;
     }
-    AxisGrid {
+    Ok(AxisGrid {
         display: axis
             .and_then(|axis| axis.get("grid"))
             .and_then(Value::as_bool)
@@ -1030,7 +1057,7 @@ fn temporal_axis_grid(top: &Map<String, Value>, theme_grid_color: Color) -> Axis
         color: opacity.map(|_| grid_color),
         line_width: 1.0,
         draw_ticks: true,
-    }
+    })
 }
 
 /// point（scatter）の系列を組む。
@@ -1373,7 +1400,7 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
         check_line_string(color, "field", "encoding.color.field")?;
         check_line_string(color, "type", "encoding.color.type")?;
         check_line_string(color, "title", "encoding.color.title")?;
-        if let Some(scale) = color.get("scale") {
+        if let Some(scale) = color.get("scale").filter(|scale| !scale.is_null()) {
             let scale = scale
                 .as_object()
                 .ok_or_else(|| "encoding.color.scale must be an object".to_string())?;

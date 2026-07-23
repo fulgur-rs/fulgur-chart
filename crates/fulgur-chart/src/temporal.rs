@@ -84,7 +84,7 @@ pub fn parse_rfc3339_millis(field: &str, raw: &str) -> Result<i64, String> {
         let shown = bounded_error_fragment(raw);
         format!("field {shown_field} contains invalid RFC 3339 timestamp: {shown:?}")
     })?;
-    i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000)
+    i64::try_from(parsed.unix_timestamp_nanos().div_euclid(1_000_000))
         .map_err(|_| format!("field {shown_field} timestamp is outside the supported range"))
 }
 
@@ -411,6 +411,18 @@ mod tests {
         let z = parse_rfc3339_millis("timestamp", "2026-07-22T19:18:38Z").unwrap();
         let offset = parse_rfc3339_millis("timestamp", "2026-07-23T04:18:38+09:00").unwrap();
         assert_eq!(z, offset);
+    }
+
+    #[test]
+    fn pre_epoch_sub_millisecond_timestamp_floors_to_previous_millisecond() {
+        assert_eq!(
+            parse_rfc3339_millis("timestamp", "1969-12-31T23:59:59.999999999Z").unwrap(),
+            -1
+        );
+        assert_eq!(
+            parse_rfc3339_millis("timestamp", "1970-01-01T00:00:00Z").unwrap(),
+            0
+        );
     }
 
     #[test]

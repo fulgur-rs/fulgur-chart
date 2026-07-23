@@ -171,6 +171,28 @@ fn validate_tree(
 /// CLI は `--width`/`--height` オーバーライドを適用した後にこの関数を呼ぶ。
 /// 超過した場合は `Err(説明メッセージ)` を返す。
 pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
+    validate_spec_base(spec, limits)?;
+    if !matches!(spec.kind, ChartKind::Line)
+        || !matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
+    {
+        return Ok(());
+    }
+    let measurer = crate::text::TextMeasurer::new(crate::font::DEFAULT_FONT)
+        .map_err(|error| format!("failed to measure plot-area scene: {error}"))?;
+    validate_plot_area_scene_with_measurer(spec, limits, &measurer)
+}
+
+/// [`validate_spec`] と同じ入力上限を、実際の描画に使う文字幅測定器で検証する。
+pub fn validate_spec_with_measurer(
+    spec: &ChartSpec,
+    limits: &InputLimits,
+    measurer: &crate::text::TextMeasurer<'_>,
+) -> Result<(), String> {
+    validate_spec_base(spec, limits)?;
+    validate_plot_area_scene_with_measurer(spec, limits, measurer)
+}
+
+fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     // --- 寸法 ---
     if !spec.width.is_finite()
         || spec.width < limits.min_dimension_px
@@ -605,12 +627,18 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         }
     }
 
+    Ok(())
+}
+
+pub(crate) fn validate_plot_area_scene_with_measurer(
+    spec: &ChartSpec,
+    limits: &InputLimits,
+    measurer: &crate::text::TextMeasurer<'_>,
+) -> Result<(), String> {
     if matches!(spec.kind, ChartKind::Line)
         && matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
     {
-        let measurer = crate::text::TextMeasurer::new(crate::font::DEFAULT_FONT)
-            .map_err(|error| format!("failed to measure plot-area scene: {error}"))?;
-        let frame = crate::layout::common::compute(spec, &measurer);
+        let frame = crate::layout::common::compute(spec, measurer);
         if !frame.scene_width.is_finite() || frame.scene_width > limits.max_dimension_px {
             return Err(format!(
                 "scene width {:.0} exceeds limit {:.0}",

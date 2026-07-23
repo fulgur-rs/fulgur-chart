@@ -1,11 +1,11 @@
 use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::vegalite;
-use fulgur_chart::guard::{InputLimits, validate_spec};
+use fulgur_chart::guard::{InputLimits, validate_spec, validate_spec_with_measurer};
 use fulgur_chart::layout::{common, line};
 use fulgur_chart::num::fmt_num;
 use fulgur_chart::palette::VEGALITE_PALETTE;
-use fulgur_chart::raster_direct::render_chart_to_png;
-use fulgur_chart::render::render_chart;
+use fulgur_chart::raster_direct::{render_chart_to_png, render_chart_to_webp};
+use fulgur_chart::render::{render_chart, render_chart_with_font};
 use fulgur_chart::scene::Prim;
 use fulgur_chart::text::TextMeasurer;
 
@@ -61,6 +61,34 @@ fn plot_area_outer_scene_height_must_fit_dimension_limit() {
 
     let err = validate_spec(&spec, &limits).unwrap_err();
     assert!(err.contains("scene height"), "unexpected error: {err}");
+}
+
+#[test]
+fn plot_area_outer_scene_can_be_validated_with_render_measurer() {
+    let spec = parsed();
+    let limits = InputLimits {
+        max_dimension_px: 740.0,
+        ..InputLimits::default()
+    };
+    let render_measurer = measurer();
+
+    let err = validate_spec_with_measurer(&spec, &limits, &render_measurer).unwrap_err();
+    assert!(err.contains("scene width"), "unexpected error: {err}");
+}
+
+#[test]
+fn custom_font_render_paths_reject_oversized_plot_area_scene() {
+    let mut spec = parsed();
+    spec.width = InputLimits::default().max_dimension_px;
+
+    for result in [
+        render_chart_with_font(&spec, DEFAULT_FONT).map(|_| ()),
+        render_chart_to_png(&spec, 1.0, DEFAULT_FONT).map(|_| ()),
+        render_chart_to_webp(&spec, 1.0, DEFAULT_FONT).map(|_| ()),
+    ] {
+        let err = result.unwrap_err();
+        assert!(err.contains("scene width"), "unexpected error: {err}");
+    }
 }
 
 #[test]
