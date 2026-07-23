@@ -724,6 +724,7 @@ pub fn legend_band_width_vertical(m: &TextMeasurer, names: &[String], font_size:
 /// 縦置き凡例(Left/Right)を描く。entries は (名前, swatch色) の解決済みペア。
 /// プロットの縦スパン中央にエントリ群を配置する。
 /// `ink`/`font_size` はラベルの色とフォント(テーマ)。
+#[allow(clippy::too_many_arguments)]
 pub fn draw_vertical_legend(
     items: &mut Vec<Prim>,
     entries: &[(String, Color)],

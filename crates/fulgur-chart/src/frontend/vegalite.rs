@@ -154,13 +154,11 @@ pub fn parse_with_limits(
     }
 
     let mut theme = vegalite_theme();
-    if temporal_line {
-        if let Some(background) = top.get("background") {
-            let Some(background) = background.as_str().and_then(parse_color) else {
-                return Err("background must be a valid color".to_string());
-            };
-            theme.background = Some(background);
-        }
+    if temporal_line && let Some(background) = top.get("background") {
+        let Some(background) = background.as_str().and_then(parse_color) else {
+            return Err("background must be a valid color".to_string());
+        };
+        theme.background = Some(background);
     }
 
     // rect ヒートマップの場合、kind に cells を差し替え、series/categories は空。
@@ -607,6 +605,7 @@ fn build_categorical(
 }
 
 /// temporal x の line 系列を組む。x は正規化済みの instant 昇順、color は名前順。
+#[allow(clippy::too_many_arguments)]
 fn build_temporal_line(
     records: &[Map<String, Value>],
     x_field: &Option<String>,
