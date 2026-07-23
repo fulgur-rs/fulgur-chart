@@ -184,4 +184,34 @@ mod tests {
         assert_eq!(singleton.len(), 1);
         assert_eq!(singleton[0].unix_millis, 1_234);
     }
+
+    #[test]
+    fn invalid_width_alignment_and_out_of_range_labels_are_bounded() {
+        let ticks = temporal_ticks(0, 3_000, f64::NAN);
+        assert!(!ticks.is_empty());
+        assert_eq!(aligned_count(1, 999, 1_000), 0);
+        assert_eq!(tick_label(i64::MAX, true), i64::MAX.to_string());
+    }
+
+    #[test]
+    fn tick_labels_cover_every_month_abbreviation() {
+        let cases = [
+            ("2026-01-01T00:00:00Z", "Jan 01"),
+            ("2026-02-01T00:00:00Z", "Feb 01"),
+            ("2026-03-01T00:00:00Z", "Mar 01"),
+            ("2026-04-01T00:00:00Z", "Apr 01"),
+            ("2026-05-01T00:00:00Z", "May 01"),
+            ("2026-06-01T00:00:00Z", "Jun 01"),
+            ("2026-07-01T00:00:00Z", "Jul 01"),
+            ("2026-08-01T00:00:00Z", "Aug 01"),
+            ("2026-09-01T00:00:00Z", "Sep 01"),
+            ("2026-10-01T00:00:00Z", "Oct 01"),
+            ("2026-11-01T00:00:00Z", "Nov 01"),
+            ("2026-12-01T00:00:00Z", "Dec 01"),
+        ];
+        for (timestamp, expected) in cases {
+            let millis = parse_rfc3339_millis("x", timestamp).unwrap();
+            assert_eq!(tick_label(millis, true), expected);
+        }
+    }
 }

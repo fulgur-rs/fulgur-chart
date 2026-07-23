@@ -104,7 +104,7 @@ fn clamp_y(value: f64, lo: f64, hi: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::monotone_path;
+    use super::{clamp_y, monotone_path};
 
     #[test]
     fn monotone_path_uses_cubics_without_non_finite_values() {
@@ -117,6 +117,21 @@ mod tests {
     #[test]
     fn two_points_degrade_to_a_line() {
         assert_eq!(monotone_path(&[(0.0, 1.0), (2.0, 3.0)]), "M 0 1 L 2 3");
+    }
+
+    #[test]
+    fn singleton_and_duplicate_x_paths_remain_finite() {
+        assert_eq!(monotone_path(&[(2.0, 3.0)]), "M 2 3");
+        let duplicate_x = monotone_path(&[(1.0, 1.0), (1.0, 2.0), (2.0, 3.0)]);
+        assert!(!duplicate_x.contains("NaN"));
+        assert!(!duplicate_x.contains("inf"));
+    }
+
+    #[test]
+    fn non_finite_controls_clamp_to_segment_bounds() {
+        assert_eq!(clamp_y(f64::NEG_INFINITY, -1.0, 1.0), -1.0);
+        assert_eq!(clamp_y(f64::INFINITY, -1.0, 1.0), 1.0);
+        assert_eq!(clamp_y(f64::NAN, -1.0, 1.0), 1.0);
     }
 
     #[test]

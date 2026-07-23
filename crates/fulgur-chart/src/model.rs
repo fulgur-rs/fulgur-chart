@@ -385,18 +385,17 @@ fn temporal_axis(unix_millis: &[i64], ticks: &[TemporalTick]) -> AxisModel {
 /// 軸を持たないチャート(pie/radar/matrix/progress)は None を返す。
 fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisModel, usize)> {
     use crate::scale::nice_ticks;
+    if let (ChartKind::Line, XPositions::Temporal { unix_millis }) = (&spec.kind, &spec.x_positions)
+    {
+        let frame = crate::layout::common::compute(spec, m);
+        return Some((
+            temporal_axis(unix_millis, &frame.temporal_ticks),
+            linear_axis(&frame.ticks),
+            frame.ticks.ticks.len(),
+        ));
+    }
+
     match &spec.kind {
-        ChartKind::Line if matches!(spec.x_positions, XPositions::Temporal { .. }) => {
-            let frame = crate::layout::common::compute(spec, m);
-            let XPositions::Temporal { unix_millis } = &spec.x_positions else {
-                unreachable!("guard requires temporal positions");
-            };
-            Some((
-                temporal_axis(unix_millis, &frame.temporal_ticks),
-                linear_axis(&frame.ticks),
-                frame.ticks.ticks.len(),
-            ))
-        }
         // 縦棒・線・mixed: 値軸=y(layout::common::compute と共有)、カテゴリ=x。
         ChartKind::Bar {
             horizontal: false, ..
