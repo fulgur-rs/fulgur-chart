@@ -183,14 +183,18 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
             let frame = crate::layout::common::compute(spec, m);
             let pw = frame.plot_right - frame.plot_left;
             let ph = frame.plot_bottom - frame.plot_top;
-            if pw <= 0.0 || ph <= 0.0 || frame.scene_width <= 0.0 || frame.scene_height <= 0.0 {
+            let (model_width, model_height) = match &spec.x_positions {
+                XPositions::Temporal { .. } => (frame.scene_width, frame.scene_height),
+                XPositions::Category => (spec.width, spec.height),
+            };
+            if pw <= 0.0 || ph <= 0.0 || model_width <= 0.0 || model_height <= 0.0 {
                 return None;
             }
             let plot_area = RectN {
-                x: frame.plot_left / frame.scene_width,
-                y: frame.plot_top / frame.scene_height,
-                w: pw / frame.scene_width,
-                h: ph / frame.scene_height,
+                x: frame.plot_left / model_width,
+                y: frame.plot_top / model_height,
+                w: pw / model_width,
+                h: ph / model_height,
             };
             let elements = crate::layout::line::line_points(spec, &frame)
                 .iter()
@@ -454,7 +458,10 @@ pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
         model.counts.y_ticks = y_ticks;
         model.axes = Some(Axes { x, y });
     }
-    if matches!(spec.kind, ChartKind::Line) {
+    if matches!(
+        (&spec.kind, &spec.x_positions),
+        (ChartKind::Line, XPositions::Temporal { .. })
+    ) {
         let frame = crate::layout::common::compute(spec, m);
         model.meta.width = frame.scene_width;
         model.meta.height = frame.scene_height;
