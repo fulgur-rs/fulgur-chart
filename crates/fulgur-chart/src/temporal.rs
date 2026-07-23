@@ -11,6 +11,7 @@ const MAX_ERROR_FRAGMENT_BYTES: usize = 80;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TickUnit {
+    Millisecond,
     Second,
     Minute,
     Hour,
@@ -130,6 +131,13 @@ fn select_interval(start_ms: i64, stop_ms: i64, desired_count: usize) -> TickInt
     let upper =
         TICK_INTERVALS.partition_point(|interval| interval.approximate_millis as f64 <= target);
     if upper == 0 {
+        let span_millis = (i128::from(stop_ms) - i128::from(start_ms)) as f64;
+        if span_millis < MILLIS_PER_SECOND as f64 {
+            let step = nice_tick_step(span_millis, desired_count)
+                .round()
+                .clamp(1.0, i32::MAX as f64) as i32;
+            return TickInterval::new(TickUnit::Millisecond, step, i64::from(step));
+        }
         return TICK_INTERVALS[0];
     }
     if upper == TICK_INTERVALS.len() {
@@ -169,6 +177,7 @@ fn nice_tick_step(span: f64, count: usize) -> f64 {
 
 fn generate_ticks(start_ms: i64, stop_ms: i64, interval: TickInterval) -> Vec<i64> {
     match interval.unit {
+        TickUnit::Millisecond => generate_fixed(start_ms, stop_ms, i64::from(interval.step), 0),
         TickUnit::Second => generate_fixed(
             start_ms,
             stop_ms,
@@ -496,6 +505,27 @@ mod tests {
                 .collect::<HashSet<_>>()
                 .len(),
             ticks.len()
+        );
+    }
+
+    #[test]
+    fn sub_second_domains_generate_millisecond_ticks() {
+        let ticks = temporal_ticks(100, 900, 400.0);
+        assert_eq!(
+            ticks
+                .iter()
+                .map(|tick| tick.unix_millis)
+                .collect::<Vec<_>>(),
+            vec![100, 200, 300, 400, 500, 600, 700, 800, 900]
+        );
+        assert_eq!(
+            ticks
+                .iter()
+                .map(|tick| tick.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                ".100", ".200", ".300", ".400", ".500", ".600", ".700", ".800", ".900"
+            ]
         );
     }
 

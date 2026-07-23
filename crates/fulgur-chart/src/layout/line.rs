@@ -21,6 +21,9 @@ pub fn line_points(
 ) -> Vec<crate::layout::scatter::PointBox> {
     let mut pts = Vec::new();
     for (sidx, ser) in spec.series.iter().enumerate() {
+        if ser.point_radius.is_some_and(|radius| radius <= 0.0) {
+            continue;
+        }
         for i in 0..spec.categories.len() {
             let Some(&v) = ser.values.get(i) else {
                 continue;

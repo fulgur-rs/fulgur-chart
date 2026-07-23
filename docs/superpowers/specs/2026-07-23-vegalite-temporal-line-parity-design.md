@@ -71,14 +71,10 @@ This is preferred over two alternatives:
 
 ## Dependency and branch structure
 
-PR #136 adds typed `AxisTitle`, `AxisGrid`, and `AxisBorder` IR plus the shared
-axis-title and grid rendering foundation. This work is implemented on
-`feat/6an-vegalite-dogfood-parity`, stacked on
-`feat/s7o-axis-styling`.
-
-The stacked branch must be rebased onto `main` after PR #136 merges. The final
-PR must contain only the temporal-line parity commits relative to the merged
-parent.
+PR #136 added typed `AxisTitle`, `AxisGrid`, and `AxisBorder` IR plus the shared
+axis-title and grid rendering foundation. It is now merged. This work lives on
+`feat/6an-vegalite-dogfood-parity`, rebased onto `main`, and the final PR
+contains only the temporal-line parity commits relative to `main`.
 
 ## Input contract
 
@@ -97,10 +93,13 @@ The typed Vega-Lite schema and strict-key allowlists gain support for:
 
 `mark.interpolate` accepts `linear` and `monotone`. `linear` retains the current
 polyline path. `monotone` selects the new monotone cubic path.
+These newly modeled line options apply only to temporal lines; strict parsing
+rejects them on categorical lines instead of accepting and silently ignoring
+them.
 
-`scale.scheme` accepts `tableau10` in the first implementation. In strict mode,
-an unsupported explicit scheme is rejected. In non-strict mode, it falls back
-to the Vega-Lite default palette.
+`scale.scheme` accepts `tableau10` in the first implementation. An unsupported
+explicit scheme is a recognized semantic error and is rejected in both strict
+and non-strict modes.
 
 ### Temporal value format
 
@@ -372,8 +371,8 @@ New errors are returned before allocation-heavy layout work:
 - temporal value is not a string
 - RFC 3339 parsing fails
 - temporal domain length differs from category or series length
-- unsupported explicit interpolation in strict mode
-- unsupported explicit color scheme in strict mode
+- unsupported explicit interpolation in strict and non-strict modes
+- unsupported explicit color scheme in strict and non-strict modes
 
 Non-strict mode still ignores unrelated unknown keys, but it does not ignore an
 invalid value for a recognized semantic field.
@@ -408,7 +407,8 @@ values. Temporal x/y value errors use English in strict and non-strict modes.
 - sorts nominal domains and pins the three dogfood colors
 - accepts `point`, `monotone`, channel titles, `tableau10`, and axis config in
   strict mode
-- rejects supported-field typos and unsupported explicit values in strict mode
+- rejects supported-field typos in strict mode and unsupported recognized
+  semantic values in both modes
 
 ### Scale and layout tests
 
@@ -452,8 +452,9 @@ tests.
 ### Regression and coverage gates
 
 - `cargo fmt --all -- --check`
-- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - `cargo test -p fulgur-chart`
+- `cargo check -p fulgur-chart --target wasm32-unknown-unknown`
 - repository patch-coverage command against the final committed `HEAD`
 - patch coverage must be 100%
 - existing Chart.js line snapshots must remain unchanged

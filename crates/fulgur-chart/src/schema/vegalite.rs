@@ -296,7 +296,7 @@ pub struct VlConfig {
 #[serde(deny_unknown_fields)]
 pub struct VlViewConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stroke: Option<serde_json::Value>,
+    pub stroke: Option<()>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

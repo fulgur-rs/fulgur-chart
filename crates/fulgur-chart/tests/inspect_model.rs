@@ -142,3 +142,17 @@ fn temporal_line_model_uses_scene_dimensions_and_temporal_axis() {
         ]
     );
 }
+
+#[test]
+fn temporal_line_model_omits_explicitly_hidden_point_markers() {
+    let json = include_str!("fixtures/vegalite-temporal-line.json")
+        .replace("\"point\": true", "\"point\": false");
+    let spec = vegalite::parse(&json, true).unwrap();
+    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let model = build_model(&spec, &m);
+
+    assert!(
+        model.geometry.unwrap().elements.is_empty(),
+        "model geometry must not report markers omitted by the renderer"
+    );
+}

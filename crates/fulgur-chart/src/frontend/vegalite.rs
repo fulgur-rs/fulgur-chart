@@ -219,6 +219,7 @@ pub fn parse_with_limits(
     }
 
     let temporal_data = if temporal_line {
+        validate_temporal_color_scheme(encoding)?;
         Some(build_temporal_line(
             &records,
             &x_field,
@@ -226,7 +227,7 @@ pub fn parse_with_limits(
             &color_field,
             &theme,
             line_point_enabled(top),
-            line_interpolation(top),
+            line_interpolation(top)?,
             limits,
         )?)
     } else {
@@ -965,15 +966,46 @@ fn line_point_enabled(top: &Map<String, Value>) -> bool {
         .unwrap_or(false)
 }
 
-fn line_interpolation(top: &Map<String, Value>) -> LineInterpolation {
+fn line_interpolation(top: &Map<String, Value>) -> Result<LineInterpolation, String> {
     match top
         .get("mark")
         .and_then(Value::as_object)
         .and_then(|mark| mark.get("interpolate"))
-        .and_then(Value::as_str)
     {
-        Some("monotone") => LineInterpolation::Monotone,
-        _ => LineInterpolation::Linear,
+        Some(Value::String(value)) if value == "monotone" => Ok(LineInterpolation::Monotone),
+        Some(Value::String(value)) if value == "linear" => Ok(LineInterpolation::Linear),
+        Some(Value::String(_)) => {
+            Err("mark.interpolate must be \"linear\" or \"monotone\"".to_string())
+        }
+        Some(other) => Err(format!(
+            "mark.interpolate must be a string, got {}",
+            json_value_type(other)
+        )),
+        None => Ok(LineInterpolation::Linear),
+    }
+}
+
+fn validate_temporal_color_scheme(encoding: &Map<String, Value>) -> Result<(), String> {
+    let Some(scale) = encoding
+        .get("color")
+        .and_then(Value::as_object)
+        .and_then(|color| color.get("scale"))
+    else {
+        return Ok(());
+    };
+    let Some(scale) = scale.as_object() else {
+        return Err("encoding.color.scale must be an object".to_string());
+    };
+    match scale.get("scheme") {
+        Some(Value::String(scheme)) if scheme == "tableau10" => Ok(()),
+        Some(Value::String(_)) => {
+            Err("encoding.color.scale.scheme must be \"tableau10\"".to_string())
+        }
+        Some(other) => Err(format!(
+            "encoding.color.scale.scheme must be a string, got {}",
+            json_value_type(other)
+        )),
+        None => Err("encoding.color.scale.scheme is required".to_string()),
     }
 }
 
@@ -1237,6 +1269,57 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
 /// line の追加サブセットを strict に検査する。既存 mark の緩い互換性を変えないため、
 /// line 専用のキーと値だけをここで型検査する。
 fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> Result<(), String> {
+    validate_line_channel_types(encoding)?;
+    let temporal_line = encoding
+        .get("x")
+        .and_then(Value::as_object)
+        .and_then(|channel| channel.get("type"))
+        .and_then(Value::as_str)
+        == Some("temporal");
+    let line_shape_known = encoding.get("x").and_then(Value::as_object).is_some();
+
+    if line_shape_known && !temporal_line {
+        if top.contains_key("background") {
+            return Err("background is only supported for temporal line charts".to_string());
+        }
+        if top.contains_key("config") {
+            return Err("config is only supported for temporal line charts".to_string());
+        }
+        if let Some(mark) = top.get("mark").and_then(Value::as_object) {
+            if mark.contains_key("point") {
+                return Err("mark.point is only supported for temporal line charts".to_string());
+            }
+            if mark.contains_key("interpolate") {
+                return Err(
+                    "mark.interpolate is only supported for temporal line charts".to_string(),
+                );
+            }
+        }
+        for channel_name in ["x", "y"] {
+            if encoding
+                .get(channel_name)
+                .and_then(Value::as_object)
+                .is_some_and(|channel| channel.contains_key("title"))
+            {
+                return Err(format!(
+                    "encoding.{channel_name}.title is only supported for temporal line charts"
+                ));
+            }
+        }
+        if let Some(color) = encoding.get("color").and_then(Value::as_object) {
+            if color.contains_key("title") {
+                return Err(
+                    "encoding.color.title is only supported for temporal line charts".to_string(),
+                );
+            }
+            if color.contains_key("scale") {
+                return Err(
+                    "encoding.color.scale is only supported for temporal line charts".to_string(),
+                );
+            }
+        }
+    }
+
     if let Some(mark) = top.get("mark").and_then(Value::as_object) {
         check_line_object(mark, &["type", "point", "interpolate"], "mark")?;
         check_line_string(mark, "type", "mark.type")?;
@@ -1325,6 +1408,11 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
                 .as_object()
                 .ok_or_else(|| "config.view must be an object".to_string())?;
             check_line_object(view, &["stroke"], "config.view")?;
+            if let Some(stroke) = view.get("stroke")
+                && !stroke.is_null()
+            {
+                return Err("config.view.stroke must be null".to_string());
+            }
         }
         if let Some(axis) = config.get("axis") {
             let axis = axis
@@ -1346,6 +1434,32 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
         }
     }
 
+    Ok(())
+}
+
+fn validate_line_channel_types(encoding: &Map<String, Value>) -> Result<(), String> {
+    for (channel_name, supported) in [
+        ("x", &["temporal", "nominal", "ordinal"][..]),
+        ("y", &["quantitative"][..]),
+        ("color", &["nominal", "ordinal"][..]),
+    ] {
+        let Some(field_type) = encoding
+            .get(channel_name)
+            .and_then(Value::as_object)
+            .and_then(|channel| channel.get("type"))
+        else {
+            continue;
+        };
+        let Some(field_type) = field_type.as_str() else {
+            continue;
+        };
+        if !supported.contains(&field_type) {
+            return Err(format!(
+                "encoding.{channel_name}.type must be one of: {}",
+                supported.join(", ")
+            ));
+        }
+    }
     Ok(())
 }
 
