@@ -683,6 +683,27 @@ mod tests {
     }
 
     #[test]
+    fn temporal_positions_must_match_every_series() {
+        let mut spec = base_spec();
+        spec.categories = vec!["a".into(), "b".into()];
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![1, 2],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("every line series"));
+    }
+
+    #[test]
+    fn temporal_positions_require_line_chart() {
+        let mut spec = base_spec();
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![1],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("only supported for line charts"));
+    }
+
+    #[test]
     fn valid_spec_passes() {
         assert!(validate_spec(&base_spec(), &default_limits()).is_ok());
     }

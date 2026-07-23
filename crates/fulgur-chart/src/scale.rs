@@ -269,6 +269,34 @@ mod tests {
     }
 
     #[test]
+    fn vega_nice_ticks_falls_back_for_invalid_size_and_extreme_domains() {
+        let invalid_size = vega_nice_ticks(0.0, 10.0, f64::NAN);
+        assert!(!invalid_size.ticks.is_empty());
+
+        for (min, max) in [
+            (-f64::MAX, f64::MAX),
+            (0.0, f64::MAX),
+            (-f64::MAX, 0.0),
+            (-f64::MAX, 1.0),
+        ] {
+            let ticks = vega_nice_ticks(min, max, 320.0);
+            assert!(ticks.min.is_finite(), "{min}..{max}: {ticks:?}");
+            assert!(ticks.max.is_finite(), "{min}..{max}: {ticks:?}");
+            assert!(ticks.ticks.iter().all(|tick| tick.is_finite()));
+        }
+    }
+
+    #[test]
+    fn vega_step_selection_and_empty_tick_ranges_are_bounded() {
+        assert_eq!(nice_step(1.0), 1.0);
+        assert_eq!(nice_step(2.0), 2.0);
+        assert_eq!(nice_step(5.0), 5.0);
+        assert_eq!(nice_step(6.0), 10.0);
+        assert!(full_step_ticks(1.0, 0.0, 1.0).is_empty());
+        assert!(full_step_ticks(f64::MAX, f64::MAX, f64::EPSILON).is_empty());
+    }
+
+    #[test]
     fn nice_ticks_round_numbers() {
         let t = nice_ticks(0.0, 200.0, 5);
         assert_eq!(t.ticks, vec![0.0, 50.0, 100.0, 150.0, 200.0]);

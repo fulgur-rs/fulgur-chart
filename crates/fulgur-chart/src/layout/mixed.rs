@@ -345,4 +345,24 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn mixed_catmull_rom_line_emits_a_path() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a","b","c"],
+               "datasets":[{"type":"line","data":[1,3,2],"tension":0.4}]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        assert!(scene.items.iter().any(|item| matches!(
+            item,
+            Prim::Path {
+                fill: None,
+                stroke: Some(_),
+                ..
+            }
+        )));
+    }
 }

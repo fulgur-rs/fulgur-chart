@@ -682,6 +682,45 @@ fn build_temporal_line(
         .collect()
 }
 
+#[cfg(test)]
+mod temporal_line_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn temporal_line_builder_rejects_missing_validated_timestamp() {
+        let records = vec![json!({"value": 1}).as_object().expect("object").clone()];
+        let err = build_temporal_line(
+            &records,
+            &Some("timestamp".to_string()),
+            &Some("value".to_string()),
+            &None,
+            &[(0, "1970-01-01T00:00:00Z".to_string())],
+            &vegalite_theme(),
+            false,
+            LineInterpolation::Linear,
+        )
+        .unwrap_err();
+        assert_eq!(err, "temporal line timestamp validation was not preserved");
+    }
+
+    #[test]
+    fn strict_preflight_defers_missing_shapes_to_the_parser() {
+        for json in [
+            "[]",
+            r#"{"mark":"rect"}"#,
+            r#"{"mark":"rect","encoding":{"x":{"field":"x"}}}"#,
+            r#"{"mark":"rect","encoding":{"color":{"field":"c","type":"quantitative"}}}"#,
+            r#"{"mark":"line","encoding":{"x":{"field":"x"}}}"#,
+            r#"{"mark":"line","encoding":{},"config":{}}"#,
+            r#"{"mark":"line","encoding":{},"config":{"view":{}}}"#,
+            r#"{"mark":"line","encoding":{},"config":{"axis":{}}}"#,
+        ] {
+            assert!(check_unknown_keys(json).is_ok(), "{json}");
+        }
+    }
+}
+
 fn line_point_enabled(top: &Map<String, Value>) -> bool {
     top.get("mark")
         .and_then(Value::as_object)

@@ -95,6 +95,25 @@ fn temporal_line_aggregates_offset_equivalent_timestamps() {
 }
 
 #[test]
+fn temporal_line_without_color_builds_one_named_series() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T00:00:00Z","value":2},
+            {"timestamp":"2026-07-02T00:00:00Z","value":3}
+        ]},
+        "encoding":{
+            "x":{"field":"timestamp","type":"temporal"},
+            "y":{"field":"value","type":"quantitative"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, true).unwrap();
+    assert_eq!(spec.series.len(), 1);
+    assert_eq!(spec.series[0].name, "value");
+    assert_eq!(spec.series[0].values, vec![2.0, 3.0]);
+}
+
+#[test]
 fn temporal_line_rejects_invalid_timestamp_values() {
     for timestamp in [r#""not-a-date""#, "null", "42"] {
         let json = format!(
@@ -228,6 +247,72 @@ fn strict_temporal_line_rejects_unsupported_explicit_values() {
         err.contains("config.axis.gridOpacity"),
         "unexpected error: {err}"
     );
+}
+
+#[test]
+fn strict_temporal_line_reports_nested_type_and_required_key_errors() {
+    let cases = [
+        (
+            DOGFOOD_SHAPE.replace(r#","interpolate":"monotone""#, ""),
+            None,
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""title":"date""#, r#""title":"date","typo":true"#),
+            Some("encoding.x.typo"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""field":"timestamp""#, r#""field":[] "#),
+            Some("encoding.x.field"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""field":"timestamp""#, r#""field":false"#),
+            Some("encoding.x.field"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""title":"date""#, r#""title":null"#),
+            Some("encoding.x.title"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""title":"metric""#, r#""title":"metric","typo":true"#),
+            Some("encoding.color.typo"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""scheme":"tableau10""#, r#""scheme":42"#),
+            Some("encoding.color.scale.scheme"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""scale":{"scheme":"tableau10"}"#, r#""scale":{}"#),
+            Some("encoding.color.scale.scheme is required"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""stroke":null"#, r#""stroke":null,"typo":true"#),
+            Some("config.view.typo"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""gridOpacity":0.15"#, r#""gridOpacity":"opaque""#),
+            Some("config.axis.gridOpacity"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""point":true"#, r#""point":{"enabled":true}"#),
+            Some("mark.point"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""grid":true"#, r#""grid":false"#),
+            None,
+        ),
+    ];
+
+    for (json, expected) in cases {
+        match expected {
+            Some(expected) => {
+                let err = vegalite::parse(&json, true).unwrap_err();
+                assert!(err.contains(expected), "{expected}: {err}");
+            }
+            None => {
+                vegalite::parse(&json, true).unwrap();
+            }
+        }
+    }
 }
 
 #[test]

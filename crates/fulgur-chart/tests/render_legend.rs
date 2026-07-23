@@ -28,6 +28,16 @@ fn bar_legend_right_renders_series_labels() {
 }
 
 #[test]
+fn horizontal_bar_legend_right_renders_series_labels() {
+    let json = r#"{"type":"bar","data":{"labels":["x"],
+      "datasets":[{"label":"売上","data":[1]},{"label":"原価","data":[2]}]},
+      "options":{"indexAxis":"y","plugins":{"legend":{"position":"right"}}}}"#;
+    let svg = render(json);
+    assert!(svg.contains(">売上</text>"));
+    assert!(svg.contains(">原価</text>"));
+}
+
+#[test]
 fn legend_display_false_no_labels() {
     let json = r#"{"type":"bar","data":{"labels":["x"],
       "datasets":[{"label":"売上","data":[1]}]},
@@ -50,4 +60,18 @@ fn pie_legend_right_renders_category_labels() {
     let svg = render(json);
     assert!(svg.contains(">りんご</text>"));
     assert!(svg.contains(">みかん</text>"));
+}
+
+#[test]
+fn right_legends_render_for_scatter_radar_and_polar_area() {
+    let specs = [
+        r#"{"type":"scatter","data":{"datasets":[{"label":"scatter-series","data":[{"x":1,"y":2}]}]},"options":{"plugins":{"legend":{"position":"right"}}}}"#,
+        r#"{"type":"radar","data":{"labels":["a","b"],"datasets":[{"label":"radar-series","data":[1,2]}]},"options":{"plugins":{"legend":{"position":"right"}}}}"#,
+        r#"{"type":"polarArea","data":{"labels":["polar-a","polar-b"],"datasets":[{"data":[1,2]}]},"options":{"plugins":{"legend":{"position":"right"}}}}"#,
+    ];
+    for spec in specs {
+        let svg = render(spec);
+        assert!(svg.contains("<rect"));
+        assert!(svg.contains("<text"));
+    }
 }
