@@ -133,6 +133,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         common::draw_vertical_legend(
             &mut items,
             &entries,
+            None,
             band_x,
             area_top,
             area_bottom,

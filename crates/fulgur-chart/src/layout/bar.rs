@@ -615,6 +615,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         draw_vertical_legend(
             &mut items,
             &entries,
+            None,
             band_x,
             plot_top,
             plot_bottom,
