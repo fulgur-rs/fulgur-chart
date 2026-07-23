@@ -691,9 +691,13 @@ fn render_prim(
             let Some(path) = b.finish() else { return };
             let mut stroke_style = make_stroke(*stroke_width);
             // 空 Vec は実線。tiny-skia の StrokeDash::new は even 長 &全 >=0 の場合のみ Some を返す。
-            // 不正な dash は落として実線にフォールバックする(SVG 側は生値を出すので出力差は許容)。
+            // 奇数長の dash は SVG 仕様(stroke-dasharray)に合わせて配列を 2 回繰り返して偶数長へ拡張し、
+            // SVG (生値をそのまま出す)と PNG の描画結果を一致させる。負値等の他の不正は実線にフォールバック。
             if !dash.is_empty() {
-                let dash_f32: Vec<f32> = dash.iter().map(|v| *v as f32).collect();
+                let mut dash_f32: Vec<f32> = dash.iter().map(|v| *v as f32).collect();
+                if !dash_f32.len().is_multiple_of(2) {
+                    dash_f32.extend_from_within(..);
+                }
                 if let Some(sd) = tiny_skia::StrokeDash::new(dash_f32, 0.0) {
                     stroke_style.dash = Some(sd);
                 }
@@ -2350,6 +2354,52 @@ mod tests {
             pm_solid.data(),
             pm_dashed.data(),
             "dashed line は solid line と異なるピクセルを出力すべき (raster 側 dash の silent regression 防止)"
+        );
+    }
+
+    /// SVG 仕様: 奇数長の stroke-dasharray はパターンを 2 回繰り返して偶数長として扱う
+    /// (例: [5] は [5, 5] と等価)。raster 側でも同じ挙動になっているかの回帰テスト。
+    /// tiny-skia の StrokeDash::new は odd 長で None を返すため、拡張しないと実線にフォールバックし
+    /// SVG との出力差が生じる。
+    #[test]
+    fn line_dash_odd_length_matches_doubled_even() {
+        let black = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        };
+        let make_scene = |dash: Vec<f64>| Scene {
+            width: 250.0,
+            height: 100.0,
+            items: vec![Prim::Line {
+                x1: 10.0,
+                y1: 50.0,
+                x2: 200.0,
+                y2: 50.0,
+                stroke: black,
+                stroke_width: 2.0,
+                dash,
+            }],
+        };
+        let odd = make_scene(vec![6.0]);
+        let doubled = make_scene(vec![6.0, 6.0]);
+        let solid = make_scene(Vec::new());
+
+        let f = face();
+        let pm_odd = scene_to_pixmap(&odd, 1.0, &f, &PNG_LIMITS).unwrap();
+        let pm_doubled = scene_to_pixmap(&doubled, 1.0, &f, &PNG_LIMITS).unwrap();
+        let pm_solid = scene_to_pixmap(&solid, 1.0, &f, &PNG_LIMITS).unwrap();
+
+        assert_eq!(
+            pm_odd.data(),
+            pm_doubled.data(),
+            "odd 長 dash [6] は even 長 [6,6] と同じ pixmap を出力すべき (SVG 仕様準拠)"
+        );
+        assert_ne!(
+            pm_odd.data(),
+            pm_solid.data(),
+            "odd 長 dash は実線ではなく破線として描画されるべき"
         );
     }
 
