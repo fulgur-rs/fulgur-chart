@@ -305,10 +305,22 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         0.0
     };
 
-    let plot_left = OUTER_PAD + cat_w + legend_left;
+    // Y 軸タイトル(回転テキスト)の帯幅 / X 軸タイトルの帯高。title=None(既定)なら 0.0。
+    let y_title_w = spec
+        .y_axis
+        .title
+        .as_ref()
+        .map(|t| t.font_size.unwrap_or(spec.theme.font_size * 1.1) + 6.0)
+        .unwrap_or(0.0);
+    let x_title_h = if spec.x_axis.title.is_some() {
+        AXIS_TITLE_BAND
+    } else {
+        0.0
+    };
+    let plot_left = OUTER_PAD + cat_w + y_title_w + legend_left;
     let plot_right = spec.width - OUTER_PAD - legend_right;
     let plot_top = OUTER_PAD + title_band + legend_top;
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
+    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
 
     // 値→X(非反転)。
     let xs = LinearScale::new(ticks.min, ticks.max, plot_left, plot_right);
@@ -328,17 +340,23 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    // 2. 縦グリッド + 値ラベル(下)。
+    // 2. 縦グリッド + 値ラベル(下)。x_axis.grid が値軸(=X)のグリッドを支配する。
+    // display=false のとき Prim::Line を落とすが、値ラベルは常に残す。
+    let x_grid_cfg = &spec.x_axis.grid;
+    let x_grid_color = x_grid_cfg.color.unwrap_or(spec.theme.grid_color);
     for &t in &ticks.ticks {
         let x = xs.map(t);
-        items.push(Prim::Line {
-            x1: x,
-            y1: plot_top,
-            x2: x,
-            y2: plot_bottom,
-            stroke: spec.theme.grid_color,
-            stroke_width: 1.0,
-        });
+        if x_grid_cfg.display {
+            items.push(Prim::Line {
+                x1: x,
+                y1: plot_top,
+                x2: x,
+                y2: plot_bottom,
+                stroke: x_grid_color,
+                stroke_width: x_grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
         items.push(Prim::Text {
             x,
             y: plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
@@ -350,15 +368,41 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    // 3. 左軸線(カテゴリ軸)。
-    items.push(Prim::Line {
-        x1: plot_left,
-        y1: plot_top,
-        x2: plot_left,
-        y2: plot_bottom,
-        stroke: ink,
-        stroke_width: 1.0,
-    });
+    // 3. 左軸線(カテゴリ軸=Y のボーダー)。y_axis.border が縦のカテゴリ軸線を支配する。
+    // 横棒は Chart.js 同様、底辺の x_axis.border は描かない(既存挙動を維持: 追加すると
+    // 全 horizontal-bar スナップショットが回帰する)。
+    let y_border = &spec.y_axis.border;
+    if y_border.display {
+        let border_color = y_border.color.unwrap_or(ink);
+        items.push(Prim::Line {
+            x1: plot_left,
+            y1: plot_top,
+            x2: plot_left,
+            y2: plot_bottom,
+            stroke: border_color,
+            stroke_width: y_border.width,
+            dash: y_border.dash.clone(),
+        });
+    }
+
+    // 3b. tick 短線(値軸=X)。x_axis.grid.draw_ticks が true のとき plot_bottom から下方向へ。
+    // 色は grid.color を継承(既定 ink)。カテゴリ軸(Y)側は Chart.js で通常 tick を描かないためスキップ。
+    const TICK_LEN: f64 = 4.0;
+    if x_grid_cfg.draw_ticks {
+        let tick_color = x_grid_cfg.color.unwrap_or(ink);
+        for &t in &ticks.ticks {
+            let x = xs.map(t);
+            items.push(Prim::Line {
+                x1: x,
+                y1: plot_bottom,
+                x2: x,
+                y2: plot_bottom + TICK_LEN,
+                stroke: tick_color,
+                stroke_width: x_grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
+    }
 
     // 4. カテゴリ band と 横棒。
     let n = spec.categories.len().max(1);
@@ -579,6 +623,52 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         );
     }
 
+    // 6. Y 軸タイトル(-90deg 回転)。common::draw_frame と同じアンカー幾何:
+    //   Start + -90deg → cy=plot_bottom(bottom-to-top 読みの起点)
+    //   End   + -90deg → cy=plot_top
+    if let Some(title) = &spec.y_axis.title {
+        let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+        let color = title.color.unwrap_or(ink);
+        let cy_center = (plot_top + plot_bottom) / 2.0;
+        let (cy, anchor) = match title.align {
+            crate::ir::AxisTitleAlign::Start => (plot_bottom, Anchor::Start),
+            crate::ir::AxisTitleAlign::End => (plot_top, Anchor::End),
+            crate::ir::AxisTitleAlign::Center => (cy_center, Anchor::Middle),
+        };
+        let x = OUTER_PAD + font / 2.0;
+        items.push(Prim::Text {
+            x,
+            y: cy,
+            size: font,
+            anchor,
+            fill: color,
+            content: title.text.clone(),
+            rotate_deg: Some(-90.0),
+        });
+    }
+
+    // 7. X 軸タイトル(水平)。x ラベル帯のさらに下側に描く。
+    // Chart.js の x 軸は Start=left / End=right。
+    if let Some(title) = &spec.x_axis.title {
+        let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+        let color = title.color.unwrap_or(ink);
+        let (cx, anchor) = match title.align {
+            crate::ir::AxisTitleAlign::Start => (plot_left, Anchor::Start),
+            crate::ir::AxisTitleAlign::End => (plot_right, Anchor::End),
+            crate::ir::AxisTitleAlign::Center => ((plot_left + plot_right) / 2.0, Anchor::Middle),
+        };
+        let y = plot_bottom + X_LABEL_BAND + font * 0.9;
+        items.push(Prim::Text {
+            x: cx,
+            y,
+            size: font,
+            anchor,
+            fill: color,
+            content: title.text.clone(),
+            rotate_deg: None,
+        });
+    }
+
     Scene {
         width: spec.width,
         height: spec.height,
@@ -705,5 +795,165 @@ mod geom_tests {
             1,
             "NaN カテゴリで rect が 1 個減るはず"
         );
+    }
+}
+
+#[cfg(test)]
+mod horizontal_axis_style_tests {
+    //! 横棒(indexAxis:"y") のグリッド/ボーダー/軸タイトル反映テスト。
+    //! ChartJS フロントエンドを経由して spec を組む(scales.x/y と options.plugins.title を直に指定できる)。
+
+    use super::build;
+    use crate::font::DEFAULT_FONT;
+    use crate::frontend::chartjs;
+    use crate::ir::ChartSpec;
+    use crate::scene::{Anchor, Prim, Scene};
+    use crate::text::TextMeasurer;
+
+    fn parse(json: &str) -> ChartSpec {
+        chartjs::parse(json, false).expect("parse")
+    }
+
+    fn scene_for(json: &str) -> Scene {
+        let spec = parse(json);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        build(&spec, &m)
+    }
+
+    /// 値軸(=X)のグリッド線を検出: y1!=y2 かつ x1==x2(垂直線)で grid_color。
+    fn count_vertical_gridlines(scene: &Scene, spec: &ChartSpec) -> usize {
+        scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, stroke, .. }
+                        if (x1 - x2).abs() < 0.01
+                            && (y1 - y2).abs() > 1.0
+                            && stroke.r == spec.theme.grid_color.r
+                            && stroke.g == spec.theme.grid_color.g
+                            && stroke.b == spec.theme.grid_color.b
+                )
+            })
+            .count()
+    }
+
+    #[test]
+    fn horizontal_x_grid_display_false_drops_vertical_gridlines() {
+        // grid.display=false → 縦グリッド 0 本。カテゴリラベル(左)は残る。
+        let scene = scene_for(
+            r#"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[{"data":[10,20,30]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"grid":{"display":false}}}}}"#,
+        );
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[{"data":[10,20,30]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"grid":{"display":false}}}}}"#,
+        );
+        assert_eq!(
+            count_vertical_gridlines(&scene, &spec),
+            0,
+            "x_axis.grid.display=false → 縦グリッド 0 本"
+        );
+        // カテゴリラベル(A/B/C, anchor=End)は残る。
+        let labels = scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Text { content, anchor: Anchor::End, .. }
+                        if content == "A" || content == "B" || content == "C"
+                )
+            })
+            .count();
+        assert_eq!(labels, 3, "カテゴリラベルは grid を消しても残る");
+    }
+
+    #[test]
+    fn horizontal_y_border_display_false_drops_left_baseline() {
+        // 既定では左のカテゴリ軸線を描く。border.display=false で消える。
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"y":{"border":{"display":false}}}}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let ink = spec.theme.text_color;
+        // 左辺垂直ベースライン: x1==x2, ink 色, y は plot_top..plot_bottom を張る。
+        // grid の垂直線は色が grid_color なので識別可能。
+        let baseline = scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, stroke, .. }
+                        if (x1 - x2).abs() < 0.01
+                            && (y1 - y2).abs() > 1.0
+                            && stroke.r == ink.r && stroke.g == ink.g && stroke.b == ink.b
+                )
+            })
+            .count();
+        assert_eq!(
+            baseline, 0,
+            "y_axis.border.display=false → 左辺ベースライン無し"
+        );
+    }
+
+    #[test]
+    fn horizontal_x_grid_draw_ticks_true_adds_bottom_tick_marks() {
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"grid":{"drawTicks":true}}}}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        // tick 短線: x1==x2, y2-y1==4.0 (プロット下側 plot_bottom→plot_bottom+4)。
+        let ticks = scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, .. }
+                        if (x1 - x2).abs() < 0.01 && ((*y2 - *y1) - 4.0).abs() < 1e-9
+                )
+            })
+            .count();
+        assert!(
+            ticks > 0,
+            "x_axis.grid.draw_ticks=true → 値軸 tick 短線が出る: 実際 {ticks}"
+        );
+    }
+
+    #[test]
+    fn horizontal_y_axis_title_renders_rotated() {
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"y":{"title":{"display":true,"text":"地域"}}}}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rotated = scene.items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, rotate_deg: Some(deg), .. }
+                    if content == "地域" && (deg.abs() - 90.0).abs() < 0.1
+            )
+        });
+        assert!(rotated, "y_axis.title は -90deg 回転で描画");
+    }
+
+    #[test]
+    fn horizontal_x_axis_title_renders_horizontal() {
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"title":{"display":true,"text":"売上"}}}}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let has_x_title = scene.items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, rotate_deg: None, .. }
+                    if content == "売上"
+            )
+        });
+        assert!(has_x_title, "x_axis.title は水平テキストで描画");
     }
 }

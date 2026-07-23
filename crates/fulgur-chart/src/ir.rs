@@ -123,9 +123,75 @@ pub fn color_at(colors: &[Color], i: usize) -> Color {
     }
 }
 
+/// 軸タイトルの配置位置。chart.js の `title.align` に対応。
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum AxisTitleAlign {
+    Start,
+    #[default]
+    Center,
+    End,
+}
+
+/// 軸タイトル。`text` は必須で、色/フォントサイズ/配置は任意。
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisTitle {
+    pub text: String,
+    pub color: Option<Color>,
+    pub font_size: Option<f64>,
+    pub align: AxisTitleAlign,
+}
+
+/// 軸のグリッド線設定。chart.js `scales.*.grid` に対応。
+///
+/// `draw_ticks` の既定は fulgur では `false`(Chart.js は `true`)。
+/// これは v0 以来 fulgur が軸目盛の短線を描画してこなかった経緯を尊重し、
+/// 既存 fixture のスナップショットが Task 9 で回帰しないようにするための
+/// **意図的な乖離**。Chart.js の既定に合わせたいユーザは
+/// `"grid": {"drawTicks": true}` で明示的にオプトインする。
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisGrid {
+    pub display: bool,
+    pub color: Option<Color>,
+    pub line_width: f64,
+    pub draw_ticks: bool,
+}
+
+impl Default for AxisGrid {
+    fn default() -> Self {
+        Self {
+            display: true,
+            color: None,
+            line_width: 1.0,
+            // fulgur の後方互換: Chart.js の既定 (true) からの意図的乖離。
+            // 既存チャートに tick 短線が突然生えるのを避けるための選択。
+            draw_ticks: false,
+        }
+    }
+}
+
+/// 軸のボーダー(基線)設定。chart.js `scales.*.border` に対応。
+#[derive(Clone, Debug, PartialEq)]
+pub struct AxisBorder {
+    pub display: bool,
+    pub color: Option<Color>,
+    pub width: f64,
+    pub dash: Vec<f64>,
+}
+
+impl Default for AxisBorder {
+    fn default() -> Self {
+        Self {
+            display: true,
+            color: None,
+            width: 1.0,
+            dash: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AxisSpec {
-    pub title: Option<String>,
+    pub title: Option<AxisTitle>,
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub suggested_min: Option<f64>,
@@ -135,7 +201,8 @@ pub struct AxisSpec {
     /// (bar の既定挙動)。false は edge-to-edge(line の既定)。現状 line レイアウトの
     /// x 軸のみが消費する(y は line の値軸なので無描画)。
     pub offset: bool,
-    pub grid: bool,
+    pub grid: AxisGrid,
+    pub border: AxisBorder,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -514,5 +581,32 @@ mod tests {
         assert_eq!(group.children.len(), 1);
         assert_eq!(group.children[0].value, 3.0);
         assert!(leaf.children.is_empty());
+    }
+
+    #[test]
+    fn axis_grid_default_matches_fulgur_backward_compat() {
+        // fulgur の既定は Chart.js と一部乖離: draw_ticks=false。
+        // v0 以来 tick 短線を描いてこなかったため、既存スナップショットを保護する
+        // 選択的な既定値の反転。ユーザは drawTicks:true で明示オプトインする。
+        let g = AxisGrid::default();
+        assert!(g.display);
+        assert!((g.line_width - 1.0).abs() < 1e-9);
+        assert!(!g.draw_ticks);
+        assert!(g.color.is_none());
+    }
+
+    #[test]
+    fn axis_border_default_is_chartjs_shape() {
+        let b = AxisBorder::default();
+        assert!(b.display);
+        assert!((b.width - 1.0).abs() < 1e-9);
+        assert!(b.color.is_none());
+        assert!(b.dash.is_empty());
+    }
+
+    #[test]
+    fn axis_title_align_default_is_center() {
+        let a: AxisTitleAlign = Default::default();
+        assert_eq!(a, AxisTitleAlign::Center);
     }
 }

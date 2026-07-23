@@ -2,6 +2,10 @@
 
 use crate::color::parse_color;
 use crate::ir::*;
+use crate::schema::common::{
+    AxisBorderOptions, AxisOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions,
+    GridLineOptions,
+};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -45,8 +49,23 @@ struct RawOptions {
     #[serde(default)]
     theme: Option<RawTheme>,
     // scales.<index 軸>.stacked → placement_stacked(配置)、<値軸>.stacked → value_stacked(値域・累積)。
+    // 型付きにすることで、schema 側 `AxisOptions` / `AxisTitleOptions` /
+    // `GridLineOptions` / `AxisBorderOptions` の `deny_unknown_fields` が sub-object
+    // レベルのタイポ(例: `title.txt` / `border.colorr`)を deserialize 段で拒否する。
     #[serde(default)]
-    scales: Option<serde_json::Value>,
+    scales: Option<RawScales>,
+}
+
+/// `options.scales` の受け皿。x/y の 2 軸のみを typed に扱う。
+/// `deny_unknown_fields` は付けない: 非 strict モードでは `scales.r`(radar/polar)や
+/// `scales.x1`/`y1`(multi-axis)を silently 無視する必要がある(Chart.js 互換)。
+/// strict モードでの未知キー拒否は上流の `check_unknown_keys` が担当する。
+#[derive(Deserialize, Default)]
+struct RawScales {
+    #[serde(default)]
+    x: Option<AxisOptions>,
+    #[serde(default)]
+    y: Option<AxisOptions>,
 }
 
 /// `options.theme`: 視覚トークンの上書き。各フィールドは任意。
@@ -254,6 +273,95 @@ impl<T: Clone> ScalarOrArray<T> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// schema → IR ヘルパ
+//
+// `options.scales.<axis>` の typed オプション(schema::common)を、IR の
+// `AxisTitle` / `AxisGrid` / `AxisBorder` へ変換する純関数群。
+// `ChartSpec` 構築時に `axis_from` 経路で呼び出される。
+// ---------------------------------------------------------------------------
+
+/// `axis.title` を IR の [`AxisTitle`] に変換する。
+///
+/// 以下のいずれかで [`None`] を返す:
+/// - `opts` 自体が [`None`]
+/// - `display == Some(false)` (明示的に非表示)
+/// - `text` が [`None`] または空文字 (描画すべき文字列がない)
+///
+/// `align` は schema の [`SchemaAxisTitleAlign`] を IR の
+/// [`crate::ir::AxisTitleAlign`] にマップする。指定なしは `Center`。
+fn axis_title_from(opts: Option<&AxisTitleOptions>) -> Option<AxisTitle> {
+    let o = opts?;
+    if o.display == Some(false) {
+        return None;
+    }
+    let text = o.text.as_deref()?;
+    if text.is_empty() {
+        return None;
+    }
+    let align = match o.align {
+        Some(SchemaAxisTitleAlign::Start) => AxisTitleAlign::Start,
+        Some(SchemaAxisTitleAlign::End) => AxisTitleAlign::End,
+        _ => AxisTitleAlign::Center,
+    };
+    Some(AxisTitle {
+        text: text.to_string(),
+        color: o.color.as_deref().and_then(parse_color),
+        font_size: o.font.as_ref().and_then(|f| f.size),
+        align,
+    })
+}
+
+/// `axis.grid` を IR の [`AxisGrid`] に変換する。
+///
+/// - `opts` が [`None`] のときは [`AxisGrid::default()`] (display=true, width=1.0)
+/// - v1 仕様: `drawOnChartArea=false` は `display=false` と同義として扱う
+///   (chart area 外だけに grid を残す挙動は v1 で未サポート)
+/// - `color` / `line_width` の [`ScalarOrArray`] は先頭要素だけを見る
+///   (per-tick 配列は v1 未描画; 受理のみ)
+fn axis_grid_from(opts: Option<&GridLineOptions>) -> AxisGrid {
+    use crate::schema::common::ScalarOrArray;
+    let Some(g) = opts else {
+        return AxisGrid::default();
+    };
+    let display = g.display.unwrap_or(true) && g.draw_on_chart_area.unwrap_or(true);
+    let color = match &g.color {
+        Some(ScalarOrArray::One(s)) => parse_color(s),
+        Some(ScalarOrArray::Many(v)) => v.first().and_then(|s| parse_color(s)),
+        None => None,
+    };
+    let line_width = match &g.line_width {
+        Some(ScalarOrArray::One(w)) => *w,
+        Some(ScalarOrArray::Many(v)) => *v.first().unwrap_or(&1.0),
+        None => 1.0,
+    };
+    // fulgur は Chart.js の既定 (true) から意図的に乖離: 未指定なら false。
+    // 既存スナップショット保護のため。詳細は `AxisGrid::default` のドキュメント参照。
+    let draw_ticks = g.draw_ticks.unwrap_or(false);
+    AxisGrid {
+        display,
+        color,
+        line_width,
+        draw_ticks,
+    }
+}
+
+/// `axis.border` を IR の [`AxisBorder`] に変換する。
+///
+/// `opts` が [`None`] のときは [`AxisBorder::default()`]。値ごとの既定値は
+/// `display=true` / `width=1.0` / `dash=[]` / `color=None`。
+fn axis_border_from(opts: Option<&AxisBorderOptions>) -> AxisBorder {
+    let Some(b) = opts else {
+        return AxisBorder::default();
+    };
+    AxisBorder {
+        display: b.display.unwrap_or(true),
+        color: b.color.as_deref().and_then(parse_color),
+        width: b.width.unwrap_or(1.0),
+        dash: b.dash.clone().unwrap_or_default(),
+    }
+}
+
 /// `fill`: bool / 文字列("origin"等) を受ける。v1 は「塗るか否か」だけ解釈。
 #[derive(Deserialize, Default)]
 #[serde(untagged)]
@@ -354,11 +462,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         raw.options
             .scales
             .as_ref()
-            .and_then(|s| {
-                s.get(axis)
-                    .and_then(|a| a.get("stacked"))
-                    .and_then(|v| v.as_bool())
+            .and_then(|s| match axis {
+                "x" => s.x.as_ref(),
+                "y" => s.y.as_ref(),
+                _ => None,
             })
+            .and_then(|a| a.stacked)
             .unwrap_or(false)
     };
     let placement_stacked = get_axis_stacked(index_axis);
@@ -681,70 +790,50 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let value_begin_at_zero = !is_point_based && !is_sparkline && !is_line;
 
     // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する。
-    let scales_val = raw.options.scales.as_ref();
-    let x_baz_json = scales_val
-        .and_then(|s| s.get("x"))
-        .and_then(|a| a.get("beginAtZero"))
-        .and_then(|v| v.as_bool());
-    let y_baz_json = scales_val
-        .and_then(|s| s.get("y"))
-        .and_then(|a| a.get("beginAtZero"))
-        .and_then(|v| v.as_bool());
-    let x_begin_at_zero = x_baz_json.unwrap_or(is_horizontal && value_begin_at_zero);
-    let y_begin_at_zero =
-        y_baz_json.unwrap_or(!is_horizontal && value_begin_at_zero && !is_boxplot);
-    let suggested_min_y = scales_val
-        .and_then(|s| s.get("y"))
-        .and_then(|a| a.get("suggestedMin"))
-        .and_then(|v| v.as_f64());
-    let suggested_max_y = scales_val
-        .and_then(|s| s.get("y"))
-        .and_then(|a| a.get("suggestedMax"))
-        .and_then(|v| v.as_f64());
-    let suggested_min_x = scales_val
-        .and_then(|s| s.get("x"))
-        .and_then(|a| a.get("suggestedMin"))
-        .and_then(|v| v.as_f64());
-    let suggested_max_x = scales_val
-        .and_then(|s| s.get("x"))
-        .and_then(|a| a.get("suggestedMax"))
-        .and_then(|v| v.as_f64());
+    // typed `AxisOptions` 経由で読むことで、`beginAtZero` 等の camelCase タイポは
+    // schema deserialize 時に拒否される(silent 素通り防止)。
+    let x_opts = raw.options.scales.as_ref().and_then(|s| s.x.as_ref());
+    let y_opts = raw.options.scales.as_ref().and_then(|s| s.y.as_ref());
+    let x_begin_at_zero = x_opts
+        .and_then(|a| a.begin_at_zero)
+        .unwrap_or(is_horizontal && value_begin_at_zero);
+    let y_begin_at_zero = y_opts
+        .and_then(|a| a.begin_at_zero)
+        .unwrap_or(!is_horizontal && value_begin_at_zero && !is_boxplot);
+    let suggested_min_y = y_opts.and_then(|a| a.suggested_min);
+    let suggested_max_y = y_opts.and_then(|a| a.suggested_max);
+    let suggested_min_x = x_opts.and_then(|a| a.suggested_min);
+    let suggested_max_x = x_opts.and_then(|a| a.suggested_max);
     // category スケールの offset。明示時のみ尊重(既定 false=edge-to-edge)。
     // line レイアウトの x 軸のみが消費する(y は line の値軸)。
-    let x_offset = scales_val
-        .and_then(|s| s.get("x"))
-        .and_then(|a| a.get("offset"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let y_offset = scales_val
-        .and_then(|s| s.get("y"))
-        .and_then(|a| a.get("offset"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let x_offset = x_opts.and_then(|a| a.offset).unwrap_or(false);
+    let y_offset = y_opts.and_then(|a| a.offset).unwrap_or(false);
 
     Ok(ChartSpec {
         kind,
         series,
         categories: raw.data.labels,
         x_axis: AxisSpec {
-            title: None,
+            title: axis_title_from(x_opts.and_then(|a| a.title.as_ref())),
             min: None,
             max: None,
             suggested_min: suggested_min_x,
             suggested_max: suggested_max_x,
             begin_at_zero: x_begin_at_zero,
             offset: x_offset,
-            grid: true,
+            grid: axis_grid_from(x_opts.and_then(|a| a.grid.as_ref())),
+            border: axis_border_from(x_opts.and_then(|a| a.border.as_ref())),
         },
         y_axis: AxisSpec {
-            title: None,
+            title: axis_title_from(y_opts.and_then(|a| a.title.as_ref())),
             min: None,
             max: None,
             suggested_min: suggested_min_y,
             suggested_max: suggested_max_y,
             begin_at_zero: y_begin_at_zero,
             offset: y_offset,
-            grid: true,
+            grid: axis_grid_from(y_opts.and_then(|a| a.grid.as_ref())),
+            border: axis_border_from(y_opts.and_then(|a| a.border.as_ref())),
         },
         legend: legend_pos(&raw.options.plugins.legend),
         title: raw
@@ -1023,6 +1112,7 @@ fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
                             "max",
                             "title",
                             "grid",
+                            "border",
                             "beginAtZero",
                             "suggestedMin",
                             "suggestedMax",
@@ -1479,7 +1569,11 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         suggested_max: None,
         begin_at_zero: false,
         offset: false,
-        grid: false,
+        grid: AxisGrid {
+            display: false,
+            ..Default::default()
+        },
+        border: AxisBorder::default(),
     };
 
     let series = vec![Series {
@@ -1850,7 +1944,11 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             suggested_max: None,
             begin_at_zero: false,
             offset: false,
-            grid: false,
+            grid: AxisGrid {
+                display: false,
+                ..Default::default()
+            },
+            border: AxisBorder::default(),
         },
         y_axis: AxisSpec {
             title: None,
@@ -1860,7 +1958,11 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             suggested_max: None,
             begin_at_zero: false,
             offset: false,
-            grid: false,
+            grid: AxisGrid {
+                display: false,
+                ..Default::default()
+            },
+            border: AxisBorder::default(),
         },
         legend: legend_pos(&raw.options.plugins.legend),
         title: raw
@@ -2452,7 +2554,15 @@ fn zero_axis() -> AxisSpec {
         suggested_max: None,
         begin_at_zero: false,
         offset: false,
-        grid: false,
+        grid: AxisGrid {
+            display: false,
+            draw_ticks: false,
+            ..Default::default()
+        },
+        border: AxisBorder {
+            display: false,
+            ..Default::default()
+        },
     }
 }
 
@@ -2922,6 +3032,24 @@ mod tests {
     }
 
     #[test]
+    fn strict_allows_border_on_scales() {
+        // schema は options.scales.<axis>.border を typed で受理するので、
+        // strict モードでも allow-list に "border" が含まれていなければならない。
+        // schema/strict 契約の分岐(schema 通過→strict 拒否)を防ぐ回帰テスト。
+        let json = r#"{
+            "type": "bar",
+            "data": {"labels":["a"],"datasets":[{"data":[1]}]},
+            "options": {"scales":{"x":{"border":{"width":2}}}}
+        }"#;
+        let result = parse(json, true);
+        assert!(
+            result.is_ok(),
+            "strict モードで options.scales.x.border を許可すべき: {:?}",
+            result
+        );
+    }
+
+    #[test]
     fn parse_treemap_numeric_tree() {
         let json = r#"{
             "type": "treemap",
@@ -3129,5 +3257,176 @@ mod tests {
             t[0].value
         );
         assert!(t[0].value > 0.0);
+    }
+
+    // ----- Task 6: Schema→IR ヘルパ (axis_title_from / axis_grid_from / axis_border_from) -----
+
+    #[test]
+    fn axis_title_from_returns_none_when_display_false() {
+        let opts = AxisTitleOptions {
+            display: Some(false),
+            text: Some("Y".into()),
+            ..Default::default()
+        };
+        assert!(axis_title_from(Some(&opts)).is_none());
+    }
+
+    #[test]
+    fn axis_title_from_returns_none_when_text_missing_or_empty() {
+        let opts_no_text = AxisTitleOptions {
+            display: Some(true),
+            text: None,
+            ..Default::default()
+        };
+        assert!(axis_title_from(Some(&opts_no_text)).is_none());
+        let opts_empty = AxisTitleOptions {
+            display: Some(true),
+            text: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(axis_title_from(Some(&opts_empty)).is_none());
+    }
+
+    #[test]
+    fn axis_title_from_maps_text_and_align() {
+        let opts = AxisTitleOptions {
+            display: Some(true),
+            text: Some("Y (円)".into()),
+            align: Some(SchemaAxisTitleAlign::End),
+            ..Default::default()
+        };
+        let t = axis_title_from(Some(&opts)).expect("title");
+        assert_eq!(t.text, "Y (円)");
+        assert_eq!(t.align, crate::ir::AxisTitleAlign::End);
+        assert!(t.color.is_none());
+        assert!(t.font_size.is_none());
+    }
+
+    #[test]
+    fn axis_title_from_maps_color_and_font_size() {
+        use crate::schema::common::FontSpec;
+        let opts = AxisTitleOptions {
+            display: Some(true),
+            text: Some("A".into()),
+            color: Some("#123456".into()),
+            font: Some(FontSpec {
+                size: Some(14.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let t = axis_title_from(Some(&opts)).expect("title");
+        assert!(t.color.is_some());
+        assert_eq!(t.font_size, Some(14.0));
+    }
+
+    #[test]
+    fn axis_grid_from_defaults_when_none() {
+        let g = axis_grid_from(None);
+        assert!(g.display);
+        assert!((g.line_width - 1.0).abs() < 1e-9);
+        // fulgur の意図的乖離: draw_ticks 既定は false(Chart.js は true)。
+        // 詳細は `AxisGrid::default` のドキュメント参照。
+        assert!(!g.draw_ticks);
+        assert!(g.color.is_none());
+    }
+
+    #[test]
+    fn axis_grid_from_display_false_kills_grid() {
+        let opts = GridLineOptions {
+            display: Some(false),
+            ..Default::default()
+        };
+        assert!(!axis_grid_from(Some(&opts)).display);
+    }
+
+    #[test]
+    fn axis_grid_from_draw_on_chart_area_false_kills_grid_in_v1() {
+        let opts = GridLineOptions {
+            display: Some(true),
+            draw_on_chart_area: Some(false),
+            ..Default::default()
+        };
+        assert!(
+            !axis_grid_from(Some(&opts)).display,
+            "v1: drawOnChartArea=false は display=false と同義"
+        );
+    }
+
+    #[test]
+    fn axis_grid_from_scalar_line_width() {
+        use crate::schema::common::ScalarOrArray;
+        let opts = GridLineOptions {
+            line_width: Some(ScalarOrArray::One(2.5)),
+            ..Default::default()
+        };
+        assert!((axis_grid_from(Some(&opts)).line_width - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_grid_from_array_line_width_uses_first() {
+        use crate::schema::common::ScalarOrArray;
+        let opts = GridLineOptions {
+            line_width: Some(ScalarOrArray::Many(vec![3.0, 5.0])),
+            ..Default::default()
+        };
+        assert!((axis_grid_from(Some(&opts)).line_width - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_border_from_defaults_when_none() {
+        let b = axis_border_from(None);
+        assert!(b.display);
+        assert!((b.width - 1.0).abs() < 1e-9);
+        assert!(b.color.is_none());
+        assert!(b.dash.is_empty());
+    }
+
+    #[test]
+    fn axis_border_from_dash_and_width_flow_through() {
+        let opts = AxisBorderOptions {
+            dash: Some(vec![4.0, 4.0]),
+            width: Some(2.0),
+            ..Default::default()
+        };
+        let b = axis_border_from(Some(&opts));
+        assert_eq!(b.dash, vec![4.0, 4.0]);
+        assert!((b.width - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_border_from_display_false() {
+        let opts = AxisBorderOptions {
+            display: Some(false),
+            ..Default::default()
+        };
+        assert!(!axis_border_from(Some(&opts)).display);
+    }
+
+    #[test]
+    fn scales_x_title_flows_into_spec_x_axis() {
+        // 統合: options.scales.x.title.text が ChartSpec.x_axis.title へ流れることを検証。
+        // Task 6 の unit テストは helper 単体だけ、Task 7 では bridge 側の配線を確認する。
+        let json = r##"{
+          "type":"bar",
+          "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+          "options":{"scales":{"x":{"title":{"display":true,"text":"時刻"}}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        let t = spec.x_axis.title.as_ref().expect("x title should be Some");
+        assert_eq!(t.text, "時刻");
+    }
+
+    #[test]
+    fn scales_y_border_dash_flows_into_spec_y_axis() {
+        // 統合: options.scales.y.border.{dash,width} が ChartSpec.y_axis.border に反映される。
+        let json = r##"{
+          "type":"line",
+          "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+          "options":{"scales":{"y":{"border":{"dash":[4,4],"width":2}}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert_eq!(spec.y_axis.border.dash, vec![4.0, 4.0]);
+        assert!((spec.y_axis.border.width - 2.0).abs() < 1e-9);
     }
 }

@@ -482,6 +482,10 @@ fn dataset_type_on_non_mixable_base_errors() {
 #[test]
 fn strict_rejects_scales_typo() {
     // stacked は描画に効くので、typo を strict で取りこぼさない。
+    // non-strict では Chart.js の未実装フィールド(ticks/type など)を silently 通す
+    // 互換方針のため、scales.{x,y} 直下は `AxisOptions` の deny_unknown_fields を
+    // 外し、strict モードの検出は frontend/chartjs.rs の check_unknown_keys allow-list
+    // に一本化している。
     let typo = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"y":{"stakced":true}}}}"#;
     assert!(chartjs::parse(typo, true).is_err());
@@ -490,6 +494,7 @@ fn strict_rejects_scales_typo() {
     let ok = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"y":{"stacked":true}}}}"#;
     assert!(chartjs::parse(ok, true).is_ok());
+    assert!(chartjs::parse(ok, false).is_ok());
 }
 
 #[test]
@@ -1281,4 +1286,31 @@ fn schema_rejects_unknown_decimation_algorithm() {
     // schema side も enum 制約で拒否すること（value レベルの parity）。
     let v: serde_json::Value = serde_json::from_str(json).unwrap();
     assert!(serde_json::from_value::<fulgur_chart::schema::ChartJsSpec>(v).is_err());
+}
+
+#[test]
+fn scales_r_axis_silently_accepted_in_non_strict() {
+    // radar/polar chart で使う `scales.r` を非 strict で silently 通す(Chart.js 互換)。
+    let json = r##"{
+      "type":"line",
+      "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+      "options":{"scales":{"r":{"beginAtZero":true}}}
+    }"##;
+    assert!(
+        chartjs::parse(json, false).is_ok(),
+        "non-strict should silently accept scales.r"
+    );
+}
+
+#[test]
+fn scales_r_axis_rejected_in_strict() {
+    let json = r##"{
+      "type":"line",
+      "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+      "options":{"scales":{"r":{"beginAtZero":true}}}
+    }"##;
+    assert!(
+        chartjs::parse(json, true).is_err(),
+        "strict should reject unknown scale axis"
+    );
 }

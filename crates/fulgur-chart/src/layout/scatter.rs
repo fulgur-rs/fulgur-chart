@@ -3,10 +3,11 @@
 //! 線形フレームを自前で組む。共有できる凡例/定数/テーマは `common` を再利用する。
 
 use super::common::{
-    LEGEND_BAND, OUTER_PAD, TEXT_BASELINE_RATIO, TITLE_BAND, TITLE_FONT, X_LABEL_BAND,
-    X_LABEL_CENTER_RATIO, draw_vertical_legend, legend_band_width_vertical, legend_entry_width,
+    AXIS_TITLE_BAND, LEGEND_BAND, OUTER_PAD, TEXT_BASELINE_RATIO, TITLE_BAND, TITLE_FONT,
+    X_LABEL_BAND, X_LABEL_CENTER_RATIO, draw_vertical_legend, legend_band_width_vertical,
+    legend_entry_width,
 };
-use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos, Point};
+use crate::ir::{AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, Point};
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, nice_ticks};
 use crate::scene::{Anchor, Prim, Scene};
@@ -58,7 +59,15 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
             max_y_w = w;
         }
     }
-    let y_axis_w = max_y_w as f64 + 10.0;
+    // Y 軸タイトル(回転テキスト)の帯幅。text 幅(font_size)+ ベースラインギャップ(6px)。
+    // title=None(既定)なら 0.0 で、既存レイアウトは変わらない。
+    let y_title_w = spec
+        .y_axis
+        .title
+        .as_ref()
+        .map(|t| t.font_size.unwrap_or(spec.theme.font_size * 1.1) + 6.0)
+        .unwrap_or(0.0);
+    let y_axis_w = max_y_w as f64 + 10.0 + y_title_w;
     let legend = has_legend(spec);
     let title_band = if spec.title.is_some() {
         TITLE_BAND
@@ -88,10 +97,17 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
         } else {
             (0.0, 0.0)
         };
+    // X 軸タイトルがあれば、x ラベル帯の下側にさらにタイトル帯を確保して plot_bottom を上へ押し上げる。
+    // title=None(既定)なら 0.0 で、既存レイアウトは変わらない。
+    let x_title_h = if spec.x_axis.title.is_some() {
+        AXIS_TITLE_BAND
+    } else {
+        0.0
+    };
     let plot_left = OUTER_PAD + y_axis_w + legend_left;
     let plot_right = spec.width - OUTER_PAD - legend_right_w;
     let plot_top = OUTER_PAD + title_band + legend_top;
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
+    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
     ScatterLayout {
         xs: LinearScale::new(x_ticks.min, x_ticks.max, plot_left, plot_right),
         ys: LinearScale::new(y_ticks.min, y_ticks.max, plot_bottom, plot_top),
@@ -266,17 +282,23 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    // 2. 横グリッド + y 目盛りラベル(右寄せ)。
+    // 2. 横グリッド + y 目盛りラベル(右寄せ)。y_axis.grid.display=false のときは
+    // Prim::Line を落とすが、目盛りラベルは常に残す。
+    let y_grid_cfg = &spec.y_axis.grid;
+    let y_grid_color = y_grid_cfg.color.unwrap_or(spec.theme.grid_color);
     for &t in &y_ticks.ticks {
         let y = ys.map(t);
-        items.push(Prim::Line {
-            x1: plot_left,
-            y1: y,
-            x2: plot_right,
-            y2: y,
-            stroke: spec.theme.grid_color,
-            stroke_width: 1.0,
-        });
+        if y_grid_cfg.display {
+            items.push(Prim::Line {
+                x1: plot_left,
+                y1: y,
+                x2: plot_right,
+                y2: y,
+                stroke: y_grid_color,
+                stroke_width: y_grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
         items.push(Prim::Text {
             x: plot_left - 6.0,
             y: y + label_font * TEXT_BASELINE_RATIO,
@@ -288,17 +310,23 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    // 3. 縦グリッド + x 目盛りラベル(軸下に中央寄せ)。
+    // 3. 縦グリッド + x 目盛りラベル(軸下に中央寄せ)。x_axis.grid.display=false のときは
+    // Prim::Line を落とすが、目盛りラベルは常に残す。
+    let x_grid_cfg = &spec.x_axis.grid;
+    let x_grid_color = x_grid_cfg.color.unwrap_or(spec.theme.grid_color);
     for &t in &x_ticks.ticks {
         let x = xs.map(t);
-        items.push(Prim::Line {
-            x1: x,
-            y1: plot_top,
-            x2: x,
-            y2: plot_bottom,
-            stroke: spec.theme.grid_color,
-            stroke_width: 1.0,
-        });
+        if x_grid_cfg.display {
+            items.push(Prim::Line {
+                x1: x,
+                y1: plot_top,
+                x2: x,
+                y2: plot_bottom,
+                stroke: x_grid_color,
+                stroke_width: x_grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
         items.push(Prim::Text {
             x,
             y: plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
@@ -310,23 +338,67 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    // 4. 軸ベースライン(x 下辺 + y 左辺)。
-    items.push(Prim::Line {
-        x1: plot_left,
-        y1: plot_bottom,
-        x2: plot_right,
-        y2: plot_bottom,
-        stroke: ink,
-        stroke_width: 1.0,
-    });
-    items.push(Prim::Line {
-        x1: plot_left,
-        y1: plot_top,
-        x2: plot_left,
-        y2: plot_bottom,
-        stroke: ink,
-        stroke_width: 1.0,
-    });
+    // 4. 軸ベースライン(x 下辺 + y 左辺)。border.display/color/width/dash を反映。
+    let x_border = &spec.x_axis.border;
+    if x_border.display {
+        let border_color = x_border.color.unwrap_or(ink);
+        items.push(Prim::Line {
+            x1: plot_left,
+            y1: plot_bottom,
+            x2: plot_right,
+            y2: plot_bottom,
+            stroke: border_color,
+            stroke_width: x_border.width,
+            dash: x_border.dash.clone(),
+        });
+    }
+    let y_border = &spec.y_axis.border;
+    if y_border.display {
+        let border_color = y_border.color.unwrap_or(ink);
+        items.push(Prim::Line {
+            x1: plot_left,
+            y1: plot_top,
+            x2: plot_left,
+            y2: plot_bottom,
+            stroke: border_color,
+            stroke_width: y_border.width,
+            dash: y_border.dash.clone(),
+        });
+    }
+
+    // 4b. tick 短線。y_axis/x_axis の grid.draw_ticks が true のとき、プロット外側へ短線を描く。
+    // 色は grid.color を継承(既定 ink)、線幅は grid.line_width。Chart.js の既定に合わせた挙動。
+    const TICK_LEN: f64 = 4.0;
+    if y_grid_cfg.draw_ticks {
+        let tick_color = y_grid_cfg.color.unwrap_or(ink);
+        for &t in &y_ticks.ticks {
+            let y = ys.map(t);
+            items.push(Prim::Line {
+                x1: plot_left - TICK_LEN,
+                y1: y,
+                x2: plot_left,
+                y2: y,
+                stroke: tick_color,
+                stroke_width: y_grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
+    }
+    if x_grid_cfg.draw_ticks {
+        let tick_color = x_grid_cfg.color.unwrap_or(ink);
+        for &t in &x_ticks.ticks {
+            let x = xs.map(t);
+            items.push(Prim::Line {
+                x1: x,
+                y1: plot_bottom,
+                x2: x,
+                y2: plot_bottom + TICK_LEN,
+                stroke: tick_color,
+                stroke_width: x_grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
+    }
 
     // 5. 点(円)。共有 scatter_points(単一真実源)から描画。
     for b in scatter_points(spec, &layout) {
@@ -402,6 +474,53 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         );
     }
 
+    // 7. Y 軸タイトル(-90deg 回転)。common::draw_frame と同じアンカー幾何:
+    //   Anchor::Start + -90deg → cy=plot_bottom(bottom-to-top 読みの起点)
+    //   Anchor::End   + -90deg → cy=plot_top
+    //   Anchor::Middle + -90deg → cy=中央
+    if let Some(title) = &spec.y_axis.title {
+        let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+        let color = title.color.unwrap_or(ink);
+        let cy_center = (plot_top + plot_bottom) / 2.0;
+        let (cy, anchor) = match title.align {
+            AxisTitleAlign::Start => (plot_bottom, Anchor::Start),
+            AxisTitleAlign::End => (plot_top, Anchor::End),
+            AxisTitleAlign::Center => (cy_center, Anchor::Middle),
+        };
+        let x = OUTER_PAD + font / 2.0;
+        items.push(Prim::Text {
+            x,
+            y: cy,
+            size: font,
+            anchor,
+            fill: color,
+            content: title.text.clone(),
+            rotate_deg: Some(-90.0),
+        });
+    }
+
+    // 8. X 軸タイトル(水平)。x ラベル帯のさらに下側に描く。
+    // Chart.js の x 軸は Start=left / End=right(Y 軸のような入れ替えは不要)。
+    if let Some(title) = &spec.x_axis.title {
+        let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+        let color = title.color.unwrap_or(ink);
+        let (cx, anchor) = match title.align {
+            AxisTitleAlign::Start => (plot_left, Anchor::Start),
+            AxisTitleAlign::End => (plot_right, Anchor::End),
+            AxisTitleAlign::Center => ((plot_left + plot_right) / 2.0, Anchor::Middle),
+        };
+        let y = plot_bottom + X_LABEL_BAND + font * 0.9;
+        items.push(Prim::Text {
+            x: cx,
+            y,
+            size: font,
+            anchor,
+            fill: color,
+            content: title.text.clone(),
+            rotate_deg: None,
+        });
+    }
+
     Scene {
         width: spec.width,
         height: spec.height,
@@ -413,7 +532,10 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 mod tests {
     use super::*;
     use crate::font::DEFAULT_FONT;
-    use crate::ir::{AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType};
+    use crate::ir::{
+        AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, Color,
+        LegendPos, Point, Series, SeriesType,
+    };
     use crate::text::TextMeasurer;
 
     fn make_scatter_spec(points: &[(f64, f64)]) -> ChartSpec {
@@ -447,7 +569,8 @@ mod tests {
                 suggested_max: None,
                 begin_at_zero: false,
                 offset: false,
-                grid: true,
+                grid: AxisGrid::default(),
+                border: AxisBorder::default(),
             },
             y_axis: AxisSpec {
                 title: None,
@@ -457,7 +580,8 @@ mod tests {
                 suggested_max: None,
                 begin_at_zero: false,
                 offset: false,
-                grid: true,
+                grid: AxisGrid::default(),
+                border: AxisBorder::default(),
             },
             legend: LegendPos::None,
             title: None,
@@ -547,5 +671,161 @@ mod tests {
         let layout = compute_scatter_layout(&spec, &m);
         let pts = scatter_points(&spec, &layout);
         assert_eq!(pts.len(), 2);
+    }
+
+    #[test]
+    fn y_grid_display_false_drops_horizontal_gridlines_but_keeps_labels() {
+        let mut spec = make_scatter_spec(&[(0.0, 0.0), (10.0, 20.0)]);
+        spec.y_axis.grid.display = false;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let layout = compute_scatter_layout(&spec, &m);
+        // 水平グリッド線: y1==y2 かつ x1==plot_left, x2==plot_right, 色=grid_color(ink ではない)
+        // ベースライン(y=plot_bottom, ink 色)は border.display=true(既定)で残る点に注意。
+        let grid = layout
+            .y_ticks
+            .ticks
+            .iter()
+            .filter(|_| {
+                scene.items.iter().any(|p| {
+                    matches!(p,
+                        Prim::Line { y1, y2, x1, x2, stroke, .. }
+                            if (y1 - y2).abs() < 0.01
+                                && (*x1 - layout.plot_left).abs() < 0.01
+                                && (*x2 - layout.plot_right).abs() < 0.01
+                                && stroke.r == spec.theme.grid_color.r
+                                && stroke.g == spec.theme.grid_color.g
+                                && stroke.b == spec.theme.grid_color.b
+                    )
+                })
+            })
+            .count();
+        assert_eq!(grid, 0, "y_axis.grid.display=false → 水平グリッド 0 本");
+        // y 軸ラベル(text-anchor=End)は残る。
+        let y_labels = scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p,
+                    Prim::Text {
+                        anchor: Anchor::End,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert!(y_labels > 0, "grid を消しても y 目盛りラベルは残る");
+    }
+
+    #[test]
+    fn x_border_display_false_drops_bottom_baseline() {
+        let mut spec = make_scatter_spec(&[(0.0, 0.0), (10.0, 20.0)]);
+        spec.x_axis.border.display = false;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let layout = compute_scatter_layout(&spec, &m);
+        let ink = spec.theme.text_color;
+        // ベースラインの識別: y=plot_bottom の水平線 かつ ink 色 かつ x2==plot_right。
+        // 一番下の水平グリッド線も y=plot_bottom だが色は grid_color。
+        let baseline = scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { y1, y2, x1, x2, stroke, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && (*y1 - layout.plot_bottom).abs() < 0.01
+                            && (*x1 - layout.plot_left).abs() < 0.01
+                            && (*x2 - layout.plot_right).abs() < 0.01
+                            && stroke.r == ink.r && stroke.g == ink.g && stroke.b == ink.b
+                )
+            })
+            .count();
+        assert_eq!(
+            baseline, 0,
+            "x_axis.border.display=false → 下側ベースライン無し"
+        );
+    }
+
+    #[test]
+    fn y_border_display_false_drops_left_baseline() {
+        let mut spec = make_scatter_spec(&[(0.0, 0.0), (10.0, 20.0)]);
+        spec.y_axis.border.display = false;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let layout = compute_scatter_layout(&spec, &m);
+        let ink = spec.theme.text_color;
+        // 左辺ベースライン: x1==x2==plot_left, y=plot_top..plot_bottom, ink 色。
+        let baseline = scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, stroke, .. }
+                        if (x1 - x2).abs() < 0.01
+                            && (*x1 - layout.plot_left).abs() < 0.01
+                            && (*y1 - layout.plot_top).abs() < 0.01
+                            && (*y2 - layout.plot_bottom).abs() < 0.01
+                            && stroke.r == ink.r && stroke.g == ink.g && stroke.b == ink.b
+                )
+            })
+            .count();
+        assert_eq!(
+            baseline, 0,
+            "y_axis.border.display=false → 左辺ベースライン無し"
+        );
+    }
+
+    #[test]
+    fn y_axis_title_renders_rotated() {
+        let mut spec = make_scatter_spec(&[(0.0, 0.0), (10.0, 20.0)]);
+        spec.y_axis.title = Some(AxisTitle {
+            text: "測定値".into(),
+            color: Some(Color {
+                r: 128,
+                g: 0,
+                b: 128,
+                a: 1.0,
+            }),
+            font_size: Some(18.0),
+            align: AxisTitleAlign::Center,
+        });
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rotated = scene.items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, rotate_deg: Some(deg), size, fill, .. }
+                    if content == "測定値"
+                        && (deg.abs() - 90.0).abs() < 0.1
+                        && (size - 18.0).abs() < 1e-9
+                        && fill.r == 128 && fill.b == 128
+            )
+        });
+        assert!(rotated, "Y 軸タイトルは -90deg で描画される");
+    }
+
+    #[test]
+    fn x_axis_title_renders_horizontal() {
+        let mut spec = make_scatter_spec(&[(0.0, 0.0), (10.0, 20.0)]);
+        spec.x_axis.title = Some(AxisTitle {
+            text: "時刻".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::End,
+        });
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let layout = compute_scatter_layout(&spec, &m);
+        let has_x = scene.items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, rotate_deg: None, x, .. }
+                    if content == "時刻" && (x - layout.plot_right).abs() < 0.1
+            )
+        });
+        assert!(
+            has_x,
+            "X 軸タイトル: align=End → x=plot_right(水平テキスト)"
+        );
     }
 }

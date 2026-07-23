@@ -14,6 +14,8 @@ pub const LEGEND_BAND: f64 = 26.0;
 /// 縦置き凡例(Left/Right)の 1 行の高さ(px)。
 pub const LEGEND_ROW_H: f64 = 18.0;
 pub const X_LABEL_BAND: f64 = 22.0;
+/// X 軸タイトル帯の高さ(px)。ラベル帯の下側にさらに確保し、`plot_bottom` を上へ押し上げる。
+pub const AXIS_TITLE_BAND: f64 = 20.0;
 pub const TEXT_BASELINE_RATIO: f64 = 0.35;
 pub const X_LABEL_CENTER_RATIO: f64 = 0.7;
 /// データラベルの軸方向ギャップ(棒の端からラベルまでの余白, px)。
@@ -172,7 +174,16 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             max_w = w;
         }
     }
-    let y_axis_w = max_w as f64 + 10.0;
+    // y 軸タイトル(回転テキスト)の帯幅。text 幅(font_size)+ ベースラインギャップ(6px)。
+    // Task 6 で spec.y_axis.title は display=false / text 空のとき None に潰されているので、
+    // ここでは Some の場合だけ帯幅を足す。
+    let y_title_w = spec
+        .y_axis
+        .title
+        .as_ref()
+        .map(|t| t.font_size.unwrap_or(spec.theme.font_size * 1.1) + 6.0)
+        .unwrap_or(0.0);
+    let y_axis_w = max_w as f64 + 10.0 + y_title_w;
 
     // 凡例の有無。
     let legend = has_legend(spec);
@@ -244,7 +255,13 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     let plot_left = base_left.max(OUTER_PAD + legend_left + edge_pad_left * scale);
     let plot_right = (base_right - edge_pad_right * scale).max(plot_left);
     let plot_top = OUTER_PAD + title_band + legend_top;
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom;
+    // X 軸タイトルがあれば、x カテゴリラベル帯の下側にさらにタイトル帯を確保して plot_bottom を上へ押し上げる。
+    let x_title_h = if spec.x_axis.title.is_some() {
+        AXIS_TITLE_BAND
+    } else {
+        0.0
+    };
+    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
 
     // y スケール（上下反転）。
     let ys = LinearScale::new(ticks.min, ticks.max, plot_bottom, plot_top);
@@ -323,16 +340,21 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
     }
 
     // 2. 横グリッド + y 軸ラベル。
+    let grid_cfg = &spec.y_axis.grid;
+    let grid_color = grid_cfg.color.unwrap_or(spec.theme.grid_color);
     for &t in &frame.ticks.ticks {
         let y = frame.ys.map(t);
-        items.push(Prim::Line {
-            x1: frame.plot_left,
-            y1: y,
-            x2: frame.plot_right,
-            y2: y,
-            stroke: spec.theme.grid_color,
-            stroke_width: 1.0,
-        });
+        if grid_cfg.display {
+            items.push(Prim::Line {
+                x1: frame.plot_left,
+                y1: y,
+                x2: frame.plot_right,
+                y2: y,
+                stroke: grid_color,
+                stroke_width: grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
         items.push(Prim::Text {
             x: frame.plot_left - 6.0,
             y: y + label_font * TEXT_BASELINE_RATIO,
@@ -344,15 +366,40 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         });
     }
 
-    // 3. x ベースライン。
-    items.push(Prim::Line {
-        x1: frame.plot_left,
-        y1: frame.plot_bottom,
-        x2: frame.plot_right,
-        y2: frame.plot_bottom,
-        stroke: ink,
-        stroke_width: 1.0,
-    });
+    // 3. x ベースライン。border.display / border.color / border.width / border.dash を反映。
+    let border = &spec.x_axis.border;
+    if border.display {
+        let border_color = border.color.unwrap_or(ink);
+        items.push(Prim::Line {
+            x1: frame.plot_left,
+            y1: frame.plot_bottom,
+            x2: frame.plot_right,
+            y2: frame.plot_bottom,
+            stroke: border_color,
+            stroke_width: border.width,
+            dash: border.dash.clone(),
+        });
+    }
+
+    // 3b. y 軸目盛(tick 刻み)。draw_ticks=true のとき、plot_left から外側へ短線を描く。
+    // 色は grid.color を継承する(Chart.js 既定と同じ挙動: grid.color が gridline と tick の両方を制御)。
+    const TICK_LEN: f64 = 4.0;
+    let ticks_cfg = &spec.y_axis.grid;
+    if ticks_cfg.draw_ticks {
+        let tick_color = ticks_cfg.color.unwrap_or(ink);
+        for &t in &frame.ticks.ticks {
+            let y = frame.ys.map(t);
+            items.push(Prim::Line {
+                x1: frame.plot_left - TICK_LEN,
+                y1: y,
+                x2: frame.plot_left,
+                y2: y,
+                stroke: tick_color,
+                stroke_width: ticks_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
+    }
 
     // 4. x カテゴリラベル（auto-skip: ラベル幅 > スロット幅なら間引く）。
     let n = spec.categories.len().max(1);
@@ -456,6 +503,59 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             label_font,
         );
     }
+
+    // 6. Y 軸タイトル(回転テキスト)。プロット左端外側、キャンバス左端(OUTER_PAD)寄りに
+    // -90deg で描く。Chart.js の core.scale.js は `_alignStartEnd(align, bottom, top)` を
+    // Y 軸に使う: 回転タイトルは bottom-to-top で読むため "start"=下端、"end"=上端が読みの起点/終点。
+    // 加えて anchor + -90deg の幾何:
+    //   Anchor::Start + -90deg → アンカーから上方向へ伸びる → cy=plot_bottom と組み合わせる
+    //   Anchor::End   + -90deg → アンカーから下方向へ伸びる → cy=plot_top    と組み合わせる
+    // これで文字列は常にプロット領域内へ収まる。
+    if let Some(title) = &spec.y_axis.title {
+        let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+        let color = title.color.unwrap_or(ink);
+        let cy_center = (frame.plot_top + frame.plot_bottom) / 2.0;
+        let (cy, anchor) = match title.align {
+            crate::ir::AxisTitleAlign::Start => (frame.plot_bottom, Anchor::Start),
+            crate::ir::AxisTitleAlign::End => (frame.plot_top, Anchor::End),
+            crate::ir::AxisTitleAlign::Center => (cy_center, Anchor::Middle),
+        };
+        let x = OUTER_PAD + font / 2.0;
+        items.push(Prim::Text {
+            x,
+            y: cy,
+            size: font,
+            anchor,
+            fill: color,
+            content: title.text.clone(),
+            rotate_deg: Some(-90.0),
+        });
+    }
+
+    // 7. X 軸タイトル(水平テキスト)。X ラベル帯のさらに下に置く。
+    // Chart.js の core.scale.js は X 軸で `_alignStartEnd(align, left, right)` を使い、
+    // 左→右の自然な対応(Start=left, End=right)になる。Y 軸のような入れ替えは不要。
+    if let Some(title) = &spec.x_axis.title {
+        let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+        let color = title.color.unwrap_or(ink);
+        let (cx, anchor) = match title.align {
+            crate::ir::AxisTitleAlign::Start => (frame.plot_left, Anchor::Start),
+            crate::ir::AxisTitleAlign::End => (frame.plot_right, Anchor::End),
+            crate::ir::AxisTitleAlign::Center => {
+                ((frame.plot_left + frame.plot_right) / 2.0, Anchor::Middle)
+            }
+        };
+        let y = frame.plot_bottom + X_LABEL_BAND + font * 0.9;
+        items.push(Prim::Text {
+            x: cx,
+            y,
+            size: font,
+            anchor,
+            fill: color,
+            content: title.text.clone(),
+            rotate_deg: None,
+        });
+    }
 }
 
 /// 縦置き凡例(Left/Right)の帯幅: swatch(12) + gap(4) + 最大ラベル幅 + パディング(16)。
@@ -533,7 +633,10 @@ pub fn value_label(x: f64, y: f64, size: f64, anchor: Anchor, fill: Color, v: f6
 mod tests {
     use super::*;
     use crate::font::DEFAULT_FONT;
-    use crate::ir::{AxisSpec, ChartKind, ChartSpec, LegendPos, Point, Series, SeriesType};
+    use crate::ir::{
+        AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, LegendPos,
+        Point, Series, SeriesType,
+    };
     use crate::text::TextMeasurer;
 
     fn make_bar_spec(n: usize, width: f64) -> ChartSpec {
@@ -568,7 +671,8 @@ mod tests {
                 suggested_max: None,
                 begin_at_zero: true,
                 offset: false,
-                grid: true,
+                grid: AxisGrid::default(),
+                border: AxisBorder::default(),
             },
             y_axis: AxisSpec {
                 title: None,
@@ -578,7 +682,8 @@ mod tests {
                 suggested_max: None,
                 begin_at_zero: true,
                 offset: false,
-                grid: true,
+                grid: AxisGrid::default(),
+                border: AxisBorder::default(),
             },
             legend: LegendPos::None,
             title: None,
@@ -653,5 +758,449 @@ mod tests {
             min <= 0.0,
             "suggested_min=50 はデータの下端(0.0)を縮小してはいけない: 実際 min={min}"
         );
+    }
+
+    #[test]
+    fn grid_display_false_produces_no_grid_lines() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.grid.display = false;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        // Baseline (border) は 1 本残る。gridline は 0。プロット両端の x を持つ y=const な水平線を数える。
+        let horizontal_lines = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { y1, y2, x1, x2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && ((*x1 - frame.plot_left).abs() < 0.01
+                                && (*x2 - frame.plot_right).abs() < 0.01)
+                )
+            })
+            .count();
+        assert_eq!(
+            horizontal_lines, 1,
+            "grid.display=false → gridline 0 本、baseline 1 本のみ"
+        );
+    }
+
+    #[test]
+    fn grid_color_override_reaches_prim() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.grid.color = Some(Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let red_gridline = items.iter().any(|p| {
+            matches!(p,
+                Prim::Line { stroke: Color { r: 255, g: 0, b: 0, .. }, y1, y2, .. }
+                    if (y1 - y2).abs() < 0.01
+            )
+        });
+        assert!(
+            red_gridline,
+            "grid.color=red は Prim::Line の stroke に反映されるべき"
+        );
+    }
+
+    #[test]
+    fn grid_line_width_reaches_prim() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.grid.line_width = 3.0;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        // 少なくとも 1 本の水平線が stroke_width=3.0 のはず。
+        let thick = items.iter().any(|p| {
+            matches!(p,
+                Prim::Line { stroke_width, y1, y2, .. }
+                    if (stroke_width - 3.0).abs() < 1e-9 && (y1 - y2).abs() < 0.01
+            )
+        });
+        assert!(
+            thick,
+            "grid.line_width=3.0 は stroke_width に反映されるべき"
+        );
+    }
+
+    #[test]
+    fn border_display_false_produces_no_baseline() {
+        // baseline (ink 色) と 最下段 gridline (theme.grid_color 色) は
+        // 幾何 (y=plot_bottom, x=plot_left..plot_right) が一致するため、
+        // baseline のみを識別するには stroke 色でも絞り込む必要がある。
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.border.display = false;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let ink = spec.theme.text_color;
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let baseline_count = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { y1, y2, x1, x2, stroke, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && (*y1 - frame.plot_bottom).abs() < 0.01
+                            && (*x1 - frame.plot_left).abs() < 0.01
+                            && (*x2 - frame.plot_right).abs() < 0.01
+                            && stroke.r == ink.r && stroke.g == ink.g && stroke.b == ink.b
+                )
+            })
+            .count();
+        assert_eq!(baseline_count, 0, "border.display=false → baseline なし");
+    }
+
+    #[test]
+    fn border_dash_reaches_baseline() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.border.dash = vec![4.0, 4.0];
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let has_dashed_baseline = items.iter().any(|p| {
+            matches!(p,
+                Prim::Line { y1, y2, dash, .. }
+                    if (y1 - y2).abs() < 0.01
+                        && (*y1 - frame.plot_bottom).abs() < 0.01
+                        && dash == &vec![4.0, 4.0]
+            )
+        });
+        assert!(
+            has_dashed_baseline,
+            "border.dash が baseline に伝わっていない"
+        );
+    }
+
+    #[test]
+    fn border_color_and_width_reach_baseline() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.border.color = Some(Color {
+            r: 0,
+            g: 100,
+            b: 0,
+            a: 1.0,
+        });
+        spec.x_axis.border.width = 2.5;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let has_custom_baseline = items.iter().any(|p| {
+            matches!(p,
+                Prim::Line { y1, y2, stroke, stroke_width, .. }
+                    if (y1 - y2).abs() < 0.01
+                        && (*y1 - frame.plot_bottom).abs() < 0.01
+                        && stroke.r == 0 && stroke.g == 100 && stroke.b == 0
+                        && (stroke_width - 2.5).abs() < 1e-9
+            )
+        });
+        assert!(has_custom_baseline);
+    }
+
+    #[test]
+    fn grid_draw_ticks_true_adds_tick_marks() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.grid.draw_ticks = true;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        // tick 短線: x1 = plot_left - 4, x2 = plot_left, y1 == y2
+        let tick_count = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && ((*x2 - *x1) - 4.0).abs() < 1e-9
+                            && (*x2 - frame.plot_left).abs() < 0.01
+                )
+            })
+            .count();
+        assert!(
+            tick_count > 0,
+            "draw_ticks=true で tick 刻み描画されるべき: 実際 {tick_count}"
+        );
+        assert_eq!(
+            tick_count,
+            frame.ticks.ticks.len(),
+            "tick 数は y ticks 数と一致"
+        );
+    }
+
+    #[test]
+    fn grid_draw_ticks_false_produces_no_tick_marks() {
+        let spec = make_bar_spec(3, 400.0); // default: draw_ticks=false
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let tick_count = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && ((*x2 - *x1) - 4.0).abs() < 1e-9
+                            && (*x2 - frame.plot_left).abs() < 0.01
+                )
+            })
+            .count();
+        assert_eq!(tick_count, 0, "draw_ticks=false は tick 刻みを描かない");
+    }
+
+    #[test]
+    fn y_axis_title_shifts_plot_left_right() {
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let spec_no_title = make_bar_spec(3, 400.0);
+        let mut spec_with_title = make_bar_spec(3, 400.0);
+        spec_with_title.y_axis.title = Some(AxisTitle {
+            text: "売上 (円)".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        let f_no = compute(&spec_no_title, &m);
+        let f_ti = compute(&spec_with_title, &m);
+        assert!(
+            f_ti.plot_left > f_no.plot_left,
+            "Y 軸タイトル分だけ plot_left が右にシフトすべき: no={} ti={}",
+            f_no.plot_left,
+            f_ti.plot_left
+        );
+    }
+
+    #[test]
+    fn y_axis_title_renders_rotated_text() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.title = Some(AxisTitle {
+            text: "売上".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let has_rotated = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, rotate_deg: Some(deg), .. }
+                    if content == "売上" && (deg.abs() - 90.0).abs() < 0.1
+            )
+        });
+        assert!(has_rotated, "Y 軸タイトルは -90deg で描画されるべき");
+    }
+
+    #[test]
+    fn y_axis_title_align_start_positions_at_plot_bottom() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.title = Some(AxisTitle {
+            text: "T".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Start,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let found = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, y, rotate_deg: Some(_), .. }
+                    if content == "T" && (y - frame.plot_bottom).abs() < 0.1
+            )
+        });
+        assert!(
+            found,
+            "Chart.js 準拠: align=Start は Y 軸下端(bottom-to-top 読みの起点)"
+        );
+    }
+
+    #[test]
+    fn y_axis_title_align_end_positions_at_plot_top() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.title = Some(AxisTitle {
+            text: "E".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::End,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let found = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, y, rotate_deg: Some(_), .. }
+                    if content == "E" && (y - frame.plot_top).abs() < 0.1
+            )
+        });
+        assert!(found, "Chart.js 準拠: align=End は Y 軸上端");
+    }
+
+    #[test]
+    fn y_axis_title_color_and_font_size_override() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.title = Some(AxisTitle {
+            text: "X".into(),
+            color: Some(Color {
+                r: 128,
+                g: 0,
+                b: 128,
+                a: 1.0,
+            }),
+            font_size: Some(20.0),
+            align: AxisTitleAlign::Center,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let found = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, size, fill, rotate_deg: Some(_), .. }
+                    if content == "X"
+                        && (size - 20.0).abs() < 1e-9
+                        && fill.r == 128 && fill.b == 128
+            )
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn no_y_axis_title_produces_no_rotated_text() {
+        let spec = make_bar_spec(3, 400.0); // title=None default
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let any_rotated = items.iter().any(|p| {
+            matches!(
+                p,
+                Prim::Text {
+                    rotate_deg: Some(_),
+                    ..
+                }
+            )
+        });
+        assert!(!any_rotated, "title=None なら rotated text は無し");
+    }
+
+    #[test]
+    fn x_axis_title_shifts_plot_bottom_up() {
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let a = make_bar_spec(3, 400.0);
+        let mut b = make_bar_spec(3, 400.0);
+        b.x_axis.title = Some(AxisTitle {
+            text: "時刻".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        let fa = compute(&a, &m);
+        let fb = compute(&b, &m);
+        assert!(
+            fb.plot_bottom < fa.plot_bottom,
+            "X タイトルぶん plot_bottom が上にシフトすべき: fa={} fb={}",
+            fa.plot_bottom,
+            fb.plot_bottom
+        );
+    }
+
+    #[test]
+    fn x_axis_title_renders_horizontal_text() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.title = Some(AxisTitle {
+            text: "時刻".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let has_horizontal_title = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, rotate_deg, .. }
+                    if content == "時刻" && rotate_deg.is_none()
+            )
+        });
+        assert!(has_horizontal_title, "X タイトルは rotate なしで描画");
+    }
+
+    #[test]
+    fn x_axis_title_align_start_positions_at_plot_left() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.title = Some(AxisTitle {
+            text: "T".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Start,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let found = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, x, rotate_deg: None, .. }
+                    if content == "T" && (x - frame.plot_left).abs() < 0.1
+            )
+        });
+        assert!(found, "Chart.js 準拠: X の Start は plot_left");
+    }
+
+    #[test]
+    fn x_axis_title_align_end_positions_at_plot_right() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.title = Some(AxisTitle {
+            text: "T".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::End,
+        });
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let found = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, x, rotate_deg: None, .. }
+                    if content == "T" && (x - frame.plot_right).abs() < 0.1
+            )
+        });
+        assert!(found, "Chart.js 準拠: X の End は plot_right");
+    }
+
+    #[test]
+    fn no_x_axis_title_produces_no_extra_horizontal_text_below_labels() {
+        // plot_bottom がシフトしないことは x_axis_title_shifts_plot_bottom_up で担保。
+        // ここでは title=None で下側バンドの余分な text が生えないことを assert する。
+        let spec = make_bar_spec(3, 400.0); // title=None
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        // plot_bottom + X_LABEL_BAND + font * 0.9 に近い y を持つ text がないこと
+        let expected_y = frame.plot_bottom + X_LABEL_BAND + spec.theme.font_size * 1.1 * 0.9;
+        let stray = items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { y, rotate_deg: None, .. } if (y - expected_y).abs() < 1.0
+            )
+        });
+        assert!(!stray, "title=None なら x-title 位置に余分な text は無い");
     }
 }
