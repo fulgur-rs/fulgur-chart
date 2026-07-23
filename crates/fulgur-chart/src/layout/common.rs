@@ -939,7 +939,7 @@ mod tests {
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
-        let title_x = items.iter().find_map(|item| match item {
+        let title_x = items.iter().rev().find_map(|item| match item {
             Prim::Text { x, content, .. } if content == "plot title" => Some(*x),
             _ => None,
         });

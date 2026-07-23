@@ -788,6 +788,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plot_area_non_cartesian_model_keeps_requested_canvas_size() {
+        let json = r#"{"type":"pie","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#;
+        let mut spec = chartjs::parse(json, false).unwrap();
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+
+        assert_eq!((model.meta.width, model.meta.height), (800.0, 450.0));
+    }
+
     /// クロス言語フィクスチャ: ここの行は
     /// `tools/chartjs-compat/rgba-fixture.json` と同一でなければならない。
     /// Rust `rgba_string` と JS `fmtAlpha` の乖離をどちらか一方のテストで必ず捕捉する。

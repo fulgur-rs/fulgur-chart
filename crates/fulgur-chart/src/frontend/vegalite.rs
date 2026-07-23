@@ -663,12 +663,10 @@ fn build_temporal_line(
         }
 
         let value = match record.get(y_field) {
-            Some(Value::Number(number)) => number.as_f64().ok_or_else(|| {
-                format!(
-                    "field {} contains a number outside the supported range",
-                    bounded_error_fragment(y_field)
-                )
-            })?,
+            // validate_temporal_line_fields has already established a finite f64.
+            Some(Value::Number(number)) => number
+                .as_f64()
+                .expect("validated JSON number must convert to f64"),
             Some(other) => {
                 return Err(format!(
                     "field {} must be numeric, got {}",
@@ -824,6 +822,121 @@ mod temporal_line_tests {
         assert_eq!(
             err,
             "field timestamp is missing; expected an RFC 3339 timestamp string"
+        );
+    }
+
+    fn record(timestamp: &str, value: Value, group: Option<Value>) -> Map<String, Value> {
+        let mut record = json!({"timestamp": timestamp, "value": value})
+            .as_object()
+            .expect("object")
+            .clone();
+        if let Some(group) = group {
+            record.insert("group".to_string(), group);
+        }
+        record
+    }
+
+    fn build_with_limits(
+        records: &[Map<String, Value>],
+        color: bool,
+        limits: &crate::guard::InputLimits,
+    ) -> Result<TemporalLineData, String> {
+        build_temporal_line(
+            records,
+            &Some("timestamp".to_string()),
+            &Some("value".to_string()),
+            &color.then(|| "group".to_string()),
+            &vegalite_theme(),
+            false,
+            LineInterpolation::Linear,
+            limits,
+        )
+    }
+
+    #[test]
+    fn temporal_line_preflight_rejects_records_categories_and_long_labels() {
+        let records = [record("2026-01-01T00:00:00Z", json!(1), None)];
+
+        let record_limit = crate::guard::InputLimits {
+            max_total_data_points: 0,
+            ..crate::guard::InputLimits::default()
+        };
+        assert!(
+            build_with_limits(&records, false, &record_limit)
+                .unwrap_err()
+                .contains("record count")
+        );
+
+        let category_limit = crate::guard::InputLimits {
+            max_categories: 0,
+            ..crate::guard::InputLimits::default()
+        };
+        assert!(
+            build_with_limits(&records, false, &category_limit)
+                .unwrap_err()
+                .contains("category count")
+        );
+
+        let label_limit = crate::guard::InputLimits {
+            max_label_bytes: 19,
+            ..crate::guard::InputLimits::default()
+        };
+        assert!(
+            build_with_limits(&records, false, &label_limit)
+                .unwrap_err()
+                .contains("x label length")
+        );
+    }
+
+    #[test]
+    fn temporal_line_groups_normalize_scalars_and_bound_errors() {
+        assert_eq!(temporal_group(Some(&json!(42)), "group").unwrap(), "42");
+        assert_eq!(temporal_group(Some(&json!(true)), "group").unwrap(), "true");
+        assert!(temporal_group(Some(&json!([])), "group").is_err());
+        assert!(temporal_group(None, "group").is_err());
+
+        let records = [record(
+            "2026-01-01T00:00:00Z",
+            json!(1),
+            Some(json!("group-label-over-limit")),
+        )];
+        let limits = crate::guard::InputLimits {
+            max_label_bytes: 20,
+            ..crate::guard::InputLimits::default()
+        };
+        assert!(
+            build_with_limits(&records, true, &limits)
+                .unwrap_err()
+                .contains("legend label length")
+        );
+    }
+
+    #[test]
+    fn temporal_shape_preflight_checks_both_dense_product_limits() {
+        let primitive_limit = crate::guard::InputLimits {
+            max_categories: 10,
+            max_series: 10,
+            max_categorical_primitives: 3,
+            max_total_data_points: 10,
+            ..crate::guard::InputLimits::default()
+        };
+        assert!(
+            preflight_temporal_shape(2, 2, &primitive_limit)
+                .unwrap_err()
+                .contains("max_categorical_primitives")
+        );
+
+        let total_limit = crate::guard::InputLimits {
+            max_categories: 10,
+            max_series: 10,
+            max_categorical_primitives: 10,
+            max_total_data_points: 3,
+            ..crate::guard::InputLimits::default()
+        };
+        assert!(
+            preflight_temporal_shape(2, 2, &total_limit)
+                .unwrap_err()
+                .contains("max_total_data_points")
         );
     }
 

@@ -217,11 +217,8 @@ fn generate_fixed(start_ms: i64, stop_ms: i64, step_ms: i64, origin_ms: i64) -> 
     let mut out = Vec::new();
     let mut current = aligned;
     while current <= stop {
-        if let Ok(value) = i64::try_from(current) {
-            out.push(value);
-        } else {
-            break;
-        }
+        // `current` is bounded by the i64-derived start/stop values here.
+        out.push(current as i64);
         current += step;
     }
     out
@@ -263,11 +260,7 @@ fn generate_calendar(start_ms: i64, stop_ms: i64, unit: TickUnit, step: i32) -> 
         if value >= start_ms {
             out.push(value);
         }
-        let next = index.saturating_add(step);
-        if next == index {
-            break;
-        }
-        index = next;
+        index = index.saturating_add(step);
     }
     out
 }
@@ -420,6 +413,15 @@ mod tests {
     }
 
     #[test]
+    fn bounded_error_fragment_preserves_multibyte_boundaries() {
+        let raw = format!("{}tail", "あ".repeat(27));
+        let shown = bounded_error_fragment(&raw);
+        assert!(shown.ends_with("..."));
+        assert!(shown.is_char_boundary(shown.len()));
+        assert!(!shown.contains("tail"));
+    }
+
+    #[test]
     fn dogfood_range_uses_two_day_ticks() {
         let min = millis("2026-06-05T19:55:20Z");
         let max = millis("2026-07-22T19:18:38Z");
@@ -471,6 +473,22 @@ mod tests {
                 .collect::<HashSet<_>>()
                 .len(),
             ticks.len()
+        );
+    }
+
+    #[test]
+    fn minute_ticks_use_minute_alignment_and_labels() {
+        let ticks = temporal_ticks(
+            millis("2026-07-15T12:00:00Z"),
+            millis("2026-07-15T12:10:00Z"),
+            80.0,
+        );
+        assert_eq!(
+            ticks
+                .iter()
+                .map(|tick| tick.label.as_str())
+                .collect::<Vec<_>>(),
+            ["12 PM", "12:05", "12:10"]
         );
     }
 
@@ -531,6 +549,53 @@ mod tests {
     }
 
     #[test]
+    fn nice_year_steps_cover_d3_one_five_and_ten_factors() {
+        assert_eq!(nice_tick_step(12.0, 10), 1.0);
+        assert_eq!(nice_tick_step(45.0, 10), 5.0);
+        assert_eq!(nice_tick_step(90.0, 10), 10.0);
+    }
+
+    #[test]
+    fn week_ticks_align_to_sunday() {
+        let ticks = temporal_ticks(
+            millis("2026-01-01T00:00:00Z"),
+            millis("2026-03-01T00:00:00Z"),
+            400.0,
+        );
+        assert!(ticks.iter().all(|tick| {
+            datetime(tick.unix_millis).expect("valid tick").weekday() == Weekday::Sunday
+        }));
+    }
+
+    #[test]
+    fn calendar_generation_ceil_aligns_partial_months_and_years() {
+        let mid_january = millis("2026-01-15T00:00:00Z");
+        let april = millis("2026-04-01T00:00:00Z");
+        assert_eq!(
+            generate_calendar(mid_january, april, TickUnit::Month, 3),
+            vec![april]
+        );
+
+        let mid_year = millis("2026-07-01T00:00:00Z");
+        let year_2030 = millis("2030-01-01T00:00:00Z");
+        assert_eq!(
+            generate_calendar(mid_year, year_2030, TickUnit::Year, 5),
+            vec![year_2030]
+        );
+        assert!(generate_calendar(0, 1, TickUnit::Day, 1).is_empty());
+        assert_eq!(
+            calendar_millis(TickUnit::Year, 2026),
+            Some(millis("2026-01-01T00:00:00Z"))
+        );
+        assert_eq!(calendar_millis(TickUnit::Day, 0), None);
+    }
+
+    #[test]
+    fn calendar_ticks_reject_datetimes_outside_time_crate_range() {
+        assert!(generate_calendar(i64::MIN, i64::MAX, TickUnit::Year, 1).is_empty());
+    }
+
+    #[test]
     fn ticks_cover_full_domain_without_twenty_four_entry_cap() {
         let min = millis("2026-01-01T00:00:00Z");
         let max = millis("2026-03-31T00:00:00Z");
@@ -558,6 +623,41 @@ mod tests {
         ];
         for (timestamp, expected) in cases {
             assert_eq!(tick_label(millis(timestamp)), expected);
+        }
+    }
+
+    #[test]
+    fn dynamic_label_tables_cover_weekdays_and_month_abbreviations() {
+        let weekdays = [
+            (Weekday::Monday, "Mon"),
+            (Weekday::Tuesday, "Tue"),
+            (Weekday::Wednesday, "Wed"),
+            (Weekday::Thursday, "Thu"),
+            (Weekday::Friday, "Fri"),
+            (Weekday::Saturday, "Sat"),
+            (Weekday::Sunday, "Sun"),
+        ];
+        for (weekday, expected) in weekdays {
+            assert_eq!(weekday_abbreviation(weekday), expected);
+        }
+
+        let months = [
+            (Month::January, "Jan", "January"),
+            (Month::February, "Feb", "February"),
+            (Month::March, "Mar", "March"),
+            (Month::April, "Apr", "April"),
+            (Month::May, "May", "May"),
+            (Month::June, "Jun", "June"),
+            (Month::July, "Jul", "July"),
+            (Month::August, "Aug", "August"),
+            (Month::September, "Sep", "September"),
+            (Month::October, "Oct", "October"),
+            (Month::November, "Nov", "November"),
+            (Month::December, "Dec", "December"),
+        ];
+        for (month, abbreviation, name) in months {
+            assert_eq!(month_abbreviation(month), abbreviation);
+            assert_eq!(month_name(month), name);
         }
     }
 }
