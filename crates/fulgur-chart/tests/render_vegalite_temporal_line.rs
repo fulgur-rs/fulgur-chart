@@ -38,6 +38,32 @@ fn dogfood_fixture_renders_in_strict_and_non_strict_modes() {
 }
 
 #[test]
+fn plot_area_outer_scene_must_fit_dimension_limit() {
+    let spec = parsed();
+    let limits = InputLimits {
+        max_dimension_px: 740.0,
+        ..InputLimits::default()
+    };
+
+    let err = validate_spec(&spec, &limits).unwrap_err();
+    assert!(err.contains("scene width"), "unexpected error: {err}");
+}
+
+#[test]
+fn plot_area_outer_scene_height_must_fit_dimension_limit() {
+    let mut spec = parsed();
+    spec.width = 100.0;
+    spec.height = 720.0;
+    let limits = InputLimits {
+        max_dimension_px: 740.0,
+        ..InputLimits::default()
+    };
+
+    let err = validate_spec(&spec, &limits).unwrap_err();
+    assert!(err.contains("scene height"), "unexpected error: {err}");
+}
+
+#[test]
 fn dogfood_fixture_preserves_series_values_and_tableau_order() {
     let spec = parsed();
     assert_eq!(

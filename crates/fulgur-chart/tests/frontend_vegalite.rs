@@ -312,6 +312,130 @@ fn strict_temporal_line_rejects_unsupported_explicit_values() {
 }
 
 #[test]
+fn non_strict_temporal_line_rejects_unsupported_interpolation() {
+    for replacement in ["\"step\"", "42"] {
+        let err = vegalite::parse(&DOGFOOD_SHAPE.replace("\"monotone\"", replacement), false)
+            .unwrap_err();
+        assert!(err.contains("mark.interpolate"), "unexpected error: {err}");
+    }
+}
+
+#[test]
+fn non_strict_temporal_line_rejects_unsupported_color_scheme() {
+    for (json, expected) in [
+        (
+            DOGFOOD_SHAPE.replace("\"tableau10\"", "\"category10\""),
+            "encoding.color.scale.scheme",
+        ),
+        (
+            DOGFOOD_SHAPE.replace("\"tableau10\"", "42"),
+            "encoding.color.scale.scheme",
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""scale":{"scheme":"tableau10"}"#, r#""scale":{}"#),
+            "encoding.color.scale.scheme",
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""scale":{"scheme":"tableau10"}"#, r#""scale":42"#),
+            "encoding.color.scale",
+        ),
+    ] {
+        let err = vegalite::parse(&json, false).unwrap_err();
+        assert!(err.contains(expected), "unexpected error: {err}");
+    }
+}
+
+#[test]
+fn strict_line_rejects_unsupported_channel_type_values() {
+    let err =
+        vegalite::parse(&DOGFOOD_SHAPE.replace("\"temporal\"", "\"temporl\""), true).unwrap_err();
+    assert!(err.contains("encoding.x.type"), "unexpected error: {err}");
+
+    let err = vegalite::parse(
+        &DOGFOOD_SHAPE.replace("\"quantitative\"", "\"quantitativ\""),
+        true,
+    )
+    .unwrap_err();
+    assert!(err.contains("encoding.y.type"), "unexpected error: {err}");
+
+    let err =
+        vegalite::parse(&DOGFOOD_SHAPE.replace("\"nominal\"", "\"nominl\""), true).unwrap_err();
+    assert!(
+        err.contains("encoding.color.type"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn strict_categorical_line_rejects_temporal_only_options() {
+    let base = r#"{
+        "mark":{"type":"line"},
+        "data":{"values":[{"x":"a","y":1},{"x":"b","y":2}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}
+    }"#;
+    for (needle, replacement, expected) in [
+        (
+            r#""type":"line""#,
+            r#""type":"line","point":false"#,
+            "mark.point",
+        ),
+        (
+            r#""type":"line""#,
+            r#""type":"line","interpolate":"monotone""#,
+            "mark.interpolate",
+        ),
+        (
+            r#""mark":{"type":"line"}"#,
+            r#""mark":{"type":"line"},"background":"white""#,
+            "background",
+        ),
+        (
+            r#""mark":{"type":"line"}"#,
+            r#""mark":{"type":"line"},"config":{"axis":{"gridOpacity":0.5}}"#,
+            "config",
+        ),
+        (
+            r#""field":"x","type":"nominal""#,
+            r#""field":"x","type":"nominal","title":"category""#,
+            "encoding.x.title",
+        ),
+        (
+            r#""field":"y","type":"quantitative""#,
+            r#""field":"y","type":"quantitative","title":"value""#,
+            "encoding.y.title",
+        ),
+        (
+            r#""y":{"field":"y","type":"quantitative"}"#,
+            r#""y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal","title":"group"}"#,
+            "encoding.color.title",
+        ),
+        (
+            r#""y":{"field":"y","type":"quantitative"}"#,
+            r#""y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal","scale":{"scheme":"tableau10"}}"#,
+            "encoding.color.scale",
+        ),
+    ] {
+        let err = vegalite::parse(&base.replace(needle, replacement), true).unwrap_err();
+        assert!(err.contains(expected), "{expected}: {err}");
+    }
+}
+
+#[test]
+fn strict_temporal_line_rejects_non_null_view_stroke() {
+    let json = DOGFOOD_SHAPE.replace(r#""stroke":null"#, r##""stroke":"#ddd""##);
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(
+        err.contains("config.view.stroke"),
+        "unexpected error: {err}"
+    );
+
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_err(),
+        "typed schema must reject non-null config.view.stroke"
+    );
+}
+
+#[test]
 fn strict_temporal_line_reports_nested_type_and_required_key_errors() {
     let cases = [
         (

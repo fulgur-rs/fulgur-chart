@@ -605,6 +605,26 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
         }
     }
 
+    if matches!(spec.kind, ChartKind::Line)
+        && matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
+    {
+        let measurer = crate::text::TextMeasurer::new(crate::font::DEFAULT_FONT)
+            .map_err(|error| format!("failed to measure plot-area scene: {error}"))?;
+        let frame = crate::layout::common::compute(spec, &measurer);
+        if !frame.scene_width.is_finite() || frame.scene_width > limits.max_dimension_px {
+            return Err(format!(
+                "scene width {:.0} exceeds limit {:.0}",
+                frame.scene_width, limits.max_dimension_px
+            ));
+        }
+        if !frame.scene_height.is_finite() || frame.scene_height > limits.max_dimension_px {
+            return Err(format!(
+                "scene height {:.0} exceeds limit {:.0}",
+                frame.scene_height, limits.max_dimension_px
+            ));
+        }
+    }
+
     Ok(())
 }
 

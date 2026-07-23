@@ -24,8 +24,8 @@ insta snapshots, cargo-llvm-cov, Beads (`bd`).
 - Work in
   `/home/ubuntu/fulgur-chart/.worktrees/6an-vegalite-dogfood-parity` on
   `feat/6an-vegalite-dogfood-parity`.
-- The branch is stacked on `feat/s7o-axis-styling` / PR #136; do not merge
-  parent commits into this feature's final PR.
+- PR #136 is merged. The feature branch is rebased onto `main`, and the final
+  PR contains only the temporal-line parity commits relative to `main`.
 - Temporal input v1 accepts RFC 3339 strings only.
 - Existing Chart.js and categorical Vega-Lite output must remain byte-stable.
 - Vega SVG DOM, ARIA, browser font metrics, and pixel identity are out of scope.
@@ -300,7 +300,17 @@ changes.
 **Step 7: Commit and close**
 
 ```bash
-git add crates/fulgur-chart/src crates/fulgur-chart/tests
+git add crates/fulgur-chart/src/frontend/chartjs.rs \
+  crates/fulgur-chart/src/frontend/vegalite.rs \
+  crates/fulgur-chart/src/guard.rs \
+  crates/fulgur-chart/src/ir.rs \
+  crates/fulgur-chart/src/layout/common.rs \
+  crates/fulgur-chart/src/layout/line.rs \
+  crates/fulgur-chart/src/layout/mixed.rs \
+  crates/fulgur-chart/src/layout/scatter.rs \
+  crates/fulgur-chart/src/layout/sparkline.rs \
+  crates/fulgur-chart/src/layout/wordcloud.rs
+git diff --cached --name-only
 git commit -m "feat(ir): add positioned line contracts"
 bd close fulgur-chart-6an.1
 bd dolt push
@@ -595,10 +605,10 @@ pub struct VlAxisConfig {
 }
 ```
 
-Model `config.view.stroke` as `Option<serde_json::Value>` so the explicit null
-from the fixture is accepted without claiming rendering support.
+Model `config.view.stroke` as `Option<()>` so the fixture's explicit null is
+accepted while every non-null value is rejected.
 
-**Step 4: Extend manual strict validation**
+**Step 4: Extend manual validation**
 
 Make top-level `background` and `config` legal only where modeled. For line:
 
@@ -610,6 +620,9 @@ Make top-level `background` and `config` legal only where modeled. For line:
 - config.axis keys: `grid`, `gridOpacity`
 
 Validate types and supported enum values, including `0.0 <= gridOpacity <= 1.0`.
+Recognized semantic values such as `mark.interpolate` and
+`encoding.color.scale.scheme` are rejected in both strict and non-strict mode
+when unsupported.
 
 **Step 5: Run all frontend tests**
 
@@ -1261,19 +1274,19 @@ git push
 **Interfaces:**
 
 - Consumes the complete feature.
-- Produces final committed, pushed, CI-green stacked branch and evidence for
+- Produces final committed, pushed, CI-green main-based branch and evidence for
   closing `fulgur-chart-6an`.
 
-**Step 1: Claim and confirm clean stack**
+**Step 1: Claim and confirm clean branch**
 
 ```bash
 bd update fulgur-chart-6an.8 --claim
 git fetch origin
-git rebase origin/feat/s7o-axis-styling
+git rebase origin/main
 git status --short --branch
 ```
 
-Expected: clean feature branch, ahead only by 6an commits.
+Expected: clean feature branch, ahead of `main` only by 6an commits.
 
 **Step 2: Reconstruct the live dogfood spec outside the repository**
 
@@ -1364,8 +1377,8 @@ CodeCov patch check:
 ```bash
 git push
 gh pr view --json number,url >/dev/null 2>&1 || \
-  gh pr create --draft \
-    --base feat/s7o-axis-styling \
+  gh pr create \
+    --base main \
     --head feat/6an-vegalite-dogfood-parity \
     --title "feat(vegalite): match temporal line dogfood semantics" \
     --body-file /tmp/fulgur-chart-6an-pr.md
@@ -1397,12 +1410,10 @@ After the semantic checks pass, create `/tmp/fulgur-chart-6an-pr.md` with
 
 ## Dependency
 
-Stacked on #136. Keep this PR draft until the parent merges.
+PR #136 is merged; this branch is rebased onto `main`.
 
 Closes fulgur-chart-6an
 ```
-
-Keep the PR draft while its base PR is open.
 
 Expected: Codecov patch coverage is exactly 100%. If it is lower, use the
 changed-line annotations to add a behavior-focused test, commit it, regenerate
