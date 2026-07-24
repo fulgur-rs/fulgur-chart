@@ -244,6 +244,14 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     } else {
         0.0
     };
+    let vertical_legend_rows =
+        if legend && matches!(spec.legend, LegendPos::Left | LegendPos::Right) {
+            spec.series.len() + usize::from(temporal_plot_right_legend_title(spec).is_some())
+        } else {
+            0
+        };
+    let vertical_legend_overflow =
+        ((vertical_legend_rows as f64 * LEGEND_ROW_H - spec.height) / 2.0).max(0.0);
     // PlotArea の幅はこの時点で確定しているため、scene 寸法より先に temporal tick を
     // 作れる。末尾ラベルが plot_right 上に中央寄せされても scene から切れないよう、
     // その半幅を右側の最低余白として使う。
@@ -324,12 +332,17 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         }
         SizeMode::PlotArea => {
             let plot_left = OUTER_PAD + y_axis_w;
-            let plot_top = OUTER_PAD + title_band;
+            let plot_top = OUTER_PAD + title_band + vertical_legend_overflow;
             let plot_right = plot_left + spec.width;
             let plot_bottom = plot_top + spec.height;
             let trailing_band = (OUTER_PAD + legend_right).max(temporal_edge_pad_right);
             let scene_width = plot_right + trailing_band;
-            let scene_height = plot_bottom + X_LABEL_BAND + x_title_h + OUTER_PAD + legend_bottom;
+            let scene_height = plot_bottom
+                + X_LABEL_BAND
+                + x_title_h
+                + OUTER_PAD
+                + legend_bottom
+                + vertical_legend_overflow;
             (
                 scene_width,
                 scene_height,
@@ -964,6 +977,29 @@ mod tests {
         assert_eq!(frame.plot_bottom - frame.plot_top, 320.0);
         assert!(frame.scene_width > 720.0);
         assert!(frame.scene_height > 320.0);
+    }
+
+    #[test]
+    fn plot_area_scene_contains_tall_right_legend() {
+        let mut spec = temporal_spec(vec![0, 1]);
+        spec.height = 18.0;
+        spec.legend = LegendPos::Right;
+        spec.legend_title = Some("metric".into());
+        let template = spec.series[0].clone();
+        spec.series = (0..6)
+            .map(|i| {
+                let mut series = template.clone();
+                series.name = format!("series-{i}");
+                series
+            })
+            .collect();
+
+        let frame = compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let group_h = (spec.series.len() + 1) as f64 * LEGEND_ROW_H;
+        let start_y = (frame.plot_top + frame.plot_bottom - group_h) / 2.0;
+        assert!(start_y >= 0.0);
+        assert!(start_y + group_h <= frame.scene_height);
+        assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
     }
 
     #[test]
