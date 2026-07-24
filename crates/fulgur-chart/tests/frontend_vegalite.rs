@@ -247,6 +247,87 @@ fn dogfood_shape_is_accepted_by_typed_schema_and_strict_parser() {
     assert!(vegalite::parse(DOGFOOD_SHAPE, true).is_ok());
 }
 
+fn temporal_line_with_field(path: &[&str], value: Option<serde_json::Value>) -> serde_json::Value {
+    let mut json: serde_json::Value = serde_json::from_str(DOGFOOD_SHAPE).unwrap();
+    let (key, parent_path) = path.split_last().expect("field path must not be empty");
+    let mut parent = &mut json;
+    for segment in parent_path {
+        parent = parent
+            .get_mut(*segment)
+            .unwrap_or_else(|| panic!("missing fixture path segment: {segment}"));
+    }
+    let parent = parent
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("fixture parent is not an object: {parent_path:?}"));
+    match value {
+        Some(value) => {
+            parent.insert((*key).to_string(), value);
+        }
+        None => {
+            parent.remove(*key);
+        }
+    }
+    json
+}
+
+#[test]
+fn temporal_line_nullable_typed_fields_treat_null_as_omission() {
+    let nullable_paths: &[&[&str]] = &[
+        &["$schema"],
+        &["width"],
+        &["height"],
+        &["title"],
+        &["background"],
+        &["config"],
+        &["mark", "point"],
+        &["mark", "interpolate"],
+        &["encoding", "color"],
+        &["encoding", "x", "title"],
+        &["encoding", "y", "type"],
+        &["encoding", "y", "title"],
+        &["encoding", "color", "type"],
+        &["encoding", "color", "title"],
+        &["encoding", "color", "scale"],
+        &["config", "view"],
+        &["config", "axis"],
+        &["config", "view", "stroke"],
+        &["config", "axis", "grid"],
+        &["config", "axis", "gridOpacity"],
+    ];
+
+    let mut failures = Vec::new();
+    for path in nullable_paths {
+        let null_json = temporal_line_with_field(path, Some(serde_json::Value::Null));
+        let omitted_json = temporal_line_with_field(path, None);
+        let path = path.join(".");
+
+        if let Err(err) =
+            serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(null_json.clone())
+        {
+            failures.push(format!("{path}: typed schema rejected null: {err}"));
+            continue;
+        }
+
+        for strict in [false, true] {
+            let omitted = vegalite::parse(&omitted_json.to_string(), strict)
+                .unwrap_or_else(|err| panic!("{path}: omitted value failed: {err}"));
+            match vegalite::parse(&null_json.to_string(), strict) {
+                Ok(actual) if actual == omitted => {}
+                Ok(_) => failures.push(format!(
+                    "{path}: strict={strict} null did not match omission"
+                )),
+                Err(err) => failures.push(format!("{path}: strict={strict} rejected null: {err}")),
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "nullable temporal-line mismatches:\n{}",
+        failures.join("\n")
+    );
+}
+
 #[test]
 fn typed_line_schema_constrains_channel_types() {
     for json in [
@@ -536,6 +617,10 @@ fn strict_temporal_line_reports_nested_type_and_required_key_errors() {
         ),
         (
             DOGFOOD_SHAPE.replace(r#""title":"date""#, r#""title":null"#),
+            None,
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""title":"date""#, r#""title":42"#),
             Some("encoding.x.title"),
         ),
         (
