@@ -104,6 +104,21 @@ fn temporal_line_aggregates_offset_equivalent_timestamps() {
 }
 
 #[test]
+fn temporal_line_rejects_non_finite_duplicate_aggregate() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T19:00:00Z","metric":"a","value":1e308},
+            {"timestamp":"2026-07-02T04:00:00+09:00","metric":"a","value":1e308}
+        ]},
+        "encoding":{"x":{"field":"timestamp","type":"temporal"},"y":{"field":"value"},"color":{"field":"metric"}}
+    }"#;
+
+    let err = vegalite::parse(json, true).unwrap_err();
+    assert_eq!(err, "temporal line aggregate must be finite");
+}
+
+#[test]
 fn temporal_line_without_color_builds_one_named_series() {
     let json = r#"{
         "mark":"line",
