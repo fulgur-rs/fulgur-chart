@@ -155,6 +155,56 @@ fn temporal_line_sorts_mixed_color_domain_by_type_without_collisions() {
 }
 
 #[test]
+fn temporal_line_numeric_color_order_is_deterministic_for_equal_f64_keys() {
+    let parse = |values: &str| {
+        vegalite::parse(
+            &format!(
+                r#"{{
+                    "mark":"line",
+                    "data":{{"values":[{values}]}},
+                    "encoding":{{
+                        "x":{{"field":"timestamp","type":"temporal"}},
+                        "y":{{"field":"value","type":"quantitative"}},
+                        "color":{{"field":"metric","type":"nominal"}}
+                    }}
+                }}"#
+            ),
+            true,
+        )
+        .unwrap()
+    };
+    let forward = parse(
+        r#"{"timestamp":"2026-07-01T00:00:00Z","metric":9007199254740992,"value":1},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":9007199254740993,"value":2},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":2,"value":3},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":2.0,"value":4}"#,
+    );
+    let reverse = parse(
+        r#"{"timestamp":"2026-07-01T00:00:00Z","metric":2.0,"value":4},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":2,"value":3},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":9007199254740993,"value":2},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":9007199254740992,"value":1}"#,
+    );
+    let series = |spec: &fulgur_chart::ir::ChartSpec| {
+        spec.series
+            .iter()
+            .map(|series| (series.name.clone(), series.stroke[0]))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(series(&forward), series(&reverse));
+    assert_eq!(
+        series(&forward),
+        vec![
+            ("2".to_string(), VEGALITE_PALETTE[0]),
+            ("2.0".to_string(), VEGALITE_PALETTE[1]),
+            ("9007199254740992".to_string(), VEGALITE_PALETTE[2]),
+            ("9007199254740993".to_string(), VEGALITE_PALETTE[3]),
+        ]
+    );
+}
+
+#[test]
 fn temporal_line_aggregates_offset_equivalent_timestamps() {
     let json = r#"{
         "mark":"line",

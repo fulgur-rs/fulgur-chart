@@ -611,7 +611,7 @@ enum TemporalGroupKey {
 
 #[derive(Clone, Debug, PartialEq)]
 enum TemporalGroupOrder {
-    Number(f64),
+    Number { value: f64, exact: Number },
     String(String),
     Bool(bool),
 }
@@ -629,17 +629,32 @@ fn cmp_temporal_group_orders(
     right: &TemporalGroupOrder,
 ) -> std::cmp::Ordering {
     match (left, right) {
-        (TemporalGroupOrder::Number(left), TemporalGroupOrder::Number(right)) => {
-            left.total_cmp(right)
+        (
+            TemporalGroupOrder::Number {
+                value: left_value,
+                exact: left_exact,
+            },
+            TemporalGroupOrder::Number {
+                value: right_value,
+                exact: right_exact,
+            },
+        ) => left_value
+            .total_cmp(right_value)
+            .then_with(|| left_exact.to_string().cmp(&right_exact.to_string())),
+        (TemporalGroupOrder::Number { .. }, TemporalGroupOrder::String(_)) => {
+            std::cmp::Ordering::Less
         }
-        (TemporalGroupOrder::Number(_), TemporalGroupOrder::String(_)) => std::cmp::Ordering::Less,
-        (TemporalGroupOrder::Number(_), TemporalGroupOrder::Bool(_)) => std::cmp::Ordering::Less,
-        (TemporalGroupOrder::String(_), TemporalGroupOrder::Number(_)) => {
+        (TemporalGroupOrder::Number { .. }, TemporalGroupOrder::Bool(_)) => {
+            std::cmp::Ordering::Less
+        }
+        (TemporalGroupOrder::String(_), TemporalGroupOrder::Number { .. }) => {
             std::cmp::Ordering::Greater
         }
         (TemporalGroupOrder::String(left), TemporalGroupOrder::String(right)) => left.cmp(right),
         (TemporalGroupOrder::String(_), TemporalGroupOrder::Bool(_)) => std::cmp::Ordering::Less,
-        (TemporalGroupOrder::Bool(_), TemporalGroupOrder::Number(_)) => std::cmp::Ordering::Greater,
+        (TemporalGroupOrder::Bool(_), TemporalGroupOrder::Number { .. }) => {
+            std::cmp::Ordering::Greater
+        }
         (TemporalGroupOrder::Bool(_), TemporalGroupOrder::String(_)) => std::cmp::Ordering::Greater,
         (TemporalGroupOrder::Bool(left), TemporalGroupOrder::Bool(right)) => left.cmp(right),
     }
@@ -824,11 +839,14 @@ fn temporal_group(value: Option<&Value>, field: &str) -> Result<TemporalGroup, S
             key: TemporalGroupKey::Number(value.clone()),
             name: value.to_string(),
             // serde_json が受理する JSON number は f64 へ変換でき、NaN は JSON に存在しない。
-            order: TemporalGroupOrder::Number(
-                value
+            order: TemporalGroupOrder::Number {
+                value: value
                     .as_f64()
                     .expect("JSON number must convert to f64 for temporal group ordering"),
-            ),
+                // `exact` は同一性 key と同じ JSON number 表現で、f64 が同値のときに
+                // 別系列の順序を入力順から独立させる。
+                exact: value.clone(),
+            },
         }),
         Some(Value::Bool(value)) => Ok(TemporalGroup {
             key: TemporalGroupKey::Bool(*value),
@@ -1000,8 +1018,18 @@ mod temporal_line_tests {
     #[test]
     fn temporal_group_order_comparison_is_total_across_types() {
         let groups = vec![
-            TemporalGroupOrder::Number(2.0),
-            TemporalGroupOrder::Number(10.0),
+            TemporalGroupOrder::Number {
+                value: 2.0,
+                exact: Number::from(2),
+            },
+            TemporalGroupOrder::Number {
+                value: 2.0,
+                exact: serde_json::from_str("2.0").unwrap(),
+            },
+            TemporalGroupOrder::Number {
+                value: 10.0,
+                exact: Number::from(10),
+            },
             TemporalGroupOrder::String("15".into()),
             TemporalGroupOrder::String("2".into()),
             TemporalGroupOrder::Bool(false),
