@@ -634,6 +634,13 @@ fn build_temporal_line(
     } else {
         vec![String::new()]
     };
+    // 表示名・同一性判定は従来どおり文字列化した値を使う。JSON 数値だけは
+    // Vega-Lite と同じ数値順で色域を並べるため、比較キーを別途保持する。
+    let mut group_numbers = if color_field.is_some() {
+        Vec::new()
+    } else {
+        vec![None]
+    };
     let mut group_indexes = HashMap::<String, usize>::new();
     let mut aggregates = HashMap::<(i64, usize), f64>::new();
     preflight_temporal_shape(0, group_names.len(), limits)?;
@@ -690,7 +697,8 @@ fn build_temporal_line(
         };
 
         let group_index = if let Some(color_field) = color_field.as_deref() {
-            let group = temporal_group(record.get(color_field), color_field)?;
+            let group_value = record.get(color_field);
+            let group = temporal_group(group_value, color_field)?;
             if group.len() > limits.max_label_bytes {
                 return Err(format!(
                     "temporal legend label length {} bytes exceeds limit {}",
@@ -705,6 +713,7 @@ fn build_temporal_line(
                 let next_group_len = index.saturating_add(1);
                 preflight_temporal_shape(domain.len(), next_group_len, limits)?;
                 group_names.push(group.clone());
+                group_numbers.push(group_value.and_then(Value::as_f64));
                 group_indexes.insert(group, index);
                 index
             }
@@ -725,7 +734,14 @@ fn build_temporal_line(
         .map(|(index, name)| (name, index))
         .collect::<Vec<_>>();
     if color_field.is_some() {
-        ordered_groups.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        ordered_groups.sort_unstable_by(|left, right| {
+            match (group_numbers[left.1], group_numbers[right.1]) {
+                (Some(left_number), Some(right_number)) => left_number
+                    .total_cmp(&right_number)
+                    .then_with(|| left.0.cmp(&right.0)),
+                _ => left.0.cmp(&right.0),
+            }
+        });
     }
     let mut series = Vec::with_capacity(ordered_groups.len());
     for (palette_index, (name, group_index)) in ordered_groups.into_iter().enumerate() {
