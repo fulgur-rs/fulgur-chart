@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 #[serde(untagged)]
 pub enum VegaLiteSpec {
     Bar(VlBarSpec),
-    Line(VlLineSpec),
+    TemporalLine(VlTemporalLineSpec),
+    CategoricalLine(VlCategoricalLineSpec),
     Point(VlPointSpec),
     Circle(VlCircleSpec),
     Arc(VlArcSpec),
@@ -105,6 +106,20 @@ pub struct MarkLineObject {
 pub enum MarkLine {
     String(MarkLineName),
     Object(MarkLineObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkCategoricalLineObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkLineName,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkCategoricalLine {
+    String(MarkLineName),
+    Object(MarkCategoricalLineObject),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -217,15 +232,15 @@ pub struct VlBarEncoding {
 }
 
 // ────────────────────────────────────────────────
-// Line chart (mark: "line")
+// Temporal line chart (mark: "line")
 // ────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct VlLineSpec {
+pub struct VlTemporalLineSpec {
     pub mark: MarkLine,
     pub data: VlData,
-    pub encoding: VlLineEncoding,
+    pub encoding: VlTemporalLineEncoding,
     #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -242,19 +257,48 @@ pub struct VlLineSpec {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct VlLineEncoding {
-    pub x: VlLineChannel,
-    pub y: VlLineChannel,
+pub struct VlTemporalLineEncoding {
+    pub x: VlTemporalXChannel,
+    pub y: VlTemporalYChannel,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub color: Option<VlColorChannel>,
+    pub color: Option<VlTemporalColorChannel>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlTemporalType {
+    Temporal,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlCategoricalType {
+    Nominal,
+    Ordinal,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlQuantitativeType {
+    Quantitative,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct VlLineChannel {
+pub struct VlTemporalXChannel {
+    pub field: String,
+    #[serde(rename = "type")]
+    pub field_type: VlTemporalType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTemporalYChannel {
     pub field: String,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub field_type: Option<String>,
+    pub field_type: Option<VlQuantitativeType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
@@ -273,14 +317,67 @@ pub struct VlColorScale {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct VlColorChannel {
+pub struct VlTemporalColorChannel {
     pub field: String,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    pub field_type: Option<String>,
+    pub field_type: Option<VlCategoricalType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scale: Option<VlColorScale>,
+}
+
+// ────────────────────────────────────────────────
+// Categorical line chart (mark: "line")
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCategoricalLineSpec {
+    pub mark: MarkCategoricalLine,
+    pub data: VlData,
+    pub encoding: VlCategoricalLineEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCategoricalLineEncoding {
+    pub x: VlCategoricalXChannel,
+    pub y: VlCategoricalYChannel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlCategoricalColorChannel>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCategoricalXChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlCategoricalType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCategoricalYChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlQuantitativeType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCategoricalColorChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlCategoricalType>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
