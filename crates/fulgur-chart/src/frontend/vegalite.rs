@@ -14,7 +14,7 @@ use crate::color::parse_color;
 use crate::ir::*;
 use crate::palette::vegalite_theme;
 use crate::temporal::{bounded_error_fragment, parse_rfc3339_millis};
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Vega-Lite サブセットを [`ChartSpec`] へ変換する。
@@ -604,14 +604,14 @@ struct TemporalLineData {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum TemporalGroupKey {
-    Number(Number),
+    Number(u64),
     String(String),
     Bool(bool),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 enum TemporalGroupOrder {
-    Number { value: f64, exact: Number },
+    Number(u64),
     String(String),
     Bool(bool),
 }
@@ -624,37 +624,30 @@ struct TemporalGroup {
 
 /// 異種 group の決定的な型順序。各型の内部順序は従来のまま、数値だけは数値順にする。
 /// `Number -> String -> Bool` として、混在型でも全順序を維持する。
+fn canonical_number_bits(value: f64) -> u64 {
+    if value == 0.0 {
+        0.0f64.to_bits()
+    } else {
+        value.to_bits()
+    }
+}
+
 fn cmp_temporal_group_orders(
     left: &TemporalGroupOrder,
     right: &TemporalGroupOrder,
 ) -> std::cmp::Ordering {
     match (left, right) {
-        (
-            TemporalGroupOrder::Number {
-                value: left_value,
-                exact: left_exact,
-            },
-            TemporalGroupOrder::Number {
-                value: right_value,
-                exact: right_exact,
-            },
-        ) => left_value
-            .total_cmp(right_value)
-            .then_with(|| left_exact.to_string().cmp(&right_exact.to_string())),
-        (TemporalGroupOrder::Number { .. }, TemporalGroupOrder::String(_)) => {
-            std::cmp::Ordering::Less
+        (TemporalGroupOrder::Number(left), TemporalGroupOrder::Number(right)) => {
+            f64::from_bits(*left).total_cmp(&f64::from_bits(*right))
         }
-        (TemporalGroupOrder::Number { .. }, TemporalGroupOrder::Bool(_)) => {
-            std::cmp::Ordering::Less
-        }
-        (TemporalGroupOrder::String(_), TemporalGroupOrder::Number { .. }) => {
+        (TemporalGroupOrder::Number(_), TemporalGroupOrder::String(_)) => std::cmp::Ordering::Less,
+        (TemporalGroupOrder::Number(_), TemporalGroupOrder::Bool(_)) => std::cmp::Ordering::Less,
+        (TemporalGroupOrder::String(_), TemporalGroupOrder::Number(_)) => {
             std::cmp::Ordering::Greater
         }
         (TemporalGroupOrder::String(left), TemporalGroupOrder::String(right)) => left.cmp(right),
         (TemporalGroupOrder::String(_), TemporalGroupOrder::Bool(_)) => std::cmp::Ordering::Less,
-        (TemporalGroupOrder::Bool(_), TemporalGroupOrder::Number { .. }) => {
-            std::cmp::Ordering::Greater
-        }
+        (TemporalGroupOrder::Bool(_), TemporalGroupOrder::Number(_)) => std::cmp::Ordering::Greater,
         (TemporalGroupOrder::Bool(_), TemporalGroupOrder::String(_)) => std::cmp::Ordering::Greater,
         (TemporalGroupOrder::Bool(left), TemporalGroupOrder::Bool(right)) => left.cmp(right),
     }
@@ -835,19 +828,19 @@ fn temporal_group(value: Option<&Value>, field: &str) -> Result<TemporalGroup, S
             name: value.clone(),
             order: TemporalGroupOrder::String(value.clone()),
         }),
-        Some(Value::Number(value)) => Ok(TemporalGroup {
-            key: TemporalGroupKey::Number(value.clone()),
-            name: value.to_string(),
-            // serde_json が受理する JSON number は f64 へ変換でき、NaN は JSON に存在しない。
-            order: TemporalGroupOrder::Number {
-                value: value
-                    .as_f64()
-                    .expect("JSON number must convert to f64 for temporal group ordering"),
-                // `exact` は同一性 key と同じ JSON number 表現で、f64 が同値のときに
-                // 別系列の順序を入力順から独立させる。
-                exact: value.clone(),
-            },
-        }),
+        Some(Value::Number(value)) => {
+            // JSON の数値 group は JavaScript と同じ有限 f64 へ正規化する。key/order/name
+            // を同じ値から作るため、2 と 2.0 や丸め同値の整数は同一系列になる。
+            let number = value
+                .as_f64()
+                .expect("JSON number must convert to f64 for temporal group ordering");
+            let bits = canonical_number_bits(number);
+            Ok(TemporalGroup {
+                key: TemporalGroupKey::Number(bits),
+                name: number.to_string(),
+                order: TemporalGroupOrder::Number(bits),
+            })
+        }
         Some(Value::Bool(value)) => Ok(TemporalGroup {
             key: TemporalGroupKey::Bool(*value),
             name: value.to_string(),
@@ -1017,19 +1010,10 @@ mod temporal_line_tests {
 
     #[test]
     fn temporal_group_order_comparison_is_total_across_types() {
+        assert_eq!(canonical_number_bits(-0.0), canonical_number_bits(0.0));
         let groups = vec![
-            TemporalGroupOrder::Number {
-                value: 2.0,
-                exact: Number::from(2),
-            },
-            TemporalGroupOrder::Number {
-                value: 2.0,
-                exact: serde_json::from_str("2.0").unwrap(),
-            },
-            TemporalGroupOrder::Number {
-                value: 10.0,
-                exact: Number::from(10),
-            },
+            TemporalGroupOrder::Number(canonical_number_bits(2.0)),
+            TemporalGroupOrder::Number(canonical_number_bits(10.0)),
             TemporalGroupOrder::String("15".into()),
             TemporalGroupOrder::String("2".into()),
             TemporalGroupOrder::Bool(false),
