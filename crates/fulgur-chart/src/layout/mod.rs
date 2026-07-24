@@ -8,6 +8,7 @@ pub mod gauge;
 pub mod line;
 pub mod matrix;
 pub mod mixed;
+pub mod monotone;
 pub mod outlabeled_pie;
 pub mod pie;
 pub mod polar_area;
@@ -53,8 +54,8 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             Prim::Rect {
                 x: 0.0,
                 y: 0.0,
-                w: spec.width,
-                h: spec.height,
+                w: scene.width,
+                h: scene.height,
                 fill,
             },
         );

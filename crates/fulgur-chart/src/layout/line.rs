@@ -1,6 +1,6 @@
 //! line / area チャート。共有フレーム(common)の上に折れ線・面・マーカーを重ねる。
 
-use super::common;
+use super::{common, monotone::monotone_path};
 use crate::ir::ChartSpec;
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
@@ -19,9 +19,11 @@ pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
 ) -> Vec<crate::layout::scatter::PointBox> {
-    let n = spec.categories.len().max(1);
     let mut pts = Vec::new();
     for (sidx, ser) in spec.series.iter().enumerate() {
+        if ser.point_radius.is_some_and(|radius| radius <= 0.0) {
+            continue;
+        }
         for i in 0..spec.categories.len() {
             let Some(&v) = ser.values.get(i) else {
                 continue;
@@ -29,7 +31,7 @@ pub fn line_points(
             if !v.is_finite() {
                 continue;
             }
-            let x = common::line_category_x(spec, frame, i, n);
+            let x = common::line_x(spec, frame, i);
             pts.push(crate::layout::scatter::PointBox {
                 series: sidx,
                 index: i,
@@ -49,8 +51,6 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let mut items: Vec<Prim> = Vec::new();
     common::draw_frame(&mut items, spec, &frame, m);
 
-    let n = spec.categories.len().max(1);
-
     for ser in &spec.series {
         // 有効点列: (x, y, 元カテゴリインデックス)。欠損・非有限値を除外。
         // 元インデックスはラベル lookup と gap 検出に使う。
@@ -60,7 +60,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if !v.is_finite() {
                     return None;
                 }
-                let x = common::line_category_x(spec, &frame, i, n);
+                let x = common::line_x(spec, &frame, i);
                 Some((x, frame.ys.map(v), i))
             })
             .collect();
@@ -146,20 +146,31 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 continue;
             }
             let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
-            if ser.tension <= 0.0 {
-                items.push(Prim::Polyline {
-                    points: xy,
-                    stroke: ser.stroke_at(0),
-                    stroke_width: ser.stroke_width,
-                });
-            } else {
-                let d = catmull_rom_path(&xy, ser.tension);
-                items.push(Prim::Path {
-                    d,
-                    fill: None,
-                    stroke: Some(ser.stroke_at(0)),
-                    stroke_width: ser.stroke_width,
-                });
+            match ser.interpolation {
+                crate::ir::LineInterpolation::Linear => {
+                    items.push(Prim::Polyline {
+                        points: xy,
+                        stroke: ser.stroke_at(0),
+                        stroke_width: ser.stroke_width,
+                    });
+                }
+                crate::ir::LineInterpolation::CatmullRom { tension } => {
+                    let d = catmull_rom_path(&xy, tension);
+                    items.push(Prim::Path {
+                        d,
+                        fill: None,
+                        stroke: Some(ser.stroke_at(0)),
+                        stroke_width: ser.stroke_width,
+                    });
+                }
+                crate::ir::LineInterpolation::Monotone => {
+                    items.push(Prim::Path {
+                        d: monotone_path(&xy),
+                        fill: None,
+                        stroke: Some(ser.stroke_at(0)),
+                        stroke_width: ser.stroke_width,
+                    });
+                }
             }
         }
 
@@ -170,9 +181,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // 同順・同内容)。
         for seg in &segments {
             let r = match (decimated, ser.point_radius) {
-                (false, _) => Some(MARKER_R),
-                (true, Some(r)) if r > 0.0 => Some(r),
-                (true, Some(_)) => None,
+                (_, Some(r)) if r > 0.0 => Some(r),
+                (_, Some(_)) => None,
+                (false, None) => Some(MARKER_R),
                 // 間引き既定: 線になる(≥2点)なら帯を抑制、単点(孤立点)は描画。
                 (true, None) if seg.len() < 2 => Some(MARKER_R),
                 (true, None) => None,
@@ -208,8 +219,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 
     Scene {
-        width: spec.width,
-        height: spec.height,
+        width: frame.scene_width,
+        height: frame.scene_height,
         items,
     }
 }
@@ -294,6 +305,40 @@ mod tests {
     }
 
     #[test]
+    fn plot_area_line_scene_uses_outer_frame_size() {
+        let mut spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10,20,30]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.x_positions = crate::ir::XPositions::Temporal {
+            unix_millis: vec![0, 86_400_000, 3 * 86_400_000],
+        };
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        spec.width = 720.0;
+        spec.height = 320.0;
+        spec.theme.background = Some(crate::ir::Color {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 1.0,
+        });
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let scene = crate::layout::build_scene(&spec, &m);
+        assert_eq!(
+            (scene.width, scene.height),
+            (frame.scene_width, frame.scene_height)
+        );
+        assert!(matches!(
+            scene.items.first(),
+            Some(Prim::Rect { w, h, .. })
+                if (*w, *h) == (frame.scene_width, frame.scene_height)
+        ));
+    }
+
+    #[test]
     fn line_frame_stays_valid_when_edge_labels_exceed_width() {
         // 狭い幅 + 長い端ラベルでも edge 余白で描画領域が反転しない(plot_right >= plot_left)。
         let mut spec = chartjs::parse(
@@ -313,8 +358,8 @@ mod tests {
         );
         // line_x は有限かつ先頭<=末尾(NaN や順序反転を生まない)。
         let n = spec.categories.len();
-        let x0 = common::line_x(&frame, 0, n);
-        let x_last = common::line_x(&frame, n - 1, n);
+        let x0 = common::line_x(&spec, &frame, 0);
+        let x_last = common::line_x(&spec, &frame, n - 1);
         assert!(x0.is_finite() && x_last.is_finite());
         assert!(x_last >= x0);
     }

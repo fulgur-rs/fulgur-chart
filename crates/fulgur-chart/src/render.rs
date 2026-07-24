@@ -15,6 +15,11 @@ pub fn render_chart_with_font(
     font_bytes: &[u8],
 ) -> Result<String, String> {
     let m = TextMeasurer::new(font_bytes).map_err(|e| format!("フォント読込失敗: {e}"))?;
+    crate::guard::validate_plot_area_scene_with_measurer(
+        spec,
+        &crate::guard::InputLimits::default(),
+        &m,
+    )?;
     let fam = family_name(font_bytes).unwrap_or_else(|| DEFAULT_FAMILY.to_string());
     // family 名は CSS string としてクォートする。フォント name table はカンマや引用符を
     // 含み得るため、未クォートだと CSS が複数 family と解釈し計測/SVG/PNG の三者一致が崩れる。

@@ -176,20 +176,23 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 continue;
             }
             let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
-            if ser.tension <= 0.0 {
-                items.push(Prim::Polyline {
-                    points: xy,
-                    stroke: ser.stroke_at(0),
-                    stroke_width: ser.stroke_width,
-                });
-            } else {
-                let d = catmull_rom_path(&xy, ser.tension);
-                items.push(Prim::Path {
-                    d,
-                    fill: None,
-                    stroke: Some(ser.stroke_at(0)),
-                    stroke_width: ser.stroke_width,
-                });
+            match ser.interpolation {
+                crate::ir::LineInterpolation::Linear | crate::ir::LineInterpolation::Monotone => {
+                    items.push(Prim::Polyline {
+                        points: xy,
+                        stroke: ser.stroke_at(0),
+                        stroke_width: ser.stroke_width,
+                    });
+                }
+                crate::ir::LineInterpolation::CatmullRom { tension } => {
+                    let d = catmull_rom_path(&xy, tension);
+                    items.push(Prim::Path {
+                        d,
+                        fill: None,
+                        stroke: Some(ser.stroke_at(0)),
+                        stroke_width: ser.stroke_width,
+                    });
+                }
             }
         }
 
@@ -341,5 +344,25 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    #[test]
+    fn mixed_catmull_rom_line_emits_a_path() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a","b","c"],
+               "datasets":[{"type":"line","data":[1,3,2],"tension":0.4}]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        assert!(scene.items.iter().any(|item| matches!(
+            item,
+            Prim::Path {
+                fill: None,
+                stroke: Some(_),
+                ..
+            }
+        )));
     }
 }

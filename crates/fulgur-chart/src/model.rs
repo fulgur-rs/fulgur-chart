@@ -3,7 +3,8 @@
 
 use serde::Serialize;
 
-use crate::ir::{ChartKind, ChartSpec, Color};
+use crate::ir::{ChartKind, ChartSpec, Color, SizeMode, XPositions};
+use crate::temporal::TemporalTick;
 use crate::text::TextMeasurer;
 
 /// 解決済み色を正規化 rgba 文字列にする(plan の正規化規約に従う)。
@@ -112,6 +113,15 @@ pub struct Geometry {
     pub elements: Vec<ElemN>,
 }
 
+fn model_dimensions(spec: &ChartSpec, m: &TextMeasurer) -> (f64, f64) {
+    if matches!(spec.size_mode, SizeMode::PlotArea) && matches!(spec.kind, ChartKind::Line) {
+        let frame = crate::layout::common::compute(spec, m);
+        (frame.scene_width, frame.scene_height)
+    } else {
+        (spec.width, spec.height)
+    }
+}
+
 /// 縦棒のジオメトリを共有 `vertical_bar_boxes` から構築する(描画と単一真実源)。
 /// 縦棒以外、または退化プロット領域(幅/高さ<=0)は None。
 fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
@@ -122,14 +132,15 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
             let frame = crate::layout::common::compute(spec, m);
             let pw = frame.plot_right - frame.plot_left;
             let ph = frame.plot_bottom - frame.plot_top;
-            if pw <= 0.0 || ph <= 0.0 {
+            let (model_width, model_height) = model_dimensions(spec, m);
+            if pw <= 0.0 || ph <= 0.0 || model_width <= 0.0 || model_height <= 0.0 {
                 return None;
             }
             let plot_area = RectN {
-                x: frame.plot_left / spec.width,
-                y: frame.plot_top / spec.height,
-                w: pw / spec.width,
-                h: ph / spec.height,
+                x: frame.plot_left / model_width,
+                y: frame.plot_top / model_height,
+                w: pw / model_width,
+                h: ph / model_height,
             };
             let elements = crate::layout::bar::vertical_bar_boxes(spec, &frame)
                 .iter()
@@ -182,14 +193,15 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
             let frame = crate::layout::common::compute(spec, m);
             let pw = frame.plot_right - frame.plot_left;
             let ph = frame.plot_bottom - frame.plot_top;
-            if pw <= 0.0 || ph <= 0.0 || spec.width <= 0.0 || spec.height <= 0.0 {
+            let (model_width, model_height) = model_dimensions(spec, m);
+            if pw <= 0.0 || ph <= 0.0 || model_width <= 0.0 || model_height <= 0.0 {
                 return None;
             }
             let plot_area = RectN {
-                x: frame.plot_left / spec.width,
-                y: frame.plot_top / spec.height,
-                w: pw / spec.width,
-                h: ph / spec.height,
+                x: frame.plot_left / model_width,
+                y: frame.plot_top / model_height,
+                w: pw / model_width,
+                h: ph / model_height,
             };
             let elements = crate::layout::line::line_points(spec, &frame)
                 .iter()
@@ -359,6 +371,20 @@ fn category_axis(labels: &[String]) -> AxisModel {
     }
 }
 
+fn temporal_axis(unix_millis: &[i64], ticks: &[TemporalTick]) -> AxisModel {
+    AxisModel {
+        kind: "temporal".to_string(),
+        labels: Some(ticks.iter().map(|tick| tick.label.clone()).collect()),
+        min: unix_millis.first().map(|value| *value as f64),
+        max: unix_millis.last().map(|value| *value as f64),
+        step: ticks
+            .windows(2)
+            .next()
+            .map(|window| (window[1].unix_millis - window[0].unix_millis) as f64),
+        ticks: Some(ticks.iter().map(|tick| tick.unix_millis as f64).collect()),
+    }
+}
+
 /// 直交チャートの (x 軸, y 軸, y 目盛り数) を計算する。値(線形)軸は描画上の向きに
 /// 関わらず常に `y` に載せ、カテゴリ軸を `x` に載せる — JS 抽出器の正規化規約
 /// (線形値軸→y・カテゴリ→x)と揃え、apples-to-apples 照合を可能にするため。
@@ -366,6 +392,16 @@ fn category_axis(labels: &[String]) -> AxisModel {
 /// 軸を持たないチャート(pie/radar/matrix/progress)は None を返す。
 fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisModel, usize)> {
     use crate::scale::nice_ticks;
+    if let (ChartKind::Line, XPositions::Temporal { unix_millis }) = (&spec.kind, &spec.x_positions)
+    {
+        let frame = crate::layout::common::compute(spec, m);
+        return Some((
+            temporal_axis(unix_millis, &frame.temporal_ticks),
+            linear_axis(&frame.ticks),
+            frame.ticks.ticks.len(),
+        ));
+    }
+
     match &spec.kind {
         // 縦棒・線・mixed: 値軸=y(layout::common::compute と共有)、カテゴリ=x。
         ChartKind::Bar {
@@ -418,7 +454,14 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
 /// mixed・scatter・bubble)に軸を載せる。
 pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
     let mut model = build_model_core(spec);
+    (model.meta.width, model.meta.height) = model_dimensions(spec, m);
     if let Some((x, y, y_ticks)) = compute_axes(spec, m) {
+        if matches!(
+            (&spec.kind, &spec.x_positions),
+            (ChartKind::Line, XPositions::Temporal { .. })
+        ) {
+            model.counts.x_ticks = x.ticks.as_ref().map_or(0, Vec::len);
+        }
         model.counts.y_ticks = y_ticks;
         model.axes = Some(Axes { x, y });
     }
@@ -710,6 +753,91 @@ mod tests {
         assert!(
             g.elements[2].ny < g.elements[0].ny,
             "大きい値は小さい ny(上方向)"
+        );
+    }
+
+    #[test]
+    fn plot_area_categorical_line_model_matches_renderer_size() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+          "datasets":[{"data":[10,20,30]}]}}"#;
+        let mut spec = chartjs::parse(json, false).unwrap();
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = crate::layout::common::compute(&spec, &m);
+        let scene = crate::layout::build_scene(&spec, &m);
+        let model = build_model(&spec, &m);
+
+        assert_eq!(
+            (model.meta.width, model.meta.height),
+            (scene.width, scene.height)
+        );
+        let geometry = model.geometry.expect("line geometry");
+        assert_eq!(
+            geometry.plot_area,
+            RectN {
+                x: frame.plot_left / scene.width,
+                y: frame.plot_top / scene.height,
+                w: (frame.plot_right - frame.plot_left) / scene.width,
+                h: (frame.plot_bottom - frame.plot_top) / scene.height,
+            }
+        );
+    }
+
+    #[test]
+    fn plot_area_non_cartesian_model_keeps_requested_canvas_size() {
+        let json = r#"{"type":"pie","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#;
+        let mut spec = chartjs::parse(json, false).unwrap();
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+
+        assert_eq!((model.meta.width, model.meta.height), (800.0, 450.0));
+    }
+
+    fn assert_plot_area_legacy_scene_model_dimensions(json: &str) {
+        let mut spec = chartjs::parse(json, false).unwrap();
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = crate::layout::build_scene(&spec, &m);
+        let model = build_model(&spec, &m);
+
+        assert_eq!((scene.width, scene.height), (spec.width, spec.height));
+        assert_eq!(
+            (model.meta.width, model.meta.height),
+            (scene.width, scene.height)
+        );
+        if let Some(geometry) = model.geometry {
+            let frame = crate::layout::common::compute(&spec, &m);
+            assert_eq!(
+                geometry.plot_area,
+                RectN {
+                    x: frame.plot_left / spec.width,
+                    y: frame.plot_top / spec.height,
+                    w: (frame.plot_right - frame.plot_left) / spec.width,
+                    h: (frame.plot_bottom - frame.plot_top) / spec.height,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn plot_area_vertical_bar_model_matches_legacy_renderer_size() {
+        assert_plot_area_legacy_scene_model_dimensions(
+            r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#,
+        );
+    }
+
+    #[test]
+    fn plot_area_horizontal_bar_model_matches_legacy_renderer_size() {
+        assert_plot_area_legacy_scene_model_dimensions(
+            r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},"options":{"indexAxis":"y"}}"#,
+        );
+    }
+
+    #[test]
+    fn plot_area_mixed_model_matches_legacy_renderer_size() {
+        assert_plot_area_legacy_scene_model_dimensions(
+            r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]},{"type":"line","data":[2,1]}]}}"#,
         );
     }
 

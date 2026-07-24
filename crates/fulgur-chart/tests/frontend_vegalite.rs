@@ -1,11 +1,911 @@
 use fulgur_chart::frontend::vegalite;
-use fulgur_chart::ir::ChartKind;
+use fulgur_chart::ir::{ChartKind, LegendPos, LineInterpolation, SizeMode, XPositions};
+use fulgur_chart::palette::VEGALITE_PALETTE;
+use fulgur_chart::temporal::parse_rfc3339_millis;
 
 const BAR_SPEC: &str = r#"{
     "mark": "bar",
     "data": {"values": [{"cat":"A","val":3},{"cat":"B","val":5},{"cat":"C","val":2}]},
     "encoding": {"x": {"field":"cat","type":"nominal"}, "y": {"field":"val","type":"quantitative"}}
 }"#;
+
+const DOGFOOD_SHAPE: &str = r##"{
+  "$schema":"https://vega.github.io/schema/vega-lite/v5.json",
+  "title":"qtest nightly trend",
+  "width":720,
+  "height":320,
+  "background":"white",
+  "data":{"values":[
+    {"timestamp":"2026-07-21T19:21:53Z","metric":"regressions","value":0}
+  ]},
+  "mark":{"type":"line","point":true,"interpolate":"monotone"},
+  "encoding":{
+    "x":{"field":"timestamp","type":"temporal","title":"date"},
+    "y":{"field":"value","type":"quantitative","title":"subtests"},
+    "color":{"field":"metric","type":"nominal","title":"metric",
+             "scale":{"scheme":"tableau10"}}
+  },
+  "config":{"view":{"stroke":null},
+            "axis":{"grid":true,"gridOpacity":0.15}}
+}"##;
+
+const DOGFOOD_MULTI_SERIES: &str = r##"{
+  "mark":{"type":"line","point":true,"interpolate":"monotone"},
+  "data":{"values":[
+    {"timestamp":"2026-07-01T19:00:00Z","metric":"regressions","value":3},
+    {"timestamp":"2026-06-29T19:00:00Z","metric":"candidates","value":2},
+    {"timestamp":"2026-07-01T19:00:00Z","metric":"allowlist","value":6},
+    {"timestamp":"2026-06-29T19:00:00Z","metric":"regressions","value":1},
+    {"timestamp":"2026-07-01T19:00:00Z","metric":"candidates","value":5},
+    {"timestamp":"2026-06-29T19:00:00Z","metric":"allowlist","value":4}
+  ]},
+  "encoding":{
+    "x":{"field":"timestamp","type":"temporal","title":"date"},
+    "y":{"field":"value","type":"quantitative","title":"subtests"},
+    "color":{"field":"metric","type":"nominal","title":"metric"}
+  }
+}"##;
+
+const CATEGORICAL_LINE_SHAPE: &str = r#"{
+  "mark":"line",
+  "data":{"values":[{"category":"a","value":1}]},
+  "encoding":{
+    "x":{"field":"category","type":"nominal"},
+    "y":{"field":"value","type":"quantitative"}
+  }
+}"#;
+
+#[test]
+fn temporal_line_sorts_x_and_nominal_color_domain() {
+    let spec = vegalite::parse(DOGFOOD_MULTI_SERIES, true).unwrap();
+    let expected = vec![
+        parse_rfc3339_millis("timestamp", "2026-06-29T19:00:00Z").unwrap(),
+        parse_rfc3339_millis("timestamp", "2026-07-01T19:00:00Z").unwrap(),
+    ];
+    assert_eq!(
+        spec.x_positions,
+        XPositions::Temporal {
+            unix_millis: expected
+        }
+    );
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["allowlist", "candidates", "regressions"]
+    );
+    assert_eq!(
+        spec.series.iter().map(|s| s.stroke[0]).collect::<Vec<_>>(),
+        VEGALITE_PALETTE[..3]
+    );
+    assert_eq!(spec.series[0].values, vec![4.0, 6.0]);
+}
+
+#[test]
+fn temporal_line_sorts_numeric_color_domain_numerically() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T00:00:00Z","metric":10,"value":1},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":2,"value":2},
+            {"timestamp":"2026-07-02T00:00:00Z","metric":10,"value":3},
+            {"timestamp":"2026-07-02T00:00:00Z","metric":2,"value":4}
+        ]},
+        "encoding":{
+            "x":{"field":"timestamp","type":"temporal"},
+            "y":{"field":"value","type":"quantitative"},
+            "color":{"field":"metric","type":"nominal"}
+        }
+    }"#;
+
+    let spec = vegalite::parse(json, true).unwrap();
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|series| series.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["2", "10"]
+    );
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|series| series.stroke[0])
+            .collect::<Vec<_>>(),
+        VEGALITE_PALETTE[..2]
+    );
+}
+
+#[test]
+fn temporal_line_sorts_mixed_color_domain_by_type_without_collisions() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T00:00:00Z","metric":10,"value":1},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"15","value":2},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":2,"value":3},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":true,"value":4},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"2","value":5},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":false,"value":6},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"true","value":7}
+        ]},
+        "encoding":{
+            "x":{"field":"timestamp","type":"temporal"},
+            "y":{"field":"value","type":"quantitative"},
+            "color":{"field":"metric","type":"nominal"}
+        }
+    }"#;
+
+    let spec = vegalite::parse(json, true).unwrap();
+    assert_eq!(spec.series.len(), 7);
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|series| series.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["2", "10", "15", "2", "true", "false", "true"]
+    );
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|series| series.stroke[0])
+            .collect::<Vec<_>>(),
+        VEGALITE_PALETTE[..7]
+    );
+}
+
+#[test]
+fn temporal_line_numeric_color_groups_follow_canonical_f64_semantics() {
+    let parse = |values: &str| {
+        vegalite::parse(
+            &format!(
+                r#"{{
+                    "mark":"line",
+                    "data":{{"values":[{values}]}},
+                    "encoding":{{
+                        "x":{{"field":"timestamp","type":"temporal"}},
+                        "y":{{"field":"value","type":"quantitative"}},
+                        "color":{{"field":"metric","type":"nominal"}}
+                    }}
+                }}"#
+            ),
+            true,
+        )
+        .unwrap()
+    };
+    let forward = parse(
+        r#"{"timestamp":"2026-07-01T00:00:00Z","metric":9007199254740992,"value":1},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":9007199254740993,"value":2},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":2,"value":3},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":2.0,"value":4},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":9999999999999999999,"value":5},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":10000000000000000000,"value":6}"#,
+    );
+    let reverse = parse(
+        r#"{"timestamp":"2026-07-01T00:00:00Z","metric":10000000000000000000,"value":6},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":9999999999999999999,"value":5},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":2.0,"value":4},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":2,"value":3},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":9007199254740993,"value":2},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":9007199254740992,"value":1}"#,
+    );
+    let series = |spec: &fulgur_chart::ir::ChartSpec| {
+        spec.series
+            .iter()
+            .map(|series| (series.name.clone(), series.values.clone(), series.stroke[0]))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(series(&forward), series(&reverse));
+    assert_eq!(
+        series(&forward),
+        vec![
+            ("2".to_string(), vec![7.0], VEGALITE_PALETTE[0]),
+            (
+                "9007199254740992".to_string(),
+                vec![3.0],
+                VEGALITE_PALETTE[1]
+            ),
+            (
+                "10000000000000000000".to_string(),
+                vec![11.0],
+                VEGALITE_PALETTE[2],
+            ),
+        ]
+    );
+}
+
+fn parse_temporal_numeric_groups(values: &str) -> fulgur_chart::ir::ChartSpec {
+    vegalite::parse(
+        &format!(
+            r#"{{
+                "mark":"line",
+                "data":{{"values":[{values}]}},
+                "encoding":{{
+                    "x":{{"field":"timestamp","type":"temporal"}},
+                    "y":{{"field":"value","type":"quantitative"}},
+                    "color":{{"field":"metric","type":"nominal"}}
+                }}
+            }}"#
+        ),
+        true,
+    )
+    .unwrap()
+}
+
+#[test]
+fn temporal_line_numeric_group_names_canonicalize_signed_zero() {
+    let negative_first = parse_temporal_numeric_groups(
+        r#"{"timestamp":"2026-07-01T00:00:00Z","metric":-0,"value":1},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":0,"value":2}"#,
+    );
+    let positive_first = parse_temporal_numeric_groups(
+        r#"{"timestamp":"2026-07-01T00:00:00Z","metric":0,"value":2},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":-0,"value":1}"#,
+    );
+
+    assert_eq!(negative_first, positive_first);
+    assert_eq!(negative_first.series.len(), 1);
+    assert_eq!(negative_first.series[0].name, "0");
+    assert_eq!(negative_first.series[0].values, vec![3.0]);
+}
+
+#[test]
+fn temporal_line_numeric_group_names_use_ecmascript_formatting() {
+    let spec = parse_temporal_numeric_groups(
+        r#"{"timestamp":"2026-07-01T00:00:00Z","metric":1e-7,"value":1},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":1e21,"value":2},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":5e-324,"value":3}"#,
+    );
+
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|series| series.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["5e-324", "1e-7", "1e+21"]
+    );
+}
+
+#[test]
+fn temporal_line_numeric_group_names_use_ecmascript_length_for_limits() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T00:00:00Z","metric":1e21,"value":1}
+        ]},
+        "encoding":{
+            "x":{"field":"timestamp","type":"temporal"},
+            "y":{"field":"value","type":"quantitative"},
+            "color":{"field":"metric","type":"nominal"}
+        }
+    }"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_label_bytes: 20,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+
+    let spec = vegalite::parse_with_limits(json, true, &limits).unwrap();
+    assert_eq!(spec.series[0].name, "1e+21");
+}
+
+#[test]
+fn temporal_line_aggregates_offset_equivalent_timestamps() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T19:00:00Z","metric":"a","value":2},
+            {"timestamp":"2026-07-02T04:00:00+09:00","metric":"a","value":3}
+        ]},
+        "encoding":{"x":{"field":"timestamp","type":"temporal"},"y":{"field":"value"},"color":{"field":"metric"}}
+    }"#;
+    let spec = vegalite::parse(json, true).unwrap();
+    assert_eq!(spec.categories, vec!["2026-07-01T19:00:00Z"]);
+    assert_eq!(spec.series[0].values, vec![5.0]);
+    assert_eq!(
+        spec.x_positions,
+        XPositions::Temporal {
+            unix_millis: vec![parse_rfc3339_millis("timestamp", "2026-07-01T19:00:00Z").unwrap()]
+        }
+    );
+}
+
+#[test]
+fn temporal_line_rejects_non_finite_duplicate_aggregate() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T19:00:00Z","metric":"a","value":1e308},
+            {"timestamp":"2026-07-02T04:00:00+09:00","metric":"a","value":1e308}
+        ]},
+        "encoding":{"x":{"field":"timestamp","type":"temporal"},"y":{"field":"value"},"color":{"field":"metric"}}
+    }"#;
+
+    let err = vegalite::parse(json, true).unwrap_err();
+    assert_eq!(err, "temporal line aggregate must be finite");
+}
+
+#[test]
+fn temporal_line_without_color_builds_one_named_series() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T00:00:00Z","value":2},
+            {"timestamp":"2026-07-02T00:00:00Z","value":3}
+        ]},
+        "encoding":{
+            "x":{"field":"timestamp","type":"temporal"},
+            "y":{"field":"value","type":"quantitative"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, true).unwrap();
+    assert_eq!(spec.series.len(), 1);
+    assert_eq!(spec.series[0].name, "");
+    assert_eq!(spec.series[0].values, vec![2.0, 3.0]);
+    assert_eq!(spec.legend, LegendPos::None);
+    assert_eq!(spec.legend_title, None);
+}
+
+#[test]
+fn temporal_line_rejects_invalid_timestamp_values() {
+    for timestamp in [r#""not-a-date""#, "null", "42"] {
+        let json = format!(
+            r#"{{"mark":"line","data":{{"values":[{{"timestamp":{timestamp},"value":1}}]}},"encoding":{{"x":{{"field":"timestamp","type":"temporal"}},"y":{{"field":"value"}}}}}}"#
+        );
+        let err = vegalite::parse(&json, true).unwrap_err();
+        assert!(err.contains("timestamp"), "unexpected error: {err}");
+        assert!(err.is_ascii(), "error must be English: {err}");
+    }
+}
+
+#[test]
+fn temporal_line_errors_are_english_in_strict_and_non_strict_modes() {
+    let cases = [
+        r#"{"timestamp":null,"value":1}"#,
+        r#"{"timestamp":42,"value":1}"#,
+        r#"{"value":1}"#,
+        r#"{"timestamp":"2026-07-01T00:00:00Z","value":null}"#,
+        r#"{"timestamp":"2026-07-01T00:00:00Z","value":"one"}"#,
+        r#"{"timestamp":"2026-07-01T00:00:00Z"}"#,
+    ];
+    for strict in [false, true] {
+        for record in cases {
+            let json = format!(
+                r#"{{"mark":"line","data":{{"values":[{record}]}},"encoding":{{"x":{{"field":"timestamp","type":"temporal"}},"y":{{"field":"value","type":"quantitative"}}}}}}"#
+            );
+            let err = vegalite::parse(&json, strict).unwrap_err();
+            assert!(err.is_ascii(), "strict={strict}: {err}");
+            assert!(err.len() < 240, "strict={strict}: {err}");
+            assert!(
+                err.contains("timestamp") || err.contains("value"),
+                "strict={strict}: {err}"
+            );
+        }
+    }
+}
+
+#[test]
+fn temporal_line_errors_bound_long_fields_and_unknown_key_paths() {
+    let long_field = format!("field-{}-FIELD_TAIL", "x".repeat(600));
+    let field_json = format!(
+        r#"{{"mark":"line","data":{{"values":[{{"value":1}}]}},"encoding":{{"x":{{"field":"{long_field}","type":"temporal"}},"y":{{"field":"value"}}}}}}"#
+    );
+    let field_err = vegalite::parse(&field_json, false).unwrap_err();
+    assert!(field_err.len() < 240, "{field_err}");
+    assert!(!field_err.contains("FIELD_TAIL"), "{field_err}");
+
+    let long_key = format!("key-{}-KEY_TAIL", "y".repeat(600));
+    let key_json = DOGFOOD_SHAPE.replace(
+        r#""title":"date""#,
+        &format!(r#""title":"date","{long_key}":true"#),
+    );
+    let key_err = vegalite::parse(&key_json, true).unwrap_err();
+    assert!(key_err.len() < 240, "{key_err}");
+    assert!(!key_err.contains("KEY_TAIL"), "{key_err}");
+}
+
+#[test]
+fn temporal_line_custom_limits_reject_dense_product_before_allocation() {
+    let limits = fulgur_chart::guard::InputLimits {
+        max_series: 1,
+        max_categories: 10,
+        max_categorical_primitives: 10,
+        max_total_data_points: 10,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let err = vegalite::parse_with_limits(DOGFOOD_MULTI_SERIES, true, &limits).unwrap_err();
+    assert!(err.contains("series"), "{err}");
+    assert!(err.contains("pre-allocation"), "{err}");
+}
+
+#[test]
+fn temporal_line_rejects_sparse_pairs_after_sorting() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-02T00:00:00Z","metric":"a","value":1},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"b","value":2},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"a","value":3}
+        ]},
+        "encoding":{"x":{"field":"timestamp","type":"temporal"},"y":{"field":"value"},"color":{"field":"metric"}}
+    }"#;
+    let err = vegalite::parse(json, true).unwrap_err();
+    assert!(err.contains("sparse"), "unexpected error: {err}");
+}
+
+#[test]
+fn temporal_line_populates_positioned_ir_metadata() {
+    let spec = vegalite::parse(DOGFOOD_SHAPE, true).unwrap();
+    assert_eq!(
+        spec.x_axis.title.as_ref().map(|title| title.text.as_str()),
+        Some("date")
+    );
+    assert_eq!(
+        spec.y_axis.title.as_ref().map(|title| title.text.as_str()),
+        Some("subtests")
+    );
+    assert_eq!(spec.legend, LegendPos::Right);
+    assert_eq!(spec.legend_title.as_deref(), Some("metric"));
+    assert_eq!(spec.size_mode, SizeMode::PlotArea);
+    assert_eq!(spec.series[0].stroke_width, 2.0);
+    assert_eq!(spec.series[0].interpolation, LineInterpolation::Monotone);
+    assert_eq!(spec.series[0].point_radius, Some(3.0));
+    assert!(spec.x_axis.grid.draw_ticks);
+    assert!(spec.y_axis.grid.draw_ticks);
+    assert_eq!(spec.x_axis.grid.color.unwrap().a, 0.15);
+    assert_eq!(spec.y_axis.grid.color.unwrap().a, 0.15);
+    assert_eq!(spec.theme.background.unwrap().a, 1.0);
+    assert_eq!(
+        (
+            spec.theme.background.unwrap().r,
+            spec.theme.background.unwrap().g,
+            spec.theme.background.unwrap().b
+        ),
+        (255, 255, 255)
+    );
+}
+
+#[test]
+fn temporal_line_rejects_invalid_background_color() {
+    let json = DOGFOOD_SHAPE.replace("\"white\"", "\"not-a-color\"");
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert_eq!(err, "background must be a valid color");
+}
+
+#[test]
+fn dogfood_shape_is_accepted_by_typed_schema_and_strict_parser() {
+    let _: fulgur_chart::schema::VegaLiteSpec = serde_json::from_str(DOGFOOD_SHAPE).unwrap();
+    assert!(vegalite::parse(DOGFOOD_SHAPE, true).is_ok());
+}
+
+fn line_with_field(
+    fixture: &str,
+    path: &[&str],
+    value: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut json: serde_json::Value = serde_json::from_str(fixture).unwrap();
+    let (key, parent_path) = path.split_last().expect("field path must not be empty");
+    let mut parent = &mut json;
+    for segment in parent_path {
+        parent = parent
+            .get_mut(*segment)
+            .unwrap_or_else(|| panic!("missing fixture path segment: {segment}"));
+    }
+    let parent = parent
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("fixture parent is not an object: {parent_path:?}"));
+    match value {
+        Some(value) => {
+            parent.insert((*key).to_string(), value);
+        }
+        None => {
+            parent.remove(*key);
+        }
+    }
+    json
+}
+
+#[test]
+fn temporal_line_nullable_typed_fields_treat_null_as_omission() {
+    let nullable_paths: &[&[&str]] = &[
+        &["$schema"],
+        &["width"],
+        &["height"],
+        &["title"],
+        &["background"],
+        &["config"],
+        &["mark", "point"],
+        &["mark", "interpolate"],
+        &["encoding", "color"],
+        &["encoding", "x", "type"],
+        &["encoding", "x", "title"],
+        &["encoding", "y", "type"],
+        &["encoding", "y", "title"],
+        &["encoding", "color", "type"],
+        &["encoding", "color", "title"],
+        &["encoding", "color", "scale"],
+        &["config", "view"],
+        &["config", "axis"],
+        &["config", "view", "stroke"],
+        &["config", "axis", "grid"],
+        &["config", "axis", "gridOpacity"],
+    ];
+
+    let mut failures = Vec::new();
+    for path in nullable_paths {
+        let fixture = if *path == ["encoding", "x", "type"] {
+            CATEGORICAL_LINE_SHAPE
+        } else {
+            DOGFOOD_SHAPE
+        };
+        let null_json = line_with_field(fixture, path, Some(serde_json::Value::Null));
+        let omitted_json = line_with_field(fixture, path, None);
+        let path = path.join(".");
+
+        if let Err(err) =
+            serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(null_json.clone())
+        {
+            failures.push(format!("{path}: typed schema rejected null: {err}"));
+            continue;
+        }
+
+        for strict in [false, true] {
+            let omitted = vegalite::parse(&omitted_json.to_string(), strict)
+                .unwrap_or_else(|err| panic!("{path}: omitted value failed: {err}"));
+            match vegalite::parse(&null_json.to_string(), strict) {
+                Ok(actual) if actual == omitted => {}
+                Ok(_) => failures.push(format!(
+                    "{path}: strict={strict} null did not match omission"
+                )),
+                Err(err) => failures.push(format!("{path}: strict={strict} rejected null: {err}")),
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "nullable temporal-line mismatches:\n{}",
+        failures.join("\n")
+    );
+}
+
+#[test]
+fn typed_line_schema_constrains_channel_types() {
+    for json in [
+        DOGFOOD_SHAPE.replace("\"temporal\"", "\"temporl\""),
+        DOGFOOD_SHAPE.replace("\"quantitative\"", "\"nominal\""),
+        DOGFOOD_SHAPE.replace("\"nominal\"", "\"quantitative\""),
+    ] {
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_err(),
+            "typed schema accepted unsupported line channel type"
+        );
+    }
+}
+
+#[test]
+fn typed_categorical_line_schema_excludes_temporal_only_options() {
+    let base = r#"{
+        "mark":{"type":"line"},
+        "data":{"values":[{"x":"a","y":1}]},
+        "encoding":{
+            "x":{"field":"x","type":"nominal"},
+            "y":{"field":"y","type":"quantitative"}
+        }
+    }"#;
+    let with_point = base.replace(r#""type":"line""#, r#""type":"line","point":false"#);
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&with_point).is_err());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(base).is_ok());
+}
+
+#[test]
+fn strict_temporal_line_rejects_interpolatee_with_full_key_path() {
+    let json = DOGFOOD_SHAPE.replace("\"interpolate\"", "\"interpolatee\"");
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(err.contains("mark.interpolatee"), "unexpected error: {err}");
+}
+
+#[test]
+fn strict_temporal_line_rejects_grid_opacit_with_full_key_path() {
+    let json = DOGFOOD_SHAPE.replace("\"gridOpacity\"", "\"gridOpacit\"");
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(
+        err.contains("config.axis.gridOpacit"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn strict_temporal_line_rejects_scheeme_with_full_key_path() {
+    let json = DOGFOOD_SHAPE.replace("\"scheme\"", "\"scheeme\"");
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(
+        err.contains("encoding.color.scale.scheeme"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn strict_temporal_line_type_errors_do_not_echo_nested_payloads() {
+    let payload_marker = "FULL_PAYLOAD_MARKER_".repeat(32);
+    let invalid_interpolate = format!(r#"{{"marker":"{payload_marker}"}}"#);
+    let json = DOGFOOD_SHAPE.replace("\"monotone\"", &invalid_interpolate);
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(err.contains("mark.interpolate"), "unexpected error: {err}");
+    assert!(err.len() < 200, "unbounded error: {err}");
+    assert!(
+        !err.contains(&payload_marker),
+        "error echoed nested payload: {err}"
+    );
+}
+
+#[test]
+fn strict_temporal_line_rejects_unsupported_explicit_values() {
+    let err =
+        vegalite::parse(&DOGFOOD_SHAPE.replace("\"monotone\"", "\"step\""), true).unwrap_err();
+    assert!(err.contains("mark.interpolate"), "unexpected error: {err}");
+
+    let err = vegalite::parse(
+        &DOGFOOD_SHAPE.replace("\"tableau10\"", "\"category10\""),
+        true,
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("encoding.color.scale.scheme"),
+        "unexpected error: {err}"
+    );
+
+    let err = vegalite::parse(&DOGFOOD_SHAPE.replace("0.15", "1.5"), true).unwrap_err();
+    assert!(
+        err.contains("config.axis.gridOpacity"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn non_strict_temporal_line_rejects_unsupported_interpolation() {
+    for replacement in ["\"step\"", "42"] {
+        let err = vegalite::parse(&DOGFOOD_SHAPE.replace("\"monotone\"", replacement), false)
+            .unwrap_err();
+        assert!(err.contains("mark.interpolate"), "unexpected error: {err}");
+    }
+}
+
+#[test]
+fn non_strict_temporal_line_rejects_non_boolean_point() {
+    let err = vegalite::parse(
+        &DOGFOOD_SHAPE.replace(r#""point":true"#, r#""point":"true""#),
+        false,
+    )
+    .unwrap_err();
+    assert!(err.contains("mark.point"), "unexpected error: {err}");
+}
+
+#[test]
+fn non_strict_temporal_line_rejects_out_of_range_grid_opacity() {
+    for replacement in ["-0.5", "1.5", "\"opaque\""] {
+        let err = vegalite::parse(
+            &DOGFOOD_SHAPE.replace(
+                r#""gridOpacity":0.15"#,
+                &format!(r#""gridOpacity":{replacement}"#),
+            ),
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("config.axis.gridOpacity"),
+            "unexpected error: {err}"
+        );
+    }
+}
+
+#[test]
+fn temporal_line_treats_null_color_scale_as_absent() {
+    let json = DOGFOOD_SHAPE.replace(r#""scale":{"scheme":"tableau10"}"#, r#""scale":null"#);
+    for strict in [false, true] {
+        vegalite::parse(&json, strict).unwrap();
+    }
+}
+
+#[test]
+fn non_strict_temporal_line_rejects_unsupported_color_scheme() {
+    for (json, expected) in [
+        (
+            DOGFOOD_SHAPE.replace("\"tableau10\"", "\"category10\""),
+            "encoding.color.scale.scheme",
+        ),
+        (
+            DOGFOOD_SHAPE.replace("\"tableau10\"", "42"),
+            "encoding.color.scale.scheme",
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""scale":{"scheme":"tableau10"}"#, r#""scale":{}"#),
+            "encoding.color.scale.scheme",
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""scale":{"scheme":"tableau10"}"#, r#""scale":42"#),
+            "encoding.color.scale",
+        ),
+    ] {
+        let err = vegalite::parse(&json, false).unwrap_err();
+        assert!(err.contains(expected), "unexpected error: {err}");
+    }
+}
+
+#[test]
+fn strict_line_rejects_unsupported_channel_type_values() {
+    let err =
+        vegalite::parse(&DOGFOOD_SHAPE.replace("\"temporal\"", "\"temporl\""), true).unwrap_err();
+    assert!(err.contains("encoding.x.type"), "unexpected error: {err}");
+
+    let err = vegalite::parse(
+        &DOGFOOD_SHAPE.replace("\"quantitative\"", "\"quantitativ\""),
+        true,
+    )
+    .unwrap_err();
+    assert!(err.contains("encoding.y.type"), "unexpected error: {err}");
+
+    let err =
+        vegalite::parse(&DOGFOOD_SHAPE.replace("\"nominal\"", "\"nominl\""), true).unwrap_err();
+    assert!(
+        err.contains("encoding.color.type"),
+        "unexpected error: {err}"
+    );
+
+    let err = vegalite::parse(
+        &DOGFOOD_SHAPE.replace(r#""type":"temporal""#, r#""type":42"#),
+        true,
+    )
+    .unwrap_err();
+    assert!(err.contains("encoding.x.type"), "unexpected error: {err}");
+}
+
+#[test]
+fn strict_temporal_line_requires_color_field() {
+    let json = DOGFOOD_SHAPE.replace(r#""field":"metric","#, "");
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert_eq!(err, "encoding.color.field is required");
+    assert!(vegalite::parse(&json, false).is_ok());
+}
+
+#[test]
+fn strict_categorical_line_rejects_temporal_only_options() {
+    let base = r#"{
+        "mark":{"type":"line"},
+        "data":{"values":[{"x":"a","y":1},{"x":"b","y":2}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}
+    }"#;
+    for (needle, replacement, expected) in [
+        (
+            r#""type":"line""#,
+            r#""type":"line","point":false"#,
+            "mark.point",
+        ),
+        (
+            r#""type":"line""#,
+            r#""type":"line","interpolate":"monotone""#,
+            "mark.interpolate",
+        ),
+        (
+            r#""mark":{"type":"line"}"#,
+            r#""mark":{"type":"line"},"background":"white""#,
+            "background",
+        ),
+        (
+            r#""mark":{"type":"line"}"#,
+            r#""mark":{"type":"line"},"config":{"axis":{"gridOpacity":0.5}}"#,
+            "config",
+        ),
+        (
+            r#""field":"x","type":"nominal""#,
+            r#""field":"x","type":"nominal","title":"category""#,
+            "encoding.x.title",
+        ),
+        (
+            r#""field":"y","type":"quantitative""#,
+            r#""field":"y","type":"quantitative","title":"value""#,
+            "encoding.y.title",
+        ),
+        (
+            r#""y":{"field":"y","type":"quantitative"}"#,
+            r#""y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal","title":"group"}"#,
+            "encoding.color.title",
+        ),
+        (
+            r#""y":{"field":"y","type":"quantitative"}"#,
+            r#""y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal","scale":{"scheme":"tableau10"}}"#,
+            "encoding.color.scale",
+        ),
+    ] {
+        let err = vegalite::parse(&base.replace(needle, replacement), true).unwrap_err();
+        assert!(err.contains(expected), "{expected}: {err}");
+    }
+}
+
+#[test]
+fn strict_temporal_line_rejects_non_null_view_stroke() {
+    let json = DOGFOOD_SHAPE.replace(r#""stroke":null"#, r##""stroke":"#ddd""##);
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(
+        err.contains("config.view.stroke"),
+        "unexpected error: {err}"
+    );
+
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_err(),
+        "typed schema must reject non-null config.view.stroke"
+    );
+}
+
+#[test]
+fn strict_temporal_line_reports_nested_type_and_required_key_errors() {
+    let cases = [
+        (
+            DOGFOOD_SHAPE.replace(r#","interpolate":"monotone""#, ""),
+            None,
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""title":"date""#, r#""title":"date","typo":true"#),
+            Some("encoding.x.typo"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""field":"timestamp""#, r#""field":[] "#),
+            Some("encoding.x.field"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""field":"timestamp""#, r#""field":false"#),
+            Some("encoding.x.field"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""title":"date""#, r#""title":null"#),
+            None,
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""title":"date""#, r#""title":42"#),
+            Some("encoding.x.title"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""title":"metric""#, r#""title":"metric","typo":true"#),
+            Some("encoding.color.typo"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""scheme":"tableau10""#, r#""scheme":42"#),
+            Some("encoding.color.scale.scheme"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""scale":{"scheme":"tableau10"}"#, r#""scale":{}"#),
+            Some("encoding.color.scale.scheme is required"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""stroke":null"#, r#""stroke":null,"typo":true"#),
+            Some("config.view.typo"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""gridOpacity":0.15"#, r#""gridOpacity":"opaque""#),
+            Some("config.axis.gridOpacity"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""point":true"#, r#""point":{"enabled":true}"#),
+            Some("mark.point"),
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""grid":true"#, r#""grid":false"#),
+            None,
+        ),
+    ];
+
+    for (json, expected) in cases {
+        match expected {
+            Some(expected) => {
+                let err = vegalite::parse(&json, true).unwrap_err();
+                assert!(err.contains(expected), "{expected}: {err}");
+            }
+            None => {
+                vegalite::parse(&json, true).unwrap();
+            }
+        }
+    }
+}
 
 #[test]
 fn bar_categorical_single_series() {

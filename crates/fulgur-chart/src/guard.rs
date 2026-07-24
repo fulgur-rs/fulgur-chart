@@ -12,7 +12,7 @@
 //! - **フォントファイルサイズ**: --font はユーザ自身が渡す。不正フォントは
 //!   ttf_parser::Face::parse が Err を返すので別途処理済み。
 
-use crate::ir::ChartSpec;
+use crate::ir::{ChartKind, ChartSpec, XPositions};
 use crate::num::fmt_num;
 
 // --- デフォルト上限定数 ---
@@ -171,6 +171,28 @@ fn validate_tree(
 /// CLI は `--width`/`--height` オーバーライドを適用した後にこの関数を呼ぶ。
 /// 超過した場合は `Err(説明メッセージ)` を返す。
 pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
+    validate_spec_base(spec, limits)?;
+    if !matches!(spec.kind, ChartKind::Line)
+        || !matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
+    {
+        return Ok(());
+    }
+    let measurer = crate::text::TextMeasurer::new(crate::font::DEFAULT_FONT)
+        .map_err(|error| format!("failed to measure plot-area scene: {error}"))?;
+    validate_plot_area_scene_with_measurer(spec, limits, &measurer)
+}
+
+/// [`validate_spec`] と同じ入力上限を、実際の描画に使う文字幅測定器で検証する。
+pub fn validate_spec_with_measurer(
+    spec: &ChartSpec,
+    limits: &InputLimits,
+    measurer: &crate::text::TextMeasurer<'_>,
+) -> Result<(), String> {
+    validate_spec_base(spec, limits)?;
+    validate_plot_area_scene_with_measurer(spec, limits, measurer)
+}
+
+fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     // --- 寸法 ---
     if !spec.width.is_finite()
         || spec.width < limits.min_dimension_px
@@ -207,6 +229,29 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
             spec.categories.len(),
             limits.max_categories,
         ));
+    }
+
+    if let XPositions::Temporal { unix_millis } = &spec.x_positions {
+        if unix_millis.len() != spec.categories.len() {
+            return Err(format!(
+                "temporal x position count {} does not match category count {}",
+                unix_millis.len(),
+                spec.categories.len()
+            ));
+        }
+        if spec
+            .series
+            .iter()
+            .any(|series| series.values.len() != unix_millis.len())
+        {
+            return Err("temporal x position count does not match every line series".to_string());
+        }
+        if unix_millis.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("temporal x positions must be strictly increasing".to_string());
+        }
+        if !matches!(spec.kind, ChartKind::Line) {
+            return Err("temporal x positions are only supported for line charts".to_string());
+        }
     }
 
     // --- series × categories の積(bar/line チャートのプリミティブ数) ---
@@ -428,6 +473,29 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
             limits.max_label_bytes,
         ));
     }
+    if let Some(title) = &spec.legend_title
+        && title.len() > limits.max_label_bytes
+    {
+        return Err(format!(
+            "legend title length {} bytes exceeds limit {}",
+            title.len(),
+            limits.max_label_bytes,
+        ));
+    }
+    for (axis, title) in [
+        ("x", spec.x_axis.title.as_ref()),
+        ("y", spec.y_axis.title.as_ref()),
+    ] {
+        if let Some(title) = title
+            && title.text.len() > limits.max_label_bytes
+        {
+            return Err(format!(
+                "{axis}-axis title length {} bytes exceeds limit {}",
+                title.text.len(),
+                limits.max_label_bytes,
+            ));
+        }
+    }
     for cat in &spec.categories {
         if cat.len() > limits.max_label_bytes {
             return Err(format!(
@@ -562,6 +630,32 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
     Ok(())
 }
 
+pub(crate) fn validate_plot_area_scene_with_measurer(
+    spec: &ChartSpec,
+    limits: &InputLimits,
+    measurer: &crate::text::TextMeasurer<'_>,
+) -> Result<(), String> {
+    if matches!(spec.kind, ChartKind::Line)
+        && matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
+    {
+        let frame = crate::layout::common::compute(spec, measurer);
+        if !frame.scene_width.is_finite() || frame.scene_width > limits.max_dimension_px {
+            return Err(format!(
+                "scene width {:.0} exceeds limit {:.0}",
+                frame.scene_width, limits.max_dimension_px
+            ));
+        }
+        if !frame.scene_height.is_finite() || frame.scene_height > limits.max_dimension_px {
+            return Err(format!(
+                "scene height {:.0} exceeds limit {:.0}",
+                frame.scene_height, limits.max_dimension_px
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn estimate_outlabel_expanded_bytes(spec: &ChartSpec, template: &str) -> usize {
     let Some(series) = spec.series.first() else {
         return 0;
@@ -622,6 +716,7 @@ fn estimate_outlabel_expanded_bytes(spec: &ChartSpec, template: &str) -> usize {
 mod tests {
     use super::*;
     use crate::frontend::chartjs;
+    use crate::ir::XPositions;
 
     fn base_spec() -> ChartSpec {
         chartjs::parse(
@@ -636,8 +731,104 @@ mod tests {
     }
 
     #[test]
+    fn temporal_positions_must_match_categories() {
+        let mut spec = base_spec();
+        spec.categories = vec!["a".into(), "b".into()];
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![1],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("temporal x position count"));
+    }
+
+    #[test]
+    fn temporal_positions_must_be_strictly_increasing() {
+        let mut spec = base_spec();
+        spec.categories = vec!["a".into(), "b".into()];
+        spec.series[0].values = vec![1.0, 2.0];
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![2, 2],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("strictly increasing"));
+    }
+
+    #[test]
+    fn temporal_positions_must_match_every_series() {
+        let mut spec = base_spec();
+        spec.categories = vec!["a".into(), "b".into()];
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![1, 2],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("every line series"));
+    }
+
+    #[test]
+    fn temporal_positions_require_line_chart() {
+        let mut spec = base_spec();
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![1],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("only supported for line charts"));
+    }
+
+    #[test]
     fn valid_spec_passes() {
         assert!(validate_spec(&base_spec(), &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn axis_and_legend_titles_accept_exact_label_limit() {
+        use crate::ir::{AxisTitle, AxisTitleAlign};
+
+        let limits = InputLimits {
+            max_label_bytes: 4,
+            ..default_limits()
+        };
+        let mut spec = base_spec();
+        spec.legend_title = Some("xxxx".into());
+        spec.x_axis.title = Some(AxisTitle {
+            text: "xxxx".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        spec.y_axis.title = Some(AxisTitle {
+            text: "xxxx".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        assert!(validate_spec(&spec, &limits).is_ok());
+    }
+
+    #[test]
+    fn axis_and_legend_titles_reject_over_label_limit() {
+        use crate::ir::{AxisTitle, AxisTitleAlign};
+
+        let limits = InputLimits {
+            max_label_bytes: 4,
+            ..default_limits()
+        };
+        let title = AxisTitle {
+            text: "xxxxx".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        };
+        let mut legend_spec = base_spec();
+        legend_spec.legend_title = Some("xxxxx".into());
+        assert!(validate_spec(&legend_spec, &limits).is_err());
+
+        let mut x_spec = base_spec();
+        x_spec.x_axis.title = Some(title.clone());
+        assert!(validate_spec(&x_spec, &limits).is_err());
+
+        let mut y_spec = base_spec();
+        y_spec.y_axis.title = Some(title);
+        assert!(validate_spec(&y_spec, &limits).is_err());
     }
 
     #[test]
@@ -693,7 +884,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -729,7 +920,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -759,7 +950,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -788,7 +979,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
