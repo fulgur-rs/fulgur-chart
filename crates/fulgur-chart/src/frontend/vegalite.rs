@@ -1387,11 +1387,8 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
                 "field",
                 &format!("encoding.{channel}.field"),
             )?;
-            check_line_optional_string(
-                channel_object,
-                "type",
-                &format!("encoding.{channel}.type"),
-            )?;
+            let type_path = format!("encoding.{channel}.type");
+            check_line_optional_string(channel_object, "type", &type_path)?;
             check_line_optional_string(
                 channel_object,
                 "title",
