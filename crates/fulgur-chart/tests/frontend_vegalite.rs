@@ -46,6 +46,15 @@ const DOGFOOD_MULTI_SERIES: &str = r##"{
   }
 }"##;
 
+const CATEGORICAL_LINE_SHAPE: &str = r#"{
+  "mark":"line",
+  "data":{"values":[{"category":"a","value":1}]},
+  "encoding":{
+    "x":{"field":"category","type":"nominal"},
+    "y":{"field":"value","type":"quantitative"}
+  }
+}"#;
+
 #[test]
 fn temporal_line_sorts_x_and_nominal_color_domain() {
     let spec = vegalite::parse(DOGFOOD_MULTI_SERIES, true).unwrap();
@@ -247,8 +256,12 @@ fn dogfood_shape_is_accepted_by_typed_schema_and_strict_parser() {
     assert!(vegalite::parse(DOGFOOD_SHAPE, true).is_ok());
 }
 
-fn temporal_line_with_field(path: &[&str], value: Option<serde_json::Value>) -> serde_json::Value {
-    let mut json: serde_json::Value = serde_json::from_str(DOGFOOD_SHAPE).unwrap();
+fn line_with_field(
+    fixture: &str,
+    path: &[&str],
+    value: Option<serde_json::Value>,
+) -> serde_json::Value {
+    let mut json: serde_json::Value = serde_json::from_str(fixture).unwrap();
     let (key, parent_path) = path.split_last().expect("field path must not be empty");
     let mut parent = &mut json;
     for segment in parent_path {
@@ -282,6 +295,7 @@ fn temporal_line_nullable_typed_fields_treat_null_as_omission() {
         &["mark", "point"],
         &["mark", "interpolate"],
         &["encoding", "color"],
+        &["encoding", "x", "type"],
         &["encoding", "x", "title"],
         &["encoding", "y", "type"],
         &["encoding", "y", "title"],
@@ -297,8 +311,13 @@ fn temporal_line_nullable_typed_fields_treat_null_as_omission() {
 
     let mut failures = Vec::new();
     for path in nullable_paths {
-        let null_json = temporal_line_with_field(path, Some(serde_json::Value::Null));
-        let omitted_json = temporal_line_with_field(path, None);
+        let fixture = if *path == ["encoding", "x", "type"] {
+            CATEGORICAL_LINE_SHAPE
+        } else {
+            DOGFOOD_SHAPE
+        };
+        let null_json = line_with_field(fixture, path, Some(serde_json::Value::Null));
+        let omitted_json = line_with_field(fixture, path, None);
         let path = path.join(".");
 
         if let Err(err) =
