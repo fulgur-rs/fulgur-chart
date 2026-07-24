@@ -711,7 +711,11 @@ fn build_temporal_line(
         } else {
             0
         };
-        *aggregates.entry((millis, group_index)).or_insert(0.0) += value;
+        let aggregate = aggregates.entry((millis, group_index)).or_insert(0.0);
+        *aggregate += value;
+        if !aggregate.is_finite() {
+            return Err("temporal line aggregate must be finite".to_string());
+        }
     }
 
     let domain = domain.into_iter().collect::<Vec<_>>();
