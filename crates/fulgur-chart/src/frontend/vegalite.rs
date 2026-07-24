@@ -633,6 +633,12 @@ fn canonical_number_bits(value: f64) -> u64 {
     }
 }
 
+fn canonical_number_name(bits: u64) -> String {
+    ryu_js::Buffer::new()
+        .format(f64::from_bits(bits))
+        .to_string()
+}
+
 fn cmp_temporal_group_orders(
     left: &TemporalGroupOrder,
     right: &TemporalGroupOrder,
@@ -838,7 +844,7 @@ fn temporal_group(value: Option<&Value>, field: &str) -> Result<TemporalGroup, S
             let bits = canonical_number_bits(number);
             Ok(TemporalGroup {
                 key: TemporalGroupKey::Number(bits),
-                name: number.to_string(),
+                name: canonical_number_name(bits),
                 order: TemporalGroupOrder::Number(bits),
             })
         }
