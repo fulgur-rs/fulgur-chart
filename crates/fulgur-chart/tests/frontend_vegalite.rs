@@ -215,6 +215,80 @@ fn temporal_line_numeric_color_groups_follow_canonical_f64_semantics() {
     );
 }
 
+fn parse_temporal_numeric_groups(values: &str) -> fulgur_chart::ir::ChartSpec {
+    vegalite::parse(
+        &format!(
+            r#"{{
+                "mark":"line",
+                "data":{{"values":[{values}]}},
+                "encoding":{{
+                    "x":{{"field":"timestamp","type":"temporal"}},
+                    "y":{{"field":"value","type":"quantitative"}},
+                    "color":{{"field":"metric","type":"nominal"}}
+                }}
+            }}"#
+        ),
+        true,
+    )
+    .unwrap()
+}
+
+#[test]
+fn temporal_line_numeric_group_names_canonicalize_signed_zero() {
+    let negative_first = parse_temporal_numeric_groups(
+        r#"{"timestamp":"2026-07-01T00:00:00Z","metric":-0,"value":1},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":0,"value":2}"#,
+    );
+    let positive_first = parse_temporal_numeric_groups(
+        r#"{"timestamp":"2026-07-01T00:00:00Z","metric":0,"value":2},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":-0,"value":1}"#,
+    );
+
+    assert_eq!(negative_first, positive_first);
+    assert_eq!(negative_first.series.len(), 1);
+    assert_eq!(negative_first.series[0].name, "0");
+    assert_eq!(negative_first.series[0].values, vec![3.0]);
+}
+
+#[test]
+fn temporal_line_numeric_group_names_use_ecmascript_formatting() {
+    let spec = parse_temporal_numeric_groups(
+        r#"{"timestamp":"2026-07-01T00:00:00Z","metric":1e-7,"value":1},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":1e21,"value":2},
+           {"timestamp":"2026-07-01T00:00:00Z","metric":5e-324,"value":3}"#,
+    );
+
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|series| series.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["5e-324", "1e-7", "1e+21"]
+    );
+}
+
+#[test]
+fn temporal_line_numeric_group_names_use_ecmascript_length_for_limits() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T00:00:00Z","metric":1e21,"value":1}
+        ]},
+        "encoding":{
+            "x":{"field":"timestamp","type":"temporal"},
+            "y":{"field":"value","type":"quantitative"},
+            "color":{"field":"metric","type":"nominal"}
+        }
+    }"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_label_bytes: 20,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+
+    let spec = vegalite::parse_with_limits(json, true, &limits).unwrap();
+    assert_eq!(spec.series[0].name, "1e+21");
+}
+
 #[test]
 fn temporal_line_aggregates_offset_equivalent_timestamps() {
     let json = r#"{

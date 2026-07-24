@@ -15,6 +15,7 @@ autobenches = false
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+ryu-js = { workspace = true }
 tiny-skia = { workspace = true }
 png = { workspace = true }
 schemars = { workspace = true }
