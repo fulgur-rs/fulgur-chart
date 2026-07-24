@@ -117,6 +117,44 @@ fn temporal_line_sorts_numeric_color_domain_numerically() {
 }
 
 #[test]
+fn temporal_line_sorts_mixed_color_domain_by_type_without_collisions() {
+    let json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T00:00:00Z","metric":10,"value":1},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"15","value":2},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":2,"value":3},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":true,"value":4},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"2","value":5},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":false,"value":6},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"true","value":7}
+        ]},
+        "encoding":{
+            "x":{"field":"timestamp","type":"temporal"},
+            "y":{"field":"value","type":"quantitative"},
+            "color":{"field":"metric","type":"nominal"}
+        }
+    }"#;
+
+    let spec = vegalite::parse(json, true).unwrap();
+    assert_eq!(spec.series.len(), 7);
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|series| series.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["2", "10", "15", "2", "true", "false", "true"]
+    );
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|series| series.stroke[0])
+            .collect::<Vec<_>>(),
+        VEGALITE_PALETTE[..7]
+    );
+}
+
+#[test]
 fn temporal_line_aggregates_offset_equivalent_timestamps() {
     let json = r#"{
         "mark":"line",

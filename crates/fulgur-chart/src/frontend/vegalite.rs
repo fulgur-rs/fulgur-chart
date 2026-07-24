@@ -14,7 +14,7 @@ use crate::color::parse_color;
 use crate::ir::*;
 use crate::palette::vegalite_theme;
 use crate::temporal::{bounded_error_fragment, parse_rfc3339_millis};
-use serde_json::{Map, Value};
+use serde_json::{Map, Number, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Vega-Lite サブセットを [`ChartSpec`] へ変換する。
@@ -602,6 +602,47 @@ struct TemporalLineData {
     series: Vec<Series>,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum TemporalGroupKey {
+    Number(Number),
+    String(String),
+    Bool(bool),
+}
+
+/// 異種 group の決定的な型順序。各型の内部順序は従来のまま、数値だけは数値順にする。
+/// `Number -> String -> Bool` として、混在型でも全順序を維持する。
+fn temporal_group_type_order(group: &TemporalGroupKey) -> u8 {
+    match group {
+        TemporalGroupKey::Number(_) => 0,
+        TemporalGroupKey::String(_) => 1,
+        TemporalGroupKey::Bool(_) => 2,
+    }
+}
+
+fn cmp_temporal_group_keys(
+    left: &TemporalGroupKey,
+    right: &TemporalGroupKey,
+) -> std::cmp::Ordering {
+    let type_order = temporal_group_type_order(left).cmp(&temporal_group_type_order(right));
+    if type_order != std::cmp::Ordering::Equal {
+        return type_order;
+    }
+
+    match (left, right) {
+        (TemporalGroupKey::Number(left), TemporalGroupKey::Number(right)) => {
+            match (left.as_f64(), right.as_f64()) {
+                (Some(left_number), Some(right_number)) => left_number
+                    .total_cmp(&right_number)
+                    .then_with(|| left.to_string().cmp(&right.to_string())),
+                _ => left.to_string().cmp(&right.to_string()),
+            }
+        }
+        (TemporalGroupKey::String(left), TemporalGroupKey::String(right)) => left.cmp(right),
+        (TemporalGroupKey::Bool(left), TemporalGroupKey::Bool(right)) => left.cmp(right),
+        _ => std::cmp::Ordering::Equal,
+    }
+}
+
 /// temporal line を単一 record pass で正規化・集約する。
 ///
 /// timestamp/y/group は各 record につき一度だけ読み、aggregate は
@@ -634,14 +675,8 @@ fn build_temporal_line(
     } else {
         vec![String::new()]
     };
-    // 表示名・同一性判定は従来どおり文字列化した値を使う。JSON 数値だけは
-    // Vega-Lite と同じ数値順で色域を並べるため、比較キーを別途保持する。
-    let mut group_numbers = if color_field.is_some() {
-        Vec::new()
-    } else {
-        vec![None]
-    };
-    let mut group_indexes = HashMap::<String, usize>::new();
+    let mut group_keys = Vec::new();
+    let mut group_indexes = HashMap::<TemporalGroupKey, usize>::new();
     let mut aggregates = HashMap::<(i64, usize), f64>::new();
     preflight_temporal_shape(0, group_names.len(), limits)?;
 
@@ -698,7 +733,7 @@ fn build_temporal_line(
 
         let group_index = if let Some(color_field) = color_field.as_deref() {
             let group_value = record.get(color_field);
-            let group = temporal_group(group_value, color_field)?;
+            let (group_key, group) = temporal_group(group_value, color_field)?;
             if group.len() > limits.max_label_bytes {
                 return Err(format!(
                     "temporal legend label length {} bytes exceeds limit {}",
@@ -706,15 +741,15 @@ fn build_temporal_line(
                     limits.max_label_bytes
                 ));
             }
-            if let Some(&index) = group_indexes.get(&group) {
+            if let Some(&index) = group_indexes.get(&group_key) {
                 index
             } else {
                 let index = group_names.len();
                 let next_group_len = index.saturating_add(1);
                 preflight_temporal_shape(domain.len(), next_group_len, limits)?;
-                group_names.push(group.clone());
-                group_numbers.push(group_value.and_then(Value::as_f64));
-                group_indexes.insert(group, index);
+                group_names.push(group);
+                group_keys.push(group_key.clone());
+                group_indexes.insert(group_key, index);
                 index
             }
         } else {
@@ -735,12 +770,7 @@ fn build_temporal_line(
         .collect::<Vec<_>>();
     if color_field.is_some() {
         ordered_groups.sort_unstable_by(|left, right| {
-            match (group_numbers[left.1], group_numbers[right.1]) {
-                (Some(left_number), Some(right_number)) => left_number
-                    .total_cmp(&right_number)
-                    .then_with(|| left.0.cmp(&right.0)),
-                _ => left.0.cmp(&right.0),
-            }
+            cmp_temporal_group_keys(&group_keys[left.1], &group_keys[right.1])
         });
     }
     let mut series = Vec::with_capacity(ordered_groups.len());
@@ -777,11 +807,16 @@ fn build_temporal_line(
     Ok(TemporalLineData { domain, series })
 }
 
-fn temporal_group(value: Option<&Value>, field: &str) -> Result<String, String> {
+fn temporal_group(
+    value: Option<&Value>,
+    field: &str,
+) -> Result<(TemporalGroupKey, String), String> {
     match value {
-        Some(Value::String(value)) => Ok(value.clone()),
-        Some(Value::Number(value)) => Ok(value.to_string()),
-        Some(Value::Bool(value)) => Ok(value.to_string()),
+        Some(Value::String(value)) => Ok((TemporalGroupKey::String(value.clone()), value.clone())),
+        Some(Value::Number(value)) => {
+            Ok((TemporalGroupKey::Number(value.clone()), value.to_string()))
+        }
+        Some(Value::Bool(value)) => Ok((TemporalGroupKey::Bool(*value), value.to_string())),
         Some(other) => Err(format!(
             "field {} must be a string, number, or boolean group, got {}",
             bounded_error_fragment(field),
@@ -917,8 +952,11 @@ mod temporal_line_tests {
 
     #[test]
     fn temporal_line_groups_normalize_scalars_and_bound_errors() {
-        assert_eq!(temporal_group(Some(&json!(42)), "group").unwrap(), "42");
-        assert_eq!(temporal_group(Some(&json!(true)), "group").unwrap(), "true");
+        assert_eq!(temporal_group(Some(&json!(42)), "group").unwrap().1, "42");
+        assert_eq!(
+            temporal_group(Some(&json!(true)), "group").unwrap().1,
+            "true"
+        );
         assert!(temporal_group(Some(&json!([])), "group").is_err());
         assert!(temporal_group(None, "group").is_err());
 
