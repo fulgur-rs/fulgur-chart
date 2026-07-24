@@ -416,7 +416,9 @@ fn temporal_x(frame: &Frame, min: i64, max: i64, value: i64) -> f64 {
     if min == max {
         (frame.plot_left + frame.plot_right) / 2.0
     } else {
-        let ratio = (value - min) as f64 / (max - min) as f64;
+        let numerator = value as i128 - min as i128;
+        let denominator = max as i128 - min as i128;
+        let ratio = numerator as f64 / denominator as f64;
         frame.plot_left + ratio * (frame.plot_right - frame.plot_left)
     }
 }
@@ -939,6 +941,19 @@ mod tests {
         let x1 = line_x(&spec, &frame, 1);
         let x2 = line_x(&spec, &frame, 2);
         assert!(((x1 - x0) / (x2 - x0) - 1.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn temporal_x_handles_full_i64_domain() {
+        let spec = temporal_spec(vec![i64::MIN, 0, i64::MAX]);
+        let frame = compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let left = line_x(&spec, &frame, 0);
+        let middle = line_x(&spec, &frame, 1);
+        let right = line_x(&spec, &frame, 2);
+
+        assert_eq!(left, frame.plot_left);
+        assert_eq!(right, frame.plot_right);
+        assert!(((middle - left) / (right - left) - 0.5).abs() < 1e-9);
     }
 
     #[test]
