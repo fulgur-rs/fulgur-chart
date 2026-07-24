@@ -248,6 +248,35 @@ fn dogfood_shape_is_accepted_by_typed_schema_and_strict_parser() {
 }
 
 #[test]
+fn typed_line_schema_constrains_channel_types() {
+    for json in [
+        DOGFOOD_SHAPE.replace("\"temporal\"", "\"temporl\""),
+        DOGFOOD_SHAPE.replace("\"quantitative\"", "\"nominal\""),
+        DOGFOOD_SHAPE.replace("\"nominal\"", "\"quantitative\""),
+    ] {
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_err(),
+            "typed schema accepted unsupported line channel type"
+        );
+    }
+}
+
+#[test]
+fn typed_categorical_line_schema_excludes_temporal_only_options() {
+    let base = r#"{
+        "mark":{"type":"line"},
+        "data":{"values":[{"x":"a","y":1}]},
+        "encoding":{
+            "x":{"field":"x","type":"nominal"},
+            "y":{"field":"y","type":"quantitative"}
+        }
+    }"#;
+    let with_point = base.replace(r#""type":"line""#, r#""type":"line","point":false"#);
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&with_point).is_err());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(base).is_ok());
+}
+
+#[test]
 fn strict_temporal_line_rejects_interpolatee_with_full_key_path() {
     let json = DOGFOOD_SHAPE.replace("\"interpolate\"", "\"interpolatee\"");
     let err = vegalite::parse(&json, true).unwrap_err();
