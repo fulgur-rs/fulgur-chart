@@ -439,6 +439,14 @@ fn strict_line_rejects_unsupported_channel_type_values() {
 }
 
 #[test]
+fn strict_temporal_line_requires_color_field() {
+    let json = DOGFOOD_SHAPE.replace(r#""field":"metric","#, "");
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert_eq!(err, "encoding.color.field is required");
+    assert!(vegalite::parse(&json, false).is_ok());
+}
+
+#[test]
 fn strict_categorical_line_rejects_temporal_only_options() {
     let base = r#"{
         "mark":{"type":"line"},

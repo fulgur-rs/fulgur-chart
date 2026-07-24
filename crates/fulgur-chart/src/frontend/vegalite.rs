@@ -1398,6 +1398,9 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
             "encoding.color",
         )?;
         check_line_string(color, "field", "encoding.color.field")?;
+        if !color.contains_key("field") {
+            return Err("encoding.color.field is required".to_string());
+        }
         check_line_string(color, "type", "encoding.color.type")?;
         check_line_string(color, "title", "encoding.color.title")?;
         if let Some(scale) = color.get("scale").filter(|scale| !scale.is_null()) {
