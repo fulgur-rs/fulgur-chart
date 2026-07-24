@@ -609,37 +609,39 @@ enum TemporalGroupKey {
     Bool(bool),
 }
 
-/// 異種 group の決定的な型順序。各型の内部順序は従来のまま、数値だけは数値順にする。
-/// `Number -> String -> Bool` として、混在型でも全順序を維持する。
-fn temporal_group_type_order(group: &TemporalGroupKey) -> u8 {
-    match group {
-        TemporalGroupKey::Number(_) => 0,
-        TemporalGroupKey::String(_) => 1,
-        TemporalGroupKey::Bool(_) => 2,
-    }
+#[derive(Clone, Debug, PartialEq)]
+enum TemporalGroupOrder {
+    Number(f64),
+    String(String),
+    Bool(bool),
 }
 
-fn cmp_temporal_group_keys(
-    left: &TemporalGroupKey,
-    right: &TemporalGroupKey,
-) -> std::cmp::Ordering {
-    let type_order = temporal_group_type_order(left).cmp(&temporal_group_type_order(right));
-    if type_order != std::cmp::Ordering::Equal {
-        return type_order;
-    }
+struct TemporalGroup {
+    key: TemporalGroupKey,
+    name: String,
+    order: TemporalGroupOrder,
+}
 
+/// 異種 group の決定的な型順序。各型の内部順序は従来のまま、数値だけは数値順にする。
+/// `Number -> String -> Bool` として、混在型でも全順序を維持する。
+fn cmp_temporal_group_orders(
+    left: &TemporalGroupOrder,
+    right: &TemporalGroupOrder,
+) -> std::cmp::Ordering {
     match (left, right) {
-        (TemporalGroupKey::Number(left), TemporalGroupKey::Number(right)) => {
-            match (left.as_f64(), right.as_f64()) {
-                (Some(left_number), Some(right_number)) => left_number
-                    .total_cmp(&right_number)
-                    .then_with(|| left.to_string().cmp(&right.to_string())),
-                _ => left.to_string().cmp(&right.to_string()),
-            }
+        (TemporalGroupOrder::Number(left), TemporalGroupOrder::Number(right)) => {
+            left.total_cmp(right)
         }
-        (TemporalGroupKey::String(left), TemporalGroupKey::String(right)) => left.cmp(right),
-        (TemporalGroupKey::Bool(left), TemporalGroupKey::Bool(right)) => left.cmp(right),
-        _ => std::cmp::Ordering::Equal,
+        (TemporalGroupOrder::Number(_), TemporalGroupOrder::String(_)) => std::cmp::Ordering::Less,
+        (TemporalGroupOrder::Number(_), TemporalGroupOrder::Bool(_)) => std::cmp::Ordering::Less,
+        (TemporalGroupOrder::String(_), TemporalGroupOrder::Number(_)) => {
+            std::cmp::Ordering::Greater
+        }
+        (TemporalGroupOrder::String(left), TemporalGroupOrder::String(right)) => left.cmp(right),
+        (TemporalGroupOrder::String(_), TemporalGroupOrder::Bool(_)) => std::cmp::Ordering::Less,
+        (TemporalGroupOrder::Bool(_), TemporalGroupOrder::Number(_)) => std::cmp::Ordering::Greater,
+        (TemporalGroupOrder::Bool(_), TemporalGroupOrder::String(_)) => std::cmp::Ordering::Greater,
+        (TemporalGroupOrder::Bool(left), TemporalGroupOrder::Bool(right)) => left.cmp(right),
     }
 }
 
@@ -675,7 +677,7 @@ fn build_temporal_line(
     } else {
         vec![String::new()]
     };
-    let mut group_keys = Vec::new();
+    let mut group_orders = Vec::new();
     let mut group_indexes = HashMap::<TemporalGroupKey, usize>::new();
     let mut aggregates = HashMap::<(i64, usize), f64>::new();
     preflight_temporal_shape(0, group_names.len(), limits)?;
@@ -733,7 +735,11 @@ fn build_temporal_line(
 
         let group_index = if let Some(color_field) = color_field.as_deref() {
             let group_value = record.get(color_field);
-            let (group_key, group) = temporal_group(group_value, color_field)?;
+            let TemporalGroup {
+                key: group_key,
+                name: group,
+                order: group_order,
+            } = temporal_group(group_value, color_field)?;
             if group.len() > limits.max_label_bytes {
                 return Err(format!(
                     "temporal legend label length {} bytes exceeds limit {}",
@@ -748,7 +754,7 @@ fn build_temporal_line(
                 let next_group_len = index.saturating_add(1);
                 preflight_temporal_shape(domain.len(), next_group_len, limits)?;
                 group_names.push(group);
-                group_keys.push(group_key.clone());
+                group_orders.push(group_order);
                 group_indexes.insert(group_key, index);
                 index
             }
@@ -770,7 +776,7 @@ fn build_temporal_line(
         .collect::<Vec<_>>();
     if color_field.is_some() {
         ordered_groups.sort_unstable_by(|left, right| {
-            cmp_temporal_group_keys(&group_keys[left.1], &group_keys[right.1])
+            cmp_temporal_group_orders(&group_orders[left.1], &group_orders[right.1])
         });
     }
     let mut series = Vec::with_capacity(ordered_groups.len());
@@ -807,16 +813,28 @@ fn build_temporal_line(
     Ok(TemporalLineData { domain, series })
 }
 
-fn temporal_group(
-    value: Option<&Value>,
-    field: &str,
-) -> Result<(TemporalGroupKey, String), String> {
+fn temporal_group(value: Option<&Value>, field: &str) -> Result<TemporalGroup, String> {
     match value {
-        Some(Value::String(value)) => Ok((TemporalGroupKey::String(value.clone()), value.clone())),
-        Some(Value::Number(value)) => {
-            Ok((TemporalGroupKey::Number(value.clone()), value.to_string()))
-        }
-        Some(Value::Bool(value)) => Ok((TemporalGroupKey::Bool(*value), value.to_string())),
+        Some(Value::String(value)) => Ok(TemporalGroup {
+            key: TemporalGroupKey::String(value.clone()),
+            name: value.clone(),
+            order: TemporalGroupOrder::String(value.clone()),
+        }),
+        Some(Value::Number(value)) => Ok(TemporalGroup {
+            key: TemporalGroupKey::Number(value.clone()),
+            name: value.to_string(),
+            // serde_json が受理する JSON number は f64 へ変換でき、NaN は JSON に存在しない。
+            order: TemporalGroupOrder::Number(
+                value
+                    .as_f64()
+                    .expect("JSON number must convert to f64 for temporal group ordering"),
+            ),
+        }),
+        Some(Value::Bool(value)) => Ok(TemporalGroup {
+            key: TemporalGroupKey::Bool(*value),
+            name: value.to_string(),
+            order: TemporalGroupOrder::Bool(*value),
+        }),
         Some(other) => Err(format!(
             "field {} must be a string, number, or boolean group, got {}",
             bounded_error_fragment(field),
@@ -952,9 +970,12 @@ mod temporal_line_tests {
 
     #[test]
     fn temporal_line_groups_normalize_scalars_and_bound_errors() {
-        assert_eq!(temporal_group(Some(&json!(42)), "group").unwrap().1, "42");
         assert_eq!(
-            temporal_group(Some(&json!(true)), "group").unwrap().1,
+            temporal_group(Some(&json!(42)), "group").unwrap().name,
+            "42"
+        );
+        assert_eq!(
+            temporal_group(Some(&json!(true)), "group").unwrap().name,
             "true"
         );
         assert!(temporal_group(Some(&json!([])), "group").is_err());
@@ -974,6 +995,45 @@ mod temporal_line_tests {
                 .unwrap_err()
                 .contains("legend label length")
         );
+    }
+
+    #[test]
+    fn temporal_group_order_comparison_is_total_across_types() {
+        let groups = vec![
+            TemporalGroupOrder::Number(2.0),
+            TemporalGroupOrder::Number(10.0),
+            TemporalGroupOrder::String("15".into()),
+            TemporalGroupOrder::String("2".into()),
+            TemporalGroupOrder::Bool(false),
+            TemporalGroupOrder::Bool(true),
+        ];
+
+        let mut ordered = groups.clone();
+        ordered.sort_unstable_by(cmp_temporal_group_orders);
+        assert_eq!(ordered, groups);
+
+        for left in &groups {
+            for right in &groups {
+                assert_eq!(
+                    cmp_temporal_group_orders(left, right),
+                    cmp_temporal_group_orders(right, left).reverse()
+                );
+            }
+        }
+        for first in &groups {
+            for second in &groups {
+                for third in &groups {
+                    if cmp_temporal_group_orders(first, second) != std::cmp::Ordering::Greater
+                        && cmp_temporal_group_orders(second, third) != std::cmp::Ordering::Greater
+                    {
+                        assert_ne!(
+                            cmp_temporal_group_orders(first, third),
+                            std::cmp::Ordering::Greater
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
