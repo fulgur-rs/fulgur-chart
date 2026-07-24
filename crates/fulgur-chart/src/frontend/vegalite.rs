@@ -148,7 +148,9 @@ pub fn parse_with_limits(
     }
 
     let mut theme = vegalite_theme();
-    if temporal_line && let Some(background) = top.get("background") {
+    if temporal_line
+        && let Some(background) = top.get("background").filter(|value| !value.is_null())
+    {
         let Some(background) = background.as_str().and_then(parse_color) else {
             return Err("background must be a valid color".to_string());
         };
@@ -967,6 +969,7 @@ fn line_point_enabled(top: &Map<String, Value>) -> Result<bool, String> {
         .get("mark")
         .and_then(Value::as_object)
         .and_then(|mark| mark.get("point"))
+        .filter(|value| !value.is_null())
     {
         Some(Value::Bool(value)) => Ok(*value),
         Some(other) => Err(format!(
@@ -982,6 +985,7 @@ fn line_interpolation(top: &Map<String, Value>) -> Result<LineInterpolation, Str
         .get("mark")
         .and_then(Value::as_object)
         .and_then(|mark| mark.get("interpolate"))
+        .filter(|value| !value.is_null())
     {
         Some(Value::String(value)) if value == "monotone" => Ok(LineInterpolation::Monotone),
         Some(Value::String(value)) if value == "linear" => Ok(LineInterpolation::Linear),
@@ -1030,7 +1034,10 @@ fn temporal_axis_grid(
         .and_then(Value::as_object)
         .and_then(|config| config.get("axis"))
         .and_then(Value::as_object);
-    let opacity = match axis.and_then(|axis| axis.get("gridOpacity")) {
+    let opacity = match axis
+        .and_then(|axis| axis.get("gridOpacity"))
+        .filter(|value| !value.is_null())
+    {
         Some(value) => {
             let Some(opacity) = value.as_f64() else {
                 return Err(format!(
@@ -1347,8 +1354,8 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
     if let Some(mark) = top.get("mark").and_then(Value::as_object) {
         check_line_object(mark, &["type", "point", "interpolate"], "mark")?;
         check_line_string(mark, "type", "mark.type")?;
-        check_line_bool(mark, "point", "mark.point")?;
-        if let Some(interpolate) = mark.get("interpolate") {
+        check_line_optional_bool(mark, "point", "mark.point")?;
+        if let Some(interpolate) = mark.get("interpolate").filter(|value| !value.is_null()) {
             match interpolate {
                 Value::String(value) if value == "linear" || value == "monotone" => {}
                 Value::String(_) => {
@@ -1380,15 +1387,19 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
                 "field",
                 &format!("encoding.{channel}.field"),
             )?;
-            check_line_string(channel_object, "type", &format!("encoding.{channel}.type"))?;
-            check_line_string(
+            check_line_optional_string(
+                channel_object,
+                "type",
+                &format!("encoding.{channel}.type"),
+            )?;
+            check_line_optional_string(
                 channel_object,
                 "title",
                 &format!("encoding.{channel}.title"),
             )?;
         }
     }
-    if let Some(value) = encoding.get("color") {
+    if let Some(value) = encoding.get("color").filter(|value| !value.is_null()) {
         let color = value
             .as_object()
             .ok_or_else(|| "encoding.color must be an object".to_string())?;
@@ -1401,8 +1412,8 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
         if !color.contains_key("field") {
             return Err("encoding.color.field is required".to_string());
         }
-        check_line_string(color, "type", "encoding.color.type")?;
-        check_line_string(color, "title", "encoding.color.title")?;
+        check_line_optional_string(color, "type", "encoding.color.type")?;
+        check_line_optional_string(color, "title", "encoding.color.title")?;
         if let Some(scale) = color.get("scale").filter(|scale| !scale.is_null()) {
             let scale = scale
                 .as_object()
@@ -1424,13 +1435,13 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
         }
     }
 
-    check_line_string(top, "background", "background")?;
-    if let Some(config) = top.get("config") {
+    check_line_optional_string(top, "background", "background")?;
+    if let Some(config) = top.get("config").filter(|value| !value.is_null()) {
         let config = config
             .as_object()
             .ok_or_else(|| "config must be an object".to_string())?;
         check_line_object(config, &["view", "axis"], "config")?;
-        if let Some(view) = config.get("view") {
+        if let Some(view) = config.get("view").filter(|value| !value.is_null()) {
             let view = view
                 .as_object()
                 .ok_or_else(|| "config.view must be an object".to_string())?;
@@ -1441,13 +1452,13 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
                 return Err("config.view.stroke must be null".to_string());
             }
         }
-        if let Some(axis) = config.get("axis") {
+        if let Some(axis) = config.get("axis").filter(|value| !value.is_null()) {
             let axis = axis
                 .as_object()
                 .ok_or_else(|| "config.axis must be an object".to_string())?;
             check_line_object(axis, &["grid", "gridOpacity"], "config.axis")?;
-            check_line_bool(axis, "grid", "config.axis.grid")?;
-            if let Some(grid_opacity) = axis.get("gridOpacity") {
+            check_line_optional_bool(axis, "grid", "config.axis.grid")?;
+            if let Some(grid_opacity) = axis.get("gridOpacity").filter(|value| !value.is_null()) {
                 let Some(value) = grid_opacity.as_f64() else {
                     return Err(format!(
                         "config.axis.gridOpacity must be a number, got {}",
@@ -1474,6 +1485,7 @@ fn validate_line_channel_types(encoding: &Map<String, Value>) -> Result<(), Stri
             .get(channel_name)
             .and_then(Value::as_object)
             .and_then(|channel| channel.get("type"))
+            .filter(|value| !value.is_null())
         else {
             continue;
         };
@@ -1522,8 +1534,24 @@ fn check_line_string(object: &Map<String, Value>, key: &str, path: &str) -> Resu
     Ok(())
 }
 
-fn check_line_bool(object: &Map<String, Value>, key: &str, path: &str) -> Result<(), String> {
+fn check_line_optional_string(
+    object: &Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<(), String> {
+    if object.get(key).is_some_and(Value::is_null) {
+        return Ok(());
+    }
+    check_line_string(object, key, path)
+}
+
+fn check_line_optional_bool(
+    object: &Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<(), String> {
     if let Some(value) = object.get(key)
+        && !value.is_null()
         && !value.is_boolean()
     {
         return Err(format!(
