@@ -803,6 +803,63 @@ fn temporal_line_grid_option_preserves_false_null_and_omitted_semantics() {
 }
 
 #[test]
+fn temporal_line_rejects_invalid_view_config_in_both_modes() {
+    for (json, expected) in [
+        (
+            DOGFOOD_SHAPE.replace(r#""view":{"stroke":null}"#, r#""view":42"#),
+            "config.view must be an object",
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""stroke":null"#, r##""stroke":"#ddd""##),
+            "config.view.stroke must be null",
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""stroke":null"#, r#""stroke":42"#),
+            "config.view.stroke must be null",
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""stroke":null"#, r#""stroke":false"#),
+            "config.view.stroke must be null",
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""stroke":null"#, r#""stroke":{}"#),
+            "config.view.stroke must be null",
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""stroke":null"#, r#""stroke":[]"#),
+            "config.view.stroke must be null",
+        ),
+    ] {
+        for strict in [false, true] {
+            assert_eq!(
+                vegalite::parse(&json, strict).unwrap_err(),
+                expected,
+                "strict={strict}"
+            );
+        }
+    }
+}
+
+#[test]
+fn temporal_line_view_config_preserves_null_missing_and_mode_boundaries() {
+    for json in [
+        DOGFOOD_SHAPE.replace(r#""view":{"stroke":null},"#, ""),
+        DOGFOOD_SHAPE.replace(r#""view":{"stroke":null}"#, r#""view":null"#),
+    ] {
+        for strict in [false, true] {
+            vegalite::parse(&json, strict).unwrap();
+        }
+    }
+
+    let non_strict =
+        DOGFOOD_SHAPE.replace(r#""stroke":null"#, r#""stroke":null,"futureOption":true"#);
+    vegalite::parse(&non_strict, false).unwrap();
+    let strict_typo = DOGFOOD_SHAPE.replace(r#""stroke":null"#, r#""stroke":null,"typo":true"#);
+    let err = vegalite::parse(&strict_typo, true).unwrap_err();
+    assert!(err.contains("config.view.typo"), "unexpected error: {err}");
+}
+
+#[test]
 fn temporal_line_treats_null_color_scale_as_absent() {
     let json = DOGFOOD_SHAPE.replace(r#""scale":{"scheme":"tableau10"}"#, r#""scale":null"#);
     for strict in [false, true] {

@@ -221,6 +221,7 @@ pub fn parse_with_limits(
     }
 
     let temporal_data = if temporal_line {
+        validate_temporal_view(top)?;
         validate_temporal_color_scheme(encoding)?;
         Some(build_temporal_line(
             &records,
@@ -1179,6 +1180,24 @@ fn validate_temporal_color_scheme(encoding: &Map<String, Value>) -> Result<(), S
     }
 }
 
+fn validate_temporal_view(top: &Map<String, Value>) -> Result<(), String> {
+    let Some(view) = top
+        .get("config")
+        .and_then(Value::as_object)
+        .and_then(|config| config.get("view"))
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(());
+    };
+    let view = view
+        .as_object()
+        .ok_or_else(|| "config.view must be an object".to_string())?;
+    if view.get("stroke").is_some_and(|stroke| !stroke.is_null()) {
+        return Err("config.view.stroke must be null".to_string());
+    }
+    Ok(())
+}
+
 fn temporal_axis_grid(
     top: &Map<String, Value>,
     theme_grid_color: Color,
@@ -1600,11 +1619,6 @@ fn check_line_keys(top: &Map<String, Value>, encoding: &Map<String, Value>) -> R
                 .as_object()
                 .ok_or_else(|| "config.view must be an object".to_string())?;
             check_line_object(view, &["stroke"], "config.view")?;
-            if let Some(stroke) = view.get("stroke")
-                && !stroke.is_null()
-            {
-                return Err("config.view.stroke must be null".to_string());
-            }
         }
         if let Some(axis) = config.get("axis").filter(|value| !value.is_null()) {
             let axis = axis
