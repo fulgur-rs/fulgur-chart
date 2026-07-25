@@ -182,34 +182,57 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 
     // rr_lo / rr_hi は「値→半径」マッピングに使う raw ドメイン。
-    // radial_axis 有り時は nice_ticks で丸めない (Codex Fix 5: max: 95 の hard override が
-    // nice.max=100 に丸められて内側に落ちるバグを避ける)。
+    //
+    // ドメインは「側ごと」に硬さが違う。`min` / `max` が明示された側は hard bound として
+    // raw 値をそのまま使い (Codex Fix 5: `max: 95` が nice.max=100 に丸められて
+    // データ最大値が外周に届かなくなるバグの回避)、明示されていない側 —— 自動計算のみ、
+    // または `suggested*` によって広げられただけの側 —— は従来通り nice_ticks の
+    // 丸めた境界を使う (Codex Fix 11: `min: 0` だけ指定したとき data [95,95,95] が
+    // 0..95 になってしまい、既定の 0..100 から不必要にズレる問題の回避)。
+    //
     // radial_axis 無し時は既存の byte-identical パスを維持するため nice.min / nice.max を使う。
     let (nice, rr_lo, rr_hi) = if let Some(ra) = &spec.radial_axis {
         // scatter.rs:189-209 と同パターン: min/max hard override、
         // suggested* は expand-only、beginAtZero は 0 を含める。
+        //
+        // Codex Fix 12: `suggested*` と beginAtZero は「自動計算側」だけを動かす。
+        // hard bound が指定された側に適用すると、例えば
+        // `{ min: 0, suggestedMin: -50 }` で hard な下限 0 が -50 に負けてしまう。
+        let lo_is_hard = ra.min.is_some();
+        let hi_is_hard = ra.max.is_some();
         let mut lo = ra
             .min
             .unwrap_or_else(|| if data_min.is_finite() { data_min } else { 0.0 });
         let mut hi = ra.max.unwrap_or(max_val);
-        if let Some(s) = ra.suggested_min
-            && s < lo
-        {
-            lo = s;
+        if !lo_is_hard {
+            if let Some(s) = ra.suggested_min
+                && s < lo
+            {
+                lo = s;
+            }
+            if ra.begin_at_zero {
+                lo = lo.min(0.0);
+            }
         }
-        if let Some(s) = ra.suggested_max
-            && s > hi
-        {
-            hi = s;
-        }
-        if ra.begin_at_zero && ra.min.is_none() {
-            lo = lo.min(0.0);
+        if !hi_is_hard {
+            if let Some(s) = ra.suggested_max
+                && s > hi
+            {
+                hi = s;
+            }
+            if ra.begin_at_zero {
+                hi = hi.max(0.0);
+            }
         }
         if !hi.is_finite() || hi <= lo {
             hi = lo + 1.0;
         }
+        // nice_ticks は外側へ丸める (nice.min <= lo かつ nice.max >= hi) ため、
+        // 自動側に採用してもデータがクリップされることはない。
         let n = nice_ticks(lo, hi, 10);
-        (n, lo, hi)
+        let rr_lo = if lo_is_hard { lo } else { n.min };
+        let rr_hi = if hi_is_hard { hi } else { n.max };
+        (n, rr_lo, rr_hi)
     } else {
         // 既存 default: byte-identical を維持。
         let n = nice_ticks(0.0, max_val, 10);
@@ -231,6 +254,14 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 5. グリッド(多角形状)。tick レベルごとに n 頂点を結ぶ閉多角形を描く。
     for &t in &nice.ticks {
         if t <= 0.0 {
+            continue;
+        }
+        // ドメイン外の tick は描かない。hard な `min` が nice 境界より内側にあるとき
+        // (例 min: 15 → nice.min: 10)、tick 10 は rr() で中心へクランプされ、
+        // 中心に潰れたリングが重なってしまう。
+        // default パス (radial_axis == None) では rr_lo == nice.min かつ
+        // rr_hi == nice.max なので、この条件は常に偽 → snapshot は不変。
+        if t < rr_lo || t > rr_hi {
             continue;
         }
         let r = rr(t);

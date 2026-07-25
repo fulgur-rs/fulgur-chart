@@ -182,3 +182,105 @@ fn radar_max_override_places_data_max_at_outer_edge() {
         "value 95 with max=95 と value 100 with max=100 は outer edge 100% で同一座標のはず: a={a:?} b={b:?}"
     );
 }
+
+/// 系列多角形 (fill != "none") の path から最初の "M x y" 座標を取り出す。
+/// グリッド path は fill="none" なので除外される。
+fn first_series_vertex(s: &str) -> Option<(String, String)> {
+    for chunk in s.split(r#"<path d=""#).skip(1) {
+        let end = chunk.find('"')?;
+        let d = &chunk[..end];
+        let attrs = &chunk[end..];
+        if attrs.contains(r#"fill="none""#) {
+            continue;
+        }
+        let m = d.strip_prefix('M')?.trim_start();
+        let mut it = m.split_whitespace();
+        let x = it.next()?.to_string();
+        let y = it.next()?.to_string();
+        return Some((x, y));
+    }
+    None
+}
+
+#[test]
+fn radar_auto_upper_bound_stays_nice_with_hard_min_only() {
+    // Codex Fix 11 のリグレッションテスト。
+    // `min` だけを hard 指定した場合、上端は自動計算なので従来通り nice 境界
+    // (data 95 → nice.max = 100) を使うべき。raw の data max (95) を上端にすると
+    // 頂点が外周まで伸びてしまい、既定 (scales 未指定) の見た目から不必要にズレる。
+    let hard_min_only = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[95,95,95]}]},"options":{"scales":{"r":{"min":0}}}}"##,
+    );
+    let explicit_nice = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[95,95,95]}]},"options":{"scales":{"r":{"min":0,"max":100}}}}"##,
+    );
+    assert_eq!(
+        first_series_vertex(&hard_min_only),
+        first_series_vertex(&explicit_nice),
+        "min のみ指定時、上端は nice.max=100 のままであるべき"
+    );
+
+    // 逆に max を hard 指定した場合は raw の 95 が使われ、頂点は外周に届く → 別位置。
+    let hard_max = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[95,95,95]}]},"options":{"scales":{"r":{"min":0,"max":95}}}}"##,
+    );
+    assert_ne!(
+        first_series_vertex(&hard_min_only),
+        first_series_vertex(&hard_max),
+        "max: 95 (hard) は nice.max=100 とは異なる位置になるべき"
+    );
+}
+
+#[test]
+fn radar_empty_scales_r_is_a_no_op() {
+    // Codex Fix 9 のリグレッションテスト。
+    // `scales.r: {}` はドメインキーを 1 つも含まないので radial_axis を populate せず、
+    // scales 未指定時と完全に同じ SVG になるべき。
+    let with_empty = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[95,95,95]}]},"options":{"scales":{"r":{}}}}"##,
+    );
+    let without = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[95,95,95]}]}}"##,
+    );
+    assert_eq!(with_empty, without, "空の scales.r は no-op であるべき");
+}
+
+#[test]
+fn radar_hard_min_wins_over_suggested_min() {
+    // Codex Fix 12 のリグレッションテスト。
+    // `min` は hard bound なので、より広い `suggestedMin` があっても負けてはならない。
+    let both = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"min":0,"suggestedMin":-50}}}}"##,
+    );
+    let hard_only = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"min":0}}}}"##,
+    );
+    assert_eq!(
+        both, hard_only,
+        "hard な min:0 は suggestedMin:-50 に上書きされてはならない"
+    );
+}
+
+#[test]
+fn radar_hard_max_wins_over_suggested_max() {
+    // Codex Fix 12 の対称ケース。`max` が hard なら suggestedMax は無視される。
+    let both = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"max":50,"suggestedMax":500}}}}"##,
+    );
+    let hard_only = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"max":50}}}}"##,
+    );
+    assert_eq!(
+        both, hard_only,
+        "hard な max:50 は suggestedMax:500 に上書きされてはならない"
+    );
+}

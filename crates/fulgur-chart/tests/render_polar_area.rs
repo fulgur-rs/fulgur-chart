@@ -169,3 +169,72 @@ fn polar_area_min_equal_to_data_max_does_not_produce_nan() {
     );
     assert!(svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"));
 }
+
+#[test]
+fn polar_area_all_negative_data_still_renders_slices() {
+    // Codex Fix 13 のリグレッションテスト。
+    // 全データが負で beginAtZero が既定 (true) のとき、下端だけ 0 方向へ寄せると
+    // ドメインが [0, 0] → 縮退救済で [0, 1] に潰れ、全スライスが消えていた。
+    // beginAtZero は「ドメインに 0 を含める」意味なので上端にも効く必要がある
+    // (→ [-50, 0])。
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B"],
+        "datasets":[{"data":[-50,-10]}]},"options":{"scales":{"r":{"suggestedMin":-60}}}}"##,
+    );
+    assert!(
+        svg.matches("<path").count() >= 2,
+        "全負データでもスライスが描画されるべき: {svg}"
+    );
+    assert!(svg.contains(" A "), "円弧コマンドが必要: {svg}");
+    assert!(!svg.contains("NaN") && !svg.contains("inf"));
+}
+
+#[test]
+fn polar_area_begin_at_zero_includes_zero_with_hard_negative_min() {
+    // Codex Fix 13: hard な負の `min` が指定されていても、`max` は自動計算側なので
+    // beginAtZero によって上端が 0 まで引き上げられ、ドメインが 0 を含むべき。
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B"],
+        "datasets":[{"data":[-50,-10]}]},"options":{"scales":{"r":{"min":-100}}}}"##,
+    );
+    // ドメイン [-100, 0] なら値 -50 は半径の中央 (ratio 0.5) にマップされる。
+    // [-100, -10] (beginAtZero 無効時) との差を見るため、明示 max との一致を確認する。
+    let explicit = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B"],
+        "datasets":[{"data":[-50,-10]}]},"options":{"scales":{"r":{"min":-100,"max":0}}}}"##,
+    );
+    assert_eq!(
+        svg, explicit,
+        "beginAtZero(既定 true) は自動側の上端を 0 まで引き上げるべき"
+    );
+    assert!(!svg.contains("NaN") && !svg.contains("inf"));
+}
+
+#[test]
+fn polar_area_empty_scales_r_is_a_no_op() {
+    // Codex Fix 9: `scales.r: {}` は radial_axis を populate せず、
+    // scales 未指定時と完全に同じ SVG になるべき。
+    let with_empty = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{}}}}"##,
+    );
+    let without = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[10,20,30]}]}}"##,
+    );
+    assert_eq!(with_empty, without, "空の scales.r は no-op であるべき");
+}
+
+#[test]
+fn polar_area_hard_min_wins_over_suggested_min() {
+    // Codex Fix 12: hard な `min` は、より広い `suggestedMin` に負けてはならない。
+    let both = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"min":0,"suggestedMin":-50}}}}"##,
+    );
+    let hard_only = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"min":0}}}}"##,
+    );
+    assert_eq!(both, hard_only);
+}

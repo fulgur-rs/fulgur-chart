@@ -1446,3 +1446,72 @@ fn scales_r_axis_rejected_in_strict() {
         "strict should reject unknown scale axis"
     );
 }
+
+#[test]
+fn strict_mode_treats_null_scales_axis_as_absent() {
+    // Codex Fix 10: `options.scales.<axis>: null` は「軸未指定」と同義。
+    // schema 側 (`RadialLinearScales.r` / `BarScales.y`) は `Option<_>` なので
+    // null は None に deserialize される。optional フィールドを nullable に
+    // serialize するクライアントが strict で落ちないようにする。
+    let radar = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":null}}}"##;
+    chartjs::parse(radar, true).expect("strict should treat scales.r: null as absent");
+
+    let bar = r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"y":null}}}"##;
+    chartjs::parse(bar, true).expect("strict should treat scales.y: null as absent");
+
+    // null 軸は radial_axis を populate しない (未指定と同じ)。
+    let spec = chartjs::parse(radar, false).unwrap();
+    assert!(spec.radial_axis.is_none(), "null 軸は未指定と同義");
+
+    // schema 側も同じ結論に到達すること (value レベルの parity)。
+    for json in [radar, bar] {
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        serde_json::from_value::<fulgur_chart::schema::ChartJsSpec>(v)
+            .expect("schema should deserialize a null axis as unset");
+    }
+
+    // 非 object かつ非 null (数値・文字列) は従来通り拒否する。
+    let bad = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":5}}}"##;
+    assert!(chartjs::parse(bad, true).is_err(), "非 object は拒否");
+}
+
+#[test]
+fn empty_scales_r_does_not_populate_radial_axis() {
+    // Codex Fix 9: ドメインキーを 1 つも持たない `scales.r` は no-op。
+    // 空 object でも `Some(RadialAxis)` を返すと layout が override 経路に入り、
+    // 既定の nice ドメインが raw データ範囲に置き換わってしまう。
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{}}}}"##,
+        false,
+    )
+    .unwrap();
+    assert!(spec.radial_axis.is_none(), "空の scales.r は no-op");
+
+    // 視覚キーのみ (非 strict では silently 無視される) も同様に no-op。
+    let spec = chartjs::parse(
+        r##"{"type":"polarArea","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+             "options":{"scales":{"r":{"ticks":{"display":false}}}}}"##,
+        false,
+    )
+    .unwrap();
+    assert!(
+        spec.radial_axis.is_none(),
+        "視覚キーのみの scales.r は no-op"
+    );
+
+    // 逆に、ドメインキーが 1 つでもあれば populate される。
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{"beginAtZero":false}}}}"##,
+        false,
+    )
+    .unwrap();
+    let r = spec
+        .radial_axis
+        .expect("beginAtZero 明示時は populate される");
+    assert!(!r.begin_at_zero);
+}
