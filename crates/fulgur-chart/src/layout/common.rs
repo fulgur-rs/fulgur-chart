@@ -213,7 +213,7 @@ fn has_legend(spec: &ChartSpec) -> bool {
     matches!(
         spec.legend,
         LegendPos::Top | LegendPos::Bottom | LegendPos::Left | LegendPos::Right
-    ) && spec.series.iter().any(|s| !s.name.is_empty())
+    ) && (spec.legend_title.is_some() || spec.series.iter().any(|s| !s.name.is_empty()))
 }
 
 /// `legend_title` を描画・予約する supported semantics。
@@ -413,6 +413,19 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         };
     let vertical_legend_overflow =
         ((vertical_legend_rows as f64 * LEGEND_ROW_H - spec.height) / 2.0).max(0.0);
+    let rotated_y_title_overflow = if matches!(spec.size_mode, SizeMode::PlotArea) {
+        spec.y_axis
+            .title
+            .as_ref()
+            .map(|title| {
+                let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+                ((m.width(&title.text, font as f32) as f64 - spec.height) / 2.0).max(0.0)
+            })
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let plot_area_vertical_overflow = vertical_legend_overflow.max(rotated_y_title_overflow);
     // PlotArea の幅はこの時点で確定しているため、scene 寸法より先に temporal tick を
     // 作れる。端ラベルが中央寄せされても scene から切れないよう、その半幅を
     // 左側の最低 plot offset と右側の最低余白として使う。
@@ -497,7 +510,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         }
         SizeMode::PlotArea => {
             let plot_left = (OUTER_PAD + y_axis_w).max(temporal_edge_pad_left);
-            let plot_top = OUTER_PAD + title_band + vertical_legend_overflow;
+            let plot_top = OUTER_PAD + title_band + plot_area_vertical_overflow;
             let plot_right = plot_left + spec.width;
             let plot_bottom = plot_top + spec.height;
             let trailing_band = (OUTER_PAD + legend_right).max(temporal_edge_pad_right);
@@ -507,7 +520,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
                 + x_title_h
                 + OUTER_PAD
                 + legend_bottom
-                + vertical_legend_overflow;
+                + plot_area_vertical_overflow;
             (
                 scene_width,
                 scene_height,
@@ -681,7 +694,11 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
     const TICK_LEN: f64 = 4.0;
     let ticks_cfg = &spec.y_axis.grid;
     if ticks_cfg.draw_ticks {
-        let tick_color = ticks_cfg.color.unwrap_or(ink);
+        let tick_color = if matches!(spec.x_positions, XPositions::Temporal { .. }) {
+            ink
+        } else {
+            ticks_cfg.color.unwrap_or(ink)
+        };
         for &t in &frame.ticks.ticks {
             let y = frame.ys.map(t);
             items.push(Prim::Line {
@@ -743,7 +760,6 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             let max = *unix_millis.last().unwrap_or(&min);
             let x_grid = &spec.x_axis.grid;
             let grid_color = x_grid.color.unwrap_or(spec.theme.grid_color);
-            let tick_color = x_grid.color.unwrap_or(ink);
             let mut last_label_right = f64::NEG_INFINITY;
             for tick in &frame.temporal_ticks {
                 let x = temporal_x(frame, min, max, tick.unix_millis);
@@ -764,7 +780,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                         y1: frame.plot_bottom,
                         x2: x,
                         y2: frame.plot_bottom + TICK_LEN,
-                        stroke: tick_color,
+                        stroke: ink,
                         stroke_width: x_grid.line_width,
                         dash: Vec::new(),
                     });
@@ -1280,7 +1296,7 @@ mod tests {
                     } if (*x1 - *x2).abs() < 1e-9
                         && (*y1 - frame.plot_bottom).abs() < 1e-9
                         && (*y2 - frame.plot_bottom - 4.0).abs() < 1e-9
-                        && (stroke.a - 0.15).abs() < f32::EPSILON
+                        && *stroke == spec.theme.text_color
                 )
             })
             .count();

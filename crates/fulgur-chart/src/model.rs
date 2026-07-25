@@ -314,7 +314,11 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
             }
         })
         .collect();
-    let legend_items = spec.series.iter().filter(|s| !s.name.is_empty()).count();
+    let legend_items = if spec.legend_title.is_some() {
+        spec.series.len()
+    } else {
+        spec.series.iter().filter(|s| !s.name.is_empty()).count()
+    };
     let mut counts = Counts {
         datasets: spec.series.len(),
         legend_items,

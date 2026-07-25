@@ -38,6 +38,43 @@ fn dogfood_fixture_renders_in_strict_and_non_strict_modes() {
 }
 
 #[test]
+fn grid_opacity_does_not_fade_temporal_tick_marks() {
+    let json = fixture().replace(
+        r#""grid": true, "gridOpacity": 0.15"#,
+        r#""grid": false, "gridOpacity": 0"#,
+    );
+    let spec = vegalite::parse(&json, true).unwrap();
+    let frame = common::compute(&spec, &measurer());
+    let scene = line::build(&spec, &measurer());
+    let tick_strokes = scene.items.iter().filter_map(|item| match item {
+        Prim::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            stroke,
+            ..
+        } if ((*x2 - frame.plot_left).abs() < 0.01
+            && (*x1 - (frame.plot_left - 4.0)).abs() < 0.01
+            && (*y1 - *y2).abs() < 0.01)
+            || ((*y1 - frame.plot_bottom).abs() < 0.01
+                && (*y2 - (frame.plot_bottom + 4.0)).abs() < 0.01
+                && (*x1 - *x2).abs() < 0.01) =>
+        {
+            Some(*stroke)
+        }
+        _ => None,
+    });
+    let tick_strokes = tick_strokes.collect::<Vec<_>>();
+
+    assert!(!tick_strokes.is_empty());
+    assert!(
+        tick_strokes.iter().all(|stroke| stroke.a == 1.0),
+        "gridOpacity must affect grid lines only: {tick_strokes:?}"
+    );
+}
+
+#[test]
 fn plot_area_outer_scene_must_fit_dimension_limit() {
     let spec = parsed();
     let limits = InputLimits {
@@ -61,6 +98,45 @@ fn plot_area_outer_scene_height_must_fit_dimension_limit() {
 
     let err = validate_spec(&spec, &limits).unwrap_err();
     assert!(err.contains("scene height"), "unexpected error: {err}");
+}
+
+#[test]
+fn plot_area_contains_long_rotated_y_axis_title() {
+    const Y_TITLE: &str = "a very long quantitative y axis title";
+    let json = fixture()
+        .replace(r#""height": 320"#, r#""height": 24"#)
+        .replace(
+            r#""title": "subtests""#,
+            &format!(r#""title": "{Y_TITLE}""#),
+        );
+    let spec = vegalite::parse(&json, true).unwrap();
+    let m = measurer();
+    let scene = line::build(&spec, &m);
+    let (y, size) = scene
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Prim::Text {
+                y,
+                size,
+                content,
+                rotate_deg: Some(-90.0),
+                ..
+            } if content == Y_TITLE => Some((*y, *size)),
+            _ => None,
+        })
+        .expect("rotated y-axis title");
+    let half_extent = m.width(Y_TITLE, size as f32) as f64 / 2.0;
+
+    assert!(
+        y - half_extent >= 0.0,
+        "rotated title must fit above: y={y}, half_extent={half_extent}"
+    );
+    assert!(
+        y + half_extent <= scene.height,
+        "rotated title must fit below: y={y}, half_extent={half_extent}, scene={}",
+        scene.height
+    );
 }
 
 #[test]
@@ -115,6 +191,56 @@ fn dogfood_fixture_preserves_series_values_and_tableau_order() {
             .collect::<Vec<_>>(),
         VEGALITE_PALETTE[..3]
     );
+}
+
+#[test]
+fn empty_string_color_groups_keep_temporal_legend_and_model_items() {
+    let all_empty_json = r#"{
+        "mark":"line",
+        "data":{"values":[
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"","value":1},
+            {"timestamp":"2026-07-02T00:00:00Z","metric":"","value":2}
+        ]},
+        "encoding":{
+            "x":{"field":"timestamp","type":"temporal"},
+            "y":{"field":"value","type":"quantitative"},
+            "color":{"field":"metric","type":"nominal"}
+        }
+    }"#;
+    let all_empty = vegalite::parse(all_empty_json, true).unwrap();
+    let all_empty_frame = common::compute(&all_empty, &measurer());
+    let all_empty_scene = line::build(&all_empty, &measurer());
+    let legend_swatches = all_empty_scene
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                Prim::Rect { x, .. } if *x > all_empty_frame.plot_right
+            )
+        })
+        .count();
+    let all_empty_model = fulgur_chart::model::build_model_core(&all_empty);
+
+    assert_eq!(legend_swatches, 1);
+    assert_eq!(all_empty_model.counts.legend_items, 1);
+
+    let mixed_json = all_empty_json
+        .replace(
+            r#"{"timestamp":"2026-07-01T00:00:00Z","metric":"","value":1},"#,
+            r#"{"timestamp":"2026-07-01T00:00:00Z","metric":"","value":1},
+            {"timestamp":"2026-07-01T00:00:00Z","metric":"named","value":3},"#,
+        )
+        .replace(
+            r#"{"timestamp":"2026-07-02T00:00:00Z","metric":"","value":2}"#,
+            r#"{"timestamp":"2026-07-02T00:00:00Z","metric":"","value":2},
+            {"timestamp":"2026-07-02T00:00:00Z","metric":"named","value":4}"#,
+        );
+    let mixed = vegalite::parse(&mixed_json, true).unwrap();
+    let mixed_model = fulgur_chart::model::build_model_core(&mixed);
+
+    assert_eq!(mixed.series.len(), 2);
+    assert_eq!(mixed_model.counts.legend_items, 2);
 }
 
 #[test]
