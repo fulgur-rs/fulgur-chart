@@ -18,6 +18,12 @@ pub fn render_chart_with_font(
 }
 
 /// 任意フォントと入力上限で描画。font_bytes がパース不能なら Err。
+///
+/// `limits` はカスタムフォントで計測した PlotArea の外周 scene 検証だけに使う。
+/// 完全な入力検証は行わないため、呼び出し側は事前に
+/// [`crate::guard::validate_spec`] または [`crate::guard::validate_spec_with_measurer`]
+/// を使うこと。PNG/WebP 出力では、これとは別に固定のピクセル面積 hard stop
+/// （WebP は軸ごとの hard stop も）が常に適用され、`limits` では緩和できない。
 pub fn render_chart_with_font_and_limits(
     spec: &crate::ir::ChartSpec,
     font_bytes: &[u8],
