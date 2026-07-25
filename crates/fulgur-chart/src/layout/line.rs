@@ -205,10 +205,16 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // データラベル(点の上、マーカー半径ぶん+余白だけ上)。
         // 元カテゴリインデックスで ser.values を引くことで filter 後のずれを防ぐ。
         if spec.data_labels {
+            // marker 無効(0 以下)や間引きで省略された既定 marker は、従来どおり
+            // MARKER_R を基準にする。正の明示 pointRadius だけ実際の marker と揃える。
+            let label_marker_r = ser
+                .point_radius
+                .filter(|radius| *radius > 0.0)
+                .unwrap_or(MARKER_R);
             for &(x, y, cat) in &valid {
                 items.push(common::value_label(
                     x,
-                    y - MARKER_R - common::LABEL_GAP,
+                    y - label_marker_r - common::LABEL_GAP,
                     spec.theme.font_size,
                     Anchor::Middle,
                     spec.theme.text_color,
@@ -272,6 +278,77 @@ mod tests {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let frame = common::compute(&spec, &m);
         line_points(&spec, &frame)
+    }
+
+    fn scene_for(json: &str) -> Scene {
+        let spec = chartjs::parse(json, false).unwrap();
+        build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap())
+    }
+
+    fn value_label_positions(scene: &Scene) -> Vec<(String, f64, f64)> {
+        scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Text { x, y, content, .. } if content == "13" || content == "-17" => {
+                    Some((content.clone(), *x, *y))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn line_data_labels_clear_custom_marker_radius() {
+        let scene = scene_for(
+            r#"{"type":"line","data":{"labels":["a","b"],
+               "datasets":[{"data":[13,-17],"pointRadius":20}]},
+               "options":{"plugins":{"datalabels":{"display":true}}}}"#,
+        );
+        let markers: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Circle { cx, cy, r, .. } => Some((*cx, *cy, *r)),
+                _ => None,
+            })
+            .collect();
+        let labels = value_label_positions(&scene);
+
+        assert_eq!(labels.len(), 2);
+        assert_eq!(markers.len(), 2);
+        for (_, x, y) in labels {
+            let (_, marker_y, marker_r) = markers
+                .iter()
+                .find(|(marker_x, _, _)| (*marker_x - x).abs() < 1e-9)
+                .expect("value label must align with a marker");
+            assert_eq!(*marker_r, 20.0);
+            assert!(
+                (y - (marker_y - marker_r - common::LABEL_GAP)).abs() < 1e-9,
+                "label must clear the marker: label_y={y}, marker_y={marker_y}, marker_r={marker_r}"
+            );
+        }
+    }
+
+    #[test]
+    fn line_data_label_offsets_preserve_default_and_nonpositive_marker_radius() {
+        let json = |point_radius: &str| {
+            format!(
+                r#"{{"type":"line","data":{{"labels":["a","b"],"datasets":[{{"data":[13,-17]{point_radius}}}]}},"options":{{"plugins":{{"datalabels":{{"display":true}}}}}}}}"#
+            )
+        };
+        let expected = value_label_positions(&scene_for(&json("")));
+        for point_radius in [
+            r#","pointRadius":null"#,
+            r#","pointRadius":0"#,
+            r#","pointRadius":-5"#,
+        ] {
+            assert_eq!(
+                value_label_positions(&scene_for(&json(point_radius))),
+                expected,
+                "pointRadius {point_radius} must retain the default label offset"
+            );
+        }
     }
 
     #[test]
