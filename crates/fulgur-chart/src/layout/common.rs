@@ -75,6 +75,17 @@ pub(crate) fn resolve_radial_domain(ra: &RadialAxis, data_min: f64, data_max: f6
             hi = lo + 1.0;
         }
     }
+
+    // 個々の境界が有限でも、差 (span) が f64 の表現範囲を超えると +inf になる
+    // (例 `min: -1e308, max: 1e308`)。そうなると以降の比率計算が全滅し、
+    // データがあるのに凡例だけのチャートが返る。有限の span に収まるようクランプする。
+    // hard bound より「描けること」を優先する —— 影響を受けるのは f64 の限界に
+    // 迫る極端な指定だけで、通常の入力は一切変わらない。
+    if !(hi - lo).is_finite() {
+        const LIMIT: f64 = f64::MAX / 4.0;
+        lo = lo.max(-LIMIT);
+        hi = hi.min(LIMIT);
+    }
     (lo, hi)
 }
 

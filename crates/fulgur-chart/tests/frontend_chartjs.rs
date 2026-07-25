@@ -1515,3 +1515,51 @@ fn empty_scales_r_does_not_populate_radial_axis() {
         .expect("beginAtZero 明示時は populate される");
     assert!(!r.begin_at_zero);
 }
+
+#[test]
+fn non_radial_charts_ignore_malformed_scales_r_in_non_strict() {
+    // Codex Fix 17 のリグレッションテスト。
+    // `RawScales.r` を `RawRadialAxis` に型付けすると、chart kind が確定する前に
+    // 検証が走り、非 radial チャートに紛れ込んだ無関係な `scales.r` が非 strict でも
+    // deserialize エラーになる。main では未知キーとして silently 無視されていたので
+    // これは後退にあたる。kind が radial のときだけ typed に解釈すること。
+    for json in [
+        r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+             "options":{"scales":{"r":5}}}"##,
+        r##"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+             "options":{"scales":{"r":"nonsense"}}}"##,
+        r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+             "options":{"scales":{"r":{"min":"not-a-number"}}}}"##,
+    ] {
+        let spec = chartjs::parse(json, false)
+            .unwrap_or_else(|e| panic!("非 strict では silently 無視されるべき: {e} / {json}"));
+        assert!(
+            spec.radial_axis.is_none(),
+            "非 radial チャートは radial_axis を持たない"
+        );
+    }
+}
+
+#[test]
+fn radial_charts_ignore_malformed_scales_r_in_non_strict() {
+    // radial チャート側でも、型不一致の `scales.r` は非 strict では silently 無視する
+    // (Chart.js 互換)。strict モードでは check_unknown_keys が拒否する。
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":5}}}"##,
+        false,
+    )
+    .expect("非 strict では silently 無視されるべき");
+    assert!(spec.radial_axis.is_none());
+
+    // strict では従来通り拒否されること (パリティ確認)。
+    assert!(
+        chartjs::parse(
+            r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+                 "options":{"scales":{"r":5}}}"##,
+            true,
+        )
+        .is_err(),
+        "strict では非 object の scales.r を拒否する"
+    );
+}

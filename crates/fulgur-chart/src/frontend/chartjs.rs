@@ -66,9 +66,14 @@ struct RawScales {
     x: Option<AxisOptions>,
     #[serde(default)]
     y: Option<AxisOptions>,
-    /// radar / polarArea の動径軸。radar/polarArea 以外の kind では読み捨てる。
+    /// radar / polarArea の動径軸。
+    ///
+    /// ここで `RawRadialAxis` に型付けしてしまうと、chart kind が確定する前に検証が走る。
+    /// その結果、非 radial チャートに紛れ込んだ無関係な `scales.r` (例 bar + `"r": 5`) が
+    /// 非 strict モードでも deserialize エラーになってしまう —— main では未知キーとして
+    /// silently 無視されていた挙動の後退。kind が分かるまで生の JSON 値のまま保持する。
     #[serde(default)]
-    r: Option<RawRadialAxis>,
+    r: Option<serde_json::Value>,
 }
 
 /// `options.scales.r`(radar / polarArea の動径軸)のドメイン指定。
@@ -840,6 +845,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             .scales
             .as_ref()
             .and_then(|s| s.r.as_ref())
+            // ここで初めて typed に解釈する。非 object や型不一致 (例 `"r": 5`) は
+            // 非 strict では silently 無視する (Chart.js 互換)。strict モードでは
+            // 上流の `check_unknown_keys` が同じ入力を明示的に拒否する。
+            .and_then(|v| serde_json::from_value::<RawRadialAxis>(v.clone()).ok())
+            .as_ref()
             // Codex Fix 9: `scales.r: {}` や、`ticks` 等の視覚キーのみを持つ `r` は no-op とする。
             // ドメインキーが 1 つも無いのに Some(RadialAxis) を返すと layout が override 経路に
             // 入り、既定の nice ドメイン (例 0..100) が raw データ max (0..95) へ変わってしまう。

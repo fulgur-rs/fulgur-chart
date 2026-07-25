@@ -369,3 +369,19 @@ fn radar_conflicting_hard_bounds_render_deterministically() {
     assert!(!a.contains("NaN") && !a.contains("inf"));
     assert!(a.starts_with("<svg") && a.trim_end().ends_with("</svg>"));
 }
+
+#[test]
+fn radar_extremely_wide_domain_still_renders() {
+    // Codex Fix 18 のリグレッションテスト (radar 側)。
+    // span が +inf になると rr() が全頂点を中心へ落としてしまう。
+    let svg = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"min":-1e308,"max":1e308}}}}"##,
+    );
+    assert!(!svg.contains("NaN") && !svg.contains("inf"));
+    assert!(svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"));
+    assert!(
+        svg.matches(r#"fill-opacity="0.5""#).count() >= 1,
+        "系列多角形が描画されるべき: {svg}"
+    );
+}

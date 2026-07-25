@@ -288,3 +288,19 @@ fn polar_area_conflicting_hard_bounds_render_deterministically() {
     assert!(!a.contains("NaN") && !a.contains("inf"));
     assert!(a.starts_with("<svg") && a.trim_end().ends_with("</svg>"));
 }
+
+#[test]
+fn polar_area_extremely_wide_domain_still_renders() {
+    // Codex Fix 18 のリグレッションテスト。
+    // 個々の境界が有限でも差が f64 の範囲を超えると span が +inf になり、
+    // 描画ループが丸ごとスキップされて凡例だけのチャートになっていた。
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"min":-1e308,"max":1e308}}}}"##,
+    );
+    assert!(
+        svg.matches("<path").count() >= 3,
+        "極端に広いドメインでもスライスが描画されるべき: {svg}"
+    );
+    assert!(!svg.contains("NaN") && !svg.contains("inf"));
+}
