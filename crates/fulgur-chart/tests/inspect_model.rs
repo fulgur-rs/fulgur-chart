@@ -104,11 +104,17 @@ fn temporal_line_model_uses_scene_dimensions_and_temporal_axis() {
     );
     assert_eq!(
         axes.x.step,
-        frame
-            .temporal_ticks
-            .windows(2)
-            .next()
-            .map(|window| (window[1].unix_millis - window[0].unix_millis) as f64)
+        frame.temporal_ticks.windows(2).next().and_then(|first| {
+            let expected = i128::from(first[1].unix_millis) - i128::from(first[0].unix_millis);
+            frame
+                .temporal_ticks
+                .windows(2)
+                .all(|window| {
+                    i128::from(window[1].unix_millis) - i128::from(window[0].unix_millis)
+                        == expected
+                })
+                .then_some(expected as f64)
+        })
     );
     assert_eq!(
         axes.x.ticks.as_ref().unwrap(),

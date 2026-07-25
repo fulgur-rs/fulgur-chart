@@ -381,10 +381,16 @@ fn temporal_axis(unix_millis: &[i64], ticks: &[TemporalTick]) -> AxisModel {
         labels: Some(ticks.iter().map(|tick| tick.label.clone()).collect()),
         min: unix_millis.first().map(|value| *value as f64),
         max: unix_millis.last().map(|value| *value as f64),
-        step: ticks
-            .windows(2)
-            .next()
-            .map(|window| (window[1].unix_millis - window[0].unix_millis) as f64),
+        step: ticks.windows(2).next().and_then(|first| {
+            let expected = i128::from(first[1].unix_millis) - i128::from(first[0].unix_millis);
+            ticks
+                .windows(2)
+                .all(|window| {
+                    i128::from(window[1].unix_millis) - i128::from(window[0].unix_millis)
+                        == expected
+                })
+                .then_some(expected as f64)
+        }),
         ticks: Some(ticks.iter().map(|tick| tick.unix_millis as f64).collect()),
     }
 }
@@ -480,6 +486,35 @@ mod tests {
     use crate::frontend::chartjs;
     use crate::ir::Color;
     use crate::text::TextMeasurer;
+
+    #[test]
+    fn temporal_axis_reports_only_uniform_step() {
+        const DAY: i64 = 86_400_000;
+
+        fn ticks(values: &[i64]) -> Vec<TemporalTick> {
+            values
+                .iter()
+                .map(|&unix_millis| TemporalTick {
+                    unix_millis,
+                    label: unix_millis.to_string(),
+                })
+                .collect()
+        }
+
+        let fixed = ticks(&[0, DAY, 2 * DAY]);
+        assert_eq!(temporal_axis(&[], &fixed).step, Some(DAY as f64));
+
+        let calendar = ticks(&[0, 31 * DAY, (31 + 28) * DAY]);
+        assert_eq!(temporal_axis(&[], &calendar).step, None);
+
+        assert_eq!(temporal_axis(&[], &ticks(&[])).step, None);
+        assert_eq!(temporal_axis(&[], &ticks(&[0])).step, None);
+        assert_eq!(temporal_axis(&[], &ticks(&[0, DAY])).step, Some(DAY as f64));
+        assert_eq!(
+            temporal_axis(&[], &ticks(&[2 * DAY, DAY, 0])).step,
+            Some(-(DAY as f64))
+        );
+    }
 
     #[test]
     fn rgba_opaque_uses_1() {
