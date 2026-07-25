@@ -167,6 +167,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 4. 値スケール。radial_axis があれば min/max/suggested*/beginAtZero を反映する。
     //    無ければ従来通り nice_ticks(0.0, max_val) — snapshot 破壊回避。
     let mut data_min = f64::INFINITY;
+    let mut data_max = f64::NEG_INFINITY;
     let mut max_val = 0.0_f64;
     for ser in &spec.series {
         for &v in &ser.values {
@@ -174,12 +175,20 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if v < data_min {
                     data_min = v;
                 }
+                if v > data_max {
+                    data_max = v;
+                }
                 if v >= 0.0 && v > max_val {
                     max_val = v;
                 }
             }
         }
     }
+    // `max_val` は既存 default パス用 (0 で床止め、byte-identical 維持)。
+    // radial_axis 経路には `data_max` を渡す: 有限データが無いときに 0 ではなく
+    // NEG_INFINITY となり、`resolve_radial_domain` が片側 `suggested*` を
+    // 暫定レンジとして拾えるようにするため。radar は負値を parse 時に拒否するので、
+    // データがある場合の data_max と max_val は一致する。
 
     // rr_lo / rr_hi は「値→半径」マッピングに使う raw ドメイン。
     //
@@ -193,7 +202,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // radial_axis 無し時は既存の byte-identical パスを維持するため nice.min / nice.max を使う。
     let (nice, rr_lo, rr_hi) = if let Some(ra) = &spec.radial_axis {
         // ドメイン解決は polar_area と共有する (common::resolve_radial_domain)。
-        let (lo, hi) = common::resolve_radial_domain(ra, data_min, max_val);
+        let (lo, hi) = common::resolve_radial_domain(ra, data_min, data_max);
         // nice_ticks は外側へ丸める (nice.min <= lo かつ nice.max >= hi) ため、
         // 自動側に採用してもデータがクリップされることはない。
         let n = nice_ticks(lo, hi, 10);

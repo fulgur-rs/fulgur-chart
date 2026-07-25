@@ -25,10 +25,22 @@ use crate::text::TextMeasurer;
 pub(crate) fn resolve_radial_domain(ra: &RadialAxis, data_min: f64, data_max: f64) -> (f64, f64) {
     let lo_is_hard = ra.min.is_some();
     let hi_is_hard = ra.max.is_some();
-    let mut lo = ra
-        .min
-        .unwrap_or(if data_min.is_finite() { data_min } else { 0.0 });
-    let mut hi = ra.max.unwrap_or(data_max);
+    // 有限データが無い場合 (dataset が空など) は、片側だけの `suggested*` を
+    // 暫定レンジとして使う。0 で埋めてしまうと `suggestedMin: 100` のような
+    // 「0 の反対側にある片側指定」が expand-only 判定で捨てられ、100 付近ではなく
+    // 0 付近のドメインになってしまう。
+    let mut lo = ra.min.unwrap_or(if data_min.is_finite() {
+        data_min
+    } else {
+        ra.suggested_min.or(ra.suggested_max).unwrap_or(0.0)
+    });
+    let mut hi = ra.max.unwrap_or(if data_max.is_finite() {
+        data_max
+    } else {
+        ra.suggested_max
+            .or(ra.suggested_min)
+            .unwrap_or(f64::NEG_INFINITY)
+    });
 
     if !lo_is_hard {
         if let Some(s) = ra.suggested_min
@@ -62,17 +74,39 @@ pub(crate) fn resolve_radial_domain(ra: &RadialAxis, data_min: f64, data_max: f6
             (base * 0.05).abs()
         };
         if !hi_is_hard {
-            hi = base + offset;
+            // f64::MAX 近傍では `base + offset` がオーバーフローする。上へ広げられない
+            // ので base に留め、下側を広げて幅を作る (下の分岐が担当する)。
+            let up = base + offset;
+            hi = if up.is_finite() { up } else { base };
         }
         // 下端を下げるのは自動側のときだけ。`beginAtZero` が 0 起点を要求している間は
-        // 下げないが、上端が hard で固定されている場合は下げる以外に開く余地が無い。
-        if !lo_is_hard && (!ra.begin_at_zero || hi_is_hard) {
-            lo = base - offset;
+        // 下げないが、上端が hard で固定されている場合、あるいは上へ広げられずまだ
+        // 幅が無い場合は、下げる以外に開く余地が無い。
+        if !lo_is_hard && (!ra.begin_at_zero || hi_is_hard || hi <= lo) {
+            let down = base - offset;
+            if down.is_finite() {
+                lo = down;
+            }
         }
         // 両側 hard で `min > max` のように矛盾している場合は動かせる自動側が無い。
         // 描画が壊れないよう、決定的に hard な `min` を優先して上端を開く。
-        if !hi.is_finite() || hi <= lo {
-            hi = lo + 1.0;
+        //
+        // `lo + 1.0` は絶対値が大きいと丸めで lo に戻ってしまう (f64::MAX 近傍の ulp は
+        // 1 よりはるかに大きい)。ulp 相当の相対量で確実に differ させ、それも
+        // オーバーフローする場合は下端を下げる。
+        // (この時点で lo / hi は共に有限: base と offset が有限で、
+        //  非有限になる代入は上でガードしてある)
+        if hi <= lo {
+            let step = lo.abs().max(1.0) * f64::EPSILON * 4.0;
+            let up = lo + step;
+            if up.is_finite() && up > lo {
+                hi = up;
+            } else {
+                let down = hi - hi.abs().max(1.0) * f64::EPSILON * 4.0;
+                if down.is_finite() && down < hi {
+                    lo = down;
+                }
+            }
         }
     }
 
@@ -1313,5 +1347,83 @@ mod tests {
             )
         });
         assert!(!stray, "title=None なら x-title 位置に余分な text は無い");
+    }
+}
+
+#[cfg(test)]
+mod radial_domain_tests {
+    use super::resolve_radial_domain;
+    use crate::ir::RadialAxis;
+
+    fn ra(
+        min: Option<f64>,
+        max: Option<f64>,
+        suggested_min: Option<f64>,
+        suggested_max: Option<f64>,
+        begin_at_zero: bool,
+    ) -> RadialAxis {
+        RadialAxis {
+            min,
+            max,
+            suggested_min,
+            suggested_max,
+            begin_at_zero,
+        }
+    }
+
+    /// 有限データが無い場合、片側だけの `suggested*` を暫定レンジとして使う。
+    /// 0 で埋めると `suggestedMin: 100` が expand-only 判定 (s < lo) で捨てられ、
+    /// 100 付近ではなく 0 付近のドメインになってしまう。
+    ///
+    /// レンダリング経由では観測できない (データが無い radar はリングを等間隔に
+    /// 描くだけなので SVG が同一になる) ため、resolver を直接検証する。
+    #[test]
+    fn empty_data_seeds_domain_from_one_sided_suggestion() {
+        let (lo, hi) = resolve_radial_domain(
+            &ra(None, None, Some(100.0), None, false),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        assert!(
+            lo > 90.0 && hi > 100.0 && hi > lo,
+            "suggestedMin:100 は 100 付近へ展開されるべき: [{lo}, {hi}]"
+        );
+
+        // 対称ケース: suggestedMax のみ。
+        let (lo, hi) = resolve_radial_domain(
+            &ra(None, None, None, Some(-100.0), false),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        assert!(
+            hi < -90.0 && lo < -100.0 && hi > lo,
+            "suggestedMax:-100 は -100 付近へ展開されるべき: [{lo}, {hi}]"
+        );
+
+        // suggestion が無い場合は従来通り 0 起点。
+        let (lo, hi) = resolve_radial_domain(
+            &ra(None, None, None, None, true),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        assert_eq!((lo, hi), (0.0, 1.0));
+    }
+
+    /// f64::MAX 近傍の縮退ドメインでも、有限かつ幅のあるドメインになること。
+    /// `base + offset` はオーバーフローし、`lo + 1.0` は丸めで lo に戻るため、
+    /// 素朴な実装だと幅 0 のまま描画が消える。
+    #[test]
+    fn degenerate_domain_near_f64_max_keeps_finite_width() {
+        let v = f64::MAX;
+        let (lo, hi) = resolve_radial_domain(&ra(None, None, None, None, false), v, v);
+        assert!(
+            lo.is_finite() && hi.is_finite(),
+            "有限であること: [{lo}, {hi}]"
+        );
+        assert!(hi > lo, "幅を持つこと: [{lo}, {hi}]");
+
+        // 両側 hard で min == max == f64::MAX の矛盾指定でも壊れないこと。
+        let (lo, hi) = resolve_radial_domain(&ra(Some(v), Some(v), None, None, false), v, v);
+        assert!(lo.is_finite() && hi.is_finite() && hi > lo, "[{lo}, {hi}]");
     }
 }
