@@ -772,14 +772,7 @@ fn build_temporal_line(
                 key: group_key,
                 name: group,
                 order: group_order,
-            } = temporal_group(group_value, color_field)?;
-            if group.len() > limits.max_label_bytes {
-                return Err(format!(
-                    "temporal legend label length {} bytes exceeds limit {}",
-                    group.len(),
-                    limits.max_label_bytes
-                ));
-            }
+            } = temporal_group(group_value, color_field, limits.max_label_bytes)?;
             if let Some(&index) = group_indexes.get(&group_key) {
                 index
             } else {
@@ -846,13 +839,31 @@ fn build_temporal_line(
     Ok(TemporalLineData { domain, series })
 }
 
-fn temporal_group(value: Option<&Value>, field: &str) -> Result<TemporalGroup, String> {
+fn validate_temporal_group_name(name: &str, max_label_bytes: usize) -> Result<(), String> {
+    if name.len() > max_label_bytes {
+        return Err(format!(
+            "temporal legend label length {} bytes exceeds limit {}",
+            name.len(),
+            max_label_bytes
+        ));
+    }
+    Ok(())
+}
+
+fn temporal_group(
+    value: Option<&Value>,
+    field: &str,
+    max_label_bytes: usize,
+) -> Result<TemporalGroup, String> {
     match value {
-        Some(Value::String(value)) => Ok(TemporalGroup {
-            key: TemporalGroupKey::String(value.clone()),
-            name: value.clone(),
-            order: TemporalGroupOrder::String(value.clone()),
-        }),
+        Some(Value::String(value)) => {
+            validate_temporal_group_name(value, max_label_bytes)?;
+            Ok(TemporalGroup {
+                key: TemporalGroupKey::String(value.clone()),
+                name: value.clone(),
+                order: TemporalGroupOrder::String(value.clone()),
+            })
+        }
         Some(Value::Number(value)) => {
             // JSON の数値 group は JavaScript と同じ有限 f64 へ正規化する。key/order/name
             // を同じ値から作るため、2 と 2.0 や丸め同値の整数は同一系列になる。
@@ -860,17 +871,23 @@ fn temporal_group(value: Option<&Value>, field: &str) -> Result<TemporalGroup, S
                 .as_f64()
                 .expect("JSON number must convert to f64 for temporal group ordering");
             let bits = canonical_number_bits(number);
+            let name = canonical_number_name(bits);
+            validate_temporal_group_name(&name, max_label_bytes)?;
             Ok(TemporalGroup {
                 key: TemporalGroupKey::Number(bits),
-                name: canonical_number_name(bits),
+                name,
                 order: TemporalGroupOrder::Number(bits),
             })
         }
-        Some(Value::Bool(value)) => Ok(TemporalGroup {
-            key: TemporalGroupKey::Bool(*value),
-            name: value.to_string(),
-            order: TemporalGroupOrder::Bool(*value),
-        }),
+        Some(Value::Bool(value)) => {
+            let name = value.to_string();
+            validate_temporal_group_name(&name, max_label_bytes)?;
+            Ok(TemporalGroup {
+                key: TemporalGroupKey::Bool(*value),
+                name,
+                order: TemporalGroupOrder::Bool(*value),
+            })
+        }
         Some(other) => Err(format!(
             "field {} must be a string, number, or boolean group, got {}",
             bounded_error_fragment(field),
@@ -1007,29 +1024,31 @@ mod temporal_line_tests {
     #[test]
     fn temporal_line_groups_normalize_scalars_and_bound_errors() {
         assert_eq!(
-            temporal_group(Some(&json!(42)), "group").unwrap().name,
+            temporal_group(Some(&json!(42)), "group", 2).unwrap().name,
             "42"
         );
         assert_eq!(
-            temporal_group(Some(&json!(true)), "group").unwrap().name,
+            temporal_group(Some(&json!(42)), "group", 1).err().unwrap(),
+            "temporal legend label length 2 bytes exceeds limit 1"
+        );
+        assert_eq!(
+            temporal_group(Some(&json!(true)), "group", 4).unwrap().name,
             "true"
         );
-        assert!(temporal_group(Some(&json!([])), "group").is_err());
-        assert!(temporal_group(None, "group").is_err());
+        assert_eq!(
+            temporal_group(Some(&json!(true)), "group", 3)
+                .err()
+                .unwrap(),
+            "temporal legend label length 4 bytes exceeds limit 3"
+        );
+        assert!(temporal_group(Some(&json!([])), "group", 4).is_err());
+        assert!(temporal_group(None, "group", 4).is_err());
 
-        let records = [record(
-            "2026-01-01T00:00:00Z",
-            json!(1),
-            Some(json!("group-label-over-limit")),
-        )];
-        let limits = crate::guard::InputLimits {
-            max_label_bytes: 20,
-            ..crate::guard::InputLimits::default()
-        };
-        assert!(
-            build_with_limits(&records, true, &limits)
-                .unwrap_err()
-                .contains("legend label length")
+        assert_eq!(
+            temporal_group(Some(&json!("group-label-over-limit")), "group", 20)
+                .err()
+                .unwrap(),
+            "temporal legend label length 22 bytes exceeds limit 20"
         );
     }
 
