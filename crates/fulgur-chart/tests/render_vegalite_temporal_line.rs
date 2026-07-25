@@ -186,7 +186,7 @@ fn plot_area_contains_long_centered_x_axis_title() {
             .all(|x| *x >= frame.plot_right && *x <= scene.width)
     );
 
-    let legend_text_rights = scene
+    let legend_text_bounds = scene
         .items
         .iter()
         .filter_map(|item| match item {
@@ -199,16 +199,16 @@ fn plot_area_contains_long_centered_x_axis_title() {
             } if content == "metric"
                 || spec.series.iter().any(|series| series.name == *content) =>
             {
-                Some(*x + m.width(content, *size as f32) as f64)
+                Some((*x, *x + m.width(content, *size as f32) as f64))
             }
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(legend_text_rights.len(), spec.series.len() + 1);
+    assert_eq!(legend_text_bounds.len(), spec.series.len() + 1);
     assert!(
-        legend_text_rights
+        legend_text_bounds
             .iter()
-            .all(|right| *right >= frame.plot_right && *right <= scene.width)
+            .all(|(x, right)| *x >= frame.plot_right && *right <= scene.width)
     );
 }
 
