@@ -450,8 +450,14 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         .last()
         .map(|tick| m.width(&tick.label, spec.theme.font_size as f32) as f64 / 2.0)
         .unwrap_or(0.0);
-    let centered_x_title_side_overflow = if matches!(spec.size_mode, SizeMode::PlotArea) {
-        spec.x_axis
+    let centered_title_side_overflow = if matches!(spec.size_mode, SizeMode::PlotArea) {
+        let chart_title_side_overflow = spec
+            .title
+            .as_ref()
+            .map(|title| ((m.width(title, TITLE_FONT as f32) as f64 - spec.width) / 2.0).max(0.0))
+            .unwrap_or(0.0);
+        let x_axis_title_side_overflow = spec
+            .x_axis
             .title
             .as_ref()
             .filter(|title| matches!(title.align, AxisTitleAlign::Center))
@@ -459,7 +465,8 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
                 let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
                 ((m.width(&title.text, font as f32) as f64 - spec.width) / 2.0).max(0.0)
             })
-            .unwrap_or(0.0)
+            .unwrap_or(0.0);
+        chart_title_side_overflow.max(x_axis_title_side_overflow)
     } else {
         0.0
     };
@@ -523,7 +530,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             )
         }
         SizeMode::PlotArea => {
-            let required_title_side_band = OUTER_PAD + centered_x_title_side_overflow;
+            let required_title_side_band = OUTER_PAD + centered_title_side_overflow;
             let plot_left = (OUTER_PAD + y_axis_w)
                 .max(temporal_edge_pad_left)
                 .max(required_title_side_band);

@@ -1,12 +1,16 @@
 use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::vegalite;
 use fulgur_chart::guard::{InputLimits, validate_spec, validate_spec_with_measurer};
-use fulgur_chart::layout::{common, line};
+use fulgur_chart::ir::ChartSpec;
+use fulgur_chart::layout::{
+    common::{self, Frame},
+    line,
+};
 use fulgur_chart::num::fmt_num;
 use fulgur_chart::palette::VEGALITE_PALETTE;
 use fulgur_chart::raster_direct::{render_chart_to_png, render_chart_to_webp};
 use fulgur_chart::render::{render_chart, render_chart_with_font};
-use fulgur_chart::scene::{Anchor, Prim};
+use fulgur_chart::scene::{Anchor, Prim, Scene};
 use fulgur_chart::text::TextMeasurer;
 
 fn fixture() -> &'static str {
@@ -19,6 +23,53 @@ fn parsed() -> fulgur_chart::ir::ChartSpec {
 
 fn measurer() -> TextMeasurer<'static> {
     TextMeasurer::new(DEFAULT_FONT).unwrap()
+}
+
+fn assert_plot_area_right_legend_contained(
+    scene: &Scene,
+    frame: &Frame,
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+) {
+    let legend_swatch_bounds = scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::Rect { x, w, h, .. } if (*w, *h) == (12.0, 12.0) => Some((*x, *x + *w)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(legend_swatch_bounds.len(), spec.series.len());
+    assert!(
+        legend_swatch_bounds
+            .iter()
+            .all(|(x, right)| *x >= frame.plot_right && *right <= scene.width)
+    );
+
+    let legend_text_bounds = scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::Text {
+                x,
+                size,
+                content,
+                anchor: Anchor::Start,
+                ..
+            } if content == "metric"
+                || spec.series.iter().any(|series| series.name == *content) =>
+            {
+                Some((*x, *x + m.width(content, *size as f32) as f64))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(legend_text_bounds.len(), spec.series.len() + 1);
+    assert!(
+        legend_text_bounds
+            .iter()
+            .all(|(x, right)| *x >= frame.plot_right && *right <= scene.width)
+    );
 }
 
 #[test]
@@ -171,22 +222,23 @@ fn plot_area_contains_long_centered_x_axis_title() {
     assert_eq!(frame.plot_right - frame.plot_left, spec.width);
     assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
 
-    let legend_swatch_xs = scene
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            Prim::Rect { x, .. } if *x >= frame.plot_right => Some(*x),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(legend_swatch_xs.len(), spec.series.len());
-    assert!(
-        legend_swatch_xs
-            .iter()
-            .all(|x| *x >= frame.plot_right && *x <= scene.width)
-    );
+    assert_plot_area_right_legend_contained(&scene, &frame, &spec, &m);
+}
 
-    let legend_text_bounds = scene
+#[test]
+fn plot_area_contains_long_centered_chart_title() {
+    const CHART_TITLE: &str = "a very long unique centered top level chart title";
+    let json = fixture()
+        .replace(r#""width": 720"#, r#""width": 24"#)
+        .replace(
+            r#""title": "qtest nightly trend""#,
+            &format!(r#""title": "{CHART_TITLE}""#),
+        );
+    let spec = vegalite::parse(&json, true).unwrap();
+    let m = measurer();
+    let frame = common::compute(&spec, &m);
+    let scene = line::build(&spec, &m);
+    let (x, size) = scene
         .items
         .iter()
         .filter_map(|item| match item {
@@ -194,22 +246,22 @@ fn plot_area_contains_long_centered_x_axis_title() {
                 x,
                 size,
                 content,
-                anchor: Anchor::Start,
+                rotate_deg: None,
+                anchor: Anchor::Middle,
                 ..
-            } if content == "metric"
-                || spec.series.iter().any(|series| series.name == *content) =>
-            {
-                Some((*x, *x + m.width(content, *size as f32) as f64))
-            }
+            } if content == CHART_TITLE => Some((*x, *size)),
             _ => None,
         })
-        .collect::<Vec<_>>();
-    assert_eq!(legend_text_bounds.len(), spec.series.len() + 1);
-    assert!(
-        legend_text_bounds
-            .iter()
-            .all(|(x, right)| *x >= frame.plot_right && *right <= scene.width)
-    );
+        .next()
+        .expect("centered chart title");
+    let half_extent = m.width(CHART_TITLE, size as f32) as f64 / 2.0;
+
+    assert!(x - half_extent >= 0.0);
+    assert!(x + half_extent <= scene.width);
+    assert_eq!(frame.plot_right - frame.plot_left, spec.width);
+    assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
+
+    assert_plot_area_right_legend_contained(&scene, &frame, &spec, &m);
 }
 
 #[test]
