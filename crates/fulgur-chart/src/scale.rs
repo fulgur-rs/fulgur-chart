@@ -104,15 +104,17 @@ pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTi
         return nice_ticks(data_min, data_max, target);
     }
 
-    let span = (data_max - data_min).max(f64::EPSILON);
-    if !span.is_finite() {
+    let span = data_max - data_min;
+    if !span.is_finite() || span <= 0.0 {
         return nice_ticks(data_min, data_max, target);
     }
     let padding = span * 0.05;
 
     if data_min >= 0.0 {
         let padded_max = data_max + padding;
-        let step = nice_step((padded_max / target as f64).max(f64::EPSILON));
+        let Some(step) = finite_nice_step(padded_max, target) else {
+            return nice_ticks(data_min, data_max, target);
+        };
         let half_step = step / 2.0;
         let max = (padded_max / half_step).ceil() * half_step;
         if !max.is_finite() {
@@ -128,7 +130,9 @@ pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTi
 
     if data_max <= 0.0 {
         let padded_min = data_min - padding;
-        let step = nice_step((-padded_min / target as f64).max(f64::EPSILON));
+        let Some(step) = finite_nice_step(-padded_min, target) else {
+            return nice_ticks(data_min, data_max, target);
+        };
         let half_step = step / 2.0;
         let min = (padded_min / half_step).floor() * half_step;
         if !min.is_finite() {
@@ -144,7 +148,9 @@ pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTi
 
     let padded_min = data_min - padding;
     let padded_max = data_max + padding;
-    let step = nice_step(((padded_max - padded_min) / target as f64).max(f64::EPSILON));
+    let Some(step) = finite_nice_step(padded_max - padded_min, target) else {
+        return nice_ticks(data_min, data_max, target);
+    };
     let half_step = step / 2.0;
     let min = (padded_min / half_step).floor() * half_step;
     let max = (padded_max / half_step).ceil() * half_step;
@@ -157,6 +163,15 @@ pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTi
         step,
         ticks: full_step_ticks(min, max, step),
     }
+}
+
+fn finite_nice_step(numerator: f64, target: usize) -> Option<f64> {
+    let raw_step = numerator / target.max(1) as f64;
+    if !raw_step.is_finite() || raw_step <= 0.0 {
+        return None;
+    }
+    let step = nice_step(raw_step);
+    (step.is_finite() && step > 0.0).then_some(step)
 }
 
 fn nice_step(raw_step: f64) -> f64 {
@@ -283,6 +298,37 @@ mod tests {
             assert!(ticks.min.is_finite(), "{min}..{max}: {ticks:?}");
             assert!(ticks.max.is_finite(), "{min}..{max}: {ticks:?}");
             assert!(ticks.ticks.iter().all(|tick| tick.is_finite()));
+        }
+    }
+
+    #[test]
+    fn vega_nice_ticks_preserves_tiny_finite_domains() {
+        for (data_min, data_max) in [(0.0, 1e-20), (-1e-20, 0.0), (-1e-20, 1e-20)] {
+            let ticks = vega_nice_ticks(data_min, data_max, 320.0);
+            assert!(
+                ticks.min.is_finite()
+                    && ticks.max.is_finite()
+                    && ticks.step.is_finite()
+                    && ticks.ticks.iter().all(|tick| tick.is_finite()),
+                "{data_min}..{data_max}: {ticks:?}"
+            );
+            assert!(ticks.step > 0.0, "{data_min}..{data_max}: {ticks:?}");
+            assert!(
+                ticks.min <= data_min && ticks.max >= data_max,
+                "{data_min}..{data_max}: {ticks:?}"
+            );
+            assert!(
+                ticks.max - ticks.min <= 5e-20,
+                "{data_min}..{data_max}: {ticks:?}"
+            );
+
+            let scale = LinearScale::new(ticks.min, ticks.max, 0.0, 1.0);
+            let mapped_min = scale.map(data_min);
+            let mapped_max = scale.map(data_max);
+            assert!(
+                mapped_min.is_finite() && mapped_max.is_finite() && mapped_max - mapped_min > 0.1,
+                "{data_min}..{data_max}: {mapped_min}..{mapped_max}"
+            );
         }
     }
 
