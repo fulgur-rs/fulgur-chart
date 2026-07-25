@@ -792,6 +792,51 @@ fn temporal_line_rejects_non_object_axis_config_in_both_modes() {
 }
 
 #[test]
+fn temporal_line_rejects_non_object_config_in_both_modes() {
+    for replacement in [
+        serde_json::json!(42),
+        serde_json::json!("config"),
+        serde_json::json!(true),
+        serde_json::json!([]),
+    ] {
+        let mut json: serde_json::Value = serde_json::from_str(DOGFOOD_SHAPE).unwrap();
+        json["config"] = replacement;
+        for strict in [false, true] {
+            assert_eq!(
+                vegalite::parse(&json.to_string(), strict).unwrap_err(),
+                "config must be an object",
+                "strict={strict}"
+            );
+        }
+    }
+}
+
+#[test]
+fn temporal_line_config_preserves_missing_null_and_unknown_key_modes() {
+    let mut missing: serde_json::Value = serde_json::from_str(DOGFOOD_SHAPE).unwrap();
+    missing.as_object_mut().unwrap().remove("config");
+    let mut null: serde_json::Value = serde_json::from_str(DOGFOOD_SHAPE).unwrap();
+    null["config"] = serde_json::Value::Null;
+    for json in [missing, null] {
+        for strict in [false, true] {
+            vegalite::parse(&json.to_string(), strict).unwrap();
+        }
+    }
+
+    let mut unknown: serde_json::Value = serde_json::from_str(DOGFOOD_SHAPE).unwrap();
+    unknown["config"]
+        .as_object_mut()
+        .unwrap()
+        .insert("futureOption".to_string(), serde_json::json!(true));
+    let unknown = unknown.to_string();
+    vegalite::parse(&unknown, false).unwrap();
+    assert_eq!(
+        vegalite::parse(&unknown, true).unwrap_err(),
+        "unknown key: config.futureOption"
+    );
+}
+
+#[test]
 fn temporal_line_axis_config_preserves_null_defaults_and_unknown_key_modes() {
     for json in [
         DOGFOOD_SHAPE.replace(

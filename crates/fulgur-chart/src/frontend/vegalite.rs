@@ -1203,10 +1203,16 @@ fn validate_temporal_color_scheme(encoding: &Map<String, Value>) -> Result<(), S
     }
 }
 
+fn temporal_config(top: &Map<String, Value>) -> Result<Option<&Map<String, Value>>, String> {
+    match top.get("config") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(config)) => Ok(Some(config)),
+        Some(_) => Err("config must be an object".to_string()),
+    }
+}
+
 fn validate_temporal_view(top: &Map<String, Value>) -> Result<(), String> {
-    let Some(view) = top
-        .get("config")
-        .and_then(Value::as_object)
+    let Some(view) = temporal_config(top)?
         .and_then(|config| config.get("view"))
         .filter(|value| !value.is_null())
     else {
@@ -1225,9 +1231,7 @@ fn temporal_axis_grid(
     top: &Map<String, Value>,
     theme_grid_color: Color,
 ) -> Result<AxisGrid, String> {
-    let axis = top
-        .get("config")
-        .and_then(Value::as_object)
+    let axis = temporal_config(top)?
         .and_then(|config| config.get("axis"))
         .filter(|value| !value.is_null())
         .map(|value| {
