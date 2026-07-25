@@ -1,10 +1,82 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
-use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos};
+use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos, RadialAxis};
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, nice_ticks};
 use crate::scene::{Anchor, Prim};
 use crate::text::TextMeasurer;
+
+/// 動径軸 (`options.scales.r`) のドメイン `[lo, hi]` を解決する。radar / polarArea 共通。
+///
+/// 意味論は chart.js の `LinearScaleBase.handleTickRangeOptions` に合わせている。要点は
+/// **調整はすべて「自動計算側」にのみ作用し、`min` / `max` で明示された hard bound は
+/// 決して動かさない** こと (chart.js の `setMin` / `setMax` が `minDefined` /
+/// `maxDefined` のとき no-op になるのと同じ)。
+///
+/// - `min` / `max`: hard bound。指定された側はそのまま使う。
+/// - `suggestedMin` / `suggestedMax`: 自動側を広げる方向にのみ効く。
+/// - `beginAtZero`: 自動側の端を 0 へ寄せる。下端だけでなく **上端にも** 効くので、
+///   全データが負でもドメインは 0 を含む (chart.js は min/max が同符号のとき
+///   反対側を 0 に寄せる)。
+/// - 縮退 (`hi <= lo`) / 非有限: やはり自動側を開いて解消する。
+///
+/// `data_min` / `data_max` は呼び出し側が全 finite 値から求めた実データ範囲。
+/// データが無い場合は `INFINITY` / `NEG_INFINITY` を渡してよい。
+pub(crate) fn resolve_radial_domain(ra: &RadialAxis, data_min: f64, data_max: f64) -> (f64, f64) {
+    let lo_is_hard = ra.min.is_some();
+    let hi_is_hard = ra.max.is_some();
+    let mut lo = ra
+        .min
+        .unwrap_or(if data_min.is_finite() { data_min } else { 0.0 });
+    let mut hi = ra.max.unwrap_or(data_max);
+
+    if !lo_is_hard {
+        if let Some(s) = ra.suggested_min
+            && s < lo
+        {
+            lo = s;
+        }
+        if ra.begin_at_zero {
+            lo = lo.min(0.0);
+        }
+    }
+    if !hi_is_hard {
+        if let Some(s) = ra.suggested_max
+            && s > hi
+        {
+            hi = s;
+        }
+        if ra.begin_at_zero {
+            hi = hi.max(0.0);
+        }
+    }
+
+    if !hi.is_finite() || hi <= lo {
+        // chart.js は `min === max` のとき `offset = max == 0 ? 1 : |max * 0.05|` だけ
+        // 開く。ここでも同じ比率を使い、定数データが radius 0 に潰れて不可視になるのを防ぐ。
+        let base = if hi.is_finite() { hi } else { lo };
+        let base = if base.is_finite() { base } else { 0.0 };
+        let offset = if base == 0.0 {
+            1.0
+        } else {
+            (base * 0.05).abs()
+        };
+        if !hi_is_hard {
+            hi = base + offset;
+        }
+        // 下端を下げるのは自動側のときだけ。`beginAtZero` が 0 起点を要求している間は
+        // 下げないが、上端が hard で固定されている場合は下げる以外に開く余地が無い。
+        if !lo_is_hard && (!ra.begin_at_zero || hi_is_hard) {
+            lo = base - offset;
+        }
+        // 両側 hard で `min > max` のように矛盾している場合は動かせる自動側が無い。
+        // 描画が壊れないよう、決定的に hard な `min` を優先して上端を開く。
+        if !hi.is_finite() || hi <= lo {
+            hi = lo + 1.0;
+        }
+    }
+    (lo, hi)
+}
 
 pub const OUTER_PAD: f64 = 8.0;
 pub const TITLE_FONT: f64 = 16.0;

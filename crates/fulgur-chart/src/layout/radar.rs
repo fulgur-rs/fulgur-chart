@@ -192,46 +192,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     //
     // radial_axis 無し時は既存の byte-identical パスを維持するため nice.min / nice.max を使う。
     let (nice, rr_lo, rr_hi) = if let Some(ra) = &spec.radial_axis {
-        // scatter.rs:189-209 と同パターン: min/max hard override、
-        // suggested* は expand-only、beginAtZero は 0 を含める。
-        //
-        // Codex Fix 12: `suggested*` と beginAtZero は「自動計算側」だけを動かす。
-        // hard bound が指定された側に適用すると、例えば
-        // `{ min: 0, suggestedMin: -50 }` で hard な下限 0 が -50 に負けてしまう。
-        let lo_is_hard = ra.min.is_some();
-        let hi_is_hard = ra.max.is_some();
-        let mut lo = ra
-            .min
-            .unwrap_or_else(|| if data_min.is_finite() { data_min } else { 0.0 });
-        let mut hi = ra.max.unwrap_or(max_val);
-        if !lo_is_hard {
-            if let Some(s) = ra.suggested_min
-                && s < lo
-            {
-                lo = s;
-            }
-            if ra.begin_at_zero {
-                lo = lo.min(0.0);
-            }
-        }
-        if !hi_is_hard {
-            if let Some(s) = ra.suggested_max
-                && s > hi
-            {
-                hi = s;
-            }
-            if ra.begin_at_zero {
-                hi = hi.max(0.0);
-            }
-        }
-        if !hi.is_finite() || hi <= lo {
-            hi = lo + 1.0;
-        }
+        // ドメイン解決は polar_area と共有する (common::resolve_radial_domain)。
+        let (lo, hi) = common::resolve_radial_domain(ra, data_min, max_val);
         // nice_ticks は外側へ丸める (nice.min <= lo かつ nice.max >= hi) ため、
         // 自動側に採用してもデータがクリップされることはない。
         let n = nice_ticks(lo, hi, 10);
-        let rr_lo = if lo_is_hard { lo } else { n.min };
-        let rr_hi = if hi_is_hard { hi } else { n.max };
+        let rr_lo = if ra.min.is_some() { lo } else { n.min };
+        let rr_hi = if ra.max.is_some() { hi } else { n.max };
         (n, rr_lo, rr_hi)
     } else {
         // 既存 default: byte-identical を維持。
@@ -240,8 +207,6 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         (n, mn, mx)
     };
     // 値→半径。span<=0 の縮退は中心へ落とす。
-    // TODO(6z6): negative grid ticks under radial_axis
-    // (現状 t <= 0.0 の tick は下のグリッド描画でスキップされる — min<0 のケースは未対応)。
     let span = rr_hi - rr_lo;
     let rr = |v: f64| -> f64 {
         if span > 0.0 {
@@ -253,18 +218,23 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     // 5. グリッド(多角形状)。tick レベルごとに n 頂点を結ぶ閉多角形を描く。
     for &t in &nice.ticks {
-        if t <= 0.0 {
-            continue;
-        }
-        // ドメイン外の tick は描かない。hard な `min` が nice 境界より内側にあるとき
-        // (例 min: 15 → nice.min: 10)、tick 10 は rr() で中心へクランプされ、
-        // 中心に潰れたリングが重なってしまう。
-        // default パス (radial_axis == None) では rr_lo == nice.min かつ
-        // rr_hi == nice.max なので、この条件は常に偽 → snapshot は不変。
-        if t < rr_lo || t > rr_hi {
+        // ドメイン上端を超える tick は描かない。rr() のクランプで外周リングが
+        // 二重に重なるのを防ぐ。
+        if t > rr_hi {
             continue;
         }
         let r = rr(t);
+        // 半径 0 に潰れるリング (t <= rr_lo) は描かない。
+        //
+        // これは従来の `t <= 0.0` スキップを一般化したもの。default パス
+        // (radial_axis == None) では rr_lo == nice.min == 0 なので
+        // `r <= 0` ⟺ `t <= 0` となり厳密に等価 → 既存 snapshot は不変。
+        // 一方 radial_axis 経路で `min: -10, max: 10` のようにドメインが負を含む場合、
+        // 負および 0 の tick も正の半径へ写るため、従来は丸ごと落ちていた内側の
+        // グリッドリングとゼロ境界が描かれるようになる。
+        if r <= 0.0 {
+            continue;
+        }
         let mut d = String::new();
         for i in 0..n {
             let a = angle(i);

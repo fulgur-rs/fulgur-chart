@@ -238,3 +238,37 @@ fn polar_area_hard_min_wins_over_suggested_min() {
     );
     assert_eq!(both, hard_only);
 }
+
+#[test]
+fn polar_area_constant_data_visible_without_begin_at_zero() {
+    // Codex Fix 15 のリグレッションテスト (polar 側)。
+    // `beginAtZero: false` のみ指定 + 全値が同一だと自動 lo == hi となり、
+    // 縮退救済 [v, v+1] で全スライスの半径が 0 になり `r > 0` チェックで
+    // 一枚も描かれなくなっていた。
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[30,30,30]}]},"options":{"scales":{"r":{"beginAtZero":false}}}}"##,
+    );
+    assert!(
+        svg.matches("<path").count() >= 3,
+        "定数データでもスライスが描画されるべき: {svg}"
+    );
+    assert!(svg.contains(" A "), "円弧コマンドが必要");
+    assert!(!svg.contains("NaN") && !svg.contains("inf"));
+}
+
+#[test]
+fn polar_area_hard_max_survives_inverted_domain() {
+    // Codex Fix 14 のリグレッションテスト (polar 側)。
+    // hard な `max` がデータ範囲より下でも、上限を書き換えずに自動側 (下端) を
+    // 動かして解消するべき。値は外周にクランプされる。
+    let svg = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[50,50,50]}]},"options":{"scales":{"r":{"max":40,"beginAtZero":false}}}}"##,
+    );
+    assert!(
+        svg.matches("<path").count() >= 3,
+        "max を超える値も外周スライスとして描かれるべき: {svg}"
+    );
+    assert!(!svg.contains("NaN") && !svg.contains("inf"));
+}

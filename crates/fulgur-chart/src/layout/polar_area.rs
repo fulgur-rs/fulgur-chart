@@ -175,47 +175,10 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 }
             }
         }
-        // Codex Fix 6: min 未指定なら lo はデータ範囲 (data_min) からシードする。
-        // beginAtZero=true のときは後段で 0 まで引き下げるので、正データでの既存挙動
-        // (lo=0) は変わらない。beginAtZero=false ではドメインがデータ密着になる。
-        let lo_is_hard = ra.min.is_some();
-        let hi_is_hard = ra.max.is_some();
-        let mut lo = ra
-            .min
-            .unwrap_or(if data_min.is_finite() { data_min } else { 0.0 });
-        let mut hi = ra.max.unwrap_or(data_max);
-        // Codex Fix 12: suggested* / beginAtZero は自動計算側だけを動かす。
-        // hard bound が指定された側に適用すると `{ min: 0, suggestedMin: -50 }` で
-        // hard な下限が負けてしまう。
-        if !lo_is_hard {
-            if let Some(s) = ra.suggested_min
-                && s < lo
-            {
-                lo = s;
-            }
-            // beginAtZero はドメインに 0 を含めるという意味なので、下端にだけでなく
-            // 上端にも効く必要がある (Codex Fix 13)。全データが負の場合、
-            // lo だけ 0 方向へ動かすとドメインが [0, ..] に潰れて全スライスが消える。
-            if ra.begin_at_zero {
-                lo = lo.min(0.0);
-            }
-        }
-        if !hi_is_hard {
-            if let Some(s) = ra.suggested_max
-                && s > hi
-            {
-                hi = s;
-            }
-            if ra.begin_at_zero {
-                hi = hi.max(0.0);
-            }
-        }
-        // Fixes 1 + 4 (coderabbit + gemini): 縮退時 (hi <= lo, NaN, inf) は 1 ユニット救済。
-        // radar.rs:204-206 と同一パターン。
-        if !hi.is_finite() || hi <= lo {
-            hi = lo + 1.0;
-        }
-        (lo, hi)
+        // ドメイン解決は radar と共有する (common::resolve_radial_domain)。
+        // hard bound の優先、suggested* の expand-only、beginAtZero の両端適用、
+        // 縮退の救済はすべてそちらに集約されている。
+        common::resolve_radial_domain(ra, data_min, data_max)
     } else {
         (0.0, max_v)
     };

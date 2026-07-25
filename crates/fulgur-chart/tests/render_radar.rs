@@ -284,3 +284,71 @@ fn radar_hard_max_wins_over_suggested_max() {
         "hard な max:50 は suggestedMax:500 に上書きされてはならない"
     );
 }
+
+#[test]
+fn radar_hard_max_survives_inverted_domain() {
+    // Codex Fix 14 のリグレッションテスト。
+    // `beginAtZero: false` + hard な `max` がデータ範囲より下 (data 50, max 40) のとき、
+    // 縮退救済が hard な上限 40 を 51 に書き換えてしまい、値が外周ではなく中心へ
+    // 落ちていた。hard bound は保持し、自動側 (下端) を動かして解消するべき。
+    let clamped = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[50,50,50]}]},"options":{"scales":{"r":{"max":40,"beginAtZero":false}}}}"##,
+    );
+    // 値 50 は max 40 を超えるので外周 (ratio 1.0) にクランプされるべき。
+    // ratio 1.0 になる既知の構成と頂点位置が一致することで検証する。
+    let outer_edge = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[100,100,100]}]},"options":{"scales":{"r":{"min":0,"max":100}}}}"##,
+    );
+    assert_eq!(
+        first_series_vertex(&clamped),
+        first_series_vertex(&outer_edge),
+        "hard な max を超える値は外周にクランプされるべき (中心ではなく)"
+    );
+    assert!(!clamped.contains("NaN"));
+}
+
+#[test]
+fn radar_constant_data_visible_without_begin_at_zero() {
+    // Codex Fix 15 のリグレッションテスト。
+    // `beginAtZero: false` のみ指定 + 全値が同一のとき、自動 lo == hi となり
+    // 縮退救済が [v, v+1] を作るため、全頂点が半径 0 (中心) に潰れていた。
+    // chart.js と同じく値の周囲へ広げ、データが見えるようにする。
+    let svg = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[30,30,30]}]},"options":{"scales":{"r":{"beginAtZero":false}}}}"##,
+    );
+    let collapsed = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[0,0,0]}]},"options":{"scales":{"r":{"min":0}}}}"##,
+    );
+    assert_ne!(
+        first_series_vertex(&svg),
+        first_series_vertex(&collapsed),
+        "定数データが中心へ潰れてはならない"
+    );
+    assert!(!svg.contains("NaN"));
+}
+
+#[test]
+fn radar_negative_domain_draws_inner_grid_rings() {
+    // Codex Fix 16 のリグレッションテスト。
+    // ドメインが負を含む (min: -10, max: 10) とき、負および 0 の tick も
+    // 正の半径へ写るのでグリッドリングとして描かれるべき。従来は `t <= 0.0` で
+    // 一律にスキップされ、内側半分のリングとゼロ境界が丸ごと欠けていた。
+    let with_negative = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[5,5,5]}]},"options":{"scales":{"r":{"min":-10,"max":10}}}}"##,
+    );
+    // グリッドリングは fill="none" の path。
+    // nice_ticks(-10, 10) は step 2 で -10..10 の 11 tick を返す。うち rr() が
+    // 正の半径へ写すのは -8..10 の 10 本。従来は `t <= 0.0` スキップにより
+    // 2..10 の 5 本しか描かれなかったので、この閾値が回帰を検出する。
+    let rings = with_negative.matches(r#"fill="none""#).count();
+    assert!(
+        rings >= 8,
+        "負ドメインでは内側リングとゼロ境界も描かれるべき (旧実装は 5 本): rings={rings}"
+    );
+    assert!(!with_negative.contains("NaN"));
+}
