@@ -700,6 +700,52 @@ fn non_strict_temporal_line_rejects_out_of_range_grid_opacity() {
 }
 
 #[test]
+fn temporal_line_grid_option_rejects_non_boolean_values_in_both_modes() {
+    for (replacement, value_type) in [
+        (r#""false""#, "string"),
+        ("0", "number"),
+        ("{}", "object"),
+        ("[]", "array"),
+    ] {
+        let json = DOGFOOD_SHAPE.replace(r#""grid":true"#, &format!(r#""grid":{replacement}"#));
+        let expected = format!("config.axis.grid must be a boolean, got {value_type}");
+        for strict in [false, true] {
+            match vegalite::parse(&json, strict) {
+                Err(err) => assert_eq!(err, expected, "strict={strict}"),
+                Ok(_) => panic!("strict={strict}: expected exact error: {expected}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn temporal_line_grid_option_preserves_false_null_and_omitted_semantics() {
+    for (json, expected_display) in [
+        (
+            DOGFOOD_SHAPE.replace(r#""grid":true"#, r#""grid":false"#),
+            false,
+        ),
+        (
+            DOGFOOD_SHAPE.replace(r#""grid":true"#, r#""grid":null"#),
+            true,
+        ),
+        (DOGFOOD_SHAPE.replace(r#""grid":true,"#, ""), true),
+    ] {
+        for strict in [false, true] {
+            let spec = vegalite::parse(&json, strict).unwrap();
+            assert_eq!(
+                spec.x_axis.grid.display, expected_display,
+                "x grid strict={strict}"
+            );
+            assert_eq!(
+                spec.y_axis.grid.display, expected_display,
+                "y grid strict={strict}"
+            );
+        }
+    }
+}
+
+#[test]
 fn temporal_line_treats_null_color_scale_as_absent() {
     let json = DOGFOOD_SHAPE.replace(r#""scale":{"scheme":"tableau10"}"#, r#""scale":null"#);
     for strict in [false, true] {

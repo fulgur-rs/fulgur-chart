@@ -1171,6 +1171,9 @@ fn temporal_axis_grid(
         .and_then(Value::as_object)
         .and_then(|config| config.get("axis"))
         .and_then(Value::as_object);
+    if let Some(axis) = axis {
+        check_line_optional_bool(axis, "grid", "config.axis.grid")?;
+    }
     let opacity = match axis
         .and_then(|axis| axis.get("gridOpacity"))
         .filter(|value| !value.is_null())
