@@ -126,6 +126,14 @@ mod tests {
     }
 
     #[test]
+    fn equal_spacing_matches_d3_monotone_x_controls() {
+        assert_eq!(
+            monotone_path(&[(0.0, 0.0), (1.0, 2.0), (2.0, 3.0)]),
+            "M 0 0 C 0.33 0.75 0.67 1.5 1 2 C 1.33 2.5 1.67 2.75 2 3"
+        );
+    }
+
+    #[test]
     fn two_points_degrade_to_a_line() {
         assert_eq!(monotone_path(&[(0.0, 1.0), (2.0, 3.0)]), "M 0 1 L 2 3");
     }
