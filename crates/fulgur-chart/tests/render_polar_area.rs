@@ -304,3 +304,23 @@ fn polar_area_extremely_wide_domain_still_renders() {
     );
     assert!(!svg.contains("NaN") && !svg.contains("inf"));
 }
+
+#[test]
+fn polar_area_overflowing_domain_preserves_hard_bounds_ratio() {
+    // Codex Fix 19 のリグレッションテスト (polar 側)。
+    // 比率 0.75 が保たれるなら、min:0 / max:100 / 値 75 と同一の SVG になる。
+    let wide = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[5e307,5e307,5e307]}]},
+        "options":{"scales":{"r":{"min":-1e308,"max":1e308}}}}"##,
+    );
+    let normal = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[75,75,75]}]},"options":{"scales":{"r":{"min":0,"max":100}}}}"##,
+    );
+    assert_eq!(
+        wide, normal,
+        "オーバーフローするドメインでも比率 0.75 が保たれるべき"
+    );
+    assert!(!wide.contains("NaN") && !wide.contains("inf"));
+}

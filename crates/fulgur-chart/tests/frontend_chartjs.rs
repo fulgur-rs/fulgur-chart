@@ -1563,3 +1563,30 @@ fn radial_charts_ignore_malformed_scales_r_in_non_strict() {
         "strict では非 object の scales.r を拒否する"
     );
 }
+
+#[test]
+fn strict_mode_rejects_wrong_typed_scales_r_field() {
+    // Codex Fix 20 のリグレッションテスト。
+    // `check_unknown_keys` はキー名しか見ないので `{"max": "100"}` のように
+    // 「キーは正しいが型が違う」入力は素通りする。typed deserialize の失敗を
+    // `.ok()` で握り潰すと、strict なのに既定ドメインで描画されてしまう。
+    for json in [
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{"max":"100"}}}}"##,
+        r##"{"type":"polarArea","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+             "options":{"scales":{"r":{"beginAtZero":"yes"}}}}"##,
+    ] {
+        let err =
+            chartjs::parse(json, true).expect_err("strict は scales.r の型不一致を拒否すべき");
+        assert!(err.contains("scales.r"), "err: {err}");
+    }
+
+    // 非 strict では従来通り silently 無視して既定ドメインで描画する (Chart.js 互換)。
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{"max":"100"}}}}"##,
+        false,
+    )
+    .expect("非 strict は silently 無視する");
+    assert!(spec.radial_axis.is_none());
+}

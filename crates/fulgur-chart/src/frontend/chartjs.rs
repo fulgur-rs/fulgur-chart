@@ -841,14 +841,23 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // 他 kind、`scales.r` 未指定、`scales.r: null` の場合は None を保ち後方互換を維持する。
     let is_radial = matches!(kind, ChartKind::Radar | ChartKind::PolarArea);
     let radial_axis = if is_radial {
-        raw.options
-            .scales
-            .as_ref()
-            .and_then(|s| s.r.as_ref())
-            // ここで初めて typed に解釈する。非 object や型不一致 (例 `"r": 5`) は
-            // 非 strict では silently 無視する (Chart.js 互換)。strict モードでは
-            // 上流の `check_unknown_keys` が同じ入力を明示的に拒否する。
-            .and_then(|v| serde_json::from_value::<RawRadialAxis>(v.clone()).ok())
+        // ここで初めて typed に解釈する。
+        //
+        // 非 strict では型不一致 (例 `"r": 5`、`{"max": "100"}`) を silently 無視する
+        // (Chart.js 互換)。strict では伝播させる: `check_unknown_keys` はキー名しか
+        // 見ないので `{"max": "100"}` のような「キーは正しいが型が違う」入力を
+        // 素通りさせてしまい、`.ok()` で握り潰すと既定ドメインで描画されてしまう。
+        let parsed = match raw.options.scales.as_ref().and_then(|s| s.r.as_ref()) {
+            None => None,
+            Some(v) => match serde_json::from_value::<RawRadialAxis>(v.clone()) {
+                Ok(r) => Some(r),
+                Err(e) if strict => {
+                    return Err(format!("options.scales.r の型が不正です: {e}"));
+                }
+                Err(_) => None,
+            },
+        };
+        parsed
             .as_ref()
             // Codex Fix 9: `scales.r: {}` や、`ticks` 等の視覚キーのみを持つ `r` は no-op とする。
             // ドメインキーが 1 つも無いのに Some(RadialAxis) を返すと layout が override 経路に

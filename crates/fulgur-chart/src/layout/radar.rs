@@ -206,17 +206,16 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let (mn, mx) = (n.min, n.max);
         (n, mn, mx)
     };
-    // 値→半径。span<=0 の縮退は中心へ落とす。
-    let span = rr_hi - rr_lo;
-    let rr = |v: f64| -> f64 {
-        if span > 0.0 {
-            (((v - rr_lo) / span).clamp(0.0, 1.0)) * radius
-        } else {
-            0.0
-        }
-    };
+    // 値→半径。縮退 (幅 0) は中心へ落とす。
+    // span が f64 で表現できないほど広いドメインでも比率が壊れないよう
+    // common::radial_ratio を使う (hard bound を書き換えずに済む)。
+    let rr = |v: f64| -> f64 { common::radial_ratio(v, rr_lo, rr_hi) * radius };
 
     // 5. グリッド(多角形状)。tick レベルごとに n 頂点を結ぶ閉多角形を描く。
+    //
+    // 先に描画する半径を集める。tick 由来のリングに加え、hard な `max` が
+    // nice tick 上に無い場合は外周の境界リングを補う必要があるため。
+    let mut ring_radii: Vec<f64> = Vec::new();
     for &t in &nice.ticks {
         // ドメイン上端を超える tick は描かない。rr() のクランプで外周リングが
         // 二重に重なるのを防ぐ。
@@ -235,6 +234,23 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         if r <= 0.0 {
             continue;
         }
+        ring_radii.push(r);
+    }
+    // hard な `max` がちょうど nice tick に乗らない場合、上の `t > rr_hi` で
+    // 外側の tick が落ちるため外周に境界リングが無くなる
+    // (例 `min:0, max:95` → ticks は 100 まであるが 100 は落ち、最外周が 90 になる)。
+    // 設定した最大値の位置にグリッド境界を補う。
+    // default パスでは rr_hi == nice.max が必ず tick に含まれるので影響しない。
+    if spec.radial_axis.as_ref().is_some_and(|ra| ra.max.is_some()) {
+        let tol = f64::EPSILON * rr_hi.abs().max(1.0);
+        if !nice.ticks.iter().any(|t| (*t - rr_hi).abs() <= tol) {
+            let r = rr(rr_hi);
+            if r > 0.0 {
+                ring_radii.push(r);
+            }
+        }
+    }
+    for r in ring_radii {
         let mut d = String::new();
         for i in 0..n {
             let a = angle(i);

@@ -385,3 +385,68 @@ fn radar_extremely_wide_domain_still_renders() {
         "系列多角形が描画されるべき: {svg}"
     );
 }
+
+/// グリッドリング (fill="none" の path) それぞれの最初の "M x y" 座標を集める。
+fn grid_ring_vertices(s: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for chunk in s.split(r#"<path d=""#).skip(1) {
+        let Some(end) = chunk.find('"') else { continue };
+        let d = &chunk[..end];
+        let attrs = &chunk[end..];
+        if !attrs.contains(r#"fill="none""#) {
+            continue;
+        }
+        let Some(m) = d.strip_prefix('M') else {
+            continue;
+        };
+        let mut it = m.split_whitespace();
+        if let (Some(x), Some(y)) = (it.next(), it.next()) {
+            out.push((x.to_string(), y.to_string()));
+        }
+    }
+    out
+}
+
+#[test]
+fn radar_hard_max_gets_a_boundary_grid_ring() {
+    // Codex Fix 21 のリグレッションテスト。
+    // hard な max が nice tick に乗らない場合 (max: 95 → ticks は 100 まで)、
+    // ドメイン外の 100 が落ちるだけだと最外周リングが 90 になり、設定した最大値の
+    // 位置にグリッド境界が無くなる。外周に境界リングを補うこと。
+    let svg = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[95,95,95]}]},"options":{"scales":{"r":{"min":0,"max":95}}}}"##,
+    );
+    // データ 95 は max 95 なので ratio 1.0 = 外周。系列頂点と同じ位置に
+    // グリッドリングの頂点が存在するはず。
+    let series = first_series_vertex(&svg).expect("series path");
+    let rings = grid_ring_vertices(&svg);
+    assert!(
+        rings.contains(&series),
+        "設定した max の位置に境界リングが必要: series={series:?} rings={rings:?}"
+    );
+}
+
+#[test]
+fn radar_overflowing_domain_preserves_hard_bounds_ratio() {
+    // Codex Fix 19 のリグレッションテスト。
+    // span が f64 を超えるドメインでも、端点をクランプせず正しい比率を保つこと。
+    // min:-1e308 / max:1e308 / 値 5e307 の比率は
+    // (5e307 - (-1e308)) / 2e308 = 0.75 なので、min:0 / max:100 / 値 75 と
+    // 同じ頂点位置になるはず。端点をクランプすると外周 (ratio 1.0) に張り付く。
+    let wide = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[5e307,5e307,5e307]}]},
+        "options":{"scales":{"r":{"min":-1e308,"max":1e308}}}}"##,
+    );
+    let normal = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[75,75,75]}]},"options":{"scales":{"r":{"min":0,"max":100}}}}"##,
+    );
+    assert_eq!(
+        first_series_vertex(&wide),
+        first_series_vertex(&normal),
+        "オーバーフローするドメインでも比率 0.75 が保たれるべき"
+    );
+    assert!(!wide.contains("NaN"));
+}

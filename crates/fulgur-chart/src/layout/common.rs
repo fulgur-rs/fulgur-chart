@@ -76,17 +76,44 @@ pub(crate) fn resolve_radial_domain(ra: &RadialAxis, data_min: f64, data_max: f6
         }
     }
 
-    // 個々の境界が有限でも、差 (span) が f64 の表現範囲を超えると +inf になる
-    // (例 `min: -1e308, max: 1e308`)。そうなると以降の比率計算が全滅し、
-    // データがあるのに凡例だけのチャートが返る。有限の span に収まるようクランプする。
-    // hard bound より「描けること」を優先する —— 影響を受けるのは f64 の限界に
-    // 迫る極端な指定だけで、通常の入力は一切変わらない。
-    if !(hi - lo).is_finite() {
-        const LIMIT: f64 = f64::MAX / 4.0;
-        lo = lo.max(-LIMIT);
-        hi = hi.min(LIMIT);
-    }
     (lo, hi)
+}
+
+/// 値 `v` を動径ドメイン `[lo, hi]` 上の 0..1 比率へ写す。
+///
+/// 通常は `(v - lo) / (hi - lo)`。ただし境界が個々には有限でも、その差が f64 の
+/// 表現範囲を超えると span が `+inf` になり比率が壊れる (例 `min: -1e308, max: 1e308`)。
+/// その場合は両辺を半分にしてから引く —— 数学的には同値だがオーバーフローしない。
+///
+/// 端点をクランプする方式は採らない。それだと `resolve_radial_domain` が保証している
+/// 「hard bound は決して動かさない」という不変条件を破り、`min: -1e308, max: 1e308` +
+/// データ `5e307` が本来の 75% ではなく外周に張り付いてしまう。
+pub(crate) fn radial_ratio(v: f64, lo: f64, hi: f64) -> f64 {
+    let span = hi - lo;
+    if span.is_finite() {
+        if span > 0.0 {
+            ((v - lo) / span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    } else {
+        let half_span = hi * 0.5 - lo * 0.5;
+        if half_span > 0.0 {
+            ((v * 0.5 - lo * 0.5) / half_span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+/// 動径ドメインが正の幅を持つか。`hi - lo` が `+inf` になるケースでも正しく判定する。
+pub(crate) fn radial_domain_has_width(lo: f64, hi: f64) -> bool {
+    let span = hi - lo;
+    if span.is_finite() {
+        span > 0.0
+    } else {
+        hi * 0.5 - lo * 0.5 > 0.0
+    }
 }
 
 pub const OUTER_PAD: f64 = 8.0;

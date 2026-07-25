@@ -182,11 +182,11 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     } else {
         (0.0, max_v)
     };
-    let span = hi - lo;
-
     let mut labels: Vec<Prim> = Vec::new();
 
-    if span.is_finite() && span > 0.0 {
+    // span が f64 で表現できないほど広いドメイン (例 `min: -1e308, max: 1e308`) でも
+    // 描画できるよう、幅の判定と比率計算は common 側のオーバーフロー安全版を使う。
+    if common::radial_domain_has_width(lo, hi) {
         let mut a0 = -PI / 2.0;
         for (i, &v) in values.iter().enumerate() {
             let a1 = a0 + angle_per;
@@ -195,7 +195,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             // 有りの場合は下限クランプ + 上限クランプ。
             let r = if v.is_finite() {
                 let ratio = if spec.radial_axis.is_some() {
-                    ((v - lo) / span).clamp(0.0, 1.0)
+                    common::radial_ratio(v, lo, hi)
                 } else if v > 0.0 {
                     (v / hi).clamp(0.0, 1.0)
                 } else {
