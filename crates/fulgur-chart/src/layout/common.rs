@@ -1,7 +1,8 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
 use crate::ir::{
-    AxisSpec, ChartKind, ChartSpec, Color, LegendPos, RadialAxis, SizeMode, XPositions,
+    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, RadialAxis, SizeMode,
+    XPositions,
 };
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, nice_ticks, vega_nice_ticks};
@@ -449,6 +450,19 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         .last()
         .map(|tick| m.width(&tick.label, spec.theme.font_size as f32) as f64 / 2.0)
         .unwrap_or(0.0);
+    let centered_x_title_side_overflow = if matches!(spec.size_mode, SizeMode::PlotArea) {
+        spec.x_axis
+            .title
+            .as_ref()
+            .filter(|title| matches!(title.align, AxisTitleAlign::Center))
+            .map(|title| {
+                let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+                ((m.width(&title.text, font as f32) as f64 - spec.width) / 2.0).max(0.0)
+            })
+            .unwrap_or(0.0)
+    } else {
+        0.0
+    };
     // line(edge-to-edge)では先頭/末尾の点が plot_left/plot_right に乗り、中央寄せの
     // x ラベルが点の外側へ半幅はみ出してキャンバス端でクリップされる。chart.js が
     // chartArea を edge ラベル半幅ぶん内側へ取るのと同様に edge 余白を確保する。
@@ -509,11 +523,16 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             )
         }
         SizeMode::PlotArea => {
-            let plot_left = (OUTER_PAD + y_axis_w).max(temporal_edge_pad_left);
+            let required_title_side_band = OUTER_PAD + centered_x_title_side_overflow;
+            let plot_left = (OUTER_PAD + y_axis_w)
+                .max(temporal_edge_pad_left)
+                .max(required_title_side_band);
             let plot_top = OUTER_PAD + title_band + plot_area_vertical_overflow;
             let plot_right = plot_left + spec.width;
             let plot_bottom = plot_top + spec.height;
-            let trailing_band = (OUTER_PAD + legend_right).max(temporal_edge_pad_right);
+            let trailing_band = (OUTER_PAD + legend_right)
+                .max(temporal_edge_pad_right)
+                .max(required_title_side_band);
             let scene_width = plot_right + trailing_band;
             let scene_height = plot_bottom
                 + X_LABEL_BAND

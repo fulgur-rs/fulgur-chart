@@ -6,7 +6,7 @@ use fulgur_chart::num::fmt_num;
 use fulgur_chart::palette::VEGALITE_PALETTE;
 use fulgur_chart::raster_direct::{render_chart_to_png, render_chart_to_webp};
 use fulgur_chart::render::{render_chart, render_chart_with_font};
-use fulgur_chart::scene::Prim;
+use fulgur_chart::scene::{Anchor, Prim};
 use fulgur_chart::text::TextMeasurer;
 
 fn fixture() -> &'static str {
@@ -136,6 +136,79 @@ fn plot_area_contains_long_rotated_y_axis_title() {
         y + half_extent <= scene.height,
         "rotated title must fit below: y={y}, half_extent={half_extent}, scene={}",
         scene.height
+    );
+}
+
+#[test]
+fn plot_area_contains_long_centered_x_axis_title() {
+    const X_TITLE: &str = "a very long centered temporal x axis title";
+    let json = fixture()
+        .replace(r#""width": 720"#, r#""width": 24"#)
+        .replace(r#""title": "date""#, &format!(r#""title": "{X_TITLE}""#));
+    let spec = vegalite::parse(&json, true).unwrap();
+    let m = measurer();
+    let frame = common::compute(&spec, &m);
+    let scene = line::build(&spec, &m);
+    let (x, size) = scene
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Prim::Text {
+                x,
+                size,
+                content,
+                rotate_deg: None,
+                anchor: Anchor::Middle,
+                ..
+            } if content == X_TITLE => Some((*x, *size)),
+            _ => None,
+        })
+        .expect("centered x-axis title");
+    let half_extent = m.width(X_TITLE, size as f32) as f64 / 2.0;
+
+    assert!(x - half_extent >= 0.0);
+    assert!(x + half_extent <= scene.width);
+    assert_eq!(frame.plot_right - frame.plot_left, spec.width);
+    assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
+
+    let legend_swatch_xs = scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::Rect { x, .. } if *x >= frame.plot_right => Some(*x),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(legend_swatch_xs.len(), spec.series.len());
+    assert!(
+        legend_swatch_xs
+            .iter()
+            .all(|x| *x >= frame.plot_right && *x <= scene.width)
+    );
+
+    let legend_text_rights = scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::Text {
+                x,
+                size,
+                content,
+                anchor: Anchor::Start,
+                ..
+            } if content == "metric"
+                || spec.series.iter().any(|series| series.name == *content) =>
+            {
+                Some(*x + m.width(content, *size as f32) as f64)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(legend_text_rights.len(), spec.series.len() + 1);
+    assert!(
+        legend_text_rights
+            .iter()
+            .all(|right| *right >= frame.plot_right && *right <= scene.width)
     );
 }
 
