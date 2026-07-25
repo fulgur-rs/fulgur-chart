@@ -8,8 +8,13 @@ use fulgur_chart::layout::{
 };
 use fulgur_chart::num::fmt_num;
 use fulgur_chart::palette::VEGALITE_PALETTE;
-use fulgur_chart::raster_direct::{render_chart_to_png, render_chart_to_webp};
-use fulgur_chart::render::{render_chart, render_chart_with_font};
+use fulgur_chart::raster_direct::{
+    render_chart_to_png, render_chart_to_png_with_limits, render_chart_to_webp,
+    render_chart_to_webp_with_limits,
+};
+use fulgur_chart::render::{
+    render_chart, render_chart_with_font, render_chart_with_font_and_limits,
+};
 use fulgur_chart::scene::{Anchor, Prim, Scene};
 use fulgur_chart::text::TextMeasurer;
 
@@ -278,14 +283,47 @@ fn plot_area_outer_scene_can_be_validated_with_render_measurer() {
 }
 
 #[test]
-fn custom_font_render_paths_reject_oversized_plot_area_scene() {
+fn custom_font_render_paths_preserve_caller_supplied_limits() {
     let mut spec = parsed();
     spec.width = InputLimits::default().max_dimension_px;
+    let relaxed = InputLimits {
+        max_dimension_px: spec.width + 1_000.0,
+        ..InputLimits::default()
+    };
+    let strict = InputLimits {
+        max_dimension_px: spec.width,
+        ..InputLimits::default()
+    };
+    let render_measurer = measurer();
+
+    validate_spec_with_measurer(&spec, &relaxed, &render_measurer).unwrap();
 
     for result in [
         render_chart_with_font(&spec, DEFAULT_FONT).map(|_| ()),
-        render_chart_to_png(&spec, 1.0, DEFAULT_FONT).map(|_| ()),
-        render_chart_to_webp(&spec, 1.0, DEFAULT_FONT).map(|_| ()),
+        render_chart_to_png(&spec, 0.01, DEFAULT_FONT).map(|_| ()),
+        render_chart_to_webp(&spec, 0.01, DEFAULT_FONT).map(|_| ()),
+    ] {
+        let err = result.unwrap_err();
+        assert!(err.contains("scene width"), "unexpected error: {err}");
+    }
+
+    let svg = render_chart_with_font_and_limits(&spec, DEFAULT_FONT, &relaxed).unwrap();
+    assert!(svg.starts_with("<svg"));
+    assert!(
+        !render_chart_to_png_with_limits(&spec, 0.01, DEFAULT_FONT, &relaxed)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        !render_chart_to_webp_with_limits(&spec, 0.01, DEFAULT_FONT, &relaxed)
+            .unwrap()
+            .is_empty()
+    );
+
+    for result in [
+        render_chart_with_font_and_limits(&spec, DEFAULT_FONT, &strict).map(|_| ()),
+        render_chart_to_png_with_limits(&spec, 0.01, DEFAULT_FONT, &strict).map(|_| ()),
+        render_chart_to_webp_with_limits(&spec, 0.01, DEFAULT_FONT, &strict).map(|_| ()),
     ] {
         let err = result.unwrap_err();
         assert!(err.contains("scene width"), "unexpected error: {err}");

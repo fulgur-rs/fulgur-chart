@@ -14,12 +14,17 @@ pub fn render_chart_with_font(
     spec: &crate::ir::ChartSpec,
     font_bytes: &[u8],
 ) -> Result<String, String> {
+    render_chart_with_font_and_limits(spec, font_bytes, &crate::guard::InputLimits::default())
+}
+
+/// 任意フォントと入力上限で描画。font_bytes がパース不能なら Err。
+pub fn render_chart_with_font_and_limits(
+    spec: &crate::ir::ChartSpec,
+    font_bytes: &[u8],
+    limits: &crate::guard::InputLimits,
+) -> Result<String, String> {
     let m = TextMeasurer::new(font_bytes).map_err(|e| format!("フォント読込失敗: {e}"))?;
-    crate::guard::validate_plot_area_scene_with_measurer(
-        spec,
-        &crate::guard::InputLimits::default(),
-        &m,
-    )?;
+    crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &m)?;
     let fam = family_name(font_bytes).unwrap_or_else(|| DEFAULT_FAMILY.to_string());
     // family 名は CSS string としてクォートする。フォント name table はカンマや引用符を
     // 含み得るため、未クォートだと CSS が複数 family と解釈し計測/SVG/PNG の三者一致が崩れる。
