@@ -111,7 +111,7 @@ pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTi
     }
     let padding = span * 0.05;
 
-    if data_min >= 0.0 {
+    let (min, max, step) = if data_min >= 0.0 {
         let padded_max = data_max + padding;
         let Some(step) = finite_nice_step(padded_max, target) else {
             return nice_ticks(data_min, data_max, target);
@@ -121,18 +121,8 @@ pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTi
         if !max.is_finite() {
             return nice_ticks(data_min, data_max, target);
         }
-        let Some(ticks) = full_step_ticks(0.0, max, step) else {
-            return nice_ticks(data_min, data_max, target);
-        };
-        return NiceTicks {
-            min: 0.0,
-            max,
-            step,
-            ticks,
-        };
-    }
-
-    if data_max <= 0.0 {
+        (0.0, max, step)
+    } else if data_max <= 0.0 {
         let padded_min = data_min - padding;
         let Some(step) = finite_nice_step(-padded_min, target) else {
             return nice_ticks(data_min, data_max, target);
@@ -142,28 +132,22 @@ pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTi
         if !min.is_finite() {
             return nice_ticks(data_min, data_max, target);
         }
-        let Some(ticks) = full_step_ticks(min, 0.0, step) else {
+        (min, 0.0, step)
+    } else {
+        let padded_min = data_min - padding;
+        let padded_max = data_max + padding;
+        let Some(step) = finite_nice_step(padded_max - padded_min, target) else {
             return nice_ticks(data_min, data_max, target);
         };
-        return NiceTicks {
-            min,
-            max: 0.0,
-            step,
-            ticks,
-        };
-    }
-
-    let padded_min = data_min - padding;
-    let padded_max = data_max + padding;
-    let Some(step) = finite_nice_step(padded_max - padded_min, target) else {
-        return nice_ticks(data_min, data_max, target);
+        let half_step = step / 2.0;
+        let min = (padded_min / half_step).floor() * half_step;
+        let max = (padded_max / half_step).ceil() * half_step;
+        if !min.is_finite() || !max.is_finite() {
+            return nice_ticks(data_min, data_max, target);
+        }
+        (min, max, step)
     };
-    let half_step = step / 2.0;
-    let min = (padded_min / half_step).floor() * half_step;
-    let max = (padded_max / half_step).ceil() * half_step;
-    if !min.is_finite() || !max.is_finite() {
-        return nice_ticks(data_min, data_max, target);
-    }
+
     let Some(ticks) = full_step_ticks(min, max, step) else {
         return nice_ticks(data_min, data_max, target);
     };
@@ -404,11 +388,28 @@ mod tests {
     }
 
     #[test]
+    fn vega_nice_ticks_falls_back_when_half_step_rounding_overflows() {
+        for (data_min, data_max) in [(0.0, 1.6e308), (-1.6e308, 0.0), (-1.0, 1.46e308)] {
+            let ticks = vega_nice_ticks(data_min, data_max, 80.0);
+            assert!(ticks.min.is_finite(), "{data_min}..{data_max}: {ticks:?}");
+            assert!(ticks.max.is_finite(), "{data_min}..{data_max}: {ticks:?}");
+            assert!(ticks.step.is_finite(), "{data_min}..{data_max}: {ticks:?}");
+            assert!(
+                ticks.ticks.iter().all(|tick| tick.is_finite()),
+                "{data_min}..{data_max}: {ticks:?}"
+            );
+            assert!(ticks.min <= data_min, "{data_min}..{data_max}: {ticks:?}");
+            assert!(ticks.max >= data_max, "{data_min}..{data_max}: {ticks:?}");
+        }
+    }
+
+    #[test]
     fn vega_step_selection_and_empty_tick_ranges_are_bounded() {
         assert_eq!(nice_step(1.0), 1.0);
         assert_eq!(nice_step(2.0), 2.0);
         assert_eq!(nice_step(5.0), 5.0);
         assert_eq!(nice_step(6.0), 10.0);
+        assert!(full_step_ticks(f64::NAN, 1.0, 1.0).is_none());
         assert!(full_step_ticks(1.0, 0.0, 1.0).is_none());
         assert!(full_step_ticks(f64::MAX, f64::MAX, f64::EPSILON).is_none());
         assert!(full_step_ticks(0.0, 1_001.0, 1.0).is_none());

@@ -988,7 +988,11 @@ mod temporal_line_tests {
 
     #[test]
     fn temporal_line_preflight_rejects_records_categories_and_long_labels() {
-        let records = [record("2026-01-01T00:00:00Z", json!(1), None)];
+        let records = [record(
+            "2026-01-01T00:00:00Z",
+            json!(1),
+            Some(json!("group")),
+        )];
 
         let record_limit = crate::guard::InputLimits {
             max_total_data_points: 0,
