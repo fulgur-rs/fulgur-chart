@@ -1,5 +1,7 @@
 //! 線形スケールと nice ticks（1-2-5 ステップ）。すべて決定的な純関数。
 
+const MAX_TICK_INTERVALS: usize = 1_000;
+
 /// 値→ピクセルの線形写像。px_min>px_max（y軸の上下反転）も許容。
 #[derive(Debug, Clone)]
 pub struct LinearScale {
@@ -37,7 +39,6 @@ pub struct NiceTicks {
 /// 範囲が 0（縮退）でも panic しない。極端な有限値でも panic しない。
 pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTicks {
     // 1. 0除算回避。目盛り間隔数も上限を設け、極端な有限値での過大確保を防ぐ。
-    const MAX_TICK_INTERVALS: usize = 1_000;
     let count = target_count.clamp(1, MAX_TICK_INTERVALS);
 
     // 2. 縮退（range<=0）: range を 1.0 とみなし data_max を +1.0 して汎用処理に乗せる。
@@ -120,11 +121,14 @@ pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTi
         if !max.is_finite() {
             return nice_ticks(data_min, data_max, target);
         }
+        let Some(ticks) = full_step_ticks(0.0, max, step) else {
+            return nice_ticks(data_min, data_max, target);
+        };
         return NiceTicks {
             min: 0.0,
             max,
             step,
-            ticks: full_step_ticks(0.0, max, step),
+            ticks,
         };
     }
 
@@ -138,11 +142,14 @@ pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTi
         if !min.is_finite() {
             return nice_ticks(data_min, data_max, target);
         }
+        let Some(ticks) = full_step_ticks(min, 0.0, step) else {
+            return nice_ticks(data_min, data_max, target);
+        };
         return NiceTicks {
             min,
             max: 0.0,
             step,
-            ticks: full_step_ticks(min, 0.0, step),
+            ticks,
         };
     }
 
@@ -157,11 +164,14 @@ pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTi
     if !min.is_finite() || !max.is_finite() {
         return nice_ticks(data_min, data_max, target);
     }
+    let Some(ticks) = full_step_ticks(min, max, step) else {
+        return nice_ticks(data_min, data_max, target);
+    };
     NiceTicks {
         min,
         max,
         step,
-        ticks: full_step_ticks(min, max, step),
+        ticks,
     }
 }
 
@@ -189,15 +199,24 @@ fn nice_step(raw_step: f64) -> f64 {
         }
 }
 
-fn full_step_ticks(min: f64, max: f64, step: f64) -> Vec<f64> {
+fn full_step_ticks(min: f64, max: f64, step: f64) -> Option<Vec<f64>> {
+    if !min.is_finite() || !max.is_finite() || !step.is_finite() || step <= 0.0 {
+        return None;
+    }
     let first = (min / step).ceil() * step;
     if !first.is_finite() || first > max {
-        return Vec::new();
+        return None;
     }
-    let count = ((max - first) / step).floor() as usize;
-    (0..=count)
-        .map(|index| first + index as f64 * step)
-        .collect()
+    let intervals = ((max - first) / step).floor();
+    if !intervals.is_finite() || intervals < 0.0 || intervals > MAX_TICK_INTERVALS as f64 {
+        return None;
+    }
+    let count = intervals as usize;
+    Some(
+        (0..=count)
+            .map(|index| first + index as f64 * step)
+            .collect(),
+    )
 }
 
 /// nice 丸めが使えない場合のフォールバック: データ範囲を等分して目盛りを返す。
@@ -216,7 +235,8 @@ fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
     // range が inf になる場合（例: min=-f64::MAX, max=f64::MAX）は
     // range / count も inf になるため、分配してから減算する形で step を計算する。
     let step = if range.is_finite() && range > 0.0 {
-        range / count as f64
+        let divided = range / count as f64;
+        if divided > 0.0 { divided } else { range }
     } else {
         max / count as f64 - min / count as f64
     };
@@ -333,13 +353,65 @@ mod tests {
     }
 
     #[test]
+    fn vega_nice_ticks_falls_back_safely_for_subnormal_domains() {
+        let min_subnormal = f64::from_bits(1);
+        for (data_min, data_max) in [
+            (0.0, min_subnormal),
+            (-min_subnormal, 0.0),
+            (-min_subnormal, min_subnormal),
+            (min_subnormal, f64::from_bits(2)),
+        ] {
+            let ticks = vega_nice_ticks(data_min, data_max, 320.0);
+            assert!(
+                ticks.min.is_finite()
+                    && ticks.max.is_finite()
+                    && ticks.step.is_finite()
+                    && ticks.ticks.iter().all(|tick| tick.is_finite()),
+                "{data_min}..{data_max}: {ticks:?}"
+            );
+            assert!(ticks.step > 0.0, "{data_min}..{data_max}: {ticks:?}");
+            assert!(
+                ticks.min <= data_min && ticks.max >= data_max,
+                "{data_min}..{data_max}: {ticks:?}"
+            );
+            assert!(
+                !ticks.ticks.is_empty() && ticks.ticks.len() <= 1_001,
+                "{data_min}..{data_max}: {ticks:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn vega_nice_ticks_falls_back_when_rounded_span_overflows() {
+        let data_min: f64 = -7.5e307;
+        let data_max: f64 = 7.5e307;
+        assert!((data_max - data_min).is_finite());
+
+        let ticks = vega_nice_ticks(data_min, data_max, 320.0);
+        assert!(
+            ticks.min.is_finite()
+                && ticks.max.is_finite()
+                && ticks.step.is_finite()
+                && ticks.ticks.iter().all(|tick| tick.is_finite()),
+            "{ticks:?}"
+        );
+        assert!(ticks.step > 0.0, "{ticks:?}");
+        assert!(ticks.min <= data_min && ticks.max >= data_max, "{ticks:?}");
+        assert!(
+            !ticks.ticks.is_empty() && ticks.ticks.len() <= 1_001,
+            "{ticks:?}"
+        );
+    }
+
+    #[test]
     fn vega_step_selection_and_empty_tick_ranges_are_bounded() {
         assert_eq!(nice_step(1.0), 1.0);
         assert_eq!(nice_step(2.0), 2.0);
         assert_eq!(nice_step(5.0), 5.0);
         assert_eq!(nice_step(6.0), 10.0);
-        assert!(full_step_ticks(1.0, 0.0, 1.0).is_empty());
-        assert!(full_step_ticks(f64::MAX, f64::MAX, f64::EPSILON).is_empty());
+        assert!(full_step_ticks(1.0, 0.0, 1.0).is_none());
+        assert!(full_step_ticks(f64::MAX, f64::MAX, f64::EPSILON).is_none());
+        assert!(full_step_ticks(0.0, 1_001.0, 1.0).is_none());
     }
 
     #[test]
