@@ -272,3 +272,19 @@ fn polar_area_hard_max_survives_inverted_domain() {
     );
     assert!(!svg.contains("NaN") && !svg.contains("inf"));
 }
+
+#[test]
+fn polar_area_conflicting_hard_bounds_render_deterministically() {
+    // 両側 hard で min > max (指定ミス) の場合も NaN を出さず決定的に描画すること。
+    let a = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"min":100,"max":50}}}}"##,
+    );
+    let b = render(
+        r##"{"type":"polarArea","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"min":100,"max":50}}}}"##,
+    );
+    assert_eq!(a, b, "矛盾指定でも決定的であるべき");
+    assert!(!a.contains("NaN") && !a.contains("inf"));
+    assert!(a.starts_with("<svg") && a.trim_end().ends_with("</svg>"));
+}

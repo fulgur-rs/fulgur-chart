@@ -352,3 +352,20 @@ fn radar_negative_domain_draws_inner_grid_rings() {
     );
     assert!(!with_negative.contains("NaN"));
 }
+
+#[test]
+fn radar_conflicting_hard_bounds_render_deterministically() {
+    // 両側 hard で min > max (指定ミス) の場合、動かせる自動側が無い。
+    // 決定的に hard な min を優先して上端を開き、NaN を出さず有効な SVG を返すこと。
+    let a = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"min":100,"max":50}}}}"##,
+    );
+    let b = render(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],
+        "datasets":[{"data":[10,20,30]}]},"options":{"scales":{"r":{"min":100,"max":50}}}}"##,
+    );
+    assert_eq!(a, b, "矛盾指定でも決定的であるべき");
+    assert!(!a.contains("NaN") && !a.contains("inf"));
+    assert!(a.starts_with("<svg") && a.trim_end().ends_with("</svg>"));
+}
