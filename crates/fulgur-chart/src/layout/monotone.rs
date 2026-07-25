@@ -28,16 +28,18 @@ pub fn monotone_path(points: &[(f64, f64)]) -> String {
         _ => {}
     }
 
-    let secants: Vec<f64> = points
-        .windows(2)
-        .map(|pair| secant(pair[0], pair[1]))
+    let interior_tangents: Vec<f64> = points
+        .windows(3)
+        .map(|triple| slope3(triple[0], triple[1], triple[2]))
         .collect();
     let mut tangents = Vec::with_capacity(points.len());
-    tangents.push(secants[0]);
-    for pair in secants.windows(2) {
-        tangents.push(tangent(pair[0], pair[1]));
-    }
-    tangents.push(*secants.last().unwrap());
+    tangents.push(slope2(points[0], points[1], interior_tangents[0]));
+    tangents.extend_from_slice(&interior_tangents);
+    tangents.push(slope2(
+        points[points.len() - 2],
+        points[points.len() - 1],
+        *interior_tangents.last().unwrap(),
+    ));
 
     let mut d = String::new();
     write!(d, "M {} {}", fmt_num(points[0].0), fmt_num(points[0].1)).unwrap();
@@ -83,12 +85,21 @@ fn secant(a: (f64, f64), b: (f64, f64)) -> f64 {
     finite_or_zero(slope)
 }
 
-fn tangent(prev: f64, next: f64) -> f64 {
-    if prev == 0.0 || next == 0.0 || prev.signum() != next.signum() {
-        0.0
+fn slope3(p0: (f64, f64), p1: (f64, f64), p2: (f64, f64)) -> f64 {
+    let h0 = p1.0 - p0.0;
+    let h1 = p2.0 - p1.0;
+    let s0 = secant(p0, p1);
+    let s1 = secant(p1, p2);
+    let weighted = finite_or_zero((s0 * h1 + s1 * h0) / (h0 + h1));
+    let limit = s0.abs().min(s1.abs()).min(0.5 * weighted.abs());
+    finite_or_zero((s0.signum() + s1.signum()) * limit)
+}
+
+fn slope2(p0: (f64, f64), p1: (f64, f64), tangent: f64) -> f64 {
+    if p1.0 == p0.0 {
+        tangent
     } else {
-        let candidate = (prev + next) / 2.0;
-        candidate.signum() * candidate.abs().min(3.0 * prev.abs().min(next.abs()))
+        finite_or_zero((3.0 * secant(p0, p1) - tangent) / 2.0)
     }
 }
 
@@ -107,11 +118,11 @@ mod tests {
     use super::{clamp_y, monotone_path};
 
     #[test]
-    fn monotone_path_uses_cubics_without_non_finite_values() {
-        let path = monotone_path(&[(0.0, 0.0), (1.0, 10.0), (3.0, 12.0)]);
-        assert!(path.starts_with("M 0 0 C "));
-        assert!(!path.contains("NaN"));
-        assert!(!path.contains("inf"));
+    fn irregular_spacing_matches_d3_monotone_x_controls() {
+        assert_eq!(
+            monotone_path(&[(0.0, 0.0), (1.0, 10.0), (3.0, 12.0)]),
+            "M 0 0 C 0.33 4.67 0.67 9.33 1 10 C 1.67 11.33 2.33 11.67 3 12"
+        );
     }
 
     #[test]
