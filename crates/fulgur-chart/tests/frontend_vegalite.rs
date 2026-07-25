@@ -776,6 +776,54 @@ fn temporal_line_grid_option_rejects_non_boolean_values_in_both_modes() {
 }
 
 #[test]
+fn temporal_line_rejects_non_object_axis_config_in_both_modes() {
+    for replacement in ["42", "\"axis\"", "true", "[]"] {
+        let json = DOGFOOD_SHAPE.replace(
+            r#""axis":{"grid":true,"gridOpacity":0.15}"#,
+            &format!(r#""axis":{replacement}"#),
+        );
+        for strict in [false, true] {
+            match vegalite::parse(&json, strict) {
+                Err(err) => assert_eq!(err, "config.axis must be an object", "strict={strict}"),
+                Ok(_) => panic!("strict={strict}: expected config.axis object error"),
+            }
+        }
+    }
+}
+
+#[test]
+fn temporal_line_axis_config_preserves_null_defaults_and_unknown_key_modes() {
+    for json in [
+        DOGFOOD_SHAPE.replace(
+            r#",
+            "axis":{"grid":true,"gridOpacity":0.15}"#,
+            "",
+        ),
+        DOGFOOD_SHAPE.replace(
+            r#""axis":{"grid":true,"gridOpacity":0.15}"#,
+            r#""axis":null"#,
+        ),
+    ] {
+        for strict in [false, true] {
+            let spec = vegalite::parse(&json, strict).unwrap();
+            assert!(spec.x_axis.grid.display, "strict={strict}");
+            assert!(spec.y_axis.grid.display, "strict={strict}");
+        }
+    }
+
+    let json = DOGFOOD_SHAPE.replace(
+        r#""gridOpacity":0.15"#,
+        r#""gridOpacity":0.15,"futureOption":true"#,
+    );
+    assert!(vegalite::parse(&json, false).is_ok());
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(
+        err.contains("config.axis.futureOption"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn temporal_line_grid_option_preserves_false_null_and_omitted_semantics() {
     for (json, expected_display) in [
         (

@@ -1206,7 +1206,13 @@ fn temporal_axis_grid(
         .get("config")
         .and_then(Value::as_object)
         .and_then(|config| config.get("axis"))
-        .and_then(Value::as_object);
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_object()
+                .ok_or_else(|| "config.axis must be an object".to_string())
+        })
+        .transpose()?;
     if let Some(axis) = axis {
         check_line_optional_bool(axis, "grid", "config.axis.grid")?;
     }
