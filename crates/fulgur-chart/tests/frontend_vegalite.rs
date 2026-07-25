@@ -466,6 +466,63 @@ fn temporal_line_populates_positioned_ir_metadata() {
 }
 
 #[test]
+fn temporal_line_rejects_invalid_channel_titles_in_both_modes() {
+    for (channel, original) in [
+        ("x", r#""title":"date""#),
+        ("y", r#""title":"subtests""#),
+        ("color", r#""title":"metric""#),
+    ] {
+        for (replacement, value_type) in [
+            ("42", "number"),
+            ("true", "boolean"),
+            ("{}", "object"),
+            ("[]", "array"),
+        ] {
+            let json = DOGFOOD_SHAPE.replace(original, &format!(r#""title":{replacement}"#));
+            let expected = format!("encoding.{channel}.title must be a string, got {value_type}");
+            for strict in [false, true] {
+                assert_eq!(
+                    vegalite::parse(&json, strict).unwrap_err(),
+                    expected,
+                    "channel={channel}, strict={strict}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn temporal_line_channel_titles_preserve_string_and_field_fallbacks() {
+    for (channel, title, replacement, expected) in [
+        ("x", "date", r#""title":null"#, "timestamp"),
+        ("y", "subtests", r#""title":null"#, "value"),
+        ("color", "metric", r#""title":null"#, "metric"),
+        ("x", "date", "", "timestamp"),
+        ("y", "subtests", "", "value"),
+        ("color", "metric", "", "metric"),
+        ("x", "date", r#""title":"""#, ""),
+        ("y", "subtests", r#""title":"""#, ""),
+        ("color", "metric", r#""title":"""#, ""),
+    ] {
+        let original = format!(r#","title":"{title}""#);
+        let json = if replacement.is_empty() {
+            DOGFOOD_SHAPE.replace(&original, replacement)
+        } else {
+            DOGFOOD_SHAPE.replace(&original[1..], replacement)
+        };
+        for strict in [false, true] {
+            let spec = vegalite::parse(&json, strict).unwrap();
+            match channel {
+                "x" => assert_eq!(spec.x_axis.title.as_ref().unwrap().text, expected),
+                "y" => assert_eq!(spec.y_axis.title.as_ref().unwrap().text, expected),
+                "color" => assert_eq!(spec.legend_title.as_deref(), Some(expected)),
+                _ => unreachable!("supported temporal channel"),
+            }
+        }
+    }
+}
+
+#[test]
 fn temporal_line_rejects_invalid_background_color() {
     let json = DOGFOOD_SHAPE.replace("\"white\"", "\"not-a-color\"");
     let err = vegalite::parse(&json, true).unwrap_err();

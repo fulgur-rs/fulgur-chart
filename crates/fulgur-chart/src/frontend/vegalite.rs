@@ -278,6 +278,20 @@ pub fn parse_with_limits(
     } else {
         None
     };
+    let x_axis_title = temporal_line
+        .then(|| channel_title(encoding, "x", x_field.as_deref().unwrap_or_default()))
+        .transpose()?;
+    let y_axis_title = temporal_line
+        .then(|| channel_title(encoding, "y", y_field.as_deref().unwrap_or_default()))
+        .transpose()?;
+    let legend_title = if temporal_line {
+        color_field
+            .as_deref()
+            .map(|field| channel_title(encoding, "color", field))
+            .transpose()?
+    } else {
+        None
+    };
 
     // VL トップレベルの width/height/title を反映する(無ければ既定 800x450・無題)。
     // title は文字列、または `{"text": "..."}` オブジェクトを受ける。
@@ -309,8 +323,8 @@ pub fn parse_with_limits(
             XPositions::Temporal { unix_millis }
         }),
         x_axis: AxisSpec {
-            title: temporal_line.then(|| AxisTitle {
-                text: channel_title(encoding, "x", x_field.as_deref().unwrap_or_default()),
+            title: x_axis_title.map(|text| AxisTitle {
+                text,
                 color: None,
                 font_size: None,
                 align: AxisTitleAlign::Center,
@@ -325,8 +339,8 @@ pub fn parse_with_limits(
             border: AxisBorder::default(),
         },
         y_axis: AxisSpec {
-            title: temporal_line.then(|| AxisTitle {
-                text: channel_title(encoding, "y", y_field.as_deref().unwrap_or_default()),
+            title: y_axis_title.map(|text| AxisTitle {
+                text,
                 color: None,
                 font_size: None,
                 align: AxisTitleAlign::Center,
@@ -347,13 +361,7 @@ pub fn parse_with_limits(
         } else {
             LegendPos::Top
         },
-        legend_title: temporal_line
-            .then(|| {
-                color_field
-                    .as_deref()
-                    .map(|field| channel_title(encoding, "color", field))
-            })
-            .flatten(),
+        legend_title,
         title,
         width,
         height,
@@ -441,14 +449,23 @@ fn channel_type<'a>(encoding: &'a Map<String, Value>, name: &str) -> Option<&'a 
 }
 
 /// encoding チャネルの `title`、または field 名を返す。
-fn channel_title(encoding: &Map<String, Value>, name: &str, fallback_field: &str) -> String {
-    encoding
+fn channel_title(
+    encoding: &Map<String, Value>,
+    name: &str,
+    fallback_field: &str,
+) -> Result<String, String> {
+    let title = encoding
         .get(name)
         .and_then(Value::as_object)
-        .and_then(|channel| channel.get("title"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| fallback_field.to_owned())
+        .and_then(|channel| channel.get("title"));
+    match title {
+        None | Some(Value::Null) => Ok(fallback_field.to_owned()),
+        Some(Value::String(value)) => Ok(value.clone()),
+        Some(value) => Err(format!(
+            "encoding.{name}.title must be a string, got {}",
+            json_value_type(value)
+        )),
+    }
 }
 
 /// 必須チャネルの field 指定を取り出す。未指定なら Err。
