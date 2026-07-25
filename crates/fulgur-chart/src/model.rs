@@ -68,7 +68,10 @@ pub struct SeriesModel {
     pub label: String,
     pub fill: Vec<String>,
     pub stroke: Vec<String>,
-    pub values: Vec<f64>,
+    /// `None` は入力 JSON の `null`(IR では `f64::NAN` センチネル)に対応。
+    /// serde_json は NaN をシリアライズできないため、NaN を `None` に落として
+    /// `null` として出力する。
+    pub values: Vec<Option<f64>>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -291,7 +294,11 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
                 label: s.name.clone(),
                 fill: colors_to_strings(&s.fill, n),
                 stroke,
-                values: s.values.clone(),
+                values: s
+                    .values
+                    .iter()
+                    .map(|v| if v.is_finite() { Some(*v) } else { None })
+                    .collect(),
             }
         })
         .collect();
@@ -489,9 +496,27 @@ mod tests {
             model.series[0].stroke,
             vec!["rgba(54,162,235,1)".to_string()]
         );
-        assert_eq!(model.series[0].values, vec![120.0, 200.0, 150.0]);
+        assert_eq!(
+            model.series[0].values,
+            vec![Some(120.0), Some(200.0), Some(150.0)]
+        );
         assert_eq!(model.counts.datasets, 1);
         assert_eq!(model.counts.x_ticks, 3);
+    }
+
+    #[test]
+    fn nan_series_values_serialize_as_null() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, null, 3]}]}}"#;
+        let spec = crate::frontend::chartjs::parse(json, false).unwrap();
+        let model = build_model_core(&spec);
+        assert_eq!(model.series[0].values, vec![Some(1.0), None, Some(3.0)]);
+        // JSON dump must succeed and produce null tokens
+        let s = serde_json::to_string(&model).unwrap();
+        assert!(
+            s.contains("\"values\":[1.0,null,3.0]"),
+            "values should serialize with null: {s}"
+        );
     }
 
     #[test]

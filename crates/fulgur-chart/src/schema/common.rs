@@ -89,9 +89,121 @@ pub enum DecimationAlgorithmName {
     Lttb,
 }
 
-/// Axis options for options.scales.x / options.scales.y.
+/// Chart.js の共通 font オブジェクト。v1 では size のみ描画に反映される。
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FontSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// number | "bold" 等。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// Chart.js `font.lineHeight` (number | string)。v1 では受理のみ(描画未対応)。
+    /// non-strict Chart.js JSON 互換維持のため、typo 検出よりも tolerance を優先する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AxisTitleAlign {
+    Start,
+    Center,
+    End,
+}
+
+/// options.scales.<axis>.title (Chart.js 準拠, camelCase)。
+/// padding/font.family などは受理のみで v1 未描画。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AxisTitleOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<FontSpec>,
+    /// v1 では未使用(受理のみ)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<AxisTitleAlign>,
+}
+
+/// options.scales.<axis>.grid (Chart.js 準拠)。
+/// tick_length/offset/color per-tick 配列などは v1 未描画(受理のみ)。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GridLineOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ScalarOrArray<ColorString>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_width: Option<ScalarOrArray<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draw_on_chart_area: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draw_ticks: Option<bool>,
+    /// v1 では未使用(受理のみ)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_length: Option<f64>,
+    /// v1 では未使用(受理のみ)。chart.js は band 中心/端で grid を描く挙動の切替。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<bool>,
+    /// Chart.js `grid.z` (レンダリング Z-順)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z: Option<serde_json::Value>,
+    /// Chart.js `grid.tickColor` (tick 短線色を gridline とは独立に指定)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_color: Option<serde_json::Value>,
+    /// Chart.js `grid.tickWidth` (tick 短線の太さを gridline とは独立に指定)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_width: Option<serde_json::Value>,
+    /// Chart.js `grid.tickBorderDash` / `tickBorderDashOffset` (tick 短線の破線)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_border_dash: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tick_border_dash_offset: Option<serde_json::Value>,
+}
+
+/// options.scales.<axis>.border (Chart.js 準拠)。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AxisBorderOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash: Option<Vec<f64>>,
+    /// Chart.js `border.dashOffset` (破線オフセット)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dash_offset: Option<serde_json::Value>,
+    /// Chart.js `border.z` (レンダリング Z-順)。v1 では受理のみ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z: Option<serde_json::Value>,
+}
+
+/// Axis options for options.scales.x / options.scales.y.
+///
+/// `deny_unknown_fields` is intentionally NOT set here. Chart.js のスケールには
+/// v1 で未モデル化のフィールド(`ticks`/`type`/`time`/`position`/`reverse`/`grid.z`
+/// など)が多数あり、これらを deserialize 段でハードエラーにすると non-strict
+/// モードでの Chart.js JSON 互換が壊れる。strict モードのタイポ検出は
+/// `frontend/chartjs.rs::check_unknown_keys` の allow-list が担い、
+/// sub-object(`title`/`grid`/`border`/`font`)は各構造体の
+/// `deny_unknown_fields` でタイポを弾く二段構えを維持している。
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct AxisOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stacked: Option<bool>,
@@ -101,10 +213,13 @@ pub struct AxisOptions {
     pub max: Option<f64>,
     /// Axis title configuration (parsed but not yet mapped to IR).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<serde_json::Value>,
+    pub title: Option<AxisTitleOptions>,
     /// Grid line configuration (parsed but not yet mapped to IR).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub grid: Option<serde_json::Value>,
+    pub grid: Option<GridLineOptions>,
+    /// Axis border/base-line configuration (parsed but not yet mapped to IR).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<AxisBorderOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub begin_at_zero: Option<bool>,
     /// When true, category points/bands are centered (band center) instead of edge-to-edge.
@@ -114,4 +229,142 @@ pub struct AxisOptions {
     pub suggested_min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_max: Option<f64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn axis_title_options_accepts_full_shape() {
+        let v: AxisTitleOptions = serde_json::from_str(
+            r##"{"display":true,"text":"Y (円)","color":"#333","font":{"size":14},"align":"center"}"##,
+        ).unwrap();
+        assert_eq!(v.text.as_deref(), Some("Y (円)"));
+        assert!(matches!(v.align, Some(AxisTitleAlign::Center)));
+    }
+
+    #[test]
+    fn grid_line_options_rejects_unknown_key() {
+        let e = serde_json::from_str::<GridLineOptions>(r##"{"colorx":"#eee"}"##);
+        assert!(e.is_err(), "unknown key must be rejected");
+    }
+
+    #[test]
+    fn axis_border_options_accepts_dash_array() {
+        let v: AxisBorderOptions =
+            serde_json::from_str(r##"{"color":"#000","width":2,"dash":[4,4]}"##).unwrap();
+        assert_eq!(v.dash.as_deref(), Some(&[4.0, 4.0][..]));
+    }
+
+    /// Chart.js が公式に定義する v1 未描画の追加フィールドは、typo 検出を維持しつつ
+    /// non-strict モードで silently 受理して既存 Chart.js JSON 互換を保つ。
+    /// (typo は key 名が Chart.js docs にないものが該当し、`deny_unknown_fields` が捕捉する。)
+    #[test]
+    fn schema_accepts_documented_chartjs_v1_noop_fields() {
+        // FontSpec: Chart.js docs で定義される lineHeight。
+        let f: FontSpec = serde_json::from_str(r##"{"size":14,"lineHeight":1.2}"##).unwrap();
+        assert_eq!(f.size, Some(14.0));
+        assert!(f.line_height.is_some());
+
+        // GridLineOptions: Chart.js docs で定義される z / tickColor / tickWidth /
+        // tickBorderDash{,Offset}。全て v1 では未描画だが parse 通過が必要。
+        let g: GridLineOptions = serde_json::from_str(
+            r##"{"z":1,"tickColor":"#ccc","tickWidth":2,"tickBorderDash":[3,3],"tickBorderDashOffset":1.5}"##,
+        )
+        .unwrap();
+        assert!(g.z.is_some());
+        assert!(g.tick_color.is_some());
+        assert!(g.tick_width.is_some());
+        assert!(g.tick_border_dash.is_some());
+        assert!(g.tick_border_dash_offset.is_some());
+
+        // AxisBorderOptions: Chart.js docs で定義される dashOffset / z。
+        let b: AxisBorderOptions =
+            serde_json::from_str(r##"{"width":2,"dash":[4,4],"dashOffset":1.5,"z":2}"##).unwrap();
+        assert!(b.dash_offset.is_some());
+        assert!(b.z.is_some());
+    }
+
+    /// `deny_unknown_fields` が sub-object タイポを検出し続けることの回帰テスト。
+    /// tolerance を広げても未定義キーは弾くことを担保する(silently 通ってしまうと typo が難読化する)。
+    #[test]
+    fn schema_still_rejects_true_unknown_sub_object_keys() {
+        assert!(
+            serde_json::from_str::<GridLineOptions>(r##"{"colorx":"#eee"}"##).is_err(),
+            "grid の typo (colorx) は変わらず拒否されるべき"
+        );
+        assert!(
+            serde_json::from_str::<AxisBorderOptions>(r##"{"colorr":"#000"}"##).is_err(),
+            "border の typo (colorr) は変わらず拒否されるべき"
+        );
+        assert!(
+            serde_json::from_str::<FontSpec>(r##"{"weightt":"bold"}"##).is_err(),
+            "font の typo (weightt) は変わらず拒否されるべき"
+        );
+    }
+
+    #[test]
+    fn grid_line_options_camel_case_field_names() {
+        let v: GridLineOptions = serde_json::from_str(
+            r##"{"lineWidth":2,"drawOnChartArea":false,"drawTicks":false,"tickLength":6}"##,
+        )
+        .unwrap();
+        match v.line_width {
+            Some(ScalarOrArray::One(w)) => assert!((w - 2.0).abs() < 1e-9),
+            _ => panic!("expected ScalarOrArray::One(2.0) for lineWidth"),
+        }
+        assert_eq!(v.draw_on_chart_area, Some(false));
+        assert_eq!(v.draw_ticks, Some(false));
+        assert_eq!(v.tick_length, Some(6.0));
+    }
+
+    #[test]
+    fn axis_options_accepts_typed_title_grid_border() {
+        // is_some() だけだと配線ミス(例: title の中身が読めていない/border.width が別 field
+        // に流れている)を検出できない。値まで assert して回帰を防ぐ。
+        // grid.color は Option<ScalarOrArray<ColorString>> でワンライナに書きにくいため
+        // is_some() のままにしている(シリアライズ経路が生きていることだけを確認)。
+        let v: AxisOptions = serde_json::from_str(
+            r##"{"title":{"text":"X"},"grid":{"color":"#eee"},"border":{"width":2}}"##,
+        )
+        .unwrap();
+        assert_eq!(v.title.as_ref().and_then(|t| t.text.as_deref()), Some("X"));
+        assert!(v.grid.is_some(), "grid のシリアライズ経路が生きている");
+        assert_eq!(v.border.as_ref().and_then(|b| b.width), Some(2.0));
+    }
+
+    #[test]
+    fn axis_options_rejects_unknown_border_field() {
+        let e = serde_json::from_str::<AxisOptions>(r##"{"border":{"colorr":"#000"}}"##);
+        assert!(e.is_err(), "unknown key in border must be rejected");
+    }
+
+    #[test]
+    fn axis_options_rejects_typo_in_title() {
+        let e = serde_json::from_str::<AxisOptions>(r##"{"title":{"txt":"X"}}"##);
+        assert!(e.is_err(), "unknown key in title must be rejected");
+    }
+
+    #[test]
+    fn axis_options_silently_accepts_unmodeled_chartjs_fields() {
+        // Chart.js の未実装フィールドは non-strict で silently 通す方針。
+        // strict モードのタイポ検出は frontend の check_unknown_keys が担当する。
+        // AxisOptions は Debug を実装しないため、失敗時はエラー側だけを表示する。
+        let v = serde_json::from_str::<AxisOptions>(
+            r##"{"ticks":{"stepSize":5},"type":"linear","position":"bottom","reverse":true}"##,
+        );
+        assert!(
+            v.is_ok(),
+            "unmodeled Chart.js fields should not hard-error: {:?}",
+            v.err()
+        );
+    }
+
+    #[test]
+    fn axis_options_still_rejects_subobject_typo_in_title() {
+        // sub-object 側は deny_unknown_fields が生きているので typo は落ちる。
+        let e = serde_json::from_str::<AxisOptions>(r##"{"title":{"txt":"X"}}"##);
+        assert!(e.is_err());
+    }
 }

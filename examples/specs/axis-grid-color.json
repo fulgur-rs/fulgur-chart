@@ -1,0 +1,21 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["Q1", "Q2", "Q3", "Q4"],
+    "datasets": [
+      {
+        "label": "Revenue",
+        "data": [12, 19, 15, 22],
+        "borderColor": "#c04a4a",
+        "backgroundColor": "rgba(192,74,74,0.15)"
+      }
+    ]
+  },
+  "options": {
+    "scales": {
+      "y": {
+        "grid": { "color": "#ffe4e4", "lineWidth": 2 }
+      }
+    }
+  }
+}

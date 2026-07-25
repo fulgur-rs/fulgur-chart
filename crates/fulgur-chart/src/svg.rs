@@ -105,6 +105,7 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str, grad_idx: &mut usi
             y2,
             stroke,
             stroke_width,
+            dash,
         } => {
             let x1 = fmt_num(*x1);
             let y1 = fmt_num(*y1);
@@ -113,9 +114,20 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str, grad_idx: &mut usi
             let hex = color_hex(stroke);
             let sw = fmt_num(*stroke_width);
             let op = opacity_attr("stroke-opacity", stroke.a);
+            // 空 Vec は実線 → stroke-dasharray を省略(既存出力と後方互換)。
+            let dash_attr = if dash.is_empty() {
+                String::new()
+            } else {
+                let joined = dash
+                    .iter()
+                    .map(|v| fmt_num(*v))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!(r#" stroke-dasharray="{joined}""#)
+            };
             write!(
                 s,
-                r#"<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{hex}" stroke-width="{sw}"{op}/>"#
+                r#"<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{hex}" stroke-width="{sw}"{op}{dash_attr}/>"#
             )
             .unwrap();
         }
@@ -407,6 +419,7 @@ mod tests {
                     y2: 20.0,
                     stroke: black(),
                     stroke_width: 1.0,
+                    dash: Vec::new(),
                 },
                 Prim::Polyline {
                     points: vec![(0.0, 0.0), (5.0, 5.0), (10.0, 0.0)],
@@ -482,6 +495,7 @@ mod tests {
                     a: 0.75,
                 },
                 stroke_width: 2.0,
+                dash: Vec::new(),
             }],
         };
         let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
@@ -774,6 +788,51 @@ mod tests {
             }],
         };
         assert_eq!(render_svg(&scene, "s"), render_svg(&scene, "s"));
+    }
+
+    #[test]
+    fn line_with_dash_renders_stroke_dasharray() {
+        let scene = Scene {
+            width: 10.0,
+            height: 10.0,
+            items: vec![Prim::Line {
+                x1: 0.0,
+                y1: 0.0,
+                x2: 10.0,
+                y2: 0.0,
+                stroke: black(),
+                stroke_width: 1.0,
+                dash: vec![4.0, 4.0],
+            }],
+        };
+        let svg = render_svg(&scene, "sans-serif");
+        assert!(
+            svg.contains("stroke-dasharray"),
+            "want stroke-dasharray in svg, got: {svg}"
+        );
+        assert!(svg.contains("4 4"), "want values 4 4, got: {svg}");
+    }
+
+    #[test]
+    fn line_without_dash_omits_stroke_dasharray() {
+        let scene = Scene {
+            width: 10.0,
+            height: 10.0,
+            items: vec![Prim::Line {
+                x1: 0.0,
+                y1: 0.0,
+                x2: 10.0,
+                y2: 0.0,
+                stroke: black(),
+                stroke_width: 1.0,
+                dash: Vec::new(),
+            }],
+        };
+        let svg = render_svg(&scene, "sans-serif");
+        assert!(
+            !svg.contains("stroke-dasharray"),
+            "unexpected stroke-dasharray: {svg}"
+        );
     }
 
     #[test]

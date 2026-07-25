@@ -2,6 +2,10 @@
 
 use crate::color::parse_color;
 use crate::ir::*;
+use crate::schema::common::{
+    AxisBorderOptions, AxisOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions,
+    GridLineOptions,
+};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -45,8 +49,44 @@ struct RawOptions {
     #[serde(default)]
     theme: Option<RawTheme>,
     // scales.<index 軸>.stacked → placement_stacked(配置)、<値軸>.stacked → value_stacked(値域・累積)。
+    // 型付きにすることで、schema 側 `AxisOptions` / `AxisTitleOptions` /
+    // `GridLineOptions` / `AxisBorderOptions` の `deny_unknown_fields` が sub-object
+    // レベルのタイポ(例: `title.txt` / `border.colorr`)を deserialize 段で拒否する。
     #[serde(default)]
-    scales: Option<serde_json::Value>,
+    scales: Option<RawScales>,
+}
+
+/// `options.scales` の受け皿。x/y の直交 2 軸と r の動径軸を typed に扱う。
+/// `deny_unknown_fields` は付けない: 非 strict モードでは `scales.x1`/`y1`(multi-axis)
+/// を silently 無視する必要がある(Chart.js 互換)。
+/// strict モードでの未知キー拒否は上流の `check_unknown_keys` が担当する。
+#[derive(Deserialize, Default)]
+struct RawScales {
+    #[serde(default)]
+    x: Option<AxisOptions>,
+    #[serde(default)]
+    y: Option<AxisOptions>,
+    /// radar / polarArea の動径軸。radar/polarArea 以外の kind では読み捨てる。
+    #[serde(default)]
+    r: Option<RawRadialAxis>,
+}
+
+/// `options.scales.r`(radar / polarArea の動径軸)のドメイン指定。
+/// `deny_unknown_fields` は付けない: 非 strict では `ticks` / `angleLines` / `pointLabels`
+/// 等の視覚キーを silently 無視する(Chart.js 互換)。strict は `check_unknown_keys` が担当。
+/// 全フィールドが `Option` なので、どのキーも明示されなかった場合を呼び出し側で判別できる。
+#[derive(Deserialize, Default)]
+struct RawRadialAxis {
+    #[serde(default)]
+    min: Option<f64>,
+    #[serde(default)]
+    max: Option<f64>,
+    #[serde(rename = "suggestedMin", default)]
+    suggested_min: Option<f64>,
+    #[serde(rename = "suggestedMax", default)]
+    suggested_max: Option<f64>,
+    #[serde(rename = "beginAtZero", default)]
+    begin_at_zero: Option<bool>,
 }
 
 /// `options.theme`: 視覚トークンの上書き。各フィールドは任意。
@@ -149,12 +189,13 @@ struct RawDataset {
 }
 
 /// `data`: 数値配列(カテゴリ系)、ネスト配列(boxplot)、または点オブジェクト配列(scatter/bubble)。
-/// untagged は順に試す: `Nums` → `[1,2]`、`Boxes` → `[[1,2,3,4,5]]`、`Points` → `[{x,y}]`。
+/// untagged は順に試す: `Nums` → `[1, null, 2]`、`Boxes` → `[[1,2,3,4,5], null]`、`Points` → `[{x,y}]`。
+/// `Nums` / `Boxes` は要素の `null` を許容し、frontend 境界で `f64::NAN` に写像する。
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum DataField {
-    Nums(Vec<f64>),
-    Boxes(Vec<Vec<f64>>),
+    Nums(Vec<Option<f64>>),
+    Boxes(Vec<Option<Vec<f64>>>),
     Points(Vec<RawPoint>),
 }
 
@@ -166,11 +207,23 @@ struct RawPoint {
     r: Option<f64>,
 }
 
+/// 全フィールドが NaN の欠損 `BoxPoint`。boxplot の null 行(row=null, 全 None の
+/// フラット配列、5 要素でない非 null 行)を layout 側の欠損として一貫に扱うための共通値。
+fn nan_box_point() -> crate::ir::BoxPoint {
+    crate::ir::BoxPoint {
+        min: f64::NAN,
+        q1: f64::NAN,
+        median: f64::NAN,
+        q3: f64::NAN,
+        max: f64::NAN,
+    }
+}
+
 impl DataField {
-    /// 数値配列なら採用、それ以外は空。カテゴリ系チャートの `values` 用。
+    /// 数値配列なら採用（`None` → `f64::NAN`)、それ以外は空。カテゴリ系チャートの `values` 用。
     fn into_values(self) -> Vec<f64> {
         match self {
-            DataField::Nums(v) => v,
+            DataField::Nums(v) => v.into_iter().map(|x| x.unwrap_or(f64::NAN)).collect(),
             _ => vec![],
         }
     }
@@ -191,31 +244,34 @@ impl DataField {
     }
 
     /// ネスト配列なら IR の `BoxPoint` へ変換する。boxplot の `box_points` 用。
-    /// 各行は厳密に [min, q1, median, q3, max] の 5 要素でなければならない。
-    /// 5 要素以外の行はバイト数ガードをバイパスできるため拒否し NaN 行として扱う。
+    /// `None` 行は全 NaN の BoxPoint に写像する（layout 側で欠損として扱われる)。
+    /// 各非 null 行は厳密に [min, q1, median, q3, max] の 5 要素でなければならない。
+    /// 5 要素以外の非 null 行はバイト数ガードをバイパスできるため拒否し NaN 行として扱う。
+    ///
+    /// 加えて全要素が `None` のフラット配列(`data:[null, null]` 等)も受理する:
+    /// untagged enum は `Boxes` より先に `Nums` にマッチするため、スキーマ有効な
+    /// 「行が全て null の boxplot」は `Nums(Vec<None>)` として届く。layout は
+    /// 全 NaN 行を欠損として扱うので、空チャートではなく null 行数と同じ長さの
+    /// 全 NaN box 列に写像する。
     fn into_box_points(self) -> Vec<crate::ir::BoxPoint> {
         match self {
             DataField::Boxes(rows) => rows
                 .into_iter()
-                .map(|row| {
-                    if row.len() != 5 {
-                        return crate::ir::BoxPoint {
-                            min: f64::NAN,
-                            q1: f64::NAN,
-                            median: f64::NAN,
-                            q3: f64::NAN,
-                            max: f64::NAN,
-                        };
-                    }
-                    crate::ir::BoxPoint {
-                        min: row[0],
-                        q1: row[1],
-                        median: row[2],
-                        q3: row[3],
-                        max: row[4],
-                    }
+                .map(|row| match row {
+                    None => nan_box_point(),
+                    Some(cols) if cols.len() == 5 => crate::ir::BoxPoint {
+                        min: cols[0],
+                        q1: cols[1],
+                        median: cols[2],
+                        q3: cols[3],
+                        max: cols[4],
+                    },
+                    Some(_) => nan_box_point(),
                 })
                 .collect(),
+            DataField::Nums(v) if v.iter().all(Option::is_none) => {
+                vec![nan_box_point(); v.len()]
+            }
             _ => vec![],
         }
     }
@@ -235,6 +291,95 @@ impl<T: Clone> ScalarOrArray<T> {
             ScalarOrArray::One(v) => vec![v],
             ScalarOrArray::Many(v) => v,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// schema → IR ヘルパ
+//
+// `options.scales.<axis>` の typed オプション(schema::common)を、IR の
+// `AxisTitle` / `AxisGrid` / `AxisBorder` へ変換する純関数群。
+// `ChartSpec` 構築時に `axis_from` 経路で呼び出される。
+// ---------------------------------------------------------------------------
+
+/// `axis.title` を IR の [`AxisTitle`] に変換する。
+///
+/// 以下のいずれかで [`None`] を返す:
+/// - `opts` 自体が [`None`]
+/// - `display == Some(false)` (明示的に非表示)
+/// - `text` が [`None`] または空文字 (描画すべき文字列がない)
+///
+/// `align` は schema の [`SchemaAxisTitleAlign`] を IR の
+/// [`crate::ir::AxisTitleAlign`] にマップする。指定なしは `Center`。
+fn axis_title_from(opts: Option<&AxisTitleOptions>) -> Option<AxisTitle> {
+    let o = opts?;
+    if o.display == Some(false) {
+        return None;
+    }
+    let text = o.text.as_deref()?;
+    if text.is_empty() {
+        return None;
+    }
+    let align = match o.align {
+        Some(SchemaAxisTitleAlign::Start) => AxisTitleAlign::Start,
+        Some(SchemaAxisTitleAlign::End) => AxisTitleAlign::End,
+        _ => AxisTitleAlign::Center,
+    };
+    Some(AxisTitle {
+        text: text.to_string(),
+        color: o.color.as_deref().and_then(parse_color),
+        font_size: o.font.as_ref().and_then(|f| f.size),
+        align,
+    })
+}
+
+/// `axis.grid` を IR の [`AxisGrid`] に変換する。
+///
+/// - `opts` が [`None`] のときは [`AxisGrid::default()`] (display=true, width=1.0)
+/// - v1 仕様: `drawOnChartArea=false` は `display=false` と同義として扱う
+///   (chart area 外だけに grid を残す挙動は v1 で未サポート)
+/// - `color` / `line_width` の [`ScalarOrArray`] は先頭要素だけを見る
+///   (per-tick 配列は v1 未描画; 受理のみ)
+fn axis_grid_from(opts: Option<&GridLineOptions>) -> AxisGrid {
+    use crate::schema::common::ScalarOrArray;
+    let Some(g) = opts else {
+        return AxisGrid::default();
+    };
+    let display = g.display.unwrap_or(true) && g.draw_on_chart_area.unwrap_or(true);
+    let color = match &g.color {
+        Some(ScalarOrArray::One(s)) => parse_color(s),
+        Some(ScalarOrArray::Many(v)) => v.first().and_then(|s| parse_color(s)),
+        None => None,
+    };
+    let line_width = match &g.line_width {
+        Some(ScalarOrArray::One(w)) => *w,
+        Some(ScalarOrArray::Many(v)) => *v.first().unwrap_or(&1.0),
+        None => 1.0,
+    };
+    // fulgur は Chart.js の既定 (true) から意図的に乖離: 未指定なら false。
+    // 既存スナップショット保護のため。詳細は `AxisGrid::default` のドキュメント参照。
+    let draw_ticks = g.draw_ticks.unwrap_or(false);
+    AxisGrid {
+        display,
+        color,
+        line_width,
+        draw_ticks,
+    }
+}
+
+/// `axis.border` を IR の [`AxisBorder`] に変換する。
+///
+/// `opts` が [`None`] のときは [`AxisBorder::default()`]。値ごとの既定値は
+/// `display=true` / `width=1.0` / `dash=[]` / `color=None`。
+fn axis_border_from(opts: Option<&AxisBorderOptions>) -> AxisBorder {
+    let Some(b) = opts else {
+        return AxisBorder::default();
+    };
+    AxisBorder {
+        display: b.display.unwrap_or(true),
+        color: b.color.as_deref().and_then(parse_color),
+        width: b.width.unwrap_or(1.0),
+        dash: b.dash.clone().unwrap_or_default(),
     }
 }
 
@@ -340,11 +485,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         raw.options
             .scales
             .as_ref()
-            .and_then(|s| {
-                s.get(axis)
-                    .and_then(|a| a.get("stacked"))
-                    .and_then(|v| v.as_bool())
+            .and_then(|s| match axis {
+                "x" => s.x.as_ref(),
+                "y" => s.y.as_ref(),
+                _ => None,
             })
+            .and_then(|a| a.stacked)
             .unwrap_or(false)
     };
     let placement_stacked = get_axis_stacked(index_axis);
@@ -494,9 +640,19 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
 
     // データ形状とチャート種の整合を検査する。点ベース(scatter/bubble)は {x,y(,r)}
     // 配列、カテゴリ系は数値配列を要する。非空の不一致は空チャート化せず明示エラーに。
+    // 例外: boxplot の全 None Nums(`data:[null, null]` 等)は untagged 順で `Nums` にマッチする
+    // スキーマ有効な入力で、`into_box_points` が全 NaN 行に写像するため mismatch 扱いしない。
     for ds in &raw.data.datasets {
         let mismatched = match &ds.data {
-            DataField::Nums(v) => (is_point_based || is_boxplot) && !v.is_empty(),
+            DataField::Nums(v) => {
+                if is_point_based {
+                    !v.is_empty()
+                } else if is_boxplot {
+                    !v.is_empty() && !v.iter().all(Option::is_none)
+                } else {
+                    false
+                }
+            }
             DataField::Boxes(v) => !is_boxplot && !v.is_empty(),
             DataField::Points(v) => !is_point_based && !v.is_empty(),
         };
@@ -505,6 +661,30 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 "チャート種 {} とデータ形状が一致しません",
                 raw.chart_type
             ));
+        }
+    }
+
+    // line/bar/mixed/boxplot 以外の数値系チャートは layout 側で NaN/欠損を扱う保証が
+    // ないため(sparkline は y=0 に丸まり、radar/polarArea/gauge/progress/pie 等は
+    // 不正な control point や 0 頂点として描画されうる)、data 内の null は parse 時に
+    // 拒否する。将来対応した種別を追加した段階で allowlist を広げる。
+    let supports_null_data = matches!(
+        kind,
+        crate::ir::ChartKind::Line
+            | crate::ir::ChartKind::Bar { .. }
+            | crate::ir::ChartKind::Mixed
+            | crate::ir::ChartKind::BoxPlot
+    );
+    if !supports_null_data {
+        for ds in &raw.data.datasets {
+            if let DataField::Nums(v) = &ds.data
+                && v.iter().any(Option::is_none)
+            {
+                return Err(format!(
+                    "{} は data 内の null を受け付けません",
+                    raw.chart_type
+                ));
+            }
         }
     }
 
@@ -633,64 +813,50 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let value_begin_at_zero = !is_point_based && !is_sparkline && !is_line;
 
     // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する。
-    let scales_val = raw.options.scales.as_ref();
-    let x_baz_json = scales_val
-        .and_then(|s| s.get("x"))
-        .and_then(|a| a.get("beginAtZero"))
-        .and_then(|v| v.as_bool());
-    let y_baz_json = scales_val
-        .and_then(|s| s.get("y"))
-        .and_then(|a| a.get("beginAtZero"))
-        .and_then(|v| v.as_bool());
-    let x_begin_at_zero = x_baz_json.unwrap_or(is_horizontal && value_begin_at_zero);
-    let y_begin_at_zero =
-        y_baz_json.unwrap_or(!is_horizontal && value_begin_at_zero && !is_boxplot);
-    let suggested_min_y = scales_val
-        .and_then(|s| s.get("y"))
-        .and_then(|a| a.get("suggestedMin"))
-        .and_then(|v| v.as_f64());
-    let suggested_max_y = scales_val
-        .and_then(|s| s.get("y"))
-        .and_then(|a| a.get("suggestedMax"))
-        .and_then(|v| v.as_f64());
-    let suggested_min_x = scales_val
-        .and_then(|s| s.get("x"))
-        .and_then(|a| a.get("suggestedMin"))
-        .and_then(|v| v.as_f64());
-    let suggested_max_x = scales_val
-        .and_then(|s| s.get("x"))
-        .and_then(|a| a.get("suggestedMax"))
-        .and_then(|v| v.as_f64());
+    // typed `AxisOptions` 経由で読むことで、`beginAtZero` 等の camelCase タイポは
+    // schema deserialize 時に拒否される(silent 素通り防止)。
+    let x_opts = raw.options.scales.as_ref().and_then(|s| s.x.as_ref());
+    let y_opts = raw.options.scales.as_ref().and_then(|s| s.y.as_ref());
+    let x_begin_at_zero = x_opts
+        .and_then(|a| a.begin_at_zero)
+        .unwrap_or(is_horizontal && value_begin_at_zero);
+    let y_begin_at_zero = y_opts
+        .and_then(|a| a.begin_at_zero)
+        .unwrap_or(!is_horizontal && value_begin_at_zero && !is_boxplot);
+    let suggested_min_y = y_opts.and_then(|a| a.suggested_min);
+    let suggested_max_y = y_opts.and_then(|a| a.suggested_max);
+    let suggested_min_x = x_opts.and_then(|a| a.suggested_min);
+    let suggested_max_x = x_opts.and_then(|a| a.suggested_max);
     // category スケールの offset。明示時のみ尊重(既定 false=edge-to-edge)。
     // line レイアウトの x 軸のみが消費する(y は line の値軸)。
-    let x_offset = scales_val
-        .and_then(|s| s.get("x"))
-        .and_then(|a| a.get("offset"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let y_offset = scales_val
-        .and_then(|s| s.get("y"))
-        .and_then(|a| a.get("offset"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    let x_offset = x_opts.and_then(|a| a.offset).unwrap_or(false);
+    let y_offset = y_opts.and_then(|a| a.offset).unwrap_or(false);
 
-    // scales.r: radar / polarArea かつ scales.r が明示されているときのみ populate。
-    // 他 kind、および scales.r 未指定時は None を保ち後方互換を維持する。
+    // scales.r: radar / polarArea かつ scales.r にドメインキーが明示されているときのみ populate。
+    // 他 kind、`scales.r` 未指定、`scales.r: null` の場合は None を保ち後方互換を維持する。
     let is_radial = matches!(kind, ChartKind::Radar | ChartKind::PolarArea);
     let radial_axis = if is_radial {
-        scales_val
-            .and_then(|s| s.get("r"))
-            .and_then(|a| a.as_object())
+        raw.options
+            .scales
+            .as_ref()
+            .and_then(|s| s.r.as_ref())
+            // Codex Fix 9: `scales.r: {}` や、`ticks` 等の視覚キーのみを持つ `r` は no-op とする。
+            // ドメインキーが 1 つも無いのに Some(RadialAxis) を返すと layout が override 経路に
+            // 入り、既定の nice ドメイン (例 0..100) が raw データ max (0..95) へ変わってしまう。
+            .filter(|r| {
+                r.min.is_some()
+                    || r.max.is_some()
+                    || r.suggested_min.is_some()
+                    || r.suggested_max.is_some()
+                    || r.begin_at_zero.is_some()
+            })
             .map(|r| RadialAxis {
-                min: r.get("min").and_then(|v| v.as_f64()),
-                max: r.get("max").and_then(|v| v.as_f64()),
-                suggested_min: r.get("suggestedMin").and_then(|v| v.as_f64()),
-                suggested_max: r.get("suggestedMax").and_then(|v| v.as_f64()),
+                min: r.min,
+                max: r.max,
+                suggested_min: r.suggested_min,
+                suggested_max: r.suggested_max,
                 // radar / polarArea の既存挙動は 0 起点なので default true。
-                begin_at_zero: r
-                    .get("beginAtZero")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true),
+                begin_at_zero: r.begin_at_zero.unwrap_or(true),
             })
     } else {
         None
@@ -701,24 +867,26 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         series,
         categories: raw.data.labels,
         x_axis: AxisSpec {
-            title: None,
+            title: axis_title_from(x_opts.and_then(|a| a.title.as_ref())),
             min: None,
             max: None,
             suggested_min: suggested_min_x,
             suggested_max: suggested_max_x,
             begin_at_zero: x_begin_at_zero,
             offset: x_offset,
-            grid: true,
+            grid: axis_grid_from(x_opts.and_then(|a| a.grid.as_ref())),
+            border: axis_border_from(x_opts.and_then(|a| a.border.as_ref())),
         },
         y_axis: AxisSpec {
-            title: None,
+            title: axis_title_from(y_opts.and_then(|a| a.title.as_ref())),
             min: None,
             max: None,
             suggested_min: suggested_min_y,
             suggested_max: suggested_max_y,
             begin_at_zero: y_begin_at_zero,
             offset: y_offset,
-            grid: true,
+            grid: axis_grid_from(y_opts.and_then(|a| a.grid.as_ref())),
+            border: axis_border_from(y_opts.and_then(|a| a.border.as_ref())),
         },
         legend: legend_pos(&raw.options.plugins.legend),
         title: raw
@@ -1007,6 +1175,7 @@ fn check_unknown_keys(
                     "max",
                     "title",
                     "grid",
+                    "border",
                     "beginAtZero",
                     "suggestedMin",
                     "suggestedMax",
@@ -1016,12 +1185,24 @@ fn check_unknown_keys(
             // Codex Fix 7: axis 値が object でない (例: "r": 5) 場合は strict で拒否する。
             // 従来は as_object() の None 分岐で無音スキップされていた。chart.js では
             // 非 object の axis 値は常にエラーなので radial (r) / cartesian (x/y) 双方に適用。
+            //
+            // Codex Fix 10: ただし JSON null は「未指定」として扱う。schema 側の
+            // `BarScales.y` / `RadialLinearScales.r` は `Option<_>` なので null は None に
+            // deserialize される。optional フィールドを nullable に serialize する
+            // クライアント (例: 多くの JSON エンコーダ) が strict で落ちないようにする。
+            // null を許すのは axis レベルのみで、数値・文字列などの非 object 値は従来通り拒否する。
             for axis in allowed_axes {
-                if let Some(ax_val) = scales.get(*axis) {
-                    let ax = ax_val.as_object().ok_or_else(|| {
-                        format!("options.scales.{axis} は object でなければなりません")
-                    })?;
-                    check_object(ax, allowed_axis_keys, &format!("options.scales.{axis}"))?;
+                match scales.get(*axis) {
+                    None => {}
+                    // `"r": null` / `"y": null` → 軸未指定と同義。`options.scales: null`
+                    // が上の as_object() で既に無視されるのと同じ扱い。
+                    Some(v) if v.is_null() => {}
+                    Some(ax_val) => {
+                        let ax = ax_val.as_object().ok_or_else(|| {
+                            format!("options.scales.{axis} は object でなければなりません")
+                        })?;
+                        check_object(ax, allowed_axis_keys, &format!("options.scales.{axis}"))?;
+                    }
                 }
             }
         }
@@ -1471,7 +1652,11 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         suggested_max: None,
         begin_at_zero: false,
         offset: false,
-        grid: false,
+        grid: AxisGrid {
+            display: false,
+            ..Default::default()
+        },
+        border: AxisBorder::default(),
     };
 
     let series = vec![Series {
@@ -1843,7 +2028,11 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             suggested_max: None,
             begin_at_zero: false,
             offset: false,
-            grid: false,
+            grid: AxisGrid {
+                display: false,
+                ..Default::default()
+            },
+            border: AxisBorder::default(),
         },
         y_axis: AxisSpec {
             title: None,
@@ -1853,7 +2042,11 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             suggested_max: None,
             begin_at_zero: false,
             offset: false,
-            grid: false,
+            grid: AxisGrid {
+                display: false,
+                ..Default::default()
+            },
+            border: AxisBorder::default(),
         },
         legend: legend_pos(&raw.options.plugins.legend),
         title: raw
@@ -2448,7 +2641,15 @@ fn zero_axis() -> AxisSpec {
         suggested_max: None,
         begin_at_zero: false,
         offset: false,
-        grid: false,
+        grid: AxisGrid {
+            display: false,
+            draw_ticks: false,
+            ..Default::default()
+        },
+        border: AxisBorder {
+            display: false,
+            ..Default::default()
+        },
     }
 }
 
@@ -2919,6 +3120,24 @@ mod tests {
     }
 
     #[test]
+    fn strict_allows_border_on_scales() {
+        // schema は options.scales.<axis>.border を typed で受理するので、
+        // strict モードでも allow-list に "border" が含まれていなければならない。
+        // schema/strict 契約の分岐(schema 通過→strict 拒否)を防ぐ回帰テスト。
+        let json = r#"{
+            "type": "bar",
+            "data": {"labels":["a"],"datasets":[{"data":[1]}]},
+            "options": {"scales":{"x":{"border":{"width":2}}}}
+        }"#;
+        let result = parse(json, true);
+        assert!(
+            result.is_ok(),
+            "strict モードで options.scales.x.border を許可すべき: {:?}",
+            result
+        );
+    }
+
+    #[test]
     fn parse_treemap_numeric_tree() {
         let json = r#"{
             "type": "treemap",
@@ -3006,6 +3225,103 @@ mod tests {
     }
 
     #[test]
+    fn parse_line_null_becomes_nan_in_series() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, null, 3]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        assert_eq!(spec.series[0].values.len(), 3);
+        assert_eq!(spec.series[0].values[0], 1.0);
+        assert!(spec.series[0].values[1].is_nan());
+        assert_eq!(spec.series[0].values[2], 3.0);
+    }
+
+    #[test]
+    fn parse_bar_null_becomes_nan_in_series() {
+        let json = r#"{"type":"bar","data":{"labels":["a","b"],
+            "datasets":[{"data":[null, 5]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        assert!(spec.series[0].values[0].is_nan());
+        assert_eq!(spec.series[0].values[1], 5.0);
+    }
+
+    #[test]
+    fn parse_boxplot_null_row_becomes_nan_box_point() {
+        let json = r#"{"type":"boxplot","data":{"labels":["a","b"],
+            "datasets":[{"data":[[1,2,3,4,5], null]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        let bp = spec.series[0].box_points[1];
+        assert!(bp.min.is_nan());
+        assert!(bp.max.is_nan());
+        assert!(bp.median.is_nan());
+    }
+
+    #[test]
+    fn parse_boxplot_all_null_data_accepted() {
+        // untagged enum は Boxes より先に Nums に match するため、行が全て null の
+        // boxplot(スキーマ有効入力)は Nums(Vec<None>) として届く。全 NaN 行の box 列
+        // として受理されるべき(空チャート化させない)。
+        let json = r#"{"type":"boxplot","data":{"labels":["a","b"],
+            "datasets":[{"data":[null, null]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        assert_eq!(spec.series[0].box_points.len(), 2);
+        for bp in &spec.series[0].box_points {
+            assert!(bp.min.is_nan() && bp.max.is_nan());
+        }
+    }
+
+    #[test]
+    fn parse_boxplot_single_null_data_accepted() {
+        let json = r#"{"type":"boxplot","data":{"labels":["a"],
+            "datasets":[{"data":[null]}]}}"#;
+        let spec = parse(json, false).unwrap();
+        assert_eq!(spec.series[0].box_points.len(), 1);
+        assert!(spec.series[0].box_points[0].min.is_nan());
+    }
+
+    #[test]
+    fn parse_sparkline_rejects_null() {
+        // sparkline は layout 側で NaN 欠損を扱えないため、data 内の null は parse 段階で拒否。
+        let json = r#"{"type":"sparkline","data":{"datasets":[{"data":[1, null, 3]}]}}"#;
+        let err = parse(json, false).expect_err("sparkline should reject null");
+        assert!(
+            err.contains("sparkline"),
+            "error should mention sparkline: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_pie_rejects_null() {
+        // pie は layout 側で NaN スライスを扱えない(0 頂点・不正な弧になる)ため
+        // data 内の null は parse 段階で拒否。
+        let json = r#"{"type":"pie","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, null, 3]}]}}"#;
+        let err = parse(json, false).expect_err("pie should reject null");
+        assert!(err.contains("pie"), "error should mention pie: {err}");
+    }
+
+    #[test]
+    fn parse_radar_rejects_null() {
+        // radar は layout 側で NaN 頂点を 0 に丸めるため、data 内の null は parse
+        // 段階で拒否する(silent に 0 頂点で描画されないように)。
+        let json = r#"{"type":"radar","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, null, 3]}]}}"#;
+        let err = parse(json, false).expect_err("radar should reject null");
+        assert!(err.contains("radar"), "error should mention radar: {err}");
+    }
+
+    #[test]
+    fn parse_polar_area_rejects_null() {
+        // polarArea も radar と同じく NaN を安全に扱えないため parse 段階で拒否。
+        let json = r#"{"type":"polarArea","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, null, 3]}]}}"#;
+        let err = parse(json, false).expect_err("polarArea should reject null");
+        assert!(
+            err.contains("polarArea"),
+            "error should mention polarArea: {err}"
+        );
+    }
+
+    #[test]
     fn treemap_grouped_overflow_value_is_finite() {
         // 同一バケットの大きな有限値が +Inf に overflow しても、集約値は有限に
         // クランプされる(layout の空描画を防ぐ)。
@@ -3029,5 +3345,176 @@ mod tests {
             t[0].value
         );
         assert!(t[0].value > 0.0);
+    }
+
+    // ----- Task 6: Schema→IR ヘルパ (axis_title_from / axis_grid_from / axis_border_from) -----
+
+    #[test]
+    fn axis_title_from_returns_none_when_display_false() {
+        let opts = AxisTitleOptions {
+            display: Some(false),
+            text: Some("Y".into()),
+            ..Default::default()
+        };
+        assert!(axis_title_from(Some(&opts)).is_none());
+    }
+
+    #[test]
+    fn axis_title_from_returns_none_when_text_missing_or_empty() {
+        let opts_no_text = AxisTitleOptions {
+            display: Some(true),
+            text: None,
+            ..Default::default()
+        };
+        assert!(axis_title_from(Some(&opts_no_text)).is_none());
+        let opts_empty = AxisTitleOptions {
+            display: Some(true),
+            text: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(axis_title_from(Some(&opts_empty)).is_none());
+    }
+
+    #[test]
+    fn axis_title_from_maps_text_and_align() {
+        let opts = AxisTitleOptions {
+            display: Some(true),
+            text: Some("Y (円)".into()),
+            align: Some(SchemaAxisTitleAlign::End),
+            ..Default::default()
+        };
+        let t = axis_title_from(Some(&opts)).expect("title");
+        assert_eq!(t.text, "Y (円)");
+        assert_eq!(t.align, crate::ir::AxisTitleAlign::End);
+        assert!(t.color.is_none());
+        assert!(t.font_size.is_none());
+    }
+
+    #[test]
+    fn axis_title_from_maps_color_and_font_size() {
+        use crate::schema::common::FontSpec;
+        let opts = AxisTitleOptions {
+            display: Some(true),
+            text: Some("A".into()),
+            color: Some("#123456".into()),
+            font: Some(FontSpec {
+                size: Some(14.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let t = axis_title_from(Some(&opts)).expect("title");
+        assert!(t.color.is_some());
+        assert_eq!(t.font_size, Some(14.0));
+    }
+
+    #[test]
+    fn axis_grid_from_defaults_when_none() {
+        let g = axis_grid_from(None);
+        assert!(g.display);
+        assert!((g.line_width - 1.0).abs() < 1e-9);
+        // fulgur の意図的乖離: draw_ticks 既定は false(Chart.js は true)。
+        // 詳細は `AxisGrid::default` のドキュメント参照。
+        assert!(!g.draw_ticks);
+        assert!(g.color.is_none());
+    }
+
+    #[test]
+    fn axis_grid_from_display_false_kills_grid() {
+        let opts = GridLineOptions {
+            display: Some(false),
+            ..Default::default()
+        };
+        assert!(!axis_grid_from(Some(&opts)).display);
+    }
+
+    #[test]
+    fn axis_grid_from_draw_on_chart_area_false_kills_grid_in_v1() {
+        let opts = GridLineOptions {
+            display: Some(true),
+            draw_on_chart_area: Some(false),
+            ..Default::default()
+        };
+        assert!(
+            !axis_grid_from(Some(&opts)).display,
+            "v1: drawOnChartArea=false は display=false と同義"
+        );
+    }
+
+    #[test]
+    fn axis_grid_from_scalar_line_width() {
+        use crate::schema::common::ScalarOrArray;
+        let opts = GridLineOptions {
+            line_width: Some(ScalarOrArray::One(2.5)),
+            ..Default::default()
+        };
+        assert!((axis_grid_from(Some(&opts)).line_width - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_grid_from_array_line_width_uses_first() {
+        use crate::schema::common::ScalarOrArray;
+        let opts = GridLineOptions {
+            line_width: Some(ScalarOrArray::Many(vec![3.0, 5.0])),
+            ..Default::default()
+        };
+        assert!((axis_grid_from(Some(&opts)).line_width - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_border_from_defaults_when_none() {
+        let b = axis_border_from(None);
+        assert!(b.display);
+        assert!((b.width - 1.0).abs() < 1e-9);
+        assert!(b.color.is_none());
+        assert!(b.dash.is_empty());
+    }
+
+    #[test]
+    fn axis_border_from_dash_and_width_flow_through() {
+        let opts = AxisBorderOptions {
+            dash: Some(vec![4.0, 4.0]),
+            width: Some(2.0),
+            ..Default::default()
+        };
+        let b = axis_border_from(Some(&opts));
+        assert_eq!(b.dash, vec![4.0, 4.0]);
+        assert!((b.width - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_border_from_display_false() {
+        let opts = AxisBorderOptions {
+            display: Some(false),
+            ..Default::default()
+        };
+        assert!(!axis_border_from(Some(&opts)).display);
+    }
+
+    #[test]
+    fn scales_x_title_flows_into_spec_x_axis() {
+        // 統合: options.scales.x.title.text が ChartSpec.x_axis.title へ流れることを検証。
+        // Task 6 の unit テストは helper 単体だけ、Task 7 では bridge 側の配線を確認する。
+        let json = r##"{
+          "type":"bar",
+          "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+          "options":{"scales":{"x":{"title":{"display":true,"text":"時刻"}}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        let t = spec.x_axis.title.as_ref().expect("x title should be Some");
+        assert_eq!(t.text, "時刻");
+    }
+
+    #[test]
+    fn scales_y_border_dash_flows_into_spec_y_axis() {
+        // 統合: options.scales.y.border.{dash,width} が ChartSpec.y_axis.border に反映される。
+        let json = r##"{
+          "type":"line",
+          "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+          "options":{"scales":{"y":{"border":{"dash":[4,4],"width":2}}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert_eq!(spec.y_axis.border.dash, vec![4.0, 4.0]);
+        assert!((spec.y_axis.border.width - 2.0).abs() < 1e-9);
     }
 }

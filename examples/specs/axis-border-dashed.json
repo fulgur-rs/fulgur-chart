@@ -1,0 +1,19 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["A", "B", "C", "D", "E"],
+    "datasets": [
+      {
+        "label": "Trend",
+        "data": [5, 12, 8, 15, 10]
+      }
+    ]
+  },
+  "options": {
+    "scales": {
+      "x": {
+        "border": { "color": "#666", "width": 2, "dash": [4, 4] }
+      }
+    }
+  }
+}

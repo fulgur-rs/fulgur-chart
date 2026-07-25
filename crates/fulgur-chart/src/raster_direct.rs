@@ -683,18 +683,37 @@ fn render_prim(
             y2,
             stroke,
             stroke_width,
+            dash,
         } => {
             let mut b = PathBuilder::new();
             b.move_to(*x1 as f32, *y1 as f32);
             b.line_to(*x2 as f32, *y2 as f32);
             let Some(path) = b.finish() else { return };
-            pixmap.stroke_path(
-                &path,
-                &solid_paint(*stroke),
-                &make_stroke(*stroke_width),
-                transform,
-                None,
-            );
+            let mut stroke_style = make_stroke(*stroke_width);
+            // 空 Vec は実線。tiny-skia の StrokeDash::new は even 長 &全 >=0 の場合のみ Some を返す。
+            // 奇数長の dash は SVG 仕様(stroke-dasharray)に合わせて配列を 2 回繰り返して偶数長へ拡張し、
+            // SVG (生値をそのまま出す)と PNG の描画結果を一致させる。負値等の他の不正は実線にフォールバック。
+            // tiny-skia の内部 dashing は 1_000_000 セグメント超で silent abort(線が消える)するため、
+            // 極端に短い dash pattern(例: [0.001])は事前に見積もって上限直下(500k)を超えるなら
+            // 実線へフォールバックする。SVG も browser 側で潰されて見た目は近くなり、少なくとも「線が消える」
+            // 回帰を防げる。
+            if !dash.is_empty() {
+                let mut dash_f32: Vec<f32> = dash.iter().map(|v| *v as f32).collect();
+                if !dash_f32.len().is_multiple_of(2) {
+                    dash_f32.extend_from_within(..);
+                }
+                let period: f32 = dash_f32.iter().sum();
+                let dx = (*x2 - *x1) as f32;
+                let dy = (*y2 - *y1) as f32;
+                let seg_len = (dx * dx + dy * dy).sqrt();
+                const MAX_DASH_SEGMENTS: f32 = 500_000.0;
+                let too_many =
+                    period.is_finite() && period > 0.0 && seg_len / period > MAX_DASH_SEGMENTS;
+                if !too_many && let Some(sd) = tiny_skia::StrokeDash::new(dash_f32, 0.0) {
+                    stroke_style.dash = Some(sd);
+                }
+            }
+            pixmap.stroke_path(&path, &solid_paint(*stroke), &stroke_style, transform, None);
         }
 
         Prim::Polyline {
@@ -2306,6 +2325,141 @@ mod tests {
         assert!(
             idx < (STAMP_B * STAMP_B) as usize,
             "idx は stamps(長さ b*b) の範囲内のはず"
+        );
+    }
+
+    /// dash 指定のある `Prim::Line` は実線とは異なるピクセルを出力すること。
+    /// `tiny_skia::StrokeDash::new` は不正入力で `None` を返して静かに実線へ
+    /// フォールバックするため、raster 側の dash 適用が誤って落ちても snapshot 系
+    /// テストでは検知できない可能性がある。ここで silent regression を防ぐ最小
+    /// 回帰(pixmap 差分)を張る。ハッシュには依存せず「解が違う」ことだけを主張する。
+    #[test]
+    fn line_dash_produces_different_pixmap_than_solid() {
+        let black = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        };
+        let make_scene = |dash: Vec<f64>| Scene {
+            width: 250.0,
+            height: 100.0,
+            items: vec![Prim::Line {
+                x1: 10.0,
+                y1: 50.0,
+                x2: 200.0,
+                y2: 50.0,
+                stroke: black,
+                stroke_width: 2.0,
+                dash,
+            }],
+        };
+        let solid = make_scene(Vec::new());
+        let dashed = make_scene(vec![8.0, 8.0]);
+
+        let f = face();
+        let pm_solid = scene_to_pixmap(&solid, 1.0, &f, &PNG_LIMITS).unwrap();
+        let pm_dashed = scene_to_pixmap(&dashed, 1.0, &f, &PNG_LIMITS).unwrap();
+
+        assert_ne!(
+            pm_solid.data(),
+            pm_dashed.data(),
+            "dashed line は solid line と異なるピクセルを出力すべき (raster 側 dash の silent regression 防止)"
+        );
+    }
+
+    /// SVG 仕様: 奇数長の stroke-dasharray はパターンを 2 回繰り返して偶数長として扱う
+    /// (例: [5] は [5, 5] と等価)。raster 側でも同じ挙動になっているかの回帰テスト。
+    /// tiny-skia の StrokeDash::new は odd 長で None を返すため、拡張しないと実線にフォールバックし
+    /// SVG との出力差が生じる。
+    #[test]
+    fn line_dash_odd_length_matches_doubled_even() {
+        let black = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        };
+        let make_scene = |dash: Vec<f64>| Scene {
+            width: 250.0,
+            height: 100.0,
+            items: vec![Prim::Line {
+                x1: 10.0,
+                y1: 50.0,
+                x2: 200.0,
+                y2: 50.0,
+                stroke: black,
+                stroke_width: 2.0,
+                dash,
+            }],
+        };
+        let odd = make_scene(vec![6.0]);
+        let doubled = make_scene(vec![6.0, 6.0]);
+        let solid = make_scene(Vec::new());
+
+        let f = face();
+        let pm_odd = scene_to_pixmap(&odd, 1.0, &f, &PNG_LIMITS).unwrap();
+        let pm_doubled = scene_to_pixmap(&doubled, 1.0, &f, &PNG_LIMITS).unwrap();
+        let pm_solid = scene_to_pixmap(&solid, 1.0, &f, &PNG_LIMITS).unwrap();
+
+        assert_eq!(
+            pm_odd.data(),
+            pm_doubled.data(),
+            "odd 長 dash [6] は even 長 [6,6] と同じ pixmap を出力すべき (SVG 仕様準拠)"
+        );
+        assert_ne!(
+            pm_odd.data(),
+            pm_solid.data(),
+            "odd 長 dash は実線ではなく破線として描画されるべき"
+        );
+    }
+
+    /// tiny-skia の内部 dashing は 1_000_000 セグメント超で silent abort し線が消える。
+    /// 極端に短い dash 値(例: [0.0001] on 190px の線 → 950_000 セグメント)は事前に
+    /// 実線へフォールバックさせて「破線指定した瞬間に線が消える」silent regression を防ぐ。
+    #[test]
+    fn line_dash_too_short_falls_back_to_solid_not_blank() {
+        let black = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        };
+        let make_scene = |dash: Vec<f64>| Scene {
+            width: 250.0,
+            height: 100.0,
+            items: vec![Prim::Line {
+                x1: 10.0,
+                y1: 50.0,
+                x2: 200.0,
+                y2: 50.0,
+                stroke: black,
+                stroke_width: 2.0,
+                dash,
+            }],
+        };
+        // period=0.0002 → 190/0.0002=950k セグメント。tiny-skia の 1M 上限直下、
+        // 見積もり threshold(500k)は超えているので実線経路に落ちる想定。
+        let pathological = make_scene(vec![0.0001, 0.0001]);
+        let solid = make_scene(Vec::new());
+        let normal_dash = make_scene(vec![8.0, 8.0]);
+
+        let f = face();
+        let pm_pathological = scene_to_pixmap(&pathological, 1.0, &f, &PNG_LIMITS).unwrap();
+        let pm_solid = scene_to_pixmap(&solid, 1.0, &f, &PNG_LIMITS).unwrap();
+        let pm_normal = scene_to_pixmap(&normal_dash, 1.0, &f, &PNG_LIMITS).unwrap();
+
+        // 極短 dash は実線にフォールバックし、blank ではなく solid と同じ pixmap を出す。
+        assert_eq!(
+            pm_pathological.data(),
+            pm_solid.data(),
+            "極短 dash は tiny-skia の segment 上限を超えるため実線へフォールバックし、blank にならないべき"
+        );
+        // 通常の dash は今まで通り破線として描かれる (回帰していないことの確認)。
+        assert_ne!(
+            pm_normal.data(),
+            pm_solid.data(),
+            "通常長さの dash は破線として描画されるべき (fallback 判定が過剰に発動していないことの確認)"
         );
     }
 

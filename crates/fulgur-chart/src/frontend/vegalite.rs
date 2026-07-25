@@ -269,7 +269,8 @@ pub fn parse_with_limits(
             suggested_max: None, // Vega-Lite の scale.domainMax は未実装
             begin_at_zero: false,
             offset: false,
-            grid: true,
+            grid: AxisGrid::default(),
+            border: AxisBorder::default(),
         },
         y_axis: AxisSpec {
             title: None,
@@ -279,7 +280,8 @@ pub fn parse_with_limits(
             suggested_max: None, // Vega-Lite の scale.domainMax は未実装
             begin_at_zero: y_begin_at_zero,
             offset: false,
-            grid: true,
+            grid: AxisGrid::default(),
+            border: AxisBorder::default(),
         },
         legend: LegendPos::Top,
         title,
