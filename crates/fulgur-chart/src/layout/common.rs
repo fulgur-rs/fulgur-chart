@@ -64,6 +64,21 @@ pub(crate) fn resolve_radial_domain(ra: &RadialAxis, data_min: f64, data_max: f6
     }
 
     if !hi.is_finite() || hi <= lo {
+        // hard bound と自動側が逆転している場合、まず自動側を hard 側へ寄せる。
+        // chart.js も `getMinMax` で自動側を hard bound へ引き上げてから
+        // `handleTickRangeOptions` で 5% 広げる、という順序になっている。
+        //
+        // 先に寄せておかないと、既に無効になった自動側の値を base にしてしまい、
+        // 5% 広げてもまだ hard bound の反対側に留まる。例えば `min: 100` (hard) で
+        // データ最大が 50 のとき base=50 → 52.5 となり、最終救済で 1ULP 幅の
+        // ドメインになってしまう (本来は [100, 105])。
+        if lo_is_hard && !hi_is_hard && (!hi.is_finite() || hi < lo) {
+            hi = lo;
+        }
+        if hi_is_hard && !lo_is_hard && (!lo.is_finite() || lo > hi) {
+            lo = hi;
+        }
+
         // chart.js は `min === max` のとき `offset = max == 0 ? 1 : |max * 0.05|` だけ
         // 開く。ここでも同じ比率を使い、定数データが radius 0 に潰れて不可視になるのを防ぐ。
         let base = if hi.is_finite() { hi } else { lo };
@@ -1407,6 +1422,30 @@ mod radial_domain_tests {
             f64::NEG_INFINITY,
         );
         assert_eq!((lo, hi), (0.0, 1.0));
+    }
+
+    /// hard bound と自動側が逆転している場合、自動側を hard 側へ寄せてから展開する。
+    /// chart.js の `getMinMax` → `handleTickRangeOptions` と同じ順序。
+    /// 寄せずに無効な自動側を base にすると、5% 展開後もまだ hard bound の反対側に
+    /// 留まり、最終救済で 1ULP 幅のドメインになってしまう。
+    #[test]
+    fn inverted_range_expands_from_the_hard_bound() {
+        // min: 100 (hard) / データ最大 50 → [100, 105] になるべき (1ULP 幅ではなく)。
+        let (lo, hi) = resolve_radial_domain(&ra(Some(100.0), None, None, None, false), 10.0, 50.0);
+        assert_eq!(lo, 100.0, "hard min は動かさない");
+        assert!(
+            hi > 100.0 && (hi - lo) > 1.0,
+            "hard min から 5% 展開されるべき: [{lo}, {hi}]"
+        );
+
+        // 対称ケース: max: -100 (hard) / データ最小 -50 → [-105, -100] 相当。
+        let (lo, hi) =
+            resolve_radial_domain(&ra(None, Some(-100.0), None, None, false), -50.0, -10.0);
+        assert_eq!(hi, -100.0, "hard max は動かさない");
+        assert!(
+            lo < -100.0 && (hi - lo) > 1.0,
+            "hard max から 5% 展開されるべき: [{lo}, {hi}]"
+        );
     }
 
     /// f64::MAX 近傍の縮退ドメインでも、有限かつ幅のあるドメインになること。
