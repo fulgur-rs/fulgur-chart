@@ -414,8 +414,8 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     let vertical_legend_overflow =
         ((vertical_legend_rows as f64 * LEGEND_ROW_H - spec.height) / 2.0).max(0.0);
     // PlotArea の幅はこの時点で確定しているため、scene 寸法より先に temporal tick を
-    // 作れる。末尾ラベルが plot_right 上に中央寄せされても scene から切れないよう、
-    // その半幅を右側の最低余白として使う。
+    // 作れる。端ラベルが中央寄せされても scene から切れないよう、その半幅を
+    // 左側の最低 plot offset と右側の最低余白として使う。
     let plot_area_temporal_ticks = if matches!(spec.size_mode, SizeMode::PlotArea) {
         match &spec.x_positions {
             XPositions::Temporal { unix_millis } => unix_millis
@@ -428,6 +428,10 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     } else {
         Vec::new()
     };
+    let temporal_edge_pad_left = plot_area_temporal_ticks
+        .first()
+        .map(|tick| m.width(&tick.label, spec.theme.font_size as f32) as f64 / 2.0)
+        .unwrap_or(0.0);
     let temporal_edge_pad_right = plot_area_temporal_ticks
         .last()
         .map(|tick| m.width(&tick.label, spec.theme.font_size as f32) as f64 / 2.0)
@@ -492,7 +496,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             )
         }
         SizeMode::PlotArea => {
-            let plot_left = OUTER_PAD + y_axis_w;
+            let plot_left = (OUTER_PAD + y_axis_w).max(temporal_edge_pad_left);
             let plot_top = OUTER_PAD + title_band + vertical_legend_overflow;
             let plot_right = plot_left + spec.width;
             let plot_bottom = plot_top + spec.height;
@@ -1185,6 +1189,27 @@ mod tests {
             "label right {right} exceeds scene width {}",
             frame.scene_width
         );
+    }
+
+    #[test]
+    fn plot_area_scene_contains_wide_first_temporal_tick_label() {
+        let mut spec = temporal_spec(vec![1_788_220_800_000, 1_819_756_800_000]);
+        spec.theme.font_size = 32.0;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let first = frame.temporal_ticks.first().expect("first temporal tick");
+        assert_eq!(first.label, "September");
+
+        let x = temporal_x(
+            &frame,
+            1_788_220_800_000,
+            1_819_756_800_000,
+            first.unix_millis,
+        );
+        let left = x - m.width(&first.label, spec.theme.font_size as f32) as f64 / 2.0;
+        assert!(left >= 0.0, "label left {left} is outside the scene");
+        assert_eq!(frame.plot_right - frame.plot_left, spec.width);
+        assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
     }
 
     #[test]
