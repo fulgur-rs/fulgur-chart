@@ -419,3 +419,106 @@ git status --short --branch
 
 Expected: Bead is closed and pushed; worktree is clean and up to date. Do not
 merge PR #137.
+
+---
+
+## Approved whole-branch final-review amendment
+
+This is the only final-review fix wave after Tasks 1-3. It starts from
+`8720202b9c24e3c9ad0ddf92d690649a0ff33def`. The publication, Beads, GitHub
+thread, CI-watch, and merge steps in Task 4 are historical Round 12 completion
+steps and do not apply to this local wave.
+
+Additional constraints:
+
+- preserve normal-range D3/Vega temporal ticks and labels;
+- preserve `MAX_TICK_INTERVALS = 1_000`, normal singleton `[value, value + 1]`,
+  requested PlotArea dimensions, categorical Canvas scene bytes, named
+  categorical legends, and temporal PlotArea + Right title-only legends;
+- add no dependencies;
+- observe focused RED before each production correction;
+- commit locally, write the final fix report, and do not push, mutate Beads,
+  reply to or resolve GitHub threads, or merge.
+
+### Task 5: Bound temporal tick generation
+
+**Files:**
+- Modify/test: `crates/fulgur-chart/src/temporal.rs`
+
+- [ ] Add fixed, calendar, huge finite width, supported extreme domain, and
+  forward/reverse regressions that prove no more than 1,000 aligned ticks and
+  full-domain representation without prefix truncation.
+- [ ] Run focused RED:
+  `cargo test -p fulgur-chart --lib temporal::tests::temporal_ticks_cap`.
+- [ ] Clamp desired count to `1..=1_000`. Count fixed ticks with `i128`, count
+  calendar indices before iteration, and widen either selected step by an
+  integer stride before allocation.
+- [ ] Run focused GREEN and
+  `cargo test -p fulgur-chart --lib temporal::tests`.
+
+### Task 6: Expand finite extreme singleton scales inward
+
+**Files:**
+- Modify/test: `crates/fulgur-chart/src/scale.rs`
+
+- [ ] Add `f64::MAX` and `-f64::MAX` regressions for `nice_ticks`,
+  `bounded_ticks`, and the `vega_nice_ticks` fallback, including finite ordered
+  ticks, positive step, retained finite endpoint, and distinct `LinearScale`
+  endpoint mapping.
+- [ ] Run focused RED for both public tick paths.
+- [ ] Add one shared finite degenerate-domain expansion used by
+  `nice_ticks` and `bounded_ticks`; retain ordinary `value + 1.0` behavior and
+  the existing tick allocation bound.
+- [ ] Run focused GREEN and
+  `cargo test -p fulgur-chart --lib scale::tests`.
+
+### Task 7: Contain Start/End PlotArea axis titles
+
+**Files:**
+- Modify/test: `crates/fulgur-chart/src/layout/common.rs`
+
+- [ ] Add direct IR tests for long X and rotated Y Start/End titles. Inspect
+  emitted `Prim::Text` anchor, rotation, and measured full advance bounds, and
+  assert containment plus exact requested plot dimensions.
+- [ ] Run each new test separately and observe RED.
+- [ ] Replace scalar symmetric title overflow with left/right and top/bottom
+  components. Keep Center symmetric and combine vertical legend/title overflow
+  on each side with `max`.
+- [ ] Run focused GREEN and
+  `cargo test -p fulgur-chart --lib layout::common::tests`.
+
+### Task 8: Align model counts with supported legend titles
+
+**Files:**
+- Modify/test: `crates/fulgur-chart/src/layout/common.rs`
+- Modify: `crates/fulgur-chart/src/model.rs`
+- Test: `crates/fulgur-chart/tests/inspect_model.rs`
+- Preserve: `crates/fulgur-chart/tests/render_vegalite_temporal_line.rs`
+
+- [ ] Add a regression proving an unnamed categorical Canvas model has
+  identical counts with and without an unsupported title, and observe RED.
+- [ ] Make `temporal_plot_right_legend_title` `pub(crate)` and use it in
+  `build_model_core` instead of raw `legend_title.is_some()`.
+- [ ] Update the `has_legend` documentation to name both activation paths.
+- [ ] Run the focused categorical GREEN, the temporal empty-name preservation
+  test, model unit tests, and `inspect_model`.
+
+### Task 9: Verify, document, report, and commit locally
+
+- [ ] Run all affected suites:
+
+  ```bash
+  cargo test -p fulgur-chart --lib temporal::tests
+  cargo test -p fulgur-chart --lib scale::tests
+  cargo test -p fulgur-chart --lib layout::common::tests
+  cargo test -p fulgur-chart --lib model::tests
+  cargo test -p fulgur-chart --test inspect_model
+  cargo test -p fulgur-chart --test render_vegalite_temporal_line
+  ```
+
+- [ ] Run `cargo fmt --all -- --check` and `git diff --check`.
+- [ ] Update this plan and the matching design with the approved extension.
+- [ ] Write RED/GREEN output, implementation/files, suite results, self-review,
+  and concerns to
+  `.superpowers/sdd/2026-07-26-pr137-twelfth-review-fixes/final-fix-report.md`.
+- [ ] Commit coherent local changes. Do not push or mutate external state.

@@ -81,3 +81,54 @@ After focused and workspace verification, require 100% committed-HEAD changed
 line coverage, push the branch and Beads state, reply to and resolve only the
 three exact threads, fresh-fetch all review state, require zero unresolved
 threads, and watch CI to terminal green. Do not merge the PR.
+
+## Approved whole-branch final-review extension
+
+The whole-branch review approved one final local-only fix wave after the three
+tasks above. It adds four corrections without widening the supported frontend
+surface or changing normal-range D3/Vega behavior.
+
+### Bounded temporal tick generation
+
+Temporal ticks have a hard maximum of 1,000. Clamp the width-derived desired
+count to `1..=1_000` (`1` for non-finite or non-positive widths), then keep the
+existing interval selection. Before allocating or iterating, count fixed ticks
+with `i128` and calendar ticks by aligned calendar indices. If the selected
+interval would exceed the cap, multiply its step by an integer stride and
+realign against the same origin. This preserves aligned coverage of the whole
+domain instead of truncating its first 1,000 ticks, including reversed domains.
+
+### Finite extreme singleton scales
+
+`nice_ticks` and `bounded_ticks` share one finite degenerate-domain expansion.
+The ordinary `[value, value + 1]` result remains when `+1` advances. Otherwise
+the domain expands inward by a representable scale-relative step: positive
+`f64::MAX` keeps the upper endpoint and negative `-f64::MAX` keeps the lower
+endpoint. The resulting domain, step, ticks, and `LinearScale` endpoint mapping
+remain finite, ordered, positive-width, and bounded by the existing
+`MAX_TICK_INTERVALS = 1_000`.
+
+### Alignment-aware PlotArea title overflow
+
+PlotArea overflow is tracked independently for left/right and top/bottom.
+Horizontal X titles reserve all excess on the right for Start, all excess on
+the left for End, and half per side for Center. Rotated Y titles reserve all
+excess on top for Start, all excess on bottom for End, and half per side for
+Center. Centered chart titles remain symmetric. Vertical legend overflow also
+remains symmetric and combines with the corresponding title overflow using
+`max`, while requested plot width and height remain exact.
+
+### Shared supported-title model semantics
+
+`temporal_plot_right_legend_title` is the crate-internal single predicate for
+the supported temporal PlotArea + Right title. Common layout uses it to
+activate title-only legends, and the model uses it to decide when empty series
+names still count as legend entries. Unsupported categorical Canvas titles do
+not change model counts. Without a supported title, the existing count of
+non-empty series names remains unchanged.
+
+For this final fix wave, verify focused RED/GREEN evidence, temporal, scale,
+common-layout, model/inspect, and temporal Vega-Lite render suites, plus
+`cargo fmt --all -- --check` and `git diff --check`. Update the implementation
+plan and write the SDD report. This amendment is local-only: do not push,
+mutate Beads, reply to or resolve GitHub threads, or merge the PR.
