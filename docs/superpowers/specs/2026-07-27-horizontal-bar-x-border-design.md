@@ -51,4 +51,3 @@ Follow test-driven development:
    including stacked horizontal bars.
 6. Run formatting, the complete `fulgur-chart` test suite, clippy, and the
    repository patch-coverage gate with 100% changed-line coverage.
-
