@@ -368,9 +368,22 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    // 3. 左軸線(カテゴリ軸=Y のボーダー)。y_axis.border が縦のカテゴリ軸線を支配する。
-    // 横棒は Chart.js 同様、底辺の x_axis.border は描かない(既存挙動を維持: 追加すると
-    // 全 horizontal-bar スナップショットが回帰する)。
+    // 3. 底辺の値軸線(X のボーダー)。x_axis.border が水平線を支配する。
+    let x_border = &spec.x_axis.border;
+    if x_border.display {
+        let border_color = x_border.color.unwrap_or(ink);
+        items.push(Prim::Line {
+            x1: plot_left,
+            y1: plot_bottom,
+            x2: plot_right,
+            y2: plot_bottom,
+            stroke: border_color,
+            stroke_width: x_border.width,
+            dash: x_border.dash.clone(),
+        });
+    }
+
+    // 3a. 左軸線(カテゴリ軸=Y のボーダー)。y_axis.border が縦のカテゴリ軸線を支配する。
     let y_border = &spec.y_axis.border;
     if y_border.display {
         let border_color = y_border.color.unwrap_or(ink);
@@ -385,7 +398,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    // 3b. tick 短線(値軸=X)。x_axis.grid.draw_ticks が true のとき plot_bottom から下方向へ。
+    // 3c. tick 短線(値軸=X)。x_axis.grid.draw_ticks が true のとき plot_bottom から下方向へ。
     // 色は grid.color を継承(既定 ink)。カテゴリ軸(Y)側は Chart.js で通常 tick を描かないためスキップ。
     const TICK_LEN: f64 = 4.0;
     if x_grid_cfg.draw_ticks {
@@ -897,6 +910,76 @@ mod horizontal_axis_style_tests {
             baseline, 0,
             "y_axis.border.display=false → 左辺ベースライン無し"
         );
+    }
+
+    #[test]
+    fn horizontal_x_border_style_reaches_bottom_baseline() {
+        let spec = parse(
+            r##"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"border":{
+                    "color":"#123456","width":3,"dash":[5,2]
+                }}}}}"##,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let baseline = scene.items.iter().find_map(|p| match p {
+            Prim::Line {
+                x1,
+                x2,
+                y1,
+                y2,
+                stroke,
+                stroke_width,
+                dash,
+            } if (*y1 - *y2).abs() < 0.01
+                && (*x1 - *x2).abs() > 1.0
+                && stroke.r == 0x12
+                && stroke.g == 0x34
+                && stroke.b == 0x56 =>
+            {
+                Some((*stroke_width, dash.as_slice()))
+            }
+            _ => None,
+        });
+        let (width, dash) = baseline.expect("x_axis.border should draw a bottom baseline");
+        assert!((width - 3.0).abs() < 1e-9);
+        assert_eq!(dash, &[5.0, 2.0]);
+    }
+
+    #[test]
+    fn horizontal_x_border_display_controls_bottom_baseline() {
+        fn count_marker_border(scene: &Scene) -> usize {
+            scene
+                .items
+                .iter()
+                .filter(|p| {
+                    matches!(p,
+                        Prim::Line { x1, x2, y1, y2, stroke, .. }
+                            if (*y1 - *y2).abs() < 0.01
+                                && (*x1 - *x2).abs() > 1.0
+                                && stroke.r == 0x22
+                                && stroke.g == 0x44
+                                && stroke.b == 0x66
+                    )
+                })
+                .count()
+        }
+
+        let visible = scene_for(
+            r##"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"border":{
+                    "display":true,"color":"#224466"
+                }}}}}"##,
+        );
+        let hidden = scene_for(
+            r##"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"border":{
+                    "display":false,"color":"#224466"
+                }}}}}"##,
+        );
+
+        assert_eq!(count_marker_border(&visible), 1);
+        assert_eq!(count_marker_border(&hidden), 0);
     }
 
     #[test]
