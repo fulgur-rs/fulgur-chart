@@ -137,13 +137,10 @@ fn select_interval(start_ms: i64, stop_ms: i64, desired_count: usize) -> TickInt
         TICK_INTERVALS.partition_point(|interval| interval.approximate_millis as f64 <= target);
     if upper == 0 {
         let span_millis = (i128::from(stop_ms) - i128::from(start_ms)) as f64;
-        if span_millis < MILLIS_PER_SECOND as f64 {
-            let step = nice_tick_step(span_millis, desired_count)
-                .round()
-                .clamp(1.0, i32::MAX as f64) as i32;
-            return TickInterval::new(TickUnit::Millisecond, step, i64::from(step));
-        }
-        return TICK_INTERVALS[0];
+        let step = nice_tick_step(span_millis, desired_count)
+            .round()
+            .clamp(1.0, i32::MAX as f64) as i32;
+        return TickInterval::new(TickUnit::Millisecond, step, i64::from(step));
     }
     if upper == TICK_INTERVALS.len() {
         let span_years = target * desired_count as f64 / APPROX_MILLIS_PER_YEAR as f64;
@@ -531,7 +528,10 @@ mod tests {
                 .iter()
                 .map(|tick| tick.unix_millis)
                 .collect::<Vec<_>>(),
-            vec![3_000, 2_000, 1_000]
+            vec![
+                3_000, 2_900, 2_800, 2_700, 2_600, 2_500, 2_400, 2_300, 2_200, 2_100, 2_000, 1_900,
+                1_800, 1_700, 1_600, 1_500, 1_400, 1_300, 1_200, 1_100, 1_000,
+            ]
         );
 
         let singleton = temporal_ticks(1_234, 1_234, 720.0);
@@ -584,6 +584,18 @@ mod tests {
             [
                 ".100", ".200", ".300", ".400", ".500", ".600", ".700", ".800", ".900"
             ]
+        );
+    }
+
+    #[test]
+    fn sub_second_target_uses_millisecond_ticks_for_longer_domain() {
+        let ticks = temporal_ticks(0, 1_500, 720.0);
+        assert_eq!(
+            ticks
+                .iter()
+                .map(|tick| tick.unix_millis)
+                .collect::<Vec<_>>(),
+            (0..=1_500).step_by(100).collect::<Vec<_>>()
         );
     }
 
