@@ -1074,6 +1074,21 @@ fn temporal_line_requires_color_field_in_both_modes() {
         );
     }
 
+    for (field, value_type) in [
+        (serde_json::json!(false), "boolean"),
+        (serde_json::json!(42), "number"),
+    ] {
+        let json = line_with_field(DOGFOOD_SHAPE, &["encoding", "color", "field"], Some(field));
+        let expected = format!("encoding.color.field must be a string, got {value_type}");
+        for strict in [false, true] {
+            assert_eq!(
+                vegalite::parse(&json.to_string(), strict).unwrap_err(),
+                expected,
+                "strict={strict}"
+            );
+        }
+    }
+
     for color in [serde_json::json!(false), serde_json::json!(42)] {
         let json = line_with_field(DOGFOOD_SHAPE, &["encoding", "color"], Some(color));
         for strict in [false, true] {
