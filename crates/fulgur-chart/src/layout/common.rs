@@ -214,7 +214,8 @@ fn has_legend(spec: &ChartSpec) -> bool {
     matches!(
         spec.legend,
         LegendPos::Top | LegendPos::Bottom | LegendPos::Left | LegendPos::Right
-    ) && (spec.legend_title.is_some() || spec.series.iter().any(|s| !s.name.is_empty()))
+    ) && (temporal_plot_right_legend_title(spec).is_some()
+        || spec.series.iter().any(|series| !series.name.is_empty()))
 }
 
 /// `legend_title` を描画・予約する supported semantics。
@@ -1371,6 +1372,25 @@ mod tests {
         let baseline_scene = crate::layout::build_scene(&baseline, &m);
         let titled_scene = crate::layout::build_scene(&titled, &m);
         assert_eq!(titled_scene, baseline_scene);
+    }
+
+    #[test]
+    fn categorical_canvas_title_does_not_activate_unnamed_legend() {
+        let mut baseline = make_bar_spec(3, 600.0);
+        baseline.series[0].name.clear();
+        baseline.legend = LegendPos::Right;
+        let mut titled = baseline.clone();
+        titled.legend_title = Some("unsupported title".into());
+
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        assert_eq!(
+            compute(&titled, &m).plot_right,
+            compute(&baseline, &m).plot_right
+        );
+        assert_eq!(
+            crate::layout::build_scene(&titled, &m),
+            crate::layout::build_scene(&baseline, &m)
+        );
     }
 
     #[test]
