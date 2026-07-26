@@ -46,16 +46,24 @@ modules, cargo test, cargo clippy, cargo llvm-cov, GitHub GraphQL, Beads
 
 **Files:**
 - Modify/test: `crates/fulgur-chart/src/guard.rs`
+- Modify/test: `crates/fulgur-chart/src/raster_direct.rs`
 - Modify/test as appropriate:
-  `crates/fulgur-chart/tests/render_line.rs`
+  `crates/fulgur-chart/tests/render_line.rs`,
+  `crates/fulgur-chart/tests/render_bubble.rs`
 
 - [ ] Add direct-IR guard tests for `None`, zero, negative, boundary, non-finite,
-  and above-`f32::MAX` radii.
-- [ ] Add Chart.js `pointRadius: 1e40` tests proving SVG, PNG, and WebP return
-  the same validation error.
+  and above-`DEFAULT_MAX_DIMENSION_PX` series and per-point radii.
+- [ ] Add Chart.js `pointRadius: 1e40` and Bubble `{r: 1e40}` tests proving
+  fallible SVG, PNG, and WebP return the same field-specific errors.
+- [ ] Add raster regressions for the reported large-radius panic at output
+  scales 1 and 10, the accepted `32768` boundary, and the scale-dependent
+  device-coordinate guard.
 - [ ] Run focused tests and capture RED.
-- [ ] Add one shared `validate_spec_base` check with a stable error.
-- [ ] Run guard and line-render suites, formatting, and diff checks.
+- [ ] Add one radius-only shared guard used by full validation and fallible
+  render entry points without enabling unrelated base-policy checks.
+- [ ] Add a pre-scan raster circle-geometry check derived from tiny-skia's
+  fixed-point capacity.
+- [ ] Run guard, line/Bubble, raster, formatting, and diff checks.
 - [ ] Commit with `fix(guard): bound explicit point radii`.
 
 ### Task 3: Review, verify, publish, and resolve
