@@ -1,6 +1,6 @@
 # PNG membench Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Track execution state in `bd`.
 
 **Goal:** Gate deterministic allocation regressions for both SVG and PNG rendering across all existing benchmark cases.
 
@@ -30,7 +30,7 @@
 - Consumes: `cases::Case`, `fulgur_chart::frontend::chartjs::parse`, `render::render_chart`, and `raster_direct::render_chart_to_png_default`.
 - Produces: `OutputKind`, `MeasurementTarget<'a>`, `all(&[Case]) -> Vec<MeasurementTarget<'_>>`, and `render(&MeasurementTarget<'_>) -> Result<Vec<u8>, String>`.
 
-- [ ] **Step 1: Write the failing target-expansion test**
+#### Step 1: Write the failing target-expansion test
 
 Create `crates/fulgur-chart/tests/membench_targets.rs` with:
 
@@ -70,7 +70,7 @@ fn every_case_has_svg_and_png_measurement_targets() {
 }
 ```
 
-- [ ] **Step 2: Run the target test and verify RED**
+#### Step 2: Run the target test and verify RED
 
 Run:
 
@@ -80,7 +80,7 @@ cargo test -p fulgur-chart --test membench_targets every_case_has_svg_and_png_me
 
 Expected: compilation fails because `benches/membench_targets.rs` does not exist.
 
-- [ ] **Step 3: Implement minimal target expansion**
+#### Step 3: Implement minimal target expansion
 
 Create `crates/fulgur-chart/benches/membench_targets.rs` with:
 
@@ -122,7 +122,7 @@ pub fn all(cases: &[Case]) -> Vec<MeasurementTarget<'_>> {
 }
 ```
 
-- [ ] **Step 4: Run the target test and verify GREEN**
+#### Step 4: Run the target test and verify GREEN
 
 Run:
 
@@ -132,7 +132,7 @@ cargo test -p fulgur-chart --test membench_targets every_case_has_svg_and_png_me
 
 Expected: the target-expansion test passes.
 
-- [ ] **Step 5: Write the failing real-render dispatch test**
+#### Step 5: Write the failing real-render dispatch test
 
 Append to `crates/fulgur-chart/tests/membench_targets.rs`:
 
@@ -150,7 +150,7 @@ fn targets_render_the_selected_output_format() {
 }
 ```
 
-- [ ] **Step 6: Run the render-dispatch test and verify RED**
+#### Step 6: Run the render-dispatch test and verify RED
 
 Run:
 
@@ -160,7 +160,7 @@ cargo test -p fulgur-chart --test membench_targets targets_render_the_selected_o
 
 Expected: compilation fails because `render` does not exist.
 
-- [ ] **Step 7: Implement minimal render dispatch**
+#### Step 7: Implement minimal render dispatch
 
 Add to `crates/fulgur-chart/benches/membench_targets.rs`:
 
@@ -178,7 +178,7 @@ pub fn render(target: &MeasurementTarget<'_>) -> Result<Vec<u8>, String> {
 }
 ```
 
-- [ ] **Step 8: Run all target tests and verify GREEN**
+#### Step 8: Run all target tests and verify GREEN
 
 Run:
 
@@ -188,7 +188,7 @@ cargo test -p fulgur-chart --test membench_targets
 
 Expected: both tests pass with no warnings.
 
-- [ ] **Step 9: Commit the target module and tests**
+#### Step 9: Commit the target module and tests
 
 ```bash
 git add crates/fulgur-chart/benches/membench_targets.rs crates/fulgur-chart/tests/membench_targets.rs
@@ -206,7 +206,7 @@ git commit -m "test(bench): define PNG memory targets"
 - Consumes: Task 1's `membench_targets::all` and `membench_targets::render`.
 - Produces: 18 deterministic baseline entries: nine existing SVG names and nine `_png` names.
 
-- [ ] **Step 1: Integrate measurement targets into the bench**
+#### Step 1: Integrate measurement targets into the bench
 
 In `crates/fulgur-chart/benches/membench.rs`:
 
@@ -237,7 +237,7 @@ for target in membench_targets::all(&cases) {
 
 Update the `measure` documentation to describe both SVG and PNG E2E paths.
 
-- [ ] **Step 2: Run the membench check and verify the integration failure**
+#### Step 2: Run the membench check and verify the integration failure
 
 Run:
 
@@ -247,7 +247,7 @@ cargo bench -p fulgur-chart --bench membench --features dhat-heap -- --check
 
 Expected: all nine `_png` cases are reported missing from the committed baseline.
 
-- [ ] **Step 3: Generate the new deterministic baseline**
+#### Step 3: Generate the new deterministic baseline
 
 Run:
 
@@ -257,11 +257,11 @@ cargo bench -p fulgur-chart --bench membench --features dhat-heap -- --update
 
 Expected: `membench_baseline.json` contains the existing nine SVG keys and nine new `_png` keys.
 
-- [ ] **Step 4: Document dual-path memory gating**
+#### Step 4: Document dual-path memory gating
 
 Change the Memory section of `crates/fulgur-chart/benches/README.md` to state that dhat measures the E2E JSON-to-SVG and JSON-to-PNG allocation volume for every representative case, and that `_png` identifies PNG baseline entries.
 
-- [ ] **Step 5: Run focused verification**
+#### Step 5: Run focused verification
 
 Run:
 
@@ -275,7 +275,7 @@ git diff --check
 
 Expected: every command exits zero; the bench reports 18 cases and `memory check OK`.
 
-- [ ] **Step 6: Commit implementation, baseline, and docs**
+#### Step 6: Commit implementation, baseline, and docs
 
 ```bash
 git add crates/fulgur-chart/benches/membench.rs \
@@ -293,7 +293,7 @@ git commit -m "perf(bench): gate PNG memory allocations"
 - Consumes: the completed dual-path memory gate.
 - Produces: a pushed feature branch and a closed Beads issue.
 
-- [ ] **Step 1: Run the broader Rust quality gates**
+#### Step 1: Run the broader Rust quality gates
 
 ```bash
 cargo test -p fulgur-chart
@@ -303,7 +303,7 @@ cargo fmt --all --check
 
 Expected: all tests pass, clippy emits no warnings, and formatting is clean.
 
-- [ ] **Step 2: Verify committed state and requirement coverage**
+#### Step 2: Verify committed state and requirement coverage
 
 ```bash
 git status --short
@@ -313,14 +313,14 @@ cargo bench -p fulgur-chart --bench membench --features dhat-heap -- --check
 
 Expected: no uncommitted files, the design and implementation commits are present, and all 18 memory measurements pass.
 
-- [ ] **Step 3: Close and persist the Beads issue**
+#### Step 3: Close and persist the Beads issue
 
 ```bash
 bd close 627 --reason="Implemented PNG allocation measurements for every membench case and verified the baseline gate."
 bd dolt push
 ```
 
-- [ ] **Step 4: Rebase and push the feature branch**
+#### Step 4: Rebase and push the feature branch
 
 ```bash
 git pull --rebase
