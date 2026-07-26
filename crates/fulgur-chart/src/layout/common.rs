@@ -341,6 +341,21 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     (domain_min, domain_max)
 }
 
+/// Text laid from an axis start edge toward its end edge may overflow either
+/// side depending on its anchor. Returns `(before_start, after_end)`.
+fn aligned_title_overflow(
+    measured_extent: f64,
+    plot_extent: f64,
+    align: AxisTitleAlign,
+) -> (f64, f64) {
+    let excess = (measured_extent - plot_extent).max(0.0);
+    match align {
+        AxisTitleAlign::Start => (0.0, excess),
+        AxisTitleAlign::End => (excess, 0.0),
+        AxisTitleAlign::Center => (excess / 2.0, excess / 2.0),
+    }
+}
+
 /// spec から y ドメイン(begin_at_zero尊重)・nice_ticks・y軸ラベル幅・プロット領域・凡例帯を計算。
 pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y ドメイン。
@@ -415,19 +430,28 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         };
     let vertical_legend_overflow =
         ((vertical_legend_rows as f64 * LEGEND_ROW_H - spec.height) / 2.0).max(0.0);
-    let rotated_y_title_overflow = if matches!(spec.size_mode, SizeMode::PlotArea) {
-        spec.y_axis
-            .title
-            .as_ref()
-            .map(|title| {
-                let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
-                ((m.width(&title.text, font as f32) as f64 - spec.height) / 2.0).max(0.0)
-            })
-            .unwrap_or(0.0)
-    } else {
-        0.0
-    };
-    let plot_area_vertical_overflow = vertical_legend_overflow.max(rotated_y_title_overflow);
+    let (rotated_y_title_top_overflow, rotated_y_title_bottom_overflow) =
+        if matches!(spec.size_mode, SizeMode::PlotArea) {
+            spec.y_axis
+                .title
+                .as_ref()
+                .map(|title| {
+                    let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+                    // Rotated -90° text is laid from bottom (axis Start) to top
+                    // (axis End), so physical top/bottom reverse the helper tuple.
+                    let (bottom, top) = aligned_title_overflow(
+                        m.width(&title.text, font as f32) as f64,
+                        spec.height,
+                        title.align,
+                    );
+                    (top, bottom)
+                })
+                .unwrap_or((0.0, 0.0))
+        } else {
+            (0.0, 0.0)
+        };
+    let plot_area_top_overflow = vertical_legend_overflow.max(rotated_y_title_top_overflow);
+    let plot_area_bottom_overflow = vertical_legend_overflow.max(rotated_y_title_bottom_overflow);
     // PlotArea の幅はこの時点で確定しているため、scene 寸法より先に temporal tick を
     // 作れる。端ラベルが中央寄せされても scene から切れないよう、その半幅を
     // 左側の最低 plot offset と右側の最低余白として使う。
@@ -451,26 +475,35 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         .last()
         .map(|tick| m.width(&tick.label, spec.theme.font_size as f32) as f64 / 2.0)
         .unwrap_or(0.0);
-    let centered_title_side_overflow = if matches!(spec.size_mode, SizeMode::PlotArea) {
-        let chart_title_side_overflow = spec
-            .title
-            .as_ref()
-            .map(|title| ((m.width(title, TITLE_FONT as f32) as f64 - spec.width) / 2.0).max(0.0))
-            .unwrap_or(0.0);
-        let x_axis_title_side_overflow = spec
-            .x_axis
-            .title
-            .as_ref()
-            .filter(|title| matches!(title.align, AxisTitleAlign::Center))
-            .map(|title| {
-                let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
-                ((m.width(&title.text, font as f32) as f64 - spec.width) / 2.0).max(0.0)
-            })
-            .unwrap_or(0.0);
-        chart_title_side_overflow.max(x_axis_title_side_overflow)
-    } else {
-        0.0
-    };
+    let (plot_area_title_left_overflow, plot_area_title_right_overflow) =
+        if matches!(spec.size_mode, SizeMode::PlotArea) {
+            let chart_title_side_overflow = spec
+                .title
+                .as_ref()
+                .map(|title| {
+                    ((m.width(title, TITLE_FONT as f32) as f64 - spec.width) / 2.0).max(0.0)
+                })
+                .unwrap_or(0.0);
+            let (x_title_left_overflow, x_title_right_overflow) = spec
+                .x_axis
+                .title
+                .as_ref()
+                .map(|title| {
+                    let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+                    aligned_title_overflow(
+                        m.width(&title.text, font as f32) as f64,
+                        spec.width,
+                        title.align,
+                    )
+                })
+                .unwrap_or((0.0, 0.0));
+            (
+                chart_title_side_overflow.max(x_title_left_overflow),
+                chart_title_side_overflow.max(x_title_right_overflow),
+            )
+        } else {
+            (0.0, 0.0)
+        };
     // line(edge-to-edge)では先頭/末尾の点が plot_left/plot_right に乗り、中央寄せの
     // x ラベルが点の外側へ半幅はみ出してキャンバス端でクリップされる。chart.js が
     // chartArea を edge ラベル半幅ぶん内側へ取るのと同様に edge 余白を確保する。
@@ -531,23 +564,24 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             )
         }
         SizeMode::PlotArea => {
-            let required_title_side_band = OUTER_PAD + centered_title_side_overflow;
+            let required_title_left_band = OUTER_PAD + plot_area_title_left_overflow;
+            let required_title_right_band = OUTER_PAD + plot_area_title_right_overflow;
             let plot_left = (OUTER_PAD + y_axis_w)
                 .max(temporal_edge_pad_left)
-                .max(required_title_side_band);
-            let plot_top = OUTER_PAD + title_band + plot_area_vertical_overflow;
+                .max(required_title_left_band);
+            let plot_top = OUTER_PAD + title_band + plot_area_top_overflow;
             let plot_right = plot_left + spec.width;
             let plot_bottom = plot_top + spec.height;
             let trailing_band = (OUTER_PAD + legend_right)
                 .max(temporal_edge_pad_right)
-                .max(required_title_side_band);
+                .max(required_title_right_band);
             let scene_width = plot_right + trailing_band;
             let scene_height = plot_bottom
                 + X_LABEL_BAND
                 + x_title_h
                 + OUTER_PAD
                 + legend_bottom
-                + plot_area_vertical_overflow;
+                + plot_area_bottom_overflow;
             (
                 scene_width,
                 scene_height,
@@ -1186,6 +1220,110 @@ mod tests {
         assert_eq!(frame.plot_bottom - frame.plot_top, 320.0);
         assert!(frame.scene_width > 720.0);
         assert!(frame.scene_height > 320.0);
+    }
+
+    #[test]
+    fn plot_area_contains_long_start_and_end_x_axis_titles() {
+        const TITLE: &str = "a long horizontal axis title that exceeds the plot width";
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        for (align, expected_anchor) in [
+            (AxisTitleAlign::Start, Anchor::Start),
+            (AxisTitleAlign::End, Anchor::End),
+        ] {
+            let mut spec = temporal_spec(vec![0, 1_000]);
+            spec.width = 24.0;
+            spec.x_axis.title = Some(AxisTitle {
+                text: TITLE.into(),
+                color: None,
+                font_size: None,
+                align,
+            });
+            let frame = compute(&spec, &m);
+            let mut items = Vec::new();
+            draw_frame(&mut items, &spec, &frame, &m);
+            let (x, size, anchor) = items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Text {
+                        x,
+                        size,
+                        anchor,
+                        content,
+                        rotate_deg: None,
+                        ..
+                    } if content == TITLE => Some((*x, *size, *anchor)),
+                    _ => None,
+                })
+                .expect("x-axis title");
+            assert_eq!(anchor, expected_anchor);
+            let width = m.width(TITLE, size as f32) as f64;
+            let (left, right) = match anchor {
+                Anchor::Start => (x, x + width),
+                Anchor::End => (x - width, x),
+                Anchor::Middle => unreachable!(),
+            };
+            assert!(left >= 0.0, "{align:?}: left={left}");
+            assert!(
+                right <= frame.scene_width,
+                "{align:?}: right={right}, scene={}",
+                frame.scene_width
+            );
+            assert_eq!(frame.plot_right - frame.plot_left, spec.width);
+            assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
+        }
+    }
+
+    #[test]
+    fn plot_area_contains_long_start_and_end_rotated_y_axis_titles() {
+        const TITLE: &str = "a long rotated axis title that exceeds the plot height";
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        for (align, expected_anchor) in [
+            (AxisTitleAlign::Start, Anchor::Start),
+            (AxisTitleAlign::End, Anchor::End),
+        ] {
+            let mut spec = temporal_spec(vec![0, 1_000]);
+            spec.height = 24.0;
+            spec.y_axis.title = Some(AxisTitle {
+                text: TITLE.into(),
+                color: None,
+                font_size: None,
+                align,
+            });
+            let frame = compute(&spec, &m);
+            let mut items = Vec::new();
+            draw_frame(&mut items, &spec, &frame, &m);
+            let (y, size, anchor) = items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Text {
+                        y,
+                        size,
+                        anchor,
+                        content,
+                        rotate_deg: Some(-90.0),
+                        ..
+                    } if content == TITLE => Some((*y, *size, *anchor)),
+                    _ => None,
+                })
+                .expect("rotated y-axis title");
+            assert_eq!(anchor, expected_anchor);
+            let height = m.width(TITLE, size as f32) as f64;
+            let (top, bottom) = match anchor {
+                Anchor::Start => (y - height, y),
+                Anchor::End => (y, y + height),
+                Anchor::Middle => unreachable!(),
+            };
+            assert!(top >= 0.0, "{align:?}: top={top}");
+            assert!(
+                bottom <= frame.scene_height,
+                "{align:?}: bottom={bottom}, scene={}",
+                frame.scene_height
+            );
+            assert_eq!(frame.plot_right - frame.plot_left, spec.width);
+            assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
+        }
     }
 
     #[test]
