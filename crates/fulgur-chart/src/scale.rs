@@ -21,7 +21,14 @@ impl LinearScale {
         if span == 0.0 {
             return self.p0;
         }
-        let t = (v - self.d0) / span;
+        let t = if span.is_infinite() && self.d0.is_finite() && self.d1.is_finite() {
+            let endpoint_scale = self.d0.abs().max(self.d1.abs());
+            let scaled_d0 = self.d0 / endpoint_scale;
+            let scaled_d1 = self.d1 / endpoint_scale;
+            (v / endpoint_scale - scaled_d0) / (scaled_d1 - scaled_d0)
+        } else {
+            (v - self.d0) / span
+        };
         self.p0 + t * (self.p1 - self.p0)
     }
 }
@@ -509,6 +516,28 @@ mod tests {
         assert!((s.map(0.0) - 300.0).abs() < 1e-9);
         assert!((s.map(100.0) - 0.0).abs() < 1e-9);
         assert!((s.map(50.0) - 150.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn linear_scale_maps_overflowing_domain_to_normal_pixel_range() {
+        let s = LinearScale::new(-1e308, 1e308, 0.0, 400.0);
+
+        for (value, expected) in [(-1e308, 0.0), (0.0, 200.0), (1e308, 400.0)] {
+            let mapped = s.map(value);
+            assert!(mapped.is_finite(), "{value} mapped to {mapped}");
+            assert!((mapped - expected).abs() < 1e-9, "{value}: {mapped}");
+        }
+    }
+
+    #[test]
+    fn linear_scale_maps_overflowing_domain_to_inverted_pixel_range() {
+        let s = LinearScale::new(-1e308, 1e308, 300.0, 0.0);
+
+        for (value, expected) in [(-1e308, 300.0), (0.0, 150.0), (1e308, 0.0)] {
+            let mapped = s.map(value);
+            assert!(mapped.is_finite(), "{value} mapped to {mapped}");
+            assert!((mapped - expected).abs() < 1e-9, "{value}: {mapped}");
+        }
     }
 
     #[test]

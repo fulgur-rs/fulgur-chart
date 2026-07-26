@@ -420,6 +420,55 @@ fn dogfood_fixture_uses_elapsed_time_for_line_geometry() {
 }
 
 #[test]
+fn temporal_line_maps_extreme_values_to_opposite_finite_plot_edges() {
+    let spec = vegalite::parse(
+        r#"{
+            "width": 400,
+            "height": 200,
+            "mark": {"type": "line", "point": true},
+            "data": {"values": [
+                {"timestamp": "2026-07-01T00:00:00Z", "value": -1e308},
+                {"timestamp": "2026-07-02T00:00:00Z", "value": 1e308}
+            ]},
+            "encoding": {
+                "x": {"field": "timestamp", "type": "temporal"},
+                "y": {"field": "value", "type": "quantitative"}
+            }
+        }"#,
+        true,
+    )
+    .unwrap();
+    let m = measurer();
+    let frame = common::compute(&spec, &m);
+    let scene = line::build(&spec, &m);
+    let mut marker_ys = scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::Circle { cy, .. } => Some(*cy),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    marker_ys.sort_by(f64::total_cmp);
+
+    assert_eq!(marker_ys.len(), 2);
+    assert!(
+        marker_ys.iter().all(|y| y.is_finite()),
+        "marker geometry must remain finite: {marker_ys:?}"
+    );
+    assert!(
+        (marker_ys[0] - frame.plot_top).abs() < 1e-9,
+        "{marker_ys:?}, plot_top={}",
+        frame.plot_top
+    );
+    assert!(
+        (marker_ys[1] - frame.plot_bottom).abs() < 1e-9,
+        "{marker_ys:?}, plot_bottom={}",
+        frame.plot_bottom
+    );
+}
+
+#[test]
 fn dogfood_fixture_expands_canvas_and_dispatches_monotone_paths() {
     let spec = parsed();
     let m = measurer();
