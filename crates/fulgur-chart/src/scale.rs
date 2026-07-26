@@ -117,6 +117,11 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
     let n = intervals as usize;
     let mut ticks: Vec<f64> = (0..=n).map(|i| nice_min + i as f64 * step).collect();
     ticks.dedup_by(|left, right| *left == *right);
+    let step = if ticks.len() < n + 1 && ticks.len() == 2 {
+        ticks[1] - ticks[0]
+    } else {
+        step
+    };
 
     // 8.
     NiceTicks {
@@ -274,6 +279,11 @@ fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
         })
         .collect();
     ticks.dedup_by(|left, right| *left == *right);
+    let step = if ticks.len() < count + 1 && ticks.len() == 2 {
+        ticks[1] - ticks[0]
+    } else {
+        step
+    };
 
     NiceTicks {
         min,
@@ -300,6 +310,7 @@ mod tests {
             "{ticks:?}"
         );
         assert!(ticks.ticks.last().is_some_and(|tick| tick.is_finite()));
+        assert_eq!(ticks.step, ticks.ticks[1] - ticks.ticks[0]);
         if value.is_sign_positive() {
             assert_eq!(ticks.max, value);
         } else {
