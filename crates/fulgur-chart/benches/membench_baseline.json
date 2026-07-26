@@ -1,38 +1,74 @@
 {
   "bar_large": {
-    "alloc_bytes": 1368981,
+    "alloc_bytes": 1376981,
     "alloc_blocks": 12931
   },
+  "bar_large_png": {
+    "alloc_bytes": 6899268,
+    "alloc_blocks": 5828
+  },
   "bar_small": {
-    "alloc_bytes": 37357,
+    "alloc_bytes": 37453,
     "alloc_blocks": 619
   },
+  "bar_small_png": {
+    "alloc_bytes": 1913545,
+    "alloc_blocks": 516
+  },
   "line_large": {
-    "alloc_bytes": 14516236,
+    "alloc_bytes": 14596236,
     "alloc_blocks": 90986
   },
   "line_large_decimated": {
-    "alloc_bytes": 8982265,
+    "alloc_bytes": 9062265,
     "alloc_blocks": 26641
   },
+  "line_large_decimated_png": {
+    "alloc_bytes": 13914123,
+    "alloc_blocks": 21529
+  },
+  "line_large_png": {
+    "alloc_bytes": 24705334,
+    "alloc_blocks": 22174
+  },
   "line_small": {
-    "alloc_bytes": 37562,
+    "alloc_bytes": 37658,
     "alloc_blocks": 598
   },
+  "line_small_png": {
+    "alloc_bytes": 2055215,
+    "alloc_blocks": 611
+  },
   "pie_small": {
-    "alloc_bytes": 18518,
+    "alloc_bytes": 18566,
     "alloc_blocks": 286
   },
+  "pie_small_png": {
+    "alloc_bytes": 1781094,
+    "alloc_blocks": 305
+  },
   "scatter_large": {
-    "alloc_bytes": 18971267,
+    "alloc_bytes": 19051267,
     "alloc_blocks": 170592
   },
+  "scatter_large_png": {
+    "alloc_bytes": 20867479,
+    "alloc_blocks": 51237
+  },
   "sparkline_large": {
-    "alloc_bytes": 4978418,
+    "alloc_bytes": 5058418,
     "alloc_blocks": 20086
   },
   "sparkline_large_decimated": {
-    "alloc_bytes": 4270687,
+    "alloc_bytes": 4350687,
     "alloc_blocks": 6021
+  },
+  "sparkline_large_decimated_png": {
+    "alloc_bytes": 7904646,
+    "alloc_blocks": 132
+  },
+  "sparkline_large_png": {
+    "alloc_bytes": 14112034,
+    "alloc_blocks": 127
   }
 }
