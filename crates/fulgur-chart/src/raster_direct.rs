@@ -1000,10 +1000,15 @@ fn render_text(
     let paint = solid_paint(fill);
     let mut cursor_x = start_x;
     let text_transform = rotate_deg
-        .map(|angle| angle as f32)
         .filter(|angle| angle.is_finite())
+        .map(|angle| angle % 360.0)
+        .filter(|angle| *angle != 0.0)
         .map_or(transform, |angle| {
-            transform.pre_concat(Transform::from_rotate_at(angle, x as f32, baseline_y))
+            transform.pre_concat(Transform::from_rotate_at(
+                angle as f32,
+                x as f32,
+                baseline_y,
+            ))
         });
 
     for ch in content.chars() {
@@ -1401,6 +1406,32 @@ mod tests {
                 text_pixmap(Anchor::Middle, None, 1.0).data()
             );
         }
+    }
+
+    #[test]
+    fn finite_text_rotation_normalizes_full_and_large_turns_in_f64() {
+        let unrotated = text_pixmap(Anchor::Middle, None, 1.0);
+        for rotate_deg in [360.0, -360.0, 720.0, -1_080.0] {
+            assert_eq!(
+                text_pixmap(Anchor::Middle, Some(rotate_deg), 1.0).data(),
+                unrotated.data(),
+                "{rotate_deg} degrees must use the exact unrotated path"
+            );
+        }
+
+        assert_eq!(
+            text_pixmap(Anchor::Middle, Some(450.0), 1.0).data(),
+            text_pixmap(Anchor::Middle, Some(90.0), 1.0).data()
+        );
+
+        let huge_angle = f64::MAX;
+        let normalized = huge_angle % 360.0;
+        assert!(huge_angle > f64::from(f32::MAX));
+        assert_ne!(normalized, 0.0);
+        assert_eq!(
+            text_pixmap(Anchor::Middle, Some(huge_angle), 1.0).data(),
+            text_pixmap(Anchor::Middle, Some(normalized), 1.0).data()
+        );
     }
 
     fn bar_spec() -> crate::ir::ChartSpec {
