@@ -8,6 +8,7 @@ const MILLIS_PER_WEEK: i64 = 7 * MILLIS_PER_DAY;
 const APPROX_MILLIS_PER_MONTH: i64 = 30 * MILLIS_PER_DAY;
 const APPROX_MILLIS_PER_YEAR: i64 = 365 * MILLIS_PER_DAY;
 const MAX_ERROR_FRAGMENT_BYTES: usize = 80;
+const MAX_TEMPORAL_TICKS: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TickUnit {
@@ -90,9 +91,11 @@ pub fn parse_rfc3339_millis(field: &str, raw: &str) -> Result<i64, String> {
 
 /// D3-compatible UTC temporal ticks.
 ///
-/// The desired count is `ceil(plot_width / 40)`. Selection uses D3's
-/// neighboring-duration ratio rule, while range generation uses UTC calendar
-/// boundaries for weeks, months, and years. Reversed domains preserve direction.
+/// The desired count is `ceil(plot_width / 40)`, clamped to 1..=1,000.
+/// Selection uses D3's neighboring-duration ratio rule, while range generation
+/// uses UTC calendar boundaries for weeks, months, and years. Intervals widen
+/// when necessary so no more than 1,000 aligned ticks are emitted. Reversed
+/// domains preserve direction.
 pub fn temporal_ticks(min_ms: i64, max_ms: i64, plot_width: f64) -> Vec<TemporalTick> {
     let reverse = max_ms < min_ms;
     let (start_ms, stop_ms) = if reverse {
@@ -108,7 +111,9 @@ pub fn temporal_ticks(min_ms: i64, max_ms: i64, plot_width: f64) -> Vec<Temporal
     }
 
     let desired_count = if plot_width.is_finite() && plot_width > 0.0 {
-        (plot_width / 40.0).ceil().max(1.0) as usize
+        (plot_width / 40.0)
+            .ceil()
+            .clamp(1.0, MAX_TEMPORAL_TICKS as f64) as usize
     } else {
         1
     };
@@ -212,8 +217,33 @@ fn generate_ticks(start_ms: i64, stop_ms: i64, interval: TickInterval) -> Vec<i6
 fn generate_fixed(start_ms: i64, stop_ms: i64, step_ms: i64, origin_ms: i64) -> Vec<i64> {
     let start = i128::from(start_ms);
     let stop = i128::from(stop_ms);
-    let step = i128::from(step_ms);
+    let base_step = i128::from(step_ms);
     let origin = i128::from(origin_ms);
+    let Some((_, base_count)) = fixed_tick_range(start, stop, base_step, origin) else {
+        return Vec::new();
+    };
+    if base_count == 0 {
+        return Vec::new();
+    }
+    let stride = (base_count + MAX_TEMPORAL_TICKS as i128 - 1) / MAX_TEMPORAL_TICKS as i128;
+    let step = base_step * stride;
+    let Some((aligned, count)) = fixed_tick_range(start, stop, step, origin) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let current = aligned + index * step;
+        // `current` is bounded by the i64-derived start/stop values here.
+        out.push(current as i64);
+    }
+    out
+}
+
+fn fixed_tick_range(start: i128, stop: i128, step: i128, origin: i128) -> Option<(i128, i128)> {
+    if step <= 0 {
+        return None;
+    }
     let relative = start - origin;
     let quotient = relative.div_euclid(step);
     let aligned = origin
@@ -222,68 +252,91 @@ fn generate_fixed(start_ms: i64, stop_ms: i64, step_ms: i64, origin_ms: i64) -> 
         } else {
             quotient + 1
         } * step;
-
-    let mut out = Vec::new();
-    let mut current = aligned;
-    while current <= stop {
-        // `current` is bounded by the i64-derived start/stop values here.
-        out.push(current as i64);
-        current += step;
-    }
-    out
+    let count = if aligned > stop {
+        0
+    } else {
+        (stop - aligned).div_euclid(step) + 1
+    };
+    Some((aligned, count))
 }
 
 fn generate_calendar(start_ms: i64, stop_ms: i64, unit: TickUnit, step: i32) -> Vec<i64> {
     let Some(start) = datetime(start_ms) else {
         return Vec::new();
     };
-    let first_index = match unit {
+    let ceil_index = match unit {
         TickUnit::Month => {
-            let index = start.year().saturating_mul(12) + i32::from(u8::from(start.month())) - 1;
+            let index = i128::from(start.year()) * 12 + i128::from(u8::from(start.month())) - 1;
             let boundary = calendar_millis(TickUnit::Month, index);
-            let ceil_index = if boundary.is_some_and(|value| value < start_ms) {
-                index.saturating_add(1)
+            if boundary.is_some_and(|value| value < start_ms) {
+                index + 1
             } else {
                 index
-            };
-            align_calendar_index(ceil_index, step)
+            }
         }
         TickUnit::Year => {
-            let boundary = calendar_millis(TickUnit::Year, start.year());
-            let ceil_year = if boundary.is_some_and(|value| value < start_ms) {
-                start.year().saturating_add(1)
+            let year = i128::from(start.year());
+            let boundary = calendar_millis(TickUnit::Year, year);
+            if boundary.is_some_and(|value| value < start_ms) {
+                year + 1
             } else {
-                start.year()
-            };
-            align_calendar_index(ceil_year, step)
+                year
+            }
         }
         _ => return Vec::new(),
     };
-
-    let mut out = Vec::new();
-    let mut index = first_index;
-    while let Some(value) = calendar_millis(unit, index) {
-        if value > stop_ms {
-            break;
+    let stop_date = datetime(stop_ms)
+        .map(OffsetDateTime::date)
+        .unwrap_or(time::Date::MAX);
+    let last_index = match unit {
+        TickUnit::Month => {
+            i128::from(stop_date.year()) * 12 + i128::from(u8::from(stop_date.month())) - 1
         }
-        if value >= start_ms {
+        TickUnit::Year => i128::from(stop_date.year()),
+        _ => return Vec::new(),
+    };
+    let base_step = i128::from(step);
+    let first_index = align_calendar_index(ceil_index, base_step);
+    let base_count = calendar_tick_count(first_index, last_index, base_step);
+    if base_count == 0 {
+        return Vec::new();
+    }
+    let stride = (base_count + MAX_TEMPORAL_TICKS as i128 - 1) / MAX_TEMPORAL_TICKS as i128;
+    let widened_step = base_step * stride;
+    let first_index = align_calendar_index(ceil_index, widened_step);
+    let count = calendar_tick_count(first_index, last_index, widened_step);
+
+    let mut out = Vec::with_capacity(count as usize);
+    for offset in 0..count {
+        let index = first_index + offset * widened_step;
+        let Some(value) = calendar_millis(unit, index) else {
+            break;
+        };
+        if value >= start_ms && value <= stop_ms {
             out.push(value);
         }
-        index = index.saturating_add(step);
     }
     out
 }
 
-fn align_calendar_index(index: i32, step: i32) -> i32 {
+fn calendar_tick_count(first_index: i128, last_index: i128, step: i128) -> i128 {
+    if step <= 0 || first_index > last_index {
+        0
+    } else {
+        (last_index - first_index).div_euclid(step) + 1
+    }
+}
+
+fn align_calendar_index(index: i128, step: i128) -> i128 {
     let remainder = index.rem_euclid(step);
     if remainder == 0 {
         index
     } else {
-        index.saturating_add(step - remainder)
+        index + step - remainder
     }
 }
 
-fn calendar_millis(unit: TickUnit, index: i32) -> Option<i64> {
+fn calendar_millis(unit: TickUnit, index: i128) -> Option<i64> {
     let (year, month) = match unit {
         TickUnit::Month => {
             let year = index.div_euclid(12);
@@ -293,6 +346,7 @@ fn calendar_millis(unit: TickUnit, index: i32) -> Option<i64> {
         TickUnit::Year => (index, Month::January),
         _ => return None,
     };
+    let year = i32::try_from(year).ok()?;
     let datetime = time::Date::from_calendar_date(year, month, 1)
         .ok()?
         .midnight()
@@ -668,6 +722,81 @@ mod tests {
         assert!(ticks.len() > 24);
         assert_eq!(ticks.first().map(|tick| tick.unix_millis), Some(min));
         assert_eq!(ticks.last().map(|tick| tick.unix_millis), Some(max));
+    }
+
+    #[test]
+    fn temporal_ticks_cap_huge_width_fixed_ticks_and_preserve_direction() {
+        let forward = temporal_ticks(0, 1_000_000, f64::MAX);
+        assert!(forward.len() <= 1_000, "tick count={}", forward.len());
+        assert!(
+            forward
+                .windows(2)
+                .all(|pair| pair[0].unix_millis < pair[1].unix_millis)
+        );
+        let step = forward[1].unix_millis - forward[0].unix_millis;
+        assert!(step > 0);
+        assert!(
+            forward
+                .iter()
+                .all(|tick| tick.unix_millis.rem_euclid(step) == 0)
+        );
+        assert!(
+            forward.last().unwrap().unix_millis > 500_000,
+            "the full domain must remain represented instead of truncating early"
+        );
+
+        let reverse = temporal_ticks(1_000_000, 0, f64::MAX);
+        assert_eq!(
+            reverse
+                .iter()
+                .map(|tick| tick.unix_millis)
+                .collect::<Vec<_>>(),
+            forward
+                .iter()
+                .rev()
+                .map(|tick| tick.unix_millis)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn temporal_ticks_cap_calendar_and_extreme_domains_before_generation() {
+        let min = millis("1900-01-01T00:00:00Z");
+        let max = millis("2000-01-01T00:00:00Z");
+        let forward = temporal_ticks(min, max, 40_000.0);
+        assert!(forward.len() <= 1_000, "tick count={}", forward.len());
+        assert!(
+            forward
+                .windows(2)
+                .all(|pair| pair[0].unix_millis < pair[1].unix_millis)
+        );
+        assert_eq!(forward.first().unwrap().unix_millis, min);
+        assert_eq!(forward.last().unwrap().unix_millis, max);
+        assert!(forward.iter().all(|tick| {
+            let date = datetime(tick.unix_millis).expect("calendar tick");
+            date.day() == 1 && (i32::from(u8::from(date.month())) - 1).rem_euclid(2) == 0
+        }));
+
+        let reverse = temporal_ticks(max, min, 40_000.0);
+        assert_eq!(
+            reverse
+                .iter()
+                .map(|tick| tick.unix_millis)
+                .collect::<Vec<_>>(),
+            forward
+                .iter()
+                .rev()
+                .map(|tick| tick.unix_millis)
+                .collect::<Vec<_>>()
+        );
+
+        let extreme = temporal_ticks(i64::MIN, i64::MAX, f64::MAX);
+        assert!(extreme.len() <= 1_000);
+        assert!(
+            extreme
+                .windows(2)
+                .all(|pair| pair[0].unix_millis < pair[1].unix_millis)
+        );
     }
 
     #[test]
