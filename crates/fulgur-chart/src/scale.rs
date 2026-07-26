@@ -545,6 +545,16 @@ mod tests {
     }
 
     #[test]
+    fn nice_ticks_reversed_nonfinite_domain_uses_finite_default() {
+        let ticks = nice_ticks(f64::INFINITY, 1.0, 5);
+        assert_eq!((ticks.min, ticks.max), (0.0, 1.0));
+        assert_eq!(
+            ticks.ticks,
+            vec![0.0, 0.2, 0.4, 0.6000000000000001, 0.8, 1.0]
+        );
+    }
+
+    #[test]
     fn nice_ticks_extreme_finite_range_is_bounded() {
         let t = nice_ticks(0.0, f64::MAX, 5);
         assert_eq!(t.min, 0.0);

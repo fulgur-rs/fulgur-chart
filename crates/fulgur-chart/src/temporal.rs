@@ -227,9 +227,8 @@ fn generate_fixed(start_ms: i64, stop_ms: i64, step_ms: i64, origin_ms: i64) -> 
     }
     let stride = (base_count + MAX_TEMPORAL_TICKS as i128 - 1) / MAX_TEMPORAL_TICKS as i128;
     let step = base_step * stride;
-    let Some((aligned, count)) = fixed_tick_range(start, stop, step, origin) else {
-        return Vec::new();
-    };
+    let (aligned, count) =
+        fixed_tick_range(start, stop, step, origin).expect("widened fixed step stays positive");
 
     let mut out = Vec::with_capacity(count as usize);
     for index in 0..count {
@@ -264,35 +263,32 @@ fn generate_calendar(start_ms: i64, stop_ms: i64, unit: TickUnit, step: i32) -> 
     let Some(start) = datetime(start_ms) else {
         return Vec::new();
     };
-    let ceil_index = match unit {
+    let stop_date = datetime(stop_ms)
+        .map(OffsetDateTime::date)
+        .unwrap_or(time::Date::MAX);
+    let (ceil_index, last_index) = match unit {
         TickUnit::Month => {
             let index = i128::from(start.year()) * 12 + i128::from(u8::from(start.month())) - 1;
             let boundary = calendar_millis(TickUnit::Month, index);
-            if boundary.is_some_and(|value| value < start_ms) {
+            let ceil_index = if boundary.is_some_and(|value| value < start_ms) {
                 index + 1
             } else {
                 index
-            }
+            };
+            let last_index =
+                i128::from(stop_date.year()) * 12 + i128::from(u8::from(stop_date.month())) - 1;
+            (ceil_index, last_index)
         }
         TickUnit::Year => {
             let year = i128::from(start.year());
             let boundary = calendar_millis(TickUnit::Year, year);
-            if boundary.is_some_and(|value| value < start_ms) {
+            let ceil_index = if boundary.is_some_and(|value| value < start_ms) {
                 year + 1
             } else {
                 year
-            }
+            };
+            (ceil_index, i128::from(stop_date.year()))
         }
-        _ => return Vec::new(),
-    };
-    let stop_date = datetime(stop_ms)
-        .map(OffsetDateTime::date)
-        .unwrap_or(time::Date::MAX);
-    let last_index = match unit {
-        TickUnit::Month => {
-            i128::from(stop_date.year()) * 12 + i128::from(u8::from(stop_date.month())) - 1
-        }
-        TickUnit::Year => i128::from(stop_date.year()),
         _ => return Vec::new(),
     };
     let base_step = i128::from(step);
@@ -306,17 +302,13 @@ fn generate_calendar(start_ms: i64, stop_ms: i64, unit: TickUnit, step: i32) -> 
     let first_index = align_calendar_index(ceil_index, widened_step);
     let count = calendar_tick_count(first_index, last_index, widened_step);
 
-    let mut out = Vec::with_capacity(count as usize);
-    for offset in 0..count {
-        let index = first_index + offset * widened_step;
-        let Some(value) = calendar_millis(unit, index) else {
-            break;
-        };
-        if value >= start_ms && value <= stop_ms {
-            out.push(value);
-        }
-    }
-    out
+    (0..count)
+        .map_while(|offset| {
+            let index = first_index + offset * widened_step;
+            calendar_millis(unit, index)
+        })
+        .filter(|value| *value >= start_ms && *value <= stop_ms)
+        .collect()
 }
 
 fn calendar_tick_count(first_index: i128, last_index: i128, step: i128) -> i128 {
@@ -712,6 +704,15 @@ mod tests {
     #[test]
     fn calendar_ticks_reject_datetimes_outside_time_crate_range() {
         assert!(generate_calendar(i64::MIN, i64::MAX, TickUnit::Year, 1).is_empty());
+    }
+
+    #[test]
+    fn tick_generators_reject_invalid_steps_and_reversed_ranges() {
+        assert!(generate_fixed(0, 1_000, 0, 0).is_empty());
+
+        let january = millis("2026-01-01T00:00:00Z");
+        let february = millis("2026-02-01T00:00:00Z");
+        assert!(generate_calendar(february, january, TickUnit::Month, 1).is_empty());
     }
 
     #[test]

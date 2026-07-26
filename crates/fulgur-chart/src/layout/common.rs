@@ -1261,10 +1261,11 @@ mod tests {
                 .expect("x-axis title");
             assert_eq!(anchor, expected_anchor);
             let width = m.width(TITLE, size as f32) as f64;
-            let (left, right) = match anchor {
-                Anchor::Start => (x, x + width),
-                Anchor::End => (x - width, x),
-                Anchor::Middle => unreachable!(),
+            let (left, right) = if anchor == Anchor::Start {
+                (x, x + width)
+            } else {
+                assert_eq!(anchor, Anchor::End);
+                (x - width, x)
             };
             assert!(left >= 0.0, "{align:?}: left={left}");
             assert!(
@@ -1313,10 +1314,11 @@ mod tests {
                 .expect("rotated y-axis title");
             assert_eq!(anchor, expected_anchor);
             let height = m.width(TITLE, size as f32) as f64;
-            let (top, bottom) = match anchor {
-                Anchor::Start => (y - height, y),
-                Anchor::End => (y, y + height),
-                Anchor::Middle => unreachable!(),
+            let (top, bottom) = if anchor == Anchor::Start {
+                (y - height, y)
+            } else {
+                assert_eq!(anchor, Anchor::End);
+                (y, y + height)
             };
             assert!(top >= 0.0, "{align:?}: top={top}");
             assert!(
