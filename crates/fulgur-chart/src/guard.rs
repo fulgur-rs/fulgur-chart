@@ -72,6 +72,13 @@ pub const DEFAULT_MAX_TREE_DEPTH: usize = 50;
 /// PNG 面積の独立した入口を塞ぐ目的もある。実際の PNG メモリは raster の面積チェックで保護する。
 pub const DEFAULT_MAX_DIMENSION_PX: f64 = 32_768.0;
 
+/// 明示マーカー半径の上限(px)。
+///
+/// サポートする最大 scene 寸法を超える半径は、可視領域を覆い切った後の見た目に
+/// 有用な差を加えず、SVG と raster で異なる数値限界だけを露出する。このため
+/// backend-neutral な IR 契約として scene 寸法上限に揃える。
+pub const MAX_MARKER_RADIUS_PX: f64 = DEFAULT_MAX_DIMENSION_PX;
+
 /// spec の width/height 下限(px)。
 /// ゼロ・負値はレイアウトで除算異常を起こし得るため拒否する。
 pub const DEFAULT_MIN_DIMENSION_PX: f64 = 1.0;
@@ -188,7 +195,8 @@ pub fn validate_spec_with_measurer(
     limits: &InputLimits,
     measurer: &crate::text::TextMeasurer<'_>,
 ) -> Result<(), String> {
-    validate_spec_for_render_with_measurer(spec, limits, measurer)
+    validate_spec_base(spec, limits)?;
+    validate_plot_area_scene_with_measurer(spec, limits, measurer)
 }
 
 fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
@@ -220,25 +228,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
             limits.max_series,
         ));
     }
-    if spec.series.iter().any(|series| {
-        series
-            .point_radius
-            .is_some_and(|radius| !radius.is_finite() || radius > f32::MAX as f64)
-    }) {
-        return Err("pointRadius must be finite and no greater than f32::MAX".to_string());
-    }
-    if spec
-        .series
-        .iter()
-        .flat_map(|series| &series.points)
-        .any(|point| {
-            point
-                .r
-                .is_some_and(|radius| !radius.is_finite() || radius > f32::MAX as f64)
-        })
-    {
-        return Err("point.r must be finite and no greater than f32::MAX".to_string());
-    }
+    validate_marker_radii(spec)?;
 
     // --- カテゴリ数 ---
     if spec.categories.len() > limits.max_categories {
@@ -648,13 +638,24 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
     Ok(())
 }
 
-pub(crate) fn validate_spec_for_render_with_measurer(
-    spec: &ChartSpec,
-    limits: &InputLimits,
-    measurer: &crate::text::TextMeasurer<'_>,
-) -> Result<(), String> {
-    validate_spec_base(spec, limits)?;
-    validate_plot_area_scene_with_measurer(spec, limits, measurer)
+pub(crate) fn validate_marker_radii(spec: &ChartSpec) -> Result<(), String> {
+    let unsupported = |radius: f64| !radius.is_finite() || radius > MAX_MARKER_RADIUS_PX;
+    if spec
+        .series
+        .iter()
+        .any(|series| series.point_radius.is_some_and(unsupported))
+    {
+        return Err("pointRadius must be finite and no greater than 32768".to_string());
+    }
+    if spec
+        .series
+        .iter()
+        .flat_map(|series| &series.points)
+        .any(|point| point.r.is_some_and(unsupported))
+    {
+        return Err("point.r must be finite and no greater than 32768".to_string());
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_plot_area_scene_with_measurer(
@@ -808,7 +809,7 @@ mod tests {
 
     #[test]
     fn explicit_point_radius_accepts_supported_values() {
-        for point_radius in [None, Some(0.0), Some(-1.0), Some(f32::MAX as f64)] {
+        for point_radius in [None, Some(0.0), Some(-1.0), Some(32_768.0)] {
             let mut spec = base_spec();
             spec.series[0].point_radius = point_radius;
             assert!(
@@ -819,15 +820,10 @@ mod tests {
     }
 
     #[test]
-    fn explicit_point_radius_rejects_non_finite_and_above_f32_max() {
-        const ERROR: &str = "pointRadius must be finite and no greater than f32::MAX";
+    fn explicit_point_radius_rejects_non_finite_and_above_marker_limit() {
+        const ERROR: &str = "pointRadius must be finite and no greater than 32768";
 
-        for point_radius in [
-            (f32::MAX as f64) * 2.0,
-            f64::NAN,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-        ] {
+        for point_radius in [32_769.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let mut spec = base_spec();
             spec.series.push(spec.series[0].clone());
             spec.series[1].point_radius = Some(point_radius);
@@ -843,7 +839,7 @@ mod tests {
     fn explicit_point_r_accepts_supported_values() {
         use crate::ir::Point;
 
-        for radius in [None, Some(0.0), Some(-1.0), Some(f32::MAX as f64)] {
+        for radius in [None, Some(0.0), Some(-1.0), Some(32_768.0)] {
             let mut spec = base_spec();
             spec.series[0].points = vec![Point {
                 x: 1.0,
@@ -858,17 +854,12 @@ mod tests {
     }
 
     #[test]
-    fn explicit_point_r_rejects_non_finite_and_above_f32_max_on_later_point() {
+    fn explicit_point_r_rejects_non_finite_and_above_marker_limit_on_later_point() {
         use crate::ir::Point;
 
-        const ERROR: &str = "point.r must be finite and no greater than f32::MAX";
+        const ERROR: &str = "point.r must be finite and no greater than 32768";
 
-        for radius in [
-            (f32::MAX as f64) * 2.0,
-            f64::NAN,
-            f64::INFINITY,
-            f64::NEG_INFINITY,
-        ] {
+        for radius in [32_769.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             let mut spec = base_spec();
             spec.series[0].points = vec![
                 Point {

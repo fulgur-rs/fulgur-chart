@@ -61,7 +61,7 @@ fn bubble_snapshot() {
 
 #[test]
 fn unsupported_point_r_returns_same_error_for_fallible_svg_png_webp_apis() {
-    const ERROR: &str = "point.r must be finite and no greater than f32::MAX";
+    const ERROR: &str = "point.r must be finite and no greater than 32768";
     let spec = chartjs::parse(
         r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2,"r":1e40}]}]}}"#,
         false,

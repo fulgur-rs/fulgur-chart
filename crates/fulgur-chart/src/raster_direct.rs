@@ -169,10 +169,11 @@ pub fn render_chart_to_png_with(
 
 /// 入力上限を指定して ChartSpec を PNG バイト列に直接ラスタライズする。
 ///
-/// `limits` を使って完全な入力検証と、カスタムフォントで計測した PlotArea の
-/// 外周 scene 検証を描画前に行う。固定の PNG ピクセル面積 hard stop は別途
-/// 必ず適用され、`limits` では緩和できない。圧縮は
-/// [`PngCompression::Balanced`] を使う。
+/// 描画 backend 共通のマーカー半径安全性検証と、`limits` を使った
+/// カスタムフォント計測による PlotArea 外周 scene 検証を描画前に行う。
+/// その他の入力 policy は従来どおり検証しない。固定の PNG ピクセル面積
+/// hard stop は別途必ず適用され、`limits` では緩和できない。
+/// 圧縮は [`PngCompression::Balanced`] を使う。
 pub fn render_chart_to_png_with_limits(
     spec: &crate::ir::ChartSpec,
     scale: f32,
@@ -193,7 +194,8 @@ fn render_chart_to_png_with_options(
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
-    crate::guard::validate_spec_for_render_with_measurer(spec, limits, &measurer)?;
+    crate::guard::validate_marker_radii(spec)?;
+    crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &measurer)?;
     let scene = crate::layout::build_scene(spec, &measurer);
     scene_to_png_with_face(&scene, scale, &face, compression)
 }
@@ -224,9 +226,10 @@ pub fn render_chart_to_webp(
 
 /// 入力上限を指定して ChartSpec を WebP バイト列に直接ラスタライズする（ロスレス）。
 ///
-/// `limits` を使って完全な入力検証と、カスタムフォントで計測した PlotArea の
-/// 外周 scene 検証を描画前に行う。固定の WebP ピクセル面積・軸ごとの
-/// hard stop は別途必ず適用され、`limits` では緩和できない。
+/// 描画 backend 共通のマーカー半径安全性検証と、`limits` を使った
+/// カスタムフォント計測による PlotArea 外周 scene 検証を描画前に行う。
+/// その他の入力 policy は従来どおり検証しない。固定の WebP
+/// ピクセル面積・軸ごとの hard stop は別途必ず適用され、`limits` では緩和できない。
 pub fn render_chart_to_webp_with_limits(
     spec: &crate::ir::ChartSpec,
     scale: f32,
@@ -237,7 +240,8 @@ pub fn render_chart_to_webp_with_limits(
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
-    crate::guard::validate_spec_for_render_with_measurer(spec, limits, &measurer)?;
+    crate::guard::validate_marker_radii(spec)?;
+    crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &measurer)?;
     let scene = crate::layout::build_scene(spec, &measurer);
     // WebP 専用の上限(軸・面積)で pixmap 確保前に弾き OOM を防ぐ(→ WEBP_LIMITS)。
     let mut pixmap = scene_to_pixmap(&scene, scale, &face, &WEBP_LIMITS)?;
@@ -291,6 +295,50 @@ const STAMP_MIN_RUN: usize = 128;
 /// 病的な巨大半径/スケールのみガードする。
 const STAMP_MAX_DEVICE_R: f64 = 64.0;
 
+/// tiny-skia の AA scan converter に渡せる円外縁の device 座標絶対値上限。
+///
+/// tiny-skia 0.11.4 の AA edge は user/device 座標を FDot6 へ変換する際、
+/// supersample shift 2 と fractional bits 6 により 256 倍して `i32` に保持し、
+/// 2 点の差分も `i32` で計算する。外縁を ±4,000,000px に制限すれば最悪 span は
+/// `8,000,000 * 256 = 2,048,000,000 < i32::MAX` となり、上限まで約 4.6% の
+/// 余裕を残せる。中心、半径、正の stroke 半幅、output scale を全て含めて検証する。
+const MAX_SAFE_DEVICE_CIRCLE_COORD_PX: f64 = 4_000_000.0;
+
+fn validate_circle_device_bounds(scene: &Scene, scale: f32) -> Result<(), String> {
+    let scale = scale as f64;
+    for prim in &scene.items {
+        let Prim::Circle {
+            cx,
+            cy,
+            r,
+            stroke_width,
+            ..
+        } = prim
+        else {
+            continue;
+        };
+        // tiny-skia の from_circle が従来どおり無描画にする入力はここでは policy
+        // error に変えない。r==0 は正の stroke で点を描き得るため検証対象。
+        if !cx.is_finite() || !cy.is_finite() || !r.is_finite() || *r < 0.0 {
+            continue;
+        }
+        let half_stroke = if *stroke_width > 0.0 {
+            *stroke_width / 2.0
+        } else {
+            0.0
+        };
+        let extent = *r + half_stroke;
+        let max_device_coord = (cx.abs().max(cy.abs()) + extent) * scale;
+        if !max_device_coord.is_finite() || max_device_coord > MAX_SAFE_DEVICE_CIRCLE_COORD_PX {
+            return Err(format!(
+                "raster circle device bounds exceed safe coordinate limit of {:.0} px",
+                MAX_SAFE_DEVICE_CIRCLE_COORD_PX
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Scene を RGBA Pixmap にラスタライズする（PNG/WebP 共通）。
 fn scene_to_pixmap(
     scene: &Scene,
@@ -318,6 +366,7 @@ fn scene_to_pixmap_with(
     let h = (scene.height as f32 * scale).round().max(1.0) as u32;
     let area = w as u64 * h as u64;
     limits.check(w, h, area)?;
+    validate_circle_device_bounds(scene, scale)?;
 
     let mut pixmap = Pixmap::new(w, h)
         .ok_or_else(|| format!("Pixmap allocation failed: invalid dimensions {w}x{h}"))?;
@@ -1659,6 +1708,59 @@ mod tests {
         let err = render_chart_to_png(&spec, 1.0, DEFAULT_FONT);
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("exceeds"));
+    }
+
+    fn circle_scene(radius: f64, stroke_width: f64) -> Scene {
+        Scene {
+            width: 20.0,
+            height: 20.0,
+            items: vec![Prim::Circle {
+                cx: 10.0,
+                cy: 10.0,
+                r: radius,
+                fill: Color {
+                    r: 54,
+                    g: 162,
+                    b: 235,
+                    a: 1.0,
+                },
+                stroke: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                stroke_width,
+            }],
+        }
+    }
+
+    #[test]
+    fn circle_device_bounds_reject_scale_dependent_fixed_point_overflow() {
+        let scene = circle_scene(500_000.0, 0.0);
+        assert!(scene_to_png(&scene, 1.0, DEFAULT_FONT).is_ok());
+        assert_eq!(
+            scene_to_png(&scene, 10.0, DEFAULT_FONT),
+            Err("raster circle device bounds exceed safe coordinate limit of 4000000 px".into())
+        );
+    }
+
+    #[test]
+    fn circle_device_bounds_include_stroke_extent() {
+        let scene = circle_scene(3_999_990.0, 40.0);
+        assert_eq!(
+            scene_to_png(&scene, 1.0, DEFAULT_FONT),
+            Err("raster circle device bounds exceed safe coordinate limit of 4000000 px".into())
+        );
+    }
+
+    #[test]
+    fn normal_circle_radii_render_at_supported_scales() {
+        let scene = circle_scene(3.0, 1.0);
+        for scale in [1.0, 2.0, 10.0] {
+            let png = scene_to_png(&scene, scale, DEFAULT_FONT).unwrap();
+            assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G'], "scale={scale}");
+        }
     }
 
     #[test]

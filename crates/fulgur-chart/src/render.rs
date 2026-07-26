@@ -23,17 +23,20 @@ pub fn render_chart_with_font(
 
 /// 任意フォントと入力上限で描画。font_bytes がパース不能なら Err。
 ///
-/// `limits` を使って完全な入力検証と、カスタムフォントで計測した PlotArea の
-/// 外周 scene 検証を描画前に行う。PNG/WebP 出力では、これとは別に固定の
-/// ピクセル面積 hard stop（WebP は軸ごとの hard stop も）が常に適用され、
-/// `limits` では緩和できない。
+/// 描画 backend 共通のマーカー半径安全性検証と、`limits` を使った
+/// カスタムフォント計測による PlotArea 外周 scene 検証を描画前に行う。
+/// その他の入力 policy は従来どおり検証しないため、必要なら呼び出し側で
+/// [`crate::guard::validate_spec`] または [`crate::guard::validate_spec_with_measurer`]
+/// を使う。PNG/WebP 出力では、これとは別に固定のピクセル面積 hard stop
+/// （WebP は軸ごとの hard stop も）が常に適用され、`limits` では緩和できない。
 pub fn render_chart_with_font_and_limits(
     spec: &crate::ir::ChartSpec,
     font_bytes: &[u8],
     limits: &crate::guard::InputLimits,
 ) -> Result<String, String> {
     let m = TextMeasurer::new(font_bytes).map_err(|e| format!("フォント読込失敗: {e}"))?;
-    crate::guard::validate_spec_for_render_with_measurer(spec, limits, &m)?;
+    crate::guard::validate_marker_radii(spec)?;
+    crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &m)?;
     let fam = family_name(font_bytes).unwrap_or_else(|| DEFAULT_FAMILY.to_string());
     // family 名は CSS string としてクォートする。フォント name table はカンマや引用符を
     // 含み得るため、未クォートだと CSS が複数 family と解釈し計測/SVG/PNG の三者一致が崩れる。
@@ -82,6 +85,14 @@ mod tests {
     #[test]
     fn with_invalid_font_is_err() {
         assert!(render_chart_with_font(&spec(), b"not a font").is_err());
+    }
+
+    #[test]
+    fn custom_font_render_preserves_legacy_unrelated_base_policy_contract() {
+        let mut invalid_by_base_policy = spec();
+        invalid_by_base_policy.width = 0.0;
+        let svg = render_chart_with_font(&invalid_by_base_policy, DEFAULT_FONT).unwrap();
+        assert!(svg.starts_with("<svg"));
     }
 
     #[test]
