@@ -12,13 +12,12 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use fulgur_chart::frontend::chartjs;
-use fulgur_chart::render::render_chart;
-
 #[path = "cases.rs"]
 mod cases;
 #[path = "membench_check.rs"]
 mod membench_check;
+#[path = "membench_targets.rs"]
+mod membench_targets;
 
 use membench_check::{Baseline, CaseStat, check};
 
@@ -34,9 +33,10 @@ fn baseline_path() -> PathBuf {
     ))
 }
 
-/// Measure per-case allocation bytes/blocks for the E2E SVG path (parse + render).
-/// `total_bytes` is cumulative-allocated (frees don't reduce it), so the delta is
-/// the allocation volume of that one case — deterministic for fixed input + code.
+/// Measure per-case allocation bytes/blocks for the E2E SVG and PNG paths.
+/// `total_bytes` is cumulative-allocated (frees don't reduce it), so the delta
+/// is the allocation volume of that one target — deterministic for fixed input
+/// + code.
 fn measure() -> Baseline {
     let _profiler = dhat::Profiler::builder().testing().build();
     let mut out: Baseline = BTreeMap::new();
@@ -44,14 +44,15 @@ fn measure() -> Baseline {
     // cached font measurer or a `OnceLock`) whose one-time cost would otherwise be
     // charged to whichever case runs first. If such caching is ever added, give it
     // an explicit warmup here so per-case numbers stay order-independent.
-    for case in cases::all() {
+    let cases = cases::all();
+    for target in membench_targets::all(&cases) {
         let before = dhat::HeapStats::get();
-        let spec = chartjs::parse(&case.json, false).expect("case parses");
-        let svg = render_chart(&spec);
+        let rendered = membench_targets::render(&target)
+            .unwrap_or_else(|e| panic!("case {} renders: {e}", target.name));
         let after = dhat::HeapStats::get();
-        std::hint::black_box(&svg);
+        std::hint::black_box(&rendered);
         out.insert(
-            case.name.to_string(),
+            target.name,
             CaseStat {
                 alloc_bytes: after.total_bytes - before.total_bytes,
                 alloc_blocks: after.total_blocks - before.total_blocks,

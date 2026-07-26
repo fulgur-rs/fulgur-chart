@@ -15,9 +15,11 @@ cargo bench -p fulgur-chart --bench render -- --test  # quick smoke (each case o
 
 ## Memory (`membench`) — deterministic gate
 
-dhat measures per-case allocation bytes (deterministic), compared against the
-committed `membench_baseline.json`. CI fails if any case exceeds the baseline by
-more than the threshold (default +25%).
+dhat measures allocation bytes for the E2E JSON-to-SVG and JSON-to-PNG paths
+of every representative case, compared against the committed
+`membench_baseline.json`. SVG entries keep the case name; `_png` identifies PNG
+entries. CI fails if any target exceeds the baseline by more than the threshold
+(default +25%).
 
 ```bash
 # Print current numbers
