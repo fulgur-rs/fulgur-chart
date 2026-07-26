@@ -1383,9 +1383,31 @@ mod tests {
         titled.legend_title = Some("unsupported title".into());
 
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let titled_frame = compute(&titled, &m);
+        let baseline_frame = compute(&baseline, &m);
+        assert_eq!(titled_frame.scene_width, baseline_frame.scene_width);
+        assert_eq!(titled_frame.scene_height, baseline_frame.scene_height);
+        assert_eq!(titled_frame.plot_left, baseline_frame.plot_left);
+        assert_eq!(titled_frame.plot_right, baseline_frame.plot_right);
+        assert_eq!(titled_frame.plot_top, baseline_frame.plot_top);
+        assert_eq!(titled_frame.plot_bottom, baseline_frame.plot_bottom);
+        assert_eq!(titled_frame.ticks, baseline_frame.ticks);
+        assert_eq!(titled_frame.temporal_ticks, baseline_frame.temporal_ticks);
         assert_eq!(
-            compute(&titled, &m).plot_right,
-            compute(&baseline, &m).plot_right
+            titled_frame.ys.map(titled_frame.ticks.min),
+            baseline_frame.ys.map(baseline_frame.ticks.min)
+        );
+        assert_eq!(
+            titled_frame.ys.map(titled_frame.ticks.max),
+            baseline_frame.ys.map(baseline_frame.ticks.max)
+        );
+        let titled_midpoint =
+            titled_frame.ticks.min + (titled_frame.ticks.max - titled_frame.ticks.min) / 2.0;
+        let baseline_midpoint =
+            baseline_frame.ticks.min + (baseline_frame.ticks.max - baseline_frame.ticks.min) / 2.0;
+        assert_eq!(
+            titled_frame.ys.map(titled_midpoint),
+            baseline_frame.ys.map(baseline_midpoint)
         );
         assert_eq!(
             crate::layout::build_scene(&titled, &m),
