@@ -18,7 +18,7 @@ modules, cargo test, cargo clippy, cargo llvm-cov, GitHub GraphQL, Beads
 - Preserve unrotated raster text bytes and anchor layout.
 - Match SVG rotation around the declared text anchor.
 - Preserve zero/negative point-radius suppression semantics.
-- Reject unsupported radius consistently before every output backend.
+- Reject unsupported radius consistently before every fallible output backend.
 - Add regressions first and observe RED.
 - Final executable changed-line coverage against `origin/main...HEAD` is 100%.
 
