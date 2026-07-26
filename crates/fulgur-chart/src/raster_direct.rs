@@ -158,10 +158,44 @@ pub fn render_chart_to_png_with(
     font_bytes: &[u8],
     compression: PngCompression,
 ) -> Result<Vec<u8>, String> {
+    render_chart_to_png_with_options(
+        spec,
+        scale,
+        font_bytes,
+        &crate::guard::InputLimits::default(),
+        compression,
+    )
+}
+
+/// 入力上限を指定して ChartSpec を PNG バイト列に直接ラスタライズする。
+///
+/// 描画 backend 共通のマーカー半径安全性検証と、`limits` を使った
+/// カスタムフォント計測による PlotArea 外周 scene 検証を描画前に行う。
+/// その他の入力 policy は従来どおり検証しない。固定の PNG ピクセル面積
+/// hard stop は別途必ず適用され、`limits` では緩和できない。
+/// 圧縮は [`PngCompression::Balanced`] を使う。
+pub fn render_chart_to_png_with_limits(
+    spec: &crate::ir::ChartSpec,
+    scale: f32,
+    font_bytes: &[u8],
+    limits: &crate::guard::InputLimits,
+) -> Result<Vec<u8>, String> {
+    render_chart_to_png_with_options(spec, scale, font_bytes, limits, PngCompression::default())
+}
+
+fn render_chart_to_png_with_options(
+    spec: &crate::ir::ChartSpec,
+    scale: f32,
+    font_bytes: &[u8],
+    limits: &crate::guard::InputLimits,
+    compression: PngCompression,
+) -> Result<Vec<u8>, String> {
     let face =
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
+    crate::guard::validate_marker_radii(spec)?;
+    crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &measurer)?;
     let scene = crate::layout::build_scene(spec, &measurer);
     scene_to_png_with_face(&scene, scale, &face, compression)
 }
@@ -182,10 +216,32 @@ pub fn render_chart_to_webp(
     scale: f32,
     font_bytes: &[u8],
 ) -> Result<Vec<u8>, String> {
+    render_chart_to_webp_with_limits(
+        spec,
+        scale,
+        font_bytes,
+        &crate::guard::InputLimits::default(),
+    )
+}
+
+/// 入力上限を指定して ChartSpec を WebP バイト列に直接ラスタライズする（ロスレス）。
+///
+/// 描画 backend 共通のマーカー半径安全性検証と、`limits` を使った
+/// カスタムフォント計測による PlotArea 外周 scene 検証を描画前に行う。
+/// その他の入力 policy は従来どおり検証しない。固定の WebP
+/// ピクセル面積・軸ごとの hard stop は別途必ず適用され、`limits` では緩和できない。
+pub fn render_chart_to_webp_with_limits(
+    spec: &crate::ir::ChartSpec,
+    scale: f32,
+    font_bytes: &[u8],
+    limits: &crate::guard::InputLimits,
+) -> Result<Vec<u8>, String> {
     let face =
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
+    crate::guard::validate_marker_radii(spec)?;
+    crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &measurer)?;
     let scene = crate::layout::build_scene(spec, &measurer);
     // WebP 専用の上限(軸・面積)で pixmap 確保前に弾き OOM を防ぐ(→ WEBP_LIMITS)。
     let mut pixmap = scene_to_pixmap(&scene, scale, &face, &WEBP_LIMITS)?;
@@ -239,6 +295,50 @@ const STAMP_MIN_RUN: usize = 128;
 /// 病的な巨大半径/スケールのみガードする。
 const STAMP_MAX_DEVICE_R: f64 = 64.0;
 
+/// tiny-skia の AA scan converter に渡せる円外縁の device 座標絶対値上限。
+///
+/// tiny-skia 0.11.4 の AA edge は user/device 座標を FDot6 へ変換する際、
+/// supersample shift 2 と fractional bits 6 により 256 倍して `i32` に保持し、
+/// 2 点の差分も `i32` で計算する。外縁を ±4,000,000px に制限すれば最悪 span は
+/// `8,000,000 * 256 = 2,048,000,000 < i32::MAX` となり、上限まで約 4.6% の
+/// 余裕を残せる。中心、半径、正の stroke 半幅、output scale を全て含めて検証する。
+const MAX_SAFE_DEVICE_CIRCLE_COORD_PX: f64 = 4_000_000.0;
+
+fn validate_circle_device_bounds(scene: &Scene, scale: f32) -> Result<(), String> {
+    let scale = scale as f64;
+    for prim in &scene.items {
+        let Prim::Circle {
+            cx,
+            cy,
+            r,
+            stroke_width,
+            ..
+        } = prim
+        else {
+            continue;
+        };
+        // tiny-skia の from_circle が従来どおり無描画にする入力はここでは policy
+        // error に変えない。r==0 は正の stroke で点を描き得るため検証対象。
+        if !cx.is_finite() || !cy.is_finite() || !r.is_finite() || *r < 0.0 {
+            continue;
+        }
+        let half_stroke = if *stroke_width > 0.0 {
+            *stroke_width / 2.0
+        } else {
+            0.0
+        };
+        let extent = *r + half_stroke;
+        let max_device_coord = (cx.abs().max(cy.abs()) + extent) * scale;
+        if !max_device_coord.is_finite() || max_device_coord > MAX_SAFE_DEVICE_CIRCLE_COORD_PX {
+            return Err(format!(
+                "raster circle device bounds exceed safe coordinate limit of {:.0} px",
+                MAX_SAFE_DEVICE_CIRCLE_COORD_PX
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Scene を RGBA Pixmap にラスタライズする（PNG/WebP 共通）。
 fn scene_to_pixmap(
     scene: &Scene,
@@ -266,6 +366,7 @@ fn scene_to_pixmap_with(
     let h = (scene.height as f32 * scale).round().max(1.0) as u32;
     let area = w as u64 * h as u64;
     limits.check(w, h, area)?;
+    validate_circle_device_bounds(scene, scale)?;
 
     let mut pixmap = Pixmap::new(w, h)
         .ok_or_else(|| format!("Pixmap allocation failed: invalid dimensions {w}x{h}"))?;
@@ -842,10 +943,20 @@ fn render_prim(
             anchor,
             fill,
             content,
-            rotate_deg: _, // ラスタ出力では回転未サポート
+            rotate_deg,
         } => {
             render_text(
-                pixmap, *x, *y, *size, *anchor, *fill, content, face, transform, cache,
+                pixmap,
+                *x,
+                *y,
+                *size,
+                *anchor,
+                *fill,
+                content,
+                *rotate_deg,
+                face,
+                transform,
+                cache,
             );
         }
     }
@@ -905,6 +1016,7 @@ fn render_text(
     anchor: Anchor,
     fill: Color,
     content: &str,
+    rotate_deg: Option<f64>,
     face: &ttf_parser::Face<'_>,
     transform: Transform,
     cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
@@ -933,6 +1045,17 @@ fn render_text(
     let baseline_y = y as f32;
     let paint = solid_paint(fill);
     let mut cursor_x = start_x;
+    let text_transform = rotate_deg
+        .filter(|angle| angle.is_finite())
+        .map(|angle| angle % 360.0)
+        .filter(|angle| *angle != 0.0)
+        .map_or(transform, |angle| {
+            transform.pre_concat(Transform::from_rotate_at(
+                angle as f32,
+                x as f32,
+                baseline_y,
+            ))
+        });
 
     for ch in content.chars() {
         let Some(gid) = face.glyph_index(ch) else {
@@ -950,8 +1073,9 @@ fn render_text(
             .or_insert_with(|| build_canonical_glyph_path(face, gid));
         if let Some(path) = entry.as_ref() {
             // 正規化パス（origin=0, scale=1, Y 反転済み）を
-            // scale(glyph_scale) → translate(cursor_x, baseline_y) → outer_transform の順に合成して描画。
-            let glyph_transform = transform.pre_concat(
+            // scale(glyph_scale) → translate(cursor_x, baseline_y) →
+            // rotate(anchor) → outer_transform の順に合成して描画。
+            let glyph_transform = text_transform.pre_concat(
                 Transform::from_translate(cursor_x, baseline_y)
                     .pre_concat(Transform::from_scale(glyph_scale, glyph_scale)),
             );
@@ -1216,6 +1340,146 @@ mod tests {
     use crate::font::DEFAULT_FONT;
     use crate::frontend::chartjs;
 
+    #[derive(Clone, Copy, Debug)]
+    struct PixelBounds {
+        left: u32,
+        top: u32,
+        right: u32,
+        bottom: u32,
+    }
+
+    impl PixelBounds {
+        fn width(self) -> u32 {
+            self.right - self.left + 1
+        }
+
+        fn height(self) -> u32 {
+            self.bottom - self.top + 1
+        }
+    }
+
+    fn non_transparent_bounds(pixmap: &Pixmap) -> PixelBounds {
+        let mut bounds = None;
+        for (index, pixel) in pixmap.data().chunks_exact(4).enumerate() {
+            if pixel[3] == 0 {
+                continue;
+            }
+            let x = index as u32 % pixmap.width();
+            let y = index as u32 / pixmap.width();
+            bounds = Some(match bounds {
+                None => PixelBounds {
+                    left: x,
+                    top: y,
+                    right: x,
+                    bottom: y,
+                },
+                Some(PixelBounds {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                }) => PixelBounds {
+                    left: left.min(x),
+                    top: top.min(y),
+                    right: right.max(x),
+                    bottom: bottom.max(y),
+                },
+            });
+        }
+        bounds.expect("text must paint at least one pixel")
+    }
+
+    fn text_pixmap(anchor: Anchor, rotate_deg: Option<f64>, scale: f32) -> Pixmap {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let scene = Scene {
+            width: 180.0,
+            height: 180.0,
+            items: vec![Prim::Text {
+                x: 90.0,
+                y: 90.0,
+                size: 24.0,
+                anchor,
+                fill: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                content: "Rotate".into(),
+                rotate_deg,
+            }],
+        };
+        scene_to_pixmap(&scene, scale, &face, &PNG_LIMITS).unwrap()
+    }
+
+    #[test]
+    fn text_rotation_uses_anchor_in_user_space_before_output_scale() {
+        for anchor in [Anchor::Start, Anchor::Middle, Anchor::End] {
+            let horizontal_1x = non_transparent_bounds(&text_pixmap(anchor, None, 1.0));
+            let rotated_1x = non_transparent_bounds(&text_pixmap(anchor, Some(-90.0), 1.0));
+            assert!(
+                horizontal_1x.width() > horizontal_1x.height(),
+                "{anchor:?}: {horizontal_1x:?}"
+            );
+            assert!(
+                rotated_1x.height() > rotated_1x.width(),
+                "{anchor:?}: {rotated_1x:?}"
+            );
+
+            let horizontal_2x = non_transparent_bounds(&text_pixmap(anchor, None, 2.0));
+            let rotated_2x = non_transparent_bounds(&text_pixmap(anchor, Some(-90.0), 2.0));
+            for (at_1x, at_2x) in [(horizontal_1x, horizontal_2x), (rotated_1x, rotated_2x)] {
+                for (twice, scaled) in [
+                    (at_1x.left * 2, at_2x.left),
+                    (at_1x.top * 2, at_2x.top),
+                    (at_1x.right * 2, at_2x.right),
+                    (at_1x.bottom * 2, at_2x.bottom),
+                ] {
+                    assert!(
+                        twice.abs_diff(scaled) <= 2,
+                        "{anchor:?}: 1x={at_1x:?}, 2x={at_2x:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_finite_text_rotation_preserves_unrotated_pixels() {
+        for rotate_deg in [Some(f64::NAN), Some(f64::INFINITY), Some(f64::NEG_INFINITY)] {
+            assert_eq!(
+                text_pixmap(Anchor::Middle, rotate_deg, 1.0).data(),
+                text_pixmap(Anchor::Middle, None, 1.0).data()
+            );
+        }
+    }
+
+    #[test]
+    fn finite_text_rotation_normalizes_full_and_large_turns_in_f64() {
+        let unrotated = text_pixmap(Anchor::Middle, None, 1.0);
+        for rotate_deg in [360.0, -360.0, 720.0, -1_080.0] {
+            assert_eq!(
+                text_pixmap(Anchor::Middle, Some(rotate_deg), 1.0).data(),
+                unrotated.data(),
+                "{rotate_deg} degrees must use the exact unrotated path"
+            );
+        }
+
+        assert_eq!(
+            text_pixmap(Anchor::Middle, Some(450.0), 1.0).data(),
+            text_pixmap(Anchor::Middle, Some(90.0), 1.0).data()
+        );
+
+        let huge_angle = f64::MAX;
+        let normalized = huge_angle % 360.0;
+        assert!(huge_angle > f64::from(f32::MAX));
+        assert_ne!(normalized, 0.0);
+        assert_eq!(
+            text_pixmap(Anchor::Middle, Some(huge_angle), 1.0).data(),
+            text_pixmap(Anchor::Middle, Some(normalized), 1.0).data()
+        );
+    }
+
     fn bar_spec() -> crate::ir::ChartSpec {
         chartjs::parse(
             r#"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[{"label":"売上","data":[10,20,30]}]}}"#,
@@ -1444,6 +1708,81 @@ mod tests {
         let err = render_chart_to_png(&spec, 1.0, DEFAULT_FONT);
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("exceeds"));
+    }
+
+    fn circle_scene(radius: f64, stroke_width: f64) -> Scene {
+        Scene {
+            width: 20.0,
+            height: 20.0,
+            items: vec![Prim::Circle {
+                cx: 10.0,
+                cy: 10.0,
+                r: radius,
+                fill: Color {
+                    r: 54,
+                    g: 162,
+                    b: 235,
+                    a: 1.0,
+                },
+                stroke: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                stroke_width,
+            }],
+        }
+    }
+
+    #[test]
+    fn circle_device_bounds_reject_scale_dependent_fixed_point_overflow() {
+        let scene = circle_scene(500_000.0, 0.0);
+        assert!(scene_to_png(&scene, 1.0, DEFAULT_FONT).is_ok());
+        assert_eq!(
+            scene_to_png(&scene, 10.0, DEFAULT_FONT),
+            Err("raster circle device bounds exceed safe coordinate limit of 4000000 px".into())
+        );
+    }
+
+    #[test]
+    fn circle_device_bounds_include_stroke_extent() {
+        let scene = circle_scene(3_999_990.0, 40.0);
+        assert_eq!(
+            scene_to_png(&scene, 1.0, DEFAULT_FONT),
+            Err("raster circle device bounds exceed safe coordinate limit of 4000000 px".into())
+        );
+    }
+
+    #[test]
+    fn circle_device_bounds_preserve_invalid_circle_no_draw_semantics() {
+        for radius in [f64::NAN, f64::INFINITY, -1.0] {
+            let scene = circle_scene(radius, 0.0);
+            assert_eq!(validate_circle_device_bounds(&scene, 1.0), Ok(()));
+        }
+
+        for (cx, cy) in [(f64::NAN, 10.0), (10.0, f64::INFINITY)] {
+            let mut scene = circle_scene(3.0, 0.0);
+            if let Prim::Circle {
+                cx: scene_cx,
+                cy: scene_cy,
+                ..
+            } = &mut scene.items[0]
+            {
+                *scene_cx = cx;
+                *scene_cy = cy;
+            }
+            assert_eq!(validate_circle_device_bounds(&scene, 1.0), Ok(()));
+        }
+    }
+
+    #[test]
+    fn normal_circle_radii_render_at_supported_scales() {
+        let scene = circle_scene(3.0, 1.0);
+        for scale in [1.0, 2.0, 10.0] {
+            let png = scene_to_png(&scene, scale, DEFAULT_FONT).unwrap();
+            assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G'], "scale={scale}");
+        }
     }
 
     #[test]

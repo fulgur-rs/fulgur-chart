@@ -89,21 +89,24 @@ pub fn build(spec: &ChartSpec, _m: &TextMeasurer) -> Scene {
 
         // 折れ線
         if pts.len() >= 2 {
-            if ser.tension <= 0.0 {
-                items.push(Prim::Polyline {
-                    points: pts.iter().map(|&(x, y, _)| (x, y)).collect(),
-                    stroke: ser.stroke_at(0),
-                    stroke_width: ser.stroke_width,
-                });
-            } else {
-                let xy: Vec<(f64, f64)> = pts.iter().map(|&(x, y, _)| (x, y)).collect();
-                let d = catmull_rom_path(&xy, ser.tension);
-                items.push(Prim::Path {
-                    d,
-                    fill: None,
-                    stroke: Some(ser.stroke_at(0)),
-                    stroke_width: ser.stroke_width,
-                });
+            match ser.interpolation {
+                crate::ir::LineInterpolation::Linear | crate::ir::LineInterpolation::Monotone => {
+                    items.push(Prim::Polyline {
+                        points: pts.iter().map(|&(x, y, _)| (x, y)).collect(),
+                        stroke: ser.stroke_at(0),
+                        stroke_width: ser.stroke_width,
+                    });
+                }
+                crate::ir::LineInterpolation::CatmullRom { tension } => {
+                    let xy: Vec<(f64, f64)> = pts.iter().map(|&(x, y, _)| (x, y)).collect();
+                    let d = catmull_rom_path(&xy, tension);
+                    items.push(Prim::Path {
+                        d,
+                        fill: None,
+                        stroke: Some(ser.stroke_at(0)),
+                        stroke_width: ser.stroke_width,
+                    });
+                }
             }
         }
         // マーカーなし・データラベルなし

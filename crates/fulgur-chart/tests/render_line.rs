@@ -1,8 +1,8 @@
 use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::chartjs;
 use fulgur_chart::layout::line;
-use fulgur_chart::raster_direct::render_chart_to_png;
-use fulgur_chart::render::render_chart;
+use fulgur_chart::raster_direct::{render_chart_to_png, render_chart_to_webp};
+use fulgur_chart::render::{render_chart, render_chart_with_font};
 use fulgur_chart::scene::Prim;
 use fulgur_chart::text::TextMeasurer;
 fn render(json: &str) -> String {
@@ -187,6 +187,70 @@ fn small_line_markers_unchanged() {
         ),
         3
     );
+}
+
+#[test]
+fn explicit_point_radius_zero_suppresses_markers() {
+    assert_eq!(
+        circle_count(
+            r#"{"type":"line","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3],"pointRadius":0}]}}"#
+        ),
+        0
+    );
+}
+
+#[test]
+fn explicit_point_radius_none_retains_markers() {
+    assert_eq!(
+        circle_count(
+            r#"{"type":"line","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]}}"#
+        ),
+        3
+    );
+}
+
+#[test]
+fn unsupported_point_radius_returns_same_error_for_fallible_svg_png_webp_apis() {
+    const ERROR: &str = "pointRadius must be finite and no greater than 32768";
+    let spec = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"pointRadius":1e40}]}}"#,
+        false,
+    )
+    .unwrap();
+
+    let errors = [
+        render_chart_with_font(&spec, DEFAULT_FONT).unwrap_err(),
+        render_chart_to_png(&spec, 1.0, DEFAULT_FONT).unwrap_err(),
+        render_chart_to_webp(&spec, 1.0, DEFAULT_FONT).unwrap_err(),
+    ];
+    assert_eq!(errors, [ERROR, ERROR, ERROR]);
+}
+
+#[test]
+fn oversized_point_radius_reviewer_repros_return_clean_png_errors() {
+    const ERROR: &str = "pointRadius must be finite and no greater than 32768";
+    for (radius, scale) in [(2e9, 1.0), (2e8, 10.0)] {
+        let json = format!(
+            r#"{{"type":"line","data":{{"labels":["a"],"datasets":[{{"data":[1],"pointRadius":{radius}}}]}}}}"#
+        );
+        let spec = chartjs::parse(&json, false).unwrap();
+        assert_eq!(
+            render_chart_to_png(&spec, scale, DEFAULT_FONT),
+            Err(ERROR.to_string()),
+            "radius={radius}, scale={scale}"
+        );
+    }
+}
+
+#[test]
+fn point_radius_at_marker_limit_renders_png() {
+    let spec = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"pointRadius":32768}]}}"#,
+        false,
+    )
+    .unwrap();
+    let png = render_chart_to_png(&spec, 1.0, DEFAULT_FONT).unwrap();
+    assert_eq!(&png[..4], &[0x89, b'P', b'N', b'G']);
 }
 
 /// scene 内の各 Polyline の点列を順に返す（セグメント数・各セグメント点数・座標有限性の検証用）。

@@ -1,5 +1,7 @@
+use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::chartjs;
-use fulgur_chart::render::render_chart;
+use fulgur_chart::raster_direct::{render_chart_to_png, render_chart_to_webp};
+use fulgur_chart::render::{render_chart, render_chart_with_font};
 
 fn render(json: &str) -> String {
     render_chart(&chartjs::parse(json, false).unwrap())
@@ -55,4 +57,38 @@ fn bubble_snapshot() {
         r#"{"type":"bubble","data":{"datasets":[{"label":"観測","data":[{"x":1,"y":2,"r":5},{"x":3,"y":5,"r":20},{"x":4,"y":3,"r":12}]}]},"options":{"plugins":{"title":{"display":true,"text":"バブルチャート"}}}}"#,
     );
     insta::assert_snapshot!(svg);
+}
+
+#[test]
+fn unsupported_point_r_returns_same_error_for_fallible_svg_png_webp_apis() {
+    const ERROR: &str = "point.r must be finite and no greater than 32768";
+    let spec = chartjs::parse(
+        r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2,"r":1e40}]}]}}"#,
+        false,
+    )
+    .unwrap();
+
+    let errors = [
+        render_chart_with_font(&spec, DEFAULT_FONT).unwrap_err(),
+        render_chart_to_png(&spec, 1.0, DEFAULT_FONT).unwrap_err(),
+        render_chart_to_webp(&spec, 1.0, DEFAULT_FONT).unwrap_err(),
+    ];
+    assert_eq!(errors, [ERROR, ERROR, ERROR]);
+}
+
+#[test]
+fn unsupported_fallback_point_radius_returns_same_error_for_fallible_apis() {
+    const ERROR: &str = "pointRadius must be finite and no greater than 32768";
+    let spec = chartjs::parse(
+        r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2}]}]}}"#,
+        false,
+    )
+    .unwrap();
+
+    let errors = [
+        render_chart_with_font(&spec, DEFAULT_FONT).unwrap_err(),
+        render_chart_to_png(&spec, 1.0, DEFAULT_FONT).unwrap_err(),
+        render_chart_to_webp(&spec, 1.0, DEFAULT_FONT).unwrap_err(),
+    ];
+    assert_eq!(errors, [ERROR, ERROR, ERROR]);
 }

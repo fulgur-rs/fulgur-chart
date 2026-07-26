@@ -12,7 +12,7 @@
 //! - **フォントファイルサイズ**: --font はユーザ自身が渡す。不正フォントは
 //!   ttf_parser::Face::parse が Err を返すので別途処理済み。
 
-use crate::ir::ChartSpec;
+use crate::ir::{ChartKind, ChartSpec, XPositions};
 use crate::num::fmt_num;
 
 // --- デフォルト上限定数 ---
@@ -71,6 +71,13 @@ pub const DEFAULT_MAX_TREE_DEPTH: usize = 50;
 /// Chrome のブラウザ上限(32,767 px)に合わせた値。
 /// PNG 面積の独立した入口を塞ぐ目的もある。実際の PNG メモリは raster の面積チェックで保護する。
 pub const DEFAULT_MAX_DIMENSION_PX: f64 = 32_768.0;
+
+/// 明示マーカー半径の上限(px)。
+///
+/// サポートする最大 scene 寸法を超える半径は、可視領域を覆い切った後の見た目に
+/// 有用な差を加えず、SVG と raster で異なる数値限界だけを露出する。このため
+/// backend-neutral な IR 契約として scene 寸法上限に揃える。
+pub const MAX_MARKER_RADIUS_PX: f64 = DEFAULT_MAX_DIMENSION_PX;
 
 /// spec の width/height 下限(px)。
 /// ゼロ・負値はレイアウトで除算異常を起こし得るため拒否する。
@@ -171,6 +178,28 @@ fn validate_tree(
 /// CLI は `--width`/`--height` オーバーライドを適用した後にこの関数を呼ぶ。
 /// 超過した場合は `Err(説明メッセージ)` を返す。
 pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
+    validate_spec_base(spec, limits)?;
+    if !matches!(spec.kind, ChartKind::Line)
+        || !matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
+    {
+        return Ok(());
+    }
+    let measurer = crate::text::TextMeasurer::new(crate::font::DEFAULT_FONT)
+        .map_err(|error| format!("failed to measure plot-area scene: {error}"))?;
+    validate_plot_area_scene_with_measurer(spec, limits, &measurer)
+}
+
+/// [`validate_spec`] と同じ入力上限を、実際の描画に使う文字幅測定器で検証する。
+pub fn validate_spec_with_measurer(
+    spec: &ChartSpec,
+    limits: &InputLimits,
+    measurer: &crate::text::TextMeasurer<'_>,
+) -> Result<(), String> {
+    validate_spec_base(spec, limits)?;
+    validate_plot_area_scene_with_measurer(spec, limits, measurer)
+}
+
+fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     // --- 寸法 ---
     if !spec.width.is_finite()
         || spec.width < limits.min_dimension_px
@@ -199,6 +228,7 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
             limits.max_series,
         ));
     }
+    validate_marker_radii(spec)?;
 
     // --- カテゴリ数 ---
     if spec.categories.len() > limits.max_categories {
@@ -207,6 +237,29 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
             spec.categories.len(),
             limits.max_categories,
         ));
+    }
+
+    if let XPositions::Temporal { unix_millis } = &spec.x_positions {
+        if unix_millis.len() != spec.categories.len() {
+            return Err(format!(
+                "temporal x position count {} does not match category count {}",
+                unix_millis.len(),
+                spec.categories.len()
+            ));
+        }
+        if spec
+            .series
+            .iter()
+            .any(|series| series.values.len() != unix_millis.len())
+        {
+            return Err("temporal x position count does not match every line series".to_string());
+        }
+        if unix_millis.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("temporal x positions must be strictly increasing".to_string());
+        }
+        if !matches!(spec.kind, ChartKind::Line) {
+            return Err("temporal x positions are only supported for line charts".to_string());
+        }
     }
 
     // --- series × categories の積(bar/line チャートのプリミティブ数) ---
@@ -428,6 +481,29 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
             limits.max_label_bytes,
         ));
     }
+    if let Some(title) = &spec.legend_title
+        && title.len() > limits.max_label_bytes
+    {
+        return Err(format!(
+            "legend title length {} bytes exceeds limit {}",
+            title.len(),
+            limits.max_label_bytes,
+        ));
+    }
+    for (axis, title) in [
+        ("x", spec.x_axis.title.as_ref()),
+        ("y", spec.y_axis.title.as_ref()),
+    ] {
+        if let Some(title) = title
+            && title.text.len() > limits.max_label_bytes
+        {
+            return Err(format!(
+                "{axis}-axis title length {} bytes exceeds limit {}",
+                title.text.len(),
+                limits.max_label_bytes,
+            ));
+        }
+    }
     for cat in &spec.categories {
         if cat.len() > limits.max_label_bytes {
             return Err(format!(
@@ -562,6 +638,84 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
     Ok(())
 }
 
+pub(crate) fn validate_marker_radii(spec: &ChartSpec) -> Result<(), String> {
+    let unsupported = |radius: f64| !radius.is_finite() || radius > MAX_MARKER_RADIUS_PX;
+    let point_radius_error =
+        || Err("pointRadius must be finite and no greater than 32768".to_string());
+    let point_r_error = || Err("point.r must be finite and no greater than 32768".to_string());
+
+    match &spec.kind {
+        ChartKind::Line => {
+            for series in &spec.series {
+                let reaches_marker = series
+                    .values
+                    .iter()
+                    .take(spec.categories.len())
+                    .any(|value| value.is_finite());
+                if reaches_marker && series.point_radius.is_some_and(unsupported) {
+                    return point_radius_error();
+                }
+            }
+        }
+        ChartKind::Scatter => {
+            for series in &spec.series {
+                let reaches_marker = series
+                    .points
+                    .iter()
+                    .any(|point| point.x.is_finite() && point.y.is_finite());
+                if reaches_marker && series.point_radius.is_some_and(unsupported) {
+                    return point_radius_error();
+                }
+            }
+        }
+        ChartKind::Bubble => {
+            for series in &spec.series {
+                for point in series
+                    .points
+                    .iter()
+                    .filter(|point| point.x.is_finite() && point.y.is_finite())
+                {
+                    if let Some(radius) = point.r {
+                        if unsupported(radius) {
+                            return point_r_error();
+                        }
+                    } else if series.point_radius.is_some_and(unsupported) {
+                        return point_radius_error();
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_plot_area_scene_with_measurer(
+    spec: &ChartSpec,
+    limits: &InputLimits,
+    measurer: &crate::text::TextMeasurer<'_>,
+) -> Result<(), String> {
+    if matches!(spec.kind, ChartKind::Line)
+        && matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
+    {
+        let frame = crate::layout::common::compute(spec, measurer);
+        if !frame.scene_width.is_finite() || frame.scene_width > limits.max_dimension_px {
+            return Err(format!(
+                "scene width {:.0} exceeds limit {:.0}",
+                frame.scene_width, limits.max_dimension_px
+            ));
+        }
+        if !frame.scene_height.is_finite() || frame.scene_height > limits.max_dimension_px {
+            return Err(format!(
+                "scene height {:.0} exceeds limit {:.0}",
+                frame.scene_height, limits.max_dimension_px
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn estimate_outlabel_expanded_bytes(spec: &ChartSpec, template: &str) -> usize {
     let Some(series) = spec.series.first() else {
         return 0;
@@ -622,6 +776,7 @@ fn estimate_outlabel_expanded_bytes(spec: &ChartSpec, template: &str) -> usize {
 mod tests {
     use super::*;
     use crate::frontend::chartjs;
+    use crate::ir::XPositions;
 
     fn base_spec() -> ChartSpec {
         chartjs::parse(
@@ -635,9 +790,247 @@ mod tests {
         InputLimits::default()
     }
 
+    fn effective_dataset_radius_specs(point_radius: Option<f64>) -> Vec<ChartSpec> {
+        [
+            r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#,
+            r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2}]}]}}"#,
+            r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2}]}]}}"#,
+        ]
+        .into_iter()
+        .map(|json| {
+            let mut spec = chartjs::parse(json, false).unwrap();
+            spec.series[0].point_radius = point_radius;
+            spec
+        })
+        .collect()
+    }
+
+    fn effective_bubble_point_r_spec(radius: Option<f64>) -> ChartSpec {
+        let mut spec = chartjs::parse(
+            r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2}]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.series[0].points[0].r = radius;
+        spec
+    }
+
+    #[test]
+    fn temporal_positions_must_match_categories() {
+        let mut spec = base_spec();
+        spec.categories = vec!["a".into(), "b".into()];
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![1],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("temporal x position count"));
+    }
+
+    #[test]
+    fn temporal_positions_must_be_strictly_increasing() {
+        let mut spec = base_spec();
+        spec.categories = vec!["a".into(), "b".into()];
+        spec.series[0].values = vec![1.0, 2.0];
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![2, 2],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("strictly increasing"));
+    }
+
+    #[test]
+    fn temporal_positions_must_match_every_series() {
+        let mut spec = base_spec();
+        spec.categories = vec!["a".into(), "b".into()];
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![1, 2],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("every line series"));
+    }
+
+    #[test]
+    fn temporal_positions_require_line_chart() {
+        let mut spec = base_spec();
+        spec.x_positions = XPositions::Temporal {
+            unix_millis: vec![1],
+        };
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("only supported for line charts"));
+    }
+
     #[test]
     fn valid_spec_passes() {
         assert!(validate_spec(&base_spec(), &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn unused_marker_radii_are_accepted() {
+        for json in [
+            r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1],"pointRadius":1e40}]}}"#,
+            r#"{"type":"pie","data":{"labels":["a"],"datasets":[{"data":[1],"pointRadius":1e40}]}}"#,
+            r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2,"r":1e40}]}]}}"#,
+            r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2,"r":3}]}]}}"#,
+        ] {
+            let spec = chartjs::parse(json, false).unwrap();
+            assert!(validate_spec(&spec, &default_limits()).is_ok(), "{json}");
+        }
+    }
+
+    #[test]
+    fn effective_dataset_point_radius_accepts_supported_boundaries() {
+        for point_radius in [None, Some(0.0), Some(-1.0), Some(32_768.0)] {
+            for spec in effective_dataset_radius_specs(point_radius) {
+                assert!(
+                    validate_spec(&spec, &default_limits()).is_ok(),
+                    "kind={:?}, pointRadius={point_radius:?}",
+                    spec.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn effective_dataset_point_radius_rejects_unsupported_boundaries() {
+        const ERROR: &str = "pointRadius must be finite and no greater than 32768";
+
+        for point_radius in [32_769.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for spec in effective_dataset_radius_specs(Some(point_radius)) {
+                assert_eq!(
+                    validate_spec(&spec, &default_limits()),
+                    Err(ERROR.to_string()),
+                    "kind={:?}, pointRadius={point_radius:?}",
+                    spec.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn effective_bubble_point_r_accepts_supported_boundaries() {
+        for radius in [None, Some(0.0), Some(-1.0), Some(32_768.0)] {
+            let spec = effective_bubble_point_r_spec(radius);
+            assert!(
+                validate_spec(&spec, &default_limits()).is_ok(),
+                "point.r={radius:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn effective_bubble_point_r_rejects_unsupported_boundaries() {
+        const ERROR: &str = "point.r must be finite and no greater than 32768";
+
+        for radius in [32_769.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let spec = effective_bubble_point_r_spec(Some(radius));
+            assert_eq!(
+                validate_spec(&spec, &default_limits()),
+                Err(ERROR.to_string()),
+                "point.r={radius:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bubble_dataset_radius_is_ignored_when_every_finite_point_has_safe_r() {
+        let spec = chartjs::parse(
+            r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2,"r":3},{"x":3,"y":4,"r":5}]}]}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn bubble_dataset_radius_is_rejected_when_a_finite_point_omits_r() {
+        const ERROR: &str = "pointRadius must be finite and no greater than 32768";
+        let spec = chartjs::parse(
+            r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2,"r":3},{"x":3,"y":4}]}]}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            validate_spec(&spec, &default_limits()),
+            Err(ERROR.to_string())
+        );
+    }
+
+    #[test]
+    fn non_finite_points_do_not_activate_marker_radius_validation() {
+        for json in [
+            r#"{"type":"scatter","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2}]}]}}"#,
+            r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2,"r":1e40}]}]}}"#,
+        ] {
+            let mut spec = chartjs::parse(json, false).unwrap();
+            spec.series[0].points[0].x = f64::NAN;
+            assert!(validate_spec(&spec, &default_limits()).is_ok(), "{json}");
+        }
+    }
+
+    #[test]
+    fn values_outside_line_categories_do_not_activate_marker_radius_validation() {
+        let mut spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1,2],"pointRadius":1e40}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.series[0].values[0] = f64::NAN;
+
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn axis_and_legend_titles_accept_exact_label_limit() {
+        use crate::ir::{AxisTitle, AxisTitleAlign};
+
+        let limits = InputLimits {
+            max_label_bytes: 4,
+            ..default_limits()
+        };
+        let mut spec = base_spec();
+        spec.legend_title = Some("xxxx".into());
+        spec.x_axis.title = Some(AxisTitle {
+            text: "xxxx".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        spec.y_axis.title = Some(AxisTitle {
+            text: "xxxx".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        assert!(validate_spec(&spec, &limits).is_ok());
+    }
+
+    #[test]
+    fn axis_and_legend_titles_reject_over_label_limit() {
+        use crate::ir::{AxisTitle, AxisTitleAlign};
+
+        let limits = InputLimits {
+            max_label_bytes: 4,
+            ..default_limits()
+        };
+        let title = AxisTitle {
+            text: "xxxxx".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        };
+        let mut legend_spec = base_spec();
+        legend_spec.legend_title = Some("xxxxx".into());
+        assert!(validate_spec(&legend_spec, &limits).is_err());
+
+        let mut x_spec = base_spec();
+        x_spec.x_axis.title = Some(title.clone());
+        assert!(validate_spec(&x_spec, &limits).is_err());
+
+        let mut y_spec = base_spec();
+        y_spec.y_axis.title = Some(title);
+        assert!(validate_spec(&y_spec, &limits).is_err());
     }
 
     #[test]
@@ -693,7 +1086,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -729,7 +1122,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -759,7 +1152,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -788,7 +1181,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
-            tension: 0.0,
+            interpolation: crate::ir::LineInterpolation::Linear,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],

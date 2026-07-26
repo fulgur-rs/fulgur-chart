@@ -15,6 +15,7 @@ pub mod scale;
 pub mod scene;
 pub mod schema;
 pub mod svg;
+pub mod temporal;
 pub mod text;
 
 pub fn version() -> &'static str {

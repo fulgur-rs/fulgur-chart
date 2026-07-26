@@ -1,9 +1,13 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
-use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos, RadialAxis};
+use crate::ir::{
+    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, RadialAxis, SizeMode,
+    XPositions,
+};
 use crate::num::fmt_num;
-use crate::scale::{LinearScale, NiceTicks, nice_ticks};
+use crate::scale::{LinearScale, NiceTicks, nice_ticks, vega_nice_ticks};
 use crate::scene::{Anchor, Prim};
+use crate::temporal::{TemporalTick, temporal_ticks};
 use crate::text::TextMeasurer;
 
 /// 動径軸 (`options.scales.r`) のドメイン `[lo, hi]` を解決する。radar / polarArea 共通。
@@ -194,20 +198,42 @@ pub const INK: Color = Color {
 
 /// プロット領域と y スケール・目盛り。
 pub struct Frame {
+    pub scene_width: f64,
+    pub scene_height: f64,
     pub plot_left: f64,
     pub plot_right: f64,
     pub plot_top: f64,
     pub plot_bottom: f64,
     pub ticks: NiceTicks,
     pub ys: LinearScale,
+    pub temporal_ticks: Vec<TemporalTick>,
 }
 
-/// 凡例の有無を判定する（Top/Bottom/Left/Right かつ名前付き系列が 1 つ以上）。
+/// 凡例の有無を判定する。
+///
+/// Top/Bottom/Left/Right で、supported temporal title-only legend または
+/// 1 つ以上の名前付き系列がある場合に有効化する。
 fn has_legend(spec: &ChartSpec) -> bool {
     matches!(
         spec.legend,
         LegendPos::Top | LegendPos::Bottom | LegendPos::Left | LegendPos::Right
-    ) && spec.series.iter().any(|s| !s.name.is_empty())
+    ) && (temporal_plot_right_legend_title(spec).is_some()
+        || spec.series.iter().any(|series| !series.name.is_empty()))
+}
+
+/// `legend_title` を描画・予約する supported semantics。
+///
+/// Vega-Lite temporal line が生成する PlotArea + Right legend だけを対象にし、
+/// Canvas/category の既存 scene は `legend_title` の有無にかかわらず維持する。
+pub(crate) fn temporal_plot_right_legend_title(spec: &ChartSpec) -> Option<&str> {
+    if matches!(spec.x_positions, XPositions::Temporal { .. })
+        && matches!(spec.size_mode, SizeMode::PlotArea)
+        && spec.legend == LegendPos::Right
+    {
+        spec.legend_title.as_deref()
+    } else {
+        None
+    }
 }
 
 /// 値ドメイン(begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
@@ -318,11 +344,33 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     (domain_min, domain_max)
 }
 
+/// Text laid from an axis start edge toward its end edge may overflow either
+/// side depending on its anchor. Returns `(before_start, after_end)`.
+fn aligned_title_overflow(
+    measured_extent: f64,
+    plot_extent: f64,
+    align: AxisTitleAlign,
+) -> (f64, f64) {
+    let excess = (measured_extent - plot_extent).max(0.0);
+    match align {
+        AxisTitleAlign::Start => (0.0, excess),
+        AxisTitleAlign::End => (excess, 0.0),
+        AxisTitleAlign::Center => (excess / 2.0, excess / 2.0),
+    }
+}
+
 /// spec から y ドメイン(begin_at_zero尊重)・nice_ticks・y軸ラベル幅・プロット領域・凡例帯を計算。
 pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y ドメイン。
     let (domain_min, domain_max) = value_domain(spec, &spec.y_axis);
-    let ticks = nice_ticks(domain_min, domain_max, 10);
+    let ticks = if matches!(spec.size_mode, SizeMode::PlotArea)
+        && matches!(spec.kind, ChartKind::Line)
+        && matches!(spec.x_positions, XPositions::Temporal { .. })
+    {
+        vega_nice_ticks(domain_min, domain_max, spec.height)
+    } else {
+        nice_ticks(domain_min, domain_max, 10)
+    };
 
     // y 軸ラベル幅。
     let mut max_w = 0.0_f32;
@@ -371,10 +419,94 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         0.0
     };
     let legend_right = if legend && spec.legend == LegendPos::Right {
-        legend_band_width_vertical(m, &series_names, spec.theme.font_size)
+        let mut names = series_names.clone();
+        names.extend(temporal_plot_right_legend_title(spec).map(str::to_owned));
+        legend_band_width_vertical(m, &names, spec.theme.font_size)
     } else {
         0.0
     };
+    let vertical_legend_rows =
+        if legend && matches!(spec.legend, LegendPos::Left | LegendPos::Right) {
+            spec.series.len() + usize::from(temporal_plot_right_legend_title(spec).is_some())
+        } else {
+            0
+        };
+    let vertical_legend_overflow =
+        ((vertical_legend_rows as f64 * LEGEND_ROW_H - spec.height) / 2.0).max(0.0);
+    let (rotated_y_title_top_overflow, rotated_y_title_bottom_overflow) =
+        if matches!(spec.size_mode, SizeMode::PlotArea) {
+            spec.y_axis
+                .title
+                .as_ref()
+                .map(|title| {
+                    let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+                    // Rotated -90° text is laid from bottom (axis Start) to top
+                    // (axis End), so physical top/bottom reverse the helper tuple.
+                    let (bottom, top) = aligned_title_overflow(
+                        m.width(&title.text, font as f32) as f64,
+                        spec.height,
+                        title.align,
+                    );
+                    (top, bottom)
+                })
+                .unwrap_or((0.0, 0.0))
+        } else {
+            (0.0, 0.0)
+        };
+    let plot_area_top_overflow = vertical_legend_overflow.max(rotated_y_title_top_overflow);
+    let plot_area_bottom_overflow = vertical_legend_overflow.max(rotated_y_title_bottom_overflow);
+    // PlotArea の幅はこの時点で確定しているため、scene 寸法より先に temporal tick を
+    // 作れる。端ラベルが中央寄せされても scene から切れないよう、その半幅を
+    // 左側の最低 plot offset と右側の最低余白として使う。
+    let plot_area_temporal_ticks = if matches!(spec.size_mode, SizeMode::PlotArea) {
+        match &spec.x_positions {
+            XPositions::Temporal { unix_millis } => unix_millis
+                .first()
+                .zip(unix_millis.last())
+                .map(|(&min, &max)| temporal_ticks(min, max, spec.width))
+                .unwrap_or_default(),
+            XPositions::Category => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    let temporal_edge_pad_left = plot_area_temporal_ticks
+        .first()
+        .map(|tick| m.width(&tick.label, spec.theme.font_size as f32) as f64 / 2.0)
+        .unwrap_or(0.0);
+    let temporal_edge_pad_right = plot_area_temporal_ticks
+        .last()
+        .map(|tick| m.width(&tick.label, spec.theme.font_size as f32) as f64 / 2.0)
+        .unwrap_or(0.0);
+    let (plot_area_title_left_overflow, plot_area_title_right_overflow) =
+        if matches!(spec.size_mode, SizeMode::PlotArea) {
+            let chart_title_side_overflow = spec
+                .title
+                .as_ref()
+                .map(|title| {
+                    ((m.width(title, TITLE_FONT as f32) as f64 - spec.width) / 2.0).max(0.0)
+                })
+                .unwrap_or(0.0);
+            let (x_title_left_overflow, x_title_right_overflow) = spec
+                .x_axis
+                .title
+                .as_ref()
+                .map(|title| {
+                    let font = title.font_size.unwrap_or(spec.theme.font_size * 1.1);
+                    aligned_title_overflow(
+                        m.width(&title.text, font as f32) as f64,
+                        spec.width,
+                        title.align,
+                    )
+                })
+                .unwrap_or((0.0, 0.0));
+            (
+                chart_title_side_overflow.max(x_title_left_overflow),
+                chart_title_side_overflow.max(x_title_right_overflow),
+            )
+        } else {
+            (0.0, 0.0)
+        };
     // line(edge-to-edge)では先頭/末尾の点が plot_left/plot_right に乗り、中央寄せの
     // x ラベルが点の外側へ半幅はみ出してキャンバス端でクリップされる。chart.js が
     // chartArea を edge ラベル半幅ぶん内側へ取るのと同様に edge 余白を確保する。
@@ -403,35 +535,88 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // 狭い幅 + 長い端ラベルで edge 余白が利用可能幅を超えると plot_right <= plot_left に
     // 反転し line_x が壊れる。余白合計を利用可能幅で比例縮小し、最後に plot_right >= plot_left
     // を保証する。
-    let base_left = OUTER_PAD + y_axis_w + legend_left;
-    let base_right = spec.width - OUTER_PAD - legend_right;
-    let edge_total = edge_pad_left + edge_pad_right;
-    let scale = if edge_total > 0.0 {
-        ((base_right - base_left).max(0.0) / edge_total).min(1.0)
-    } else {
-        1.0
-    };
-    let plot_left = base_left.max(OUTER_PAD + legend_left + edge_pad_left * scale);
-    let plot_right = (base_right - edge_pad_right * scale).max(plot_left);
-    let plot_top = OUTER_PAD + title_band + legend_top;
     // X 軸タイトルがあれば、x カテゴリラベル帯の下側にさらにタイトル帯を確保して plot_bottom を上へ押し上げる。
     let x_title_h = if spec.x_axis.title.is_some() {
         AXIS_TITLE_BAND
     } else {
         0.0
     };
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
+    let (scene_width, scene_height, plot_left, plot_right, plot_top, plot_bottom) = match spec
+        .size_mode
+    {
+        SizeMode::Canvas => {
+            let base_left = OUTER_PAD + y_axis_w + legend_left;
+            let base_right = spec.width - OUTER_PAD - legend_right;
+            let edge_total = edge_pad_left + edge_pad_right;
+            let scale = if edge_total > 0.0 {
+                ((base_right - base_left).max(0.0) / edge_total).min(1.0)
+            } else {
+                1.0
+            };
+            let plot_left = base_left.max(OUTER_PAD + legend_left + edge_pad_left * scale);
+            let plot_right = (base_right - edge_pad_right * scale).max(plot_left);
+            let plot_top = OUTER_PAD + title_band + legend_top;
+            let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
+            (
+                spec.width,
+                spec.height,
+                plot_left,
+                plot_right,
+                plot_top,
+                plot_bottom,
+            )
+        }
+        SizeMode::PlotArea => {
+            let required_title_left_band = OUTER_PAD + plot_area_title_left_overflow;
+            let required_title_right_band = OUTER_PAD + plot_area_title_right_overflow;
+            let plot_left = (OUTER_PAD + y_axis_w)
+                .max(temporal_edge_pad_left)
+                .max(required_title_left_band);
+            let plot_top = OUTER_PAD + title_band + plot_area_top_overflow;
+            let plot_right = plot_left + spec.width;
+            let plot_bottom = plot_top + spec.height;
+            let trailing_band = (OUTER_PAD + legend_right)
+                .max(temporal_edge_pad_right)
+                .max(required_title_right_band);
+            let scene_width = plot_right + trailing_band;
+            let scene_height = plot_bottom
+                + X_LABEL_BAND
+                + x_title_h
+                + OUTER_PAD
+                + legend_bottom
+                + plot_area_bottom_overflow;
+            (
+                scene_width,
+                scene_height,
+                plot_left,
+                plot_right,
+                plot_top,
+                plot_bottom,
+            )
+        }
+    };
 
     // y スケール（上下反転）。
     let ys = LinearScale::new(ticks.min, ticks.max, plot_bottom, plot_top);
+    let temporal_ticks = match &spec.x_positions {
+        XPositions::Temporal { unix_millis } => unix_millis
+            .first()
+            .zip(unix_millis.last())
+            .map(|(&min, &max)| temporal_ticks(min, max, plot_right - plot_left))
+            .unwrap_or_default(),
+        XPositions::Category => Vec::new(),
+    };
 
     Frame {
+        scene_width,
+        scene_height,
         plot_left,
         plot_right,
         plot_top,
         plot_bottom,
         ticks,
         ys,
+        temporal_ticks,
     }
 }
 
@@ -445,7 +630,7 @@ pub fn category_center(frame: &Frame, i: usize, n: usize) -> f64 {
 /// n 個のカテゴリを [plot_left, plot_right] へ i/(n-1) で等間隔配置する(先頭=左端・末尾=右端)。
 /// bar の band 中心(category_center)とは異なる。n<=1 は (n-1)=0 で NaN になるため
 /// プロット中央へフォールバックする(縮退ケース; 単一カテゴリの line fixture は存在しない)。
-pub fn line_x(frame: &Frame, i: usize, n: usize) -> f64 {
+fn line_edge_x(frame: &Frame, i: usize, n: usize) -> f64 {
     if n <= 1 {
         return frame.plot_left + (frame.plot_right - frame.plot_left) / 2.0;
     }
@@ -465,7 +650,31 @@ pub(crate) fn line_category_x(spec: &ChartSpec, frame: &Frame, i: usize, n: usiz
     if spec.x_axis.offset {
         category_center(frame, i, n)
     } else {
-        line_x(frame, i, n)
+        line_edge_x(frame, i, n)
+    }
+}
+
+/// line/area の x 座標。カテゴリは従来どおり等間隔、temporal は経過時間に比例させる。
+pub fn line_x(spec: &ChartSpec, frame: &Frame, index: usize) -> f64 {
+    match &spec.x_positions {
+        XPositions::Category => line_category_x(spec, frame, index, spec.categories.len().max(1)),
+        XPositions::Temporal { unix_millis } => {
+            let min = *unix_millis.first().unwrap_or(&0);
+            let max = *unix_millis.last().unwrap_or(&min);
+            let value = *unix_millis.get(index).unwrap_or(&min);
+            temporal_x(frame, min, max, value)
+        }
+    }
+}
+
+fn temporal_x(frame: &Frame, min: i64, max: i64, value: i64) -> f64 {
+    if min == max {
+        (frame.plot_left + frame.plot_right) / 2.0
+    } else {
+        let numerator = value as i128 - min as i128;
+        let denominator = max as i128 - min as i128;
+        let ratio = numerator as f64 / denominator as f64;
+        frame.plot_left + ratio * (frame.plot_right - frame.plot_left)
     }
 }
 
@@ -487,8 +696,12 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
 
     // 1. タイトル。
     if let Some(title) = &spec.title {
+        let title_x = match spec.size_mode {
+            SizeMode::Canvas => spec.width / 2.0,
+            SizeMode::PlotArea => (frame.plot_left + frame.plot_right) / 2.0,
+        };
         items.push(Prim::Text {
-            x: spec.width / 2.0,
+            x: title_x,
             y: OUTER_PAD + TITLE_FONT,
             size: TITLE_FONT,
             anchor: Anchor::Middle,
@@ -545,7 +758,11 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
     const TICK_LEN: f64 = 4.0;
     let ticks_cfg = &spec.y_axis.grid;
     if ticks_cfg.draw_ticks {
-        let tick_color = ticks_cfg.color.unwrap_or(ink);
+        let tick_color = if matches!(spec.x_positions, XPositions::Temporal { .. }) {
+            ink
+        } else {
+            ticks_cfg.color.unwrap_or(ink)
+        };
         for &t in &frame.ticks.ticks {
             let y = frame.ys.map(t);
             items.push(Prim::Line {
@@ -560,41 +777,93 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         }
     }
 
-    // 4. x カテゴリラベル（auto-skip: ラベル幅 > スロット幅なら間引く）。
-    let n = spec.categories.len().max(1);
-    let slot_w = (frame.plot_right - frame.plot_left) / n as f64;
-    // 代表ラベル幅（最初の非空ラベル）＋ 4px ギャップを使って step を決める。
-    let step = spec
-        .categories
-        .iter()
-        .find(|c| !c.is_empty())
-        .map(|lbl| {
-            let lw = m.width(lbl, label_font as f32) as f64 + 4.0;
-            if slot_w > 0.0 && lw > slot_w {
-                ((lw / slot_w).ceil() as usize).max(1)
-            } else {
-                1
+    match &spec.x_positions {
+        XPositions::Category => {
+            // 4a. x カテゴリラベル（auto-skip: ラベル幅 > スロット幅なら間引く）。
+            let n = spec.categories.len().max(1);
+            let slot_w = (frame.plot_right - frame.plot_left) / n as f64;
+            // 代表ラベル幅（最初の非空ラベル）＋ 4px ギャップを使って step を決める。
+            let step = spec
+                .categories
+                .iter()
+                .find(|c| !c.is_empty())
+                .map(|lbl| {
+                    let lw = m.width(lbl, label_font as f32) as f64 + 4.0;
+                    if slot_w > 0.0 && lw > slot_w {
+                        ((lw / slot_w).ceil() as usize).max(1)
+                    } else {
+                        1
+                    }
+                })
+                .unwrap_or(1);
+            for (i, cat) in spec.categories.iter().enumerate() {
+                if cat.is_empty() || i % step != 0 {
+                    continue;
+                }
+                // line は点と同じ配置(offset:false=edge-to-edge / offset:true=band 中心)で
+                // ラベルを点の真下に置く。bar/その他はバンド中心。mixed は band 中心。
+                let label_x = if matches!(spec.kind, ChartKind::Line) {
+                    line_x(spec, frame, i)
+                } else {
+                    category_center(frame, i, n)
+                };
+                items.push(Prim::Text {
+                    x: label_x,
+                    y: frame.plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
+                    size: label_font,
+                    anchor: Anchor::Middle,
+                    fill: ink,
+                    content: cat.clone(),
+                    rotate_deg: None,
+                });
             }
-        })
-        .unwrap_or(1);
-    for (i, cat) in spec.categories.iter().enumerate() {
-        if !cat.is_empty() && i % step == 0 {
-            // line は点と同じ配置(offset:false=edge-to-edge / offset:true=band 中心)で
-            // ラベルを点の真下に置く。bar/その他はバンド中心。mixed は bar を含むため band 中心のまま。
-            let label_x = if matches!(spec.kind, ChartKind::Line) {
-                line_category_x(spec, frame, i, n)
-            } else {
-                category_center(frame, i, n)
-            };
-            items.push(Prim::Text {
-                x: label_x,
-                y: frame.plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
-                size: label_font,
-                anchor: Anchor::Middle,
-                fill: ink,
-                content: cat.clone(),
-                rotate_deg: None,
-            });
+        }
+        XPositions::Temporal { unix_millis } => {
+            // 4b. temporal x 軸。grid/tick は全 tick を描き、ラベルだけ決定的に重なり回避する。
+            let min = *unix_millis.first().unwrap_or(&0);
+            let max = *unix_millis.last().unwrap_or(&min);
+            let x_grid = &spec.x_axis.grid;
+            let grid_color = x_grid.color.unwrap_or(spec.theme.grid_color);
+            let mut last_label_right = f64::NEG_INFINITY;
+            for tick in &frame.temporal_ticks {
+                let x = temporal_x(frame, min, max, tick.unix_millis);
+                if x_grid.display {
+                    items.push(Prim::Line {
+                        x1: x,
+                        y1: frame.plot_top,
+                        x2: x,
+                        y2: frame.plot_bottom,
+                        stroke: grid_color,
+                        stroke_width: x_grid.line_width,
+                        dash: Vec::new(),
+                    });
+                }
+                if x_grid.draw_ticks {
+                    items.push(Prim::Line {
+                        x1: x,
+                        y1: frame.plot_bottom,
+                        x2: x,
+                        y2: frame.plot_bottom + TICK_LEN,
+                        stroke: ink,
+                        stroke_width: x_grid.line_width,
+                        dash: Vec::new(),
+                    });
+                }
+                let half_w = m.width(&tick.label, label_font as f32) as f64 / 2.0;
+                let label_left = x - half_w;
+                if label_left >= last_label_right + 4.0 {
+                    items.push(Prim::Text {
+                        x,
+                        y: frame.plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
+                        size: label_font,
+                        anchor: Anchor::Middle,
+                        fill: ink,
+                        content: tick.label.clone(),
+                        rotate_deg: None,
+                    });
+                    last_label_right = x + half_w;
+                }
+            }
         }
     }
 
@@ -645,16 +914,21 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             .iter()
             .map(|s| (s.name.clone(), s.fill_at(0)))
             .collect();
-        let names: Vec<String> = entries.iter().map(|(n, _)| n.clone()).collect();
+        let mut names: Vec<String> = entries.iter().map(|(n, _)| n.clone()).collect();
+        let legend_title = temporal_plot_right_legend_title(spec);
+        names.extend(legend_title.map(str::to_owned));
         let band_w = legend_band_width_vertical(m, &names, label_font);
         let band_x = if spec.legend == LegendPos::Left {
             OUTER_PAD
+        } else if matches!(spec.size_mode, SizeMode::PlotArea) {
+            frame.plot_right + OUTER_PAD
         } else {
             spec.width - OUTER_PAD - band_w
         };
         draw_vertical_legend(
             items,
             &entries,
+            legend_title,
             band_x,
             frame.plot_top,
             frame.plot_bottom,
@@ -734,9 +1008,11 @@ pub fn legend_band_width_vertical(m: &TextMeasurer, names: &[String], font_size:
 /// 縦置き凡例(Left/Right)を描く。entries は (名前, swatch色) の解決済みペア。
 /// プロットの縦スパン中央にエントリ群を配置する。
 /// `ink`/`font_size` はラベルの色とフォント(テーマ)。
+#[allow(clippy::too_many_arguments)]
 pub fn draw_vertical_legend(
     items: &mut Vec<Prim>,
     entries: &[(String, Color)],
+    title: Option<&str>,
     band_x: f64,
     plot_top: f64,
     plot_bottom: f64,
@@ -744,10 +1020,22 @@ pub fn draw_vertical_legend(
     font_size: f64,
 ) {
     let n = entries.len();
-    let group_h = n as f64 * LEGEND_ROW_H;
+    let title_rows = usize::from(title.is_some());
+    let group_h = (n + title_rows) as f64 * LEGEND_ROW_H;
     let start_y = (plot_top + plot_bottom) / 2.0 - group_h / 2.0;
+    if let Some(title) = title {
+        items.push(Prim::Text {
+            x: band_x,
+            y: start_y + LEGEND_ROW_H / 2.0 + font_size * TEXT_BASELINE_RATIO,
+            size: font_size,
+            anchor: Anchor::Start,
+            fill: ink,
+            content: title.to_string(),
+            rotate_deg: None,
+        });
+    }
     for (i, (name, color)) in entries.iter().enumerate() {
-        let row_top = start_y + i as f64 * LEGEND_ROW_H;
+        let row_top = start_y + (i + title_rows) as f64 * LEGEND_ROW_H;
         let row_center = row_top + LEGEND_ROW_H / 2.0;
         items.push(Prim::Rect {
             x: band_x,
@@ -794,7 +1082,7 @@ mod tests {
     use crate::font::DEFAULT_FONT;
     use crate::ir::{
         AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, LegendPos,
-        Point, Series, SeriesType,
+        LineInterpolation, Point, Series, SeriesType, SizeMode, XPositions,
     };
     use crate::text::TextMeasurer;
 
@@ -807,6 +1095,7 @@ mod tests {
                 value_stacked: false,
             },
             categories: (0..n).map(|i| format!("Cat{i:04}")).collect(),
+            x_positions: XPositions::Category,
             series: vec![Series {
                 name: String::new(),
                 values: vec![1.0; n],
@@ -815,7 +1104,7 @@ mod tests {
                 stroke: vec![],
                 stroke_width: 1.0,
                 area: false,
-                tension: 0.0,
+                interpolation: LineInterpolation::Linear,
                 series_type: SeriesType::Bar,
                 point_radius: None,
                 box_points: vec![],
@@ -845,14 +1134,428 @@ mod tests {
                 border: AxisBorder::default(),
             },
             legend: LegendPos::None,
+            legend_title: None,
             title: None,
             width,
             height: 400.0,
+            size_mode: SizeMode::Canvas,
             data_labels: false,
             theme: crate::ir::Theme::default(),
             decimation: crate::ir::Decimation::default(),
             radial_axis: None,
         }
+    }
+
+    fn temporal_spec(unix_millis: Vec<i64>) -> ChartSpec {
+        let mut spec = make_bar_spec(unix_millis.len(), 720.0);
+        spec.kind = ChartKind::Line;
+        spec.categories = unix_millis
+            .iter()
+            .map(|millis| format!("source-{millis}"))
+            .collect();
+        spec.x_positions = XPositions::Temporal { unix_millis };
+        spec.series[0].name = "regressions".into();
+        spec.series[0].series_type = SeriesType::Line;
+        spec.series[0].stroke = spec.series[0].fill.clone();
+        spec.size_mode = SizeMode::PlotArea;
+        spec
+    }
+
+    fn temporal_dogfood_spec() -> ChartSpec {
+        let day = 86_400_000;
+        let mut spec = temporal_spec(vec![0, 2 * day, 4 * day]);
+        spec.height = 320.0;
+        spec.legend = LegendPos::Right;
+        spec.legend_title = Some("metric".into());
+        spec.x_axis.title = Some(AxisTitle {
+            text: "date".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        spec.y_axis.title = Some(AxisTitle {
+            text: "subtests".into(),
+            color: None,
+            font_size: None,
+            align: AxisTitleAlign::Center,
+        });
+        let grid = Color {
+            r: 224,
+            g: 224,
+            b: 224,
+            a: 0.15,
+        };
+        spec.x_axis.grid.color = Some(grid);
+        spec.x_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.color = Some(grid);
+        spec.y_axis.grid.draw_ticks = true;
+        spec
+    }
+
+    #[test]
+    fn temporal_x_distances_follow_elapsed_time() {
+        let spec = temporal_spec(vec![0, 86_400_000, 3 * 86_400_000]);
+        let frame = compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let x0 = line_x(&spec, &frame, 0);
+        let x1 = line_x(&spec, &frame, 1);
+        let x2 = line_x(&spec, &frame, 2);
+        assert!(((x1 - x0) / (x2 - x0) - 1.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn temporal_x_handles_full_i64_domain() {
+        let spec = temporal_spec(vec![i64::MIN, 0, i64::MAX]);
+        let frame = compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let left = line_x(&spec, &frame, 0);
+        let middle = line_x(&spec, &frame, 1);
+        let right = line_x(&spec, &frame, 2);
+
+        assert_eq!(left, frame.plot_left);
+        assert_eq!(right, frame.plot_right);
+        assert!(((middle - left) / (right - left) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn plot_area_mode_preserves_requested_plot_size() {
+        let spec = temporal_dogfood_spec();
+        let frame = compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        assert_eq!(frame.plot_right - frame.plot_left, 720.0);
+        assert_eq!(frame.plot_bottom - frame.plot_top, 320.0);
+        assert!(frame.scene_width > 720.0);
+        assert!(frame.scene_height > 320.0);
+    }
+
+    #[test]
+    fn plot_area_contains_long_start_and_end_x_axis_titles() {
+        const TITLE: &str = "a long horizontal axis title that exceeds the plot width";
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        for (align, expected_anchor) in [
+            (AxisTitleAlign::Start, Anchor::Start),
+            (AxisTitleAlign::End, Anchor::End),
+        ] {
+            let mut spec = temporal_spec(vec![0, 1_000]);
+            spec.width = 24.0;
+            spec.x_axis.title = Some(AxisTitle {
+                text: TITLE.into(),
+                color: None,
+                font_size: None,
+                align,
+            });
+            let frame = compute(&spec, &m);
+            let mut items = Vec::new();
+            draw_frame(&mut items, &spec, &frame, &m);
+            let (x, size, anchor) = items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Text {
+                        x,
+                        size,
+                        anchor,
+                        content,
+                        rotate_deg: None,
+                        ..
+                    } if content == TITLE => Some((*x, *size, *anchor)),
+                    _ => None,
+                })
+                .expect("x-axis title");
+            assert_eq!(anchor, expected_anchor);
+            let width = m.width(TITLE, size as f32) as f64;
+            let (left, right) = if anchor == Anchor::Start {
+                (x, x + width)
+            } else {
+                assert_eq!(anchor, Anchor::End);
+                (x - width, x)
+            };
+            assert!(left >= 0.0, "{align:?}: left={left}");
+            assert!(
+                right <= frame.scene_width,
+                "{align:?}: right={right}, scene={}",
+                frame.scene_width
+            );
+            assert_eq!(frame.plot_right - frame.plot_left, spec.width);
+            assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
+        }
+    }
+
+    #[test]
+    fn plot_area_contains_long_start_and_end_rotated_y_axis_titles() {
+        const TITLE: &str = "a long rotated axis title that exceeds the plot height";
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        for (align, expected_anchor) in [
+            (AxisTitleAlign::Start, Anchor::Start),
+            (AxisTitleAlign::End, Anchor::End),
+        ] {
+            let mut spec = temporal_spec(vec![0, 1_000]);
+            spec.height = 24.0;
+            spec.y_axis.title = Some(AxisTitle {
+                text: TITLE.into(),
+                color: None,
+                font_size: None,
+                align,
+            });
+            let frame = compute(&spec, &m);
+            let mut items = Vec::new();
+            draw_frame(&mut items, &spec, &frame, &m);
+            let (y, size, anchor) = items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Text {
+                        y,
+                        size,
+                        anchor,
+                        content,
+                        rotate_deg: Some(-90.0),
+                        ..
+                    } if content == TITLE => Some((*y, *size, *anchor)),
+                    _ => None,
+                })
+                .expect("rotated y-axis title");
+            assert_eq!(anchor, expected_anchor);
+            let height = m.width(TITLE, size as f32) as f64;
+            let (top, bottom) = if anchor == Anchor::Start {
+                (y - height, y)
+            } else {
+                assert_eq!(anchor, Anchor::End);
+                (y, y + height)
+            };
+            assert!(top >= 0.0, "{align:?}: top={top}");
+            assert!(
+                bottom <= frame.scene_height,
+                "{align:?}: bottom={bottom}, scene={}",
+                frame.scene_height
+            );
+            assert_eq!(frame.plot_right - frame.plot_left, spec.width);
+            assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
+        }
+    }
+
+    #[test]
+    fn plot_area_scene_contains_tall_right_legend() {
+        let mut spec = temporal_spec(vec![0, 1]);
+        spec.height = 18.0;
+        spec.legend = LegendPos::Right;
+        spec.legend_title = Some("metric".into());
+        let template = spec.series[0].clone();
+        spec.series = (0..6)
+            .map(|i| {
+                let mut series = template.clone();
+                series.name = format!("series-{i}");
+                series
+            })
+            .collect();
+
+        let frame = compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let group_h = (spec.series.len() + 1) as f64 * LEGEND_ROW_H;
+        let start_y = (frame.plot_top + frame.plot_bottom - group_h) / 2.0;
+        assert!(start_y >= 0.0);
+        assert!(start_y + group_h <= frame.scene_height);
+        assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
+    }
+
+    #[test]
+    fn plot_area_scene_contains_last_temporal_tick_label() {
+        let spec = temporal_spec(vec![100, 900]);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let (x, label) = items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Text { x, content, .. } if content == ".900" => Some((*x, content)),
+                _ => None,
+            })
+            .expect("last temporal tick label");
+        let right = x + m.width(label, spec.theme.font_size as f32) as f64 / 2.0;
+        assert!(
+            right <= frame.scene_width,
+            "label right {right} exceeds scene width {}",
+            frame.scene_width
+        );
+    }
+
+    #[test]
+    fn plot_area_scene_contains_wide_first_temporal_tick_label() {
+        let mut spec = temporal_spec(vec![1_788_220_800_000, 1_819_756_800_000]);
+        spec.theme.font_size = 32.0;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let first = frame.temporal_ticks.first().expect("first temporal tick");
+        assert_eq!(first.label, "September");
+
+        let x = temporal_x(
+            &frame,
+            1_788_220_800_000,
+            1_819_756_800_000,
+            first.unix_millis,
+        );
+        let left = x - m.width(&first.label, spec.theme.font_size as f32) as f64 / 2.0;
+        assert!(left >= 0.0, "label left {left} is outside the scene");
+        assert_eq!(frame.plot_right - frame.plot_left, spec.width);
+        assert_eq!(frame.plot_bottom - frame.plot_top, spec.height);
+    }
+
+    #[test]
+    fn plot_area_chart_title_is_centered_over_plot() {
+        let mut spec = temporal_dogfood_spec();
+        spec.title = Some("plot title".into());
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+        let title_x = items.iter().rev().find_map(|item| match item {
+            Prim::Text { x, content, .. } if content == "plot title" => Some(*x),
+            _ => None,
+        });
+        assert_eq!(title_x, Some((frame.plot_left + frame.plot_right) / 2.0));
+    }
+
+    #[test]
+    fn singleton_temporal_domain_maps_to_plot_center() {
+        let spec = temporal_spec(vec![42]);
+        let frame = compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        assert_eq!(
+            line_x(&spec, &frame, 0),
+            (frame.plot_left + frame.plot_right) / 2.0
+        );
+    }
+
+    #[test]
+    fn temporal_frame_draws_ticks_titles_and_titled_right_legend() {
+        let spec = temporal_dogfood_spec();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let vertical_grids = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Prim::Line {
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        stroke,
+                        ..
+                    } if (*x1 - *x2).abs() < 1e-9
+                        && (*y1 - frame.plot_top).abs() < 1e-9
+                        && (*y2 - frame.plot_bottom).abs() < 1e-9
+                        && (stroke.a - 0.15).abs() < f32::EPSILON
+                )
+            })
+            .count();
+        assert_eq!(vertical_grids, frame.temporal_ticks.len());
+        let bottom_ticks = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Prim::Line {
+                        x1,
+                        y1,
+                        x2,
+                        y2,
+                        stroke,
+                        ..
+                    } if (*x1 - *x2).abs() < 1e-9
+                        && (*y1 - frame.plot_bottom).abs() < 1e-9
+                        && (*y2 - frame.plot_bottom - 4.0).abs() < 1e-9
+                        && *stroke == spec.theme.text_color
+                )
+            })
+            .count();
+        assert_eq!(bottom_ticks, frame.temporal_ticks.len());
+
+        let labels: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Text { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+        for tick in &frame.temporal_ticks {
+            assert!(labels.contains(&tick.label.as_str()));
+        }
+        assert!(labels.contains(&"1970"));
+        assert!(
+            spec.categories
+                .iter()
+                .all(|source_label| !labels.contains(&source_label.as_str()))
+        );
+        assert!(labels.contains(&"date"));
+        assert!(labels.contains(&"subtests"));
+        assert!(labels.contains(&"metric"));
+
+        let legend_title_y = items.iter().find_map(|item| match item {
+            Prim::Text { y, content, .. } if content == "metric" => Some(*y),
+            _ => None,
+        });
+        let legend_entry_y = items.iter().find_map(|item| match item {
+            Prim::Text { y, content, .. } if content == "regressions" => Some(*y),
+            _ => None,
+        });
+        assert!(legend_title_y.unwrap() < legend_entry_y.unwrap());
+    }
+
+    #[test]
+    fn categorical_canvas_ignores_legend_title_without_changing_scene() {
+        let mut baseline = make_bar_spec(3, 600.0);
+        baseline.series[0].name = "series".into();
+        baseline.legend = LegendPos::Right;
+        let mut titled = baseline.clone();
+        titled.legend_title = Some("unsupported title".into());
+
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let baseline_scene = crate::layout::build_scene(&baseline, &m);
+        let titled_scene = crate::layout::build_scene(&titled, &m);
+        assert_eq!(titled_scene, baseline_scene);
+    }
+
+    #[test]
+    fn categorical_canvas_title_does_not_activate_unnamed_legend() {
+        let mut baseline = make_bar_spec(3, 600.0);
+        baseline.series[0].name.clear();
+        baseline.legend = LegendPos::Right;
+        let mut titled = baseline.clone();
+        titled.legend_title = Some("unsupported title".into());
+
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let titled_frame = compute(&titled, &m);
+        let baseline_frame = compute(&baseline, &m);
+        assert_eq!(titled_frame.scene_width, baseline_frame.scene_width);
+        assert_eq!(titled_frame.scene_height, baseline_frame.scene_height);
+        assert_eq!(titled_frame.plot_left, baseline_frame.plot_left);
+        assert_eq!(titled_frame.plot_right, baseline_frame.plot_right);
+        assert_eq!(titled_frame.plot_top, baseline_frame.plot_top);
+        assert_eq!(titled_frame.plot_bottom, baseline_frame.plot_bottom);
+        assert_eq!(titled_frame.ticks, baseline_frame.ticks);
+        assert_eq!(titled_frame.temporal_ticks, baseline_frame.temporal_ticks);
+        assert_eq!(
+            titled_frame.ys.map(titled_frame.ticks.min),
+            baseline_frame.ys.map(baseline_frame.ticks.min)
+        );
+        assert_eq!(
+            titled_frame.ys.map(titled_frame.ticks.max),
+            baseline_frame.ys.map(baseline_frame.ticks.max)
+        );
+        let titled_midpoint =
+            titled_frame.ticks.min + (titled_frame.ticks.max - titled_frame.ticks.min) / 2.0;
+        let baseline_midpoint =
+            baseline_frame.ticks.min + (baseline_frame.ticks.max - baseline_frame.ticks.min) / 2.0;
+        assert_eq!(
+            titled_frame.ys.map(titled_midpoint),
+            baseline_frame.ys.map(baseline_midpoint)
+        );
+        assert_eq!(
+            crate::layout::build_scene(&titled, &m),
+            crate::layout::build_scene(&baseline, &m)
+        );
     }
 
     #[test]
