@@ -3,7 +3,11 @@
 use crate::font::{DEFAULT_FAMILY, DEFAULT_FONT, family_name};
 use crate::text::TextMeasurer;
 
-/// 既定フォント(Noto Sans JP)で描画。出力は従来と byte 一致。
+/// 既定フォント(Noto Sans JP)で描画する legacy の未検証 low-level 経路。
+///
+/// 後方互換と byte 一致のため [`crate::guard::validate_spec`] を内部では呼ばない。
+/// 入力検証を含む fallible な SVG 経路が必要なら
+/// [`render_chart_with_font`] に [`DEFAULT_FONT`] を渡す。
 pub fn render_chart(spec: &crate::ir::ChartSpec) -> String {
     let m = TextMeasurer::new(DEFAULT_FONT).expect("bundled font parses");
     render_with(spec, &m, "Noto Sans JP, sans-serif")

@@ -227,6 +227,18 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
     }) {
         return Err("pointRadius must be finite and no greater than f32::MAX".to_string());
     }
+    if spec
+        .series
+        .iter()
+        .flat_map(|series| &series.points)
+        .any(|point| {
+            point
+                .r
+                .is_some_and(|radius| !radius.is_finite() || radius > f32::MAX as f64)
+        })
+    {
+        return Err("point.r must be finite and no greater than f32::MAX".to_string());
+    }
 
     // --- カテゴリ数 ---
     if spec.categories.len() > limits.max_categories {
@@ -823,6 +835,57 @@ mod tests {
                 validate_spec(&spec, &default_limits()),
                 Err(ERROR.to_string()),
                 "point_radius={point_radius:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_point_r_accepts_supported_values() {
+        use crate::ir::Point;
+
+        for radius in [None, Some(0.0), Some(-1.0), Some(f32::MAX as f64)] {
+            let mut spec = base_spec();
+            spec.series[0].points = vec![Point {
+                x: 1.0,
+                y: 2.0,
+                r: radius,
+            }];
+            assert!(
+                validate_spec(&spec, &default_limits()).is_ok(),
+                "point.r={radius:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_point_r_rejects_non_finite_and_above_f32_max_on_later_point() {
+        use crate::ir::Point;
+
+        const ERROR: &str = "point.r must be finite and no greater than f32::MAX";
+
+        for radius in [
+            (f32::MAX as f64) * 2.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let mut spec = base_spec();
+            spec.series[0].points = vec![
+                Point {
+                    x: 1.0,
+                    y: 2.0,
+                    r: Some(3.0),
+                },
+                Point {
+                    x: 3.0,
+                    y: 4.0,
+                    r: Some(radius),
+                },
+            ];
+            assert_eq!(
+                validate_spec(&spec, &default_limits()),
+                Err(ERROR.to_string()),
+                "point.r={radius:?}"
             );
         }
     }

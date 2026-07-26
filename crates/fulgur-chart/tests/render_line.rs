@@ -210,7 +210,7 @@ fn explicit_point_radius_none_retains_markers() {
 }
 
 #[test]
-fn unsupported_point_radius_returns_same_error_for_all_render_formats() {
+fn unsupported_point_radius_returns_same_error_for_fallible_svg_png_webp_apis() {
     const ERROR: &str = "pointRadius must be finite and no greater than f32::MAX";
     let spec = chartjs::parse(
         r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"pointRadius":1e40}]}}"#,
