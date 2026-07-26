@@ -498,4 +498,3 @@ from review completion.
 bd close fulgur-chart-be3 --reason "Five PR #137 review fixes implemented, verified, pushed, replied, and resolved."
 bd dolt push
 ```
-
