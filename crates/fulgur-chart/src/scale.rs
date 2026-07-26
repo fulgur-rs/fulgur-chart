@@ -46,6 +46,25 @@ pub struct NiceTicks {
     pub ticks: Vec<f64>,
 }
 
+fn expand_finite_degenerate_domain(value: f64) -> (f64, f64) {
+    if !value.is_finite() {
+        return (0.0, 1.0);
+    }
+    let upper = value + 1.0;
+    if upper.is_finite() && upper > value {
+        return (value, upper);
+    }
+
+    // At magnitudes where +1.0 cannot advance, move one representable value
+    // toward zero. This keeps f64::MAX endpoints finite and expands inward.
+    let inward = f64::from_bits(value.to_bits() - 1);
+    if value.is_sign_positive() {
+        (inward, value)
+    } else {
+        (value, inward)
+    }
+}
+
 /// `data_min`〜`data_max` を 1-2-5 系列の「きれいな」目盛りに丸める。
 /// `target_count` は目安の目盛り間隔数（ticks数 - 1）。chart.js `maxTicksLimit=11` に合わせる場合は 10 を渡す。
 /// 範囲が 0（縮退）でも panic しない。極端な有限値でも panic しない。
@@ -54,11 +73,12 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
     let count = target_count.clamp(1, MAX_TICK_INTERVALS);
 
     // 2. 縮退（range<=0）: range を 1.0 とみなし data_max を +1.0 して汎用処理に乗せる。
-    let (data_min, data_max, range) = if data_max - data_min <= 0.0 {
-        (data_min, data_min + 1.0, 1.0)
+    let (data_min, data_max) = if data_max - data_min <= 0.0 {
+        expand_finite_degenerate_domain(data_min)
     } else {
-        (data_min, data_max, data_max - data_min)
+        (data_min, data_max)
     };
+    let range = data_max - data_min;
 
     // 3-5. 1-2-5 ステップを選ぶ。
     let raw_step = range / count as f64;
@@ -95,7 +115,8 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
         return bounded_ticks(data_min, data_max, count);
     }
     let n = intervals as usize;
-    let ticks = (0..=n).map(|i| nice_min + i as f64 * step).collect();
+    let mut ticks: Vec<f64> = (0..=n).map(|i| nice_min + i as f64 * step).collect();
+    ticks.dedup_by(|left, right| *left == *right);
 
     // 8.
     NiceTicks {
@@ -218,14 +239,16 @@ fn full_step_ticks(min: f64, max: f64, step: f64) -> Option<Vec<f64>> {
 /// nice 丸めが使えない場合のフォールバック: データ範囲を等分して目盛りを返す。
 fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
     let min = if data_min.is_finite() { data_min } else { 0.0 };
-    let mut max = if data_max.is_finite() {
+    let max = if data_max.is_finite() {
         data_max
     } else {
         min + 1.0
     };
-    if max <= min {
-        max = min + 1.0;
-    }
+    let (min, max) = if max <= min {
+        expand_finite_degenerate_domain(min)
+    } else {
+        (min, max)
+    };
 
     let range = max - min;
     // range が inf になる場合（例: min=-f64::MAX, max=f64::MAX）は
@@ -238,16 +261,19 @@ fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
     };
     // 同じ理由で tick 生成も lerp を使う: min + range*t は中間でオーバーフローするが
     // min*(1-t) + max*t は各係数が 1 以下なので有限を保てる。
-    let ticks = (0..=count)
+    let mut ticks: Vec<f64> = (0..=count)
         .map(|i| {
             if i == count {
                 max
+            } else if range.is_finite() {
+                min + range * (i as f64 / count as f64)
             } else {
                 let t = i as f64 / count as f64;
                 min * (1.0 - t) + max * t
             }
         })
         .collect();
+    ticks.dedup_by(|left, right| *left == *right);
 
     NiceTicks {
         min,
@@ -260,6 +286,44 @@ fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_extreme_singleton_domain(ticks: &NiceTicks, value: f64) {
+        assert!(ticks.min.is_finite(), "{ticks:?}");
+        assert!(ticks.max.is_finite(), "{ticks:?}");
+        assert!(ticks.min < ticks.max, "{ticks:?}");
+        assert!(ticks.step.is_finite() && ticks.step > 0.0, "{ticks:?}");
+        assert!(
+            ticks
+                .ticks
+                .windows(2)
+                .all(|pair| pair[0].is_finite() && pair[0] < pair[1]),
+            "{ticks:?}"
+        );
+        assert!(ticks.ticks.last().is_some_and(|tick| tick.is_finite()));
+        if value.is_sign_positive() {
+            assert_eq!(ticks.max, value);
+        } else {
+            assert_eq!(ticks.min, value);
+        }
+
+        let scale = LinearScale::new(ticks.min, ticks.max, 0.0, 1.0);
+        assert_eq!(scale.map(ticks.min), 0.0);
+        assert_eq!(scale.map(ticks.max), 1.0);
+    }
+
+    #[test]
+    fn nice_ticks_expands_extreme_singletons_inward() {
+        for value in [f64::MAX, -f64::MAX] {
+            assert_extreme_singleton_domain(&nice_ticks(value, value, 5), value);
+        }
+    }
+
+    #[test]
+    fn vega_nice_ticks_fallback_expands_extreme_singletons_inward() {
+        for value in [f64::MAX, -f64::MAX] {
+            assert_extreme_singleton_domain(&vega_nice_ticks(value, value, 320.0), value);
+        }
+    }
 
     #[test]
     fn vega_dogfood_domain_is_zero_to_sixty_five() {
