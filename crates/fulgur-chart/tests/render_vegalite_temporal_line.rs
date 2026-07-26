@@ -196,6 +196,59 @@ fn plot_area_contains_long_rotated_y_axis_title() {
 }
 
 #[test]
+fn temporal_y_axis_title_renders_vertically_in_png() {
+    const Y_TITLE: &str = "unique temporal vertical axis title";
+    let json = fixture().replace(
+        r#""title": "subtests""#,
+        &format!(r#""title": "{Y_TITLE}""#),
+    );
+    let spec = vegalite::parse(&json, true).unwrap();
+    let m = measurer();
+    let scene = line::build(&spec, &m);
+    let frame = common::compute(&spec, &m);
+    let title_x = scene
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Prim::Text {
+                x,
+                content,
+                rotate_deg: Some(-90.0),
+                ..
+            } if content == Y_TITLE => Some(*x),
+            _ => None,
+        })
+        .expect("rotated y-axis title");
+    let png = render_chart_to_png(&spec, 1.0, DEFAULT_FONT).unwrap();
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+
+    let band_left = (title_x - 12.0).floor().max(0.0) as u32;
+    let band_right = (title_x + 12.0).ceil().min(frame.plot_left) as u32;
+    let background = &pixmap.data()[..4];
+    let mut row_counts = vec![0_u32; pixmap.height() as usize];
+    let mut column_counts = vec![0_u32; (band_right - band_left + 1) as usize];
+    for y in 0..pixmap.height() {
+        for x in band_left..=band_right {
+            let offset = ((y * pixmap.width() + x) * 4) as usize;
+            let pixel = &pixmap.data()[offset..offset + 4];
+            if pixel == background {
+                continue;
+            }
+            row_counts[y as usize] += 1;
+            column_counts[(x - band_left) as usize] += 1;
+        }
+    }
+    let max_row = row_counts.into_iter().max().unwrap();
+    let max_column = column_counts.into_iter().max().unwrap();
+
+    assert!(
+        max_column > max_row,
+        "y-axis title must have stronger vertical than horizontal occupancy: \
+         max_column={max_column}, max_row={max_row}"
+    );
+}
+
+#[test]
 fn plot_area_contains_long_centered_x_axis_title() {
     const X_TITLE: &str = "a very long centered temporal x axis title";
     let json = fixture()

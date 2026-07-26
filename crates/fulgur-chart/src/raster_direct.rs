@@ -897,10 +897,20 @@ fn render_prim(
             anchor,
             fill,
             content,
-            rotate_deg: _, // ラスタ出力では回転未サポート
+            rotate_deg,
         } => {
             render_text(
-                pixmap, *x, *y, *size, *anchor, *fill, content, face, transform, cache,
+                pixmap,
+                *x,
+                *y,
+                *size,
+                *anchor,
+                *fill,
+                content,
+                *rotate_deg,
+                face,
+                transform,
+                cache,
             );
         }
     }
@@ -960,6 +970,7 @@ fn render_text(
     anchor: Anchor,
     fill: Color,
     content: &str,
+    rotate_deg: Option<f64>,
     face: &ttf_parser::Face<'_>,
     transform: Transform,
     cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
@@ -988,6 +999,12 @@ fn render_text(
     let baseline_y = y as f32;
     let paint = solid_paint(fill);
     let mut cursor_x = start_x;
+    let text_transform = rotate_deg
+        .map(|angle| angle as f32)
+        .filter(|angle| angle.is_finite())
+        .map_or(transform, |angle| {
+            transform.pre_concat(Transform::from_rotate_at(angle, x as f32, baseline_y))
+        });
 
     for ch in content.chars() {
         let Some(gid) = face.glyph_index(ch) else {
@@ -1005,8 +1022,9 @@ fn render_text(
             .or_insert_with(|| build_canonical_glyph_path(face, gid));
         if let Some(path) = entry.as_ref() {
             // 正規化パス（origin=0, scale=1, Y 反転済み）を
-            // scale(glyph_scale) → translate(cursor_x, baseline_y) → outer_transform の順に合成して描画。
-            let glyph_transform = transform.pre_concat(
+            // scale(glyph_scale) → translate(cursor_x, baseline_y) →
+            // rotate(anchor) → outer_transform の順に合成して描画。
+            let glyph_transform = text_transform.pre_concat(
                 Transform::from_translate(cursor_x, baseline_y)
                     .pre_concat(Transform::from_scale(glyph_scale, glyph_scale)),
             );
@@ -1270,6 +1288,120 @@ mod tests {
     use super::*;
     use crate::font::DEFAULT_FONT;
     use crate::frontend::chartjs;
+
+    #[derive(Clone, Copy, Debug)]
+    struct PixelBounds {
+        left: u32,
+        top: u32,
+        right: u32,
+        bottom: u32,
+    }
+
+    impl PixelBounds {
+        fn width(self) -> u32 {
+            self.right - self.left + 1
+        }
+
+        fn height(self) -> u32 {
+            self.bottom - self.top + 1
+        }
+    }
+
+    fn non_transparent_bounds(pixmap: &Pixmap) -> PixelBounds {
+        let mut bounds = None;
+        for (index, pixel) in pixmap.data().chunks_exact(4).enumerate() {
+            if pixel[3] == 0 {
+                continue;
+            }
+            let x = index as u32 % pixmap.width();
+            let y = index as u32 / pixmap.width();
+            bounds = Some(match bounds {
+                None => PixelBounds {
+                    left: x,
+                    top: y,
+                    right: x,
+                    bottom: y,
+                },
+                Some(PixelBounds {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                }) => PixelBounds {
+                    left: left.min(x),
+                    top: top.min(y),
+                    right: right.max(x),
+                    bottom: bottom.max(y),
+                },
+            });
+        }
+        bounds.expect("text must paint at least one pixel")
+    }
+
+    fn text_pixmap(anchor: Anchor, rotate_deg: Option<f64>, scale: f32) -> Pixmap {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let scene = Scene {
+            width: 180.0,
+            height: 180.0,
+            items: vec![Prim::Text {
+                x: 90.0,
+                y: 90.0,
+                size: 24.0,
+                anchor,
+                fill: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                content: "Rotate".into(),
+                rotate_deg,
+            }],
+        };
+        scene_to_pixmap(&scene, scale, &face, &PNG_LIMITS).unwrap()
+    }
+
+    #[test]
+    fn text_rotation_uses_anchor_in_user_space_before_output_scale() {
+        for anchor in [Anchor::Start, Anchor::Middle, Anchor::End] {
+            let horizontal_1x = non_transparent_bounds(&text_pixmap(anchor, None, 1.0));
+            let rotated_1x = non_transparent_bounds(&text_pixmap(anchor, Some(-90.0), 1.0));
+            assert!(
+                horizontal_1x.width() > horizontal_1x.height(),
+                "{anchor:?}: {horizontal_1x:?}"
+            );
+            assert!(
+                rotated_1x.height() > rotated_1x.width(),
+                "{anchor:?}: {rotated_1x:?}"
+            );
+
+            let horizontal_2x = non_transparent_bounds(&text_pixmap(anchor, None, 2.0));
+            let rotated_2x = non_transparent_bounds(&text_pixmap(anchor, Some(-90.0), 2.0));
+            for (at_1x, at_2x) in [(horizontal_1x, horizontal_2x), (rotated_1x, rotated_2x)] {
+                for (twice, scaled) in [
+                    (at_1x.left * 2, at_2x.left),
+                    (at_1x.top * 2, at_2x.top),
+                    (at_1x.right * 2, at_2x.right),
+                    (at_1x.bottom * 2, at_2x.bottom),
+                ] {
+                    assert!(
+                        twice.abs_diff(scaled) <= 2,
+                        "{anchor:?}: 1x={at_1x:?}, 2x={at_2x:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_finite_text_rotation_preserves_unrotated_pixels() {
+        for rotate_deg in [Some(f64::NAN), Some(f64::INFINITY), Some(f64::NEG_INFINITY)] {
+            assert_eq!(
+                text_pixmap(Anchor::Middle, rotate_deg, 1.0).data(),
+                text_pixmap(Anchor::Middle, None, 1.0).data()
+            );
+        }
+    }
 
     fn bar_spec() -> crate::ir::ChartSpec {
         chartjs::parse(
