@@ -150,20 +150,58 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 
     let angle_per = 2.0 * PI / n as f64;
+    // 既存 default パス (radial_axis == None) 用の max_v は byte-identical を維持するため
+    // 既存の v > 0 フィルタを保つ。
     let max_v = values
         .iter()
         .filter(|v| v.is_finite() && **v > 0.0)
         .cloned()
         .fold(f64::NEG_INFINITY, f64::max);
 
+    // ドメイン [lo, hi] を解決。radial_axis 有り → override、無し → 既存 [0, max_v]。
+    // 既存 default path (radial_axis == None) は byte-identical を維持。
+    let (lo, hi) = if let Some(ra) = &spec.radial_axis {
+        // Codex Fix 8: radial_axis ブランチでは data_min / data_max を「全 finite 値」から求める。
+        // v > 0 フィルタだと min: -10, data: [0] のケースで max_v = -inf になり hi が壊れる。
+        let mut data_min = f64::INFINITY;
+        let mut data_max = f64::NEG_INFINITY;
+        for &v in values.iter() {
+            if v.is_finite() {
+                if v < data_min {
+                    data_min = v;
+                }
+                if v > data_max {
+                    data_max = v;
+                }
+            }
+        }
+        // ドメイン解決は radar と共有する (common::resolve_radial_domain)。
+        // hard bound の優先、suggested* の expand-only、beginAtZero の両端適用、
+        // 縮退の救済はすべてそちらに集約されている。
+        common::resolve_radial_domain(ra, data_min, data_max)
+    } else {
+        (0.0, max_v)
+    };
     let mut labels: Vec<Prim> = Vec::new();
 
-    if max_v.is_finite() && max_v > 0.0 {
+    // span が f64 で表現できないほど広いドメイン (例 `min: -1e308, max: 1e308`) でも
+    // 描画できるよう、幅の判定と比率計算は common 側のオーバーフロー安全版を使う。
+    if common::radial_domain_has_width(lo, hi) {
         let mut a0 = -PI / 2.0;
         for (i, &v) in values.iter().enumerate() {
             let a1 = a0 + angle_per;
-            let r = if v.is_finite() && v > 0.0 {
-                (max_radius * (v / max_v)).clamp(0.0, max_radius)
+            // radial_axis 無しの場合は既存挙動: v > 0 のみ描く (max_v > 0 が
+            // 外側条件で保証されている; v/max_v == (v-0)/(max_v-0))。
+            // 有りの場合は下限クランプ + 上限クランプ。
+            let r = if v.is_finite() {
+                let ratio = if spec.radial_axis.is_some() {
+                    common::radial_ratio(v, lo, hi)
+                } else if v > 0.0 {
+                    (v / hi).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                max_radius * ratio
             } else {
                 0.0
             };

@@ -164,31 +164,102 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 各スポークの角度(上始点・時計回り。SVG は y 下向きなので sin が下方向に効き時計回り)。
     let angle = |i: usize| -PI / 2.0 + i as f64 * (2.0 * PI / n as f64);
 
-    // 4. 値スケール。全系列の有限・非負値の最大から nice_ticks(0..max)。
+    // 4. 値スケール。radial_axis があれば min/max/suggested*/beginAtZero を反映する。
+    //    無ければ従来通り nice_ticks(0.0, max_val) — snapshot 破壊回避。
+    let mut data_min = f64::INFINITY;
+    let mut data_max = f64::NEG_INFINITY;
     let mut max_val = 0.0_f64;
     for ser in &spec.series {
         for &v in &ser.values {
-            if v.is_finite() && v >= 0.0 && v > max_val {
-                max_val = v;
+            if v.is_finite() {
+                if v < data_min {
+                    data_min = v;
+                }
+                if v > data_max {
+                    data_max = v;
+                }
+                if v >= 0.0 && v > max_val {
+                    max_val = v;
+                }
             }
         }
     }
-    let nice = nice_ticks(0.0, max_val, 10);
-    // 値→半径。nice.max<=0 の縮退は中心へ落とす。
-    let rr = |v: f64| -> f64 {
-        if nice.max > 0.0 {
-            (v / nice.max) * radius
-        } else {
-            0.0
-        }
+    // `max_val` は既存 default パス用 (0 で床止め、byte-identical 維持)。
+    // radial_axis 経路には `data_max` を渡す: 有限データが無いときに 0 ではなく
+    // NEG_INFINITY となり、`resolve_radial_domain` が片側 `suggested*` を
+    // 暫定レンジとして拾えるようにするため。radar は負値を parse 時に拒否するので、
+    // データがある場合の data_max と max_val は一致する。
+
+    // rr_lo / rr_hi は「値→半径」マッピングに使う raw ドメイン。
+    //
+    // ドメインは「側ごと」に硬さが違う。`min` / `max` が明示された側は hard bound として
+    // raw 値をそのまま使い (Codex Fix 5: `max: 95` が nice.max=100 に丸められて
+    // データ最大値が外周に届かなくなるバグの回避)、明示されていない側 —— 自動計算のみ、
+    // または `suggested*` によって広げられただけの側 —— は従来通り nice_ticks の
+    // 丸めた境界を使う (Codex Fix 11: `min: 0` だけ指定したとき data [95,95,95] が
+    // 0..95 になってしまい、既定の 0..100 から不必要にズレる問題の回避)。
+    //
+    // radial_axis 無し時は既存の byte-identical パスを維持するため nice.min / nice.max を使う。
+    let (nice, rr_lo, rr_hi) = if let Some(ra) = &spec.radial_axis {
+        // ドメイン解決は polar_area と共有する (common::resolve_radial_domain)。
+        let (lo, hi) = common::resolve_radial_domain(ra, data_min, data_max);
+        // nice_ticks は外側へ丸める (nice.min <= lo かつ nice.max >= hi) ため、
+        // 自動側に採用してもデータがクリップされることはない。
+        let n = nice_ticks(lo, hi, 10);
+        let rr_lo = if ra.min.is_some() { lo } else { n.min };
+        let rr_hi = if ra.max.is_some() { hi } else { n.max };
+        (n, rr_lo, rr_hi)
+    } else {
+        // 既存 default: byte-identical を維持。
+        let n = nice_ticks(0.0, max_val, 10);
+        let (mn, mx) = (n.min, n.max);
+        (n, mn, mx)
     };
+    // 値→半径。縮退 (幅 0) は中心へ落とす。
+    // span が f64 で表現できないほど広いドメインでも比率が壊れないよう
+    // common::radial_ratio を使う (hard bound を書き換えずに済む)。
+    let rr = |v: f64| -> f64 { common::radial_ratio(v, rr_lo, rr_hi) * radius };
 
     // 5. グリッド(多角形状)。tick レベルごとに n 頂点を結ぶ閉多角形を描く。
+    //
+    // 先に描画する半径を集める。tick 由来のリングに加え、hard な `max` が
+    // nice tick 上に無い場合は外周の境界リングを補う必要があるため。
+    let mut ring_radii: Vec<f64> = Vec::new();
     for &t in &nice.ticks {
-        if t <= 0.0 {
+        // ドメイン上端を超える tick は描かない。rr() のクランプで外周リングが
+        // 二重に重なるのを防ぐ。
+        if t > rr_hi {
             continue;
         }
         let r = rr(t);
+        // 半径 0 に潰れるリング (t <= rr_lo) は描かない。
+        //
+        // これは従来の `t <= 0.0` スキップを一般化したもの。default パス
+        // (radial_axis == None) では rr_lo == nice.min == 0 なので
+        // `r <= 0` ⟺ `t <= 0` となり厳密に等価 → 既存 snapshot は不変。
+        // 一方 radial_axis 経路で `min: -10, max: 10` のようにドメインが負を含む場合、
+        // 負および 0 の tick も正の半径へ写るため、従来は丸ごと落ちていた内側の
+        // グリッドリングとゼロ境界が描かれるようになる。
+        if r <= 0.0 {
+            continue;
+        }
+        ring_radii.push(r);
+    }
+    // hard な `max` がちょうど nice tick に乗らない場合、上の `t > rr_hi` で
+    // 外側の tick が落ちるため外周に境界リングが無くなる
+    // (例 `min:0, max:95` → ticks は 100 まであるが 100 は落ち、最外周が 90 になる)。
+    // 設定した最大値の位置にグリッド境界を補う。
+    // default パスでは rr_hi == nice.max が必ず tick に含まれるので影響しない。
+    if spec.radial_axis.as_ref().is_some_and(|ra| ra.max.is_some()) {
+        let tol = f64::EPSILON * rr_hi.abs().max(1.0);
+        if !nice.ticks.iter().any(|t| (*t - rr_hi).abs() <= tol) {
+            let r = rr(rr_hi);
+            if r > 0.0 {
+                ring_radii.push(r);
+            }
+        }
+    }
+    for r in ring_radii {
         let mut d = String::new();
         for i in 0..n {
             let a = angle(i);

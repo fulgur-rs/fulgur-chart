@@ -1,10 +1,169 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
-use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos};
+use crate::ir::{AxisSpec, ChartKind, ChartSpec, Color, LegendPos, RadialAxis};
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, nice_ticks};
 use crate::scene::{Anchor, Prim};
 use crate::text::TextMeasurer;
+
+/// 動径軸 (`options.scales.r`) のドメイン `[lo, hi]` を解決する。radar / polarArea 共通。
+///
+/// 意味論は chart.js の `LinearScaleBase.handleTickRangeOptions` に合わせている。要点は
+/// **調整はすべて「自動計算側」にのみ作用し、`min` / `max` で明示された hard bound は
+/// 決して動かさない** こと (chart.js の `setMin` / `setMax` が `minDefined` /
+/// `maxDefined` のとき no-op になるのと同じ)。
+///
+/// - `min` / `max`: hard bound。指定された側はそのまま使う。
+/// - `suggestedMin` / `suggestedMax`: 自動側を広げる方向にのみ効く。
+/// - `beginAtZero`: 自動側の端を 0 へ寄せる。下端だけでなく **上端にも** 効くので、
+///   全データが負でもドメインは 0 を含む (chart.js は min/max が同符号のとき
+///   反対側を 0 に寄せる)。
+/// - 縮退 (`hi <= lo`) / 非有限: やはり自動側を開いて解消する。
+///
+/// `data_min` / `data_max` は呼び出し側が全 finite 値から求めた実データ範囲。
+/// データが無い場合は `INFINITY` / `NEG_INFINITY` を渡してよい。
+pub(crate) fn resolve_radial_domain(ra: &RadialAxis, data_min: f64, data_max: f64) -> (f64, f64) {
+    let lo_is_hard = ra.min.is_some();
+    let hi_is_hard = ra.max.is_some();
+    // 有限データが無い場合 (dataset が空など) は、片側だけの `suggested*` を
+    // 暫定レンジとして使う。0 で埋めてしまうと `suggestedMin: 100` のような
+    // 「0 の反対側にある片側指定」が expand-only 判定で捨てられ、100 付近ではなく
+    // 0 付近のドメインになってしまう。
+    let mut lo = ra.min.unwrap_or(if data_min.is_finite() {
+        data_min
+    } else {
+        ra.suggested_min.or(ra.suggested_max).unwrap_or(0.0)
+    });
+    let mut hi = ra.max.unwrap_or(if data_max.is_finite() {
+        data_max
+    } else {
+        ra.suggested_max
+            .or(ra.suggested_min)
+            .unwrap_or(f64::NEG_INFINITY)
+    });
+
+    if !lo_is_hard {
+        if let Some(s) = ra.suggested_min
+            && s < lo
+        {
+            lo = s;
+        }
+        if ra.begin_at_zero {
+            lo = lo.min(0.0);
+        }
+    }
+    if !hi_is_hard {
+        if let Some(s) = ra.suggested_max
+            && s > hi
+        {
+            hi = s;
+        }
+        if ra.begin_at_zero {
+            hi = hi.max(0.0);
+        }
+    }
+
+    if !hi.is_finite() || hi <= lo {
+        // hard bound と自動側が逆転している場合、まず自動側を hard 側へ寄せる。
+        // chart.js も `getMinMax` で自動側を hard bound へ引き上げてから
+        // `handleTickRangeOptions` で 5% 広げる、という順序になっている。
+        //
+        // 先に寄せておかないと、既に無効になった自動側の値を base にしてしまい、
+        // 5% 広げてもまだ hard bound の反対側に留まる。例えば `min: 100` (hard) で
+        // データ最大が 50 のとき base=50 → 52.5 となり、最終救済で 1ULP 幅の
+        // ドメインになってしまう (本来は [100, 105])。
+        if lo_is_hard && !hi_is_hard && (!hi.is_finite() || hi < lo) {
+            hi = lo;
+        }
+        if hi_is_hard && !lo_is_hard && (!lo.is_finite() || lo > hi) {
+            lo = hi;
+        }
+
+        // chart.js は `min === max` のとき `offset = max == 0 ? 1 : |max * 0.05|` だけ
+        // 開く。ここでも同じ比率を使い、定数データが radius 0 に潰れて不可視になるのを防ぐ。
+        let base = if hi.is_finite() { hi } else { lo };
+        let base = if base.is_finite() { base } else { 0.0 };
+        let offset = if base == 0.0 {
+            1.0
+        } else {
+            (base * 0.05).abs()
+        };
+        if !hi_is_hard {
+            // f64::MAX 近傍では `base + offset` がオーバーフローする。上へ広げられない
+            // ので base に留め、下側を広げて幅を作る (下の分岐が担当する)。
+            let up = base + offset;
+            hi = if up.is_finite() { up } else { base };
+        }
+        // 下端を下げるのは自動側のときだけ。`beginAtZero` が 0 起点を要求している間は
+        // 下げないが、上端が hard で固定されている場合、あるいは上へ広げられずまだ
+        // 幅が無い場合は、下げる以外に開く余地が無い。
+        if !lo_is_hard && (!ra.begin_at_zero || hi_is_hard || hi <= lo) {
+            let down = base - offset;
+            if down.is_finite() {
+                lo = down;
+            }
+        }
+        // 両側 hard で `min > max` のように矛盾している場合は動かせる自動側が無い。
+        // 描画が壊れないよう、決定的に hard な `min` を優先して上端を開く。
+        //
+        // `lo + 1.0` は絶対値が大きいと丸めで lo に戻ってしまう (f64::MAX 近傍の ulp は
+        // 1 よりはるかに大きい)。ulp 相当の相対量で確実に differ させ、それも
+        // オーバーフローする場合は下端を下げる。
+        // (この時点で lo / hi は共に有限: base と offset が有限で、
+        //  非有限になる代入は上でガードしてある)
+        if hi <= lo {
+            let step = lo.abs().max(1.0) * f64::EPSILON * 4.0;
+            let up = lo + step;
+            if up.is_finite() && up > lo {
+                hi = up;
+            } else {
+                let down = hi - hi.abs().max(1.0) * f64::EPSILON * 4.0;
+                if down.is_finite() && down < hi {
+                    lo = down;
+                }
+            }
+        }
+    }
+
+    (lo, hi)
+}
+
+/// 値 `v` を動径ドメイン `[lo, hi]` 上の 0..1 比率へ写す。
+///
+/// 通常は `(v - lo) / (hi - lo)`。ただし境界が個々には有限でも、その差が f64 の
+/// 表現範囲を超えると span が `+inf` になり比率が壊れる (例 `min: -1e308, max: 1e308`)。
+/// その場合は両辺を半分にしてから引く —— 数学的には同値だがオーバーフローしない。
+///
+/// 端点をクランプする方式は採らない。それだと `resolve_radial_domain` が保証している
+/// 「hard bound は決して動かさない」という不変条件を破り、`min: -1e308, max: 1e308` +
+/// データ `5e307` が本来の 75% ではなく外周に張り付いてしまう。
+pub(crate) fn radial_ratio(v: f64, lo: f64, hi: f64) -> f64 {
+    let span = hi - lo;
+    if span.is_finite() {
+        if span > 0.0 {
+            ((v - lo) / span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    } else {
+        let half_span = hi * 0.5 - lo * 0.5;
+        if half_span > 0.0 {
+            ((v * 0.5 - lo * 0.5) / half_span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+}
+
+/// 動径ドメインが正の幅を持つか。`hi - lo` が `+inf` になるケースでも正しく判定する。
+pub(crate) fn radial_domain_has_width(lo: f64, hi: f64) -> bool {
+    let span = hi - lo;
+    if span.is_finite() {
+        span > 0.0
+    } else {
+        hi * 0.5 - lo * 0.5 > 0.0
+    }
+}
 
 pub const OUTER_PAD: f64 = 8.0;
 pub const TITLE_FONT: f64 = 16.0;
@@ -692,6 +851,7 @@ mod tests {
             data_labels: false,
             theme: crate::ir::Theme::default(),
             decimation: crate::ir::Decimation::default(),
+            radial_axis: None,
         }
     }
 
@@ -1202,5 +1362,107 @@ mod tests {
             )
         });
         assert!(!stray, "title=None なら x-title 位置に余分な text は無い");
+    }
+}
+
+#[cfg(test)]
+mod radial_domain_tests {
+    use super::resolve_radial_domain;
+    use crate::ir::RadialAxis;
+
+    fn ra(
+        min: Option<f64>,
+        max: Option<f64>,
+        suggested_min: Option<f64>,
+        suggested_max: Option<f64>,
+        begin_at_zero: bool,
+    ) -> RadialAxis {
+        RadialAxis {
+            min,
+            max,
+            suggested_min,
+            suggested_max,
+            begin_at_zero,
+        }
+    }
+
+    /// 有限データが無い場合、片側だけの `suggested*` を暫定レンジとして使う。
+    /// 0 で埋めると `suggestedMin: 100` が expand-only 判定 (s < lo) で捨てられ、
+    /// 100 付近ではなく 0 付近のドメインになってしまう。
+    ///
+    /// レンダリング経由では観測できない (データが無い radar はリングを等間隔に
+    /// 描くだけなので SVG が同一になる) ため、resolver を直接検証する。
+    #[test]
+    fn empty_data_seeds_domain_from_one_sided_suggestion() {
+        let (lo, hi) = resolve_radial_domain(
+            &ra(None, None, Some(100.0), None, false),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        assert!(
+            lo > 90.0 && hi > 100.0 && hi > lo,
+            "suggestedMin:100 は 100 付近へ展開されるべき: [{lo}, {hi}]"
+        );
+
+        // 対称ケース: suggestedMax のみ。
+        let (lo, hi) = resolve_radial_domain(
+            &ra(None, None, None, Some(-100.0), false),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        assert!(
+            hi < -90.0 && lo < -100.0 && hi > lo,
+            "suggestedMax:-100 は -100 付近へ展開されるべき: [{lo}, {hi}]"
+        );
+
+        // suggestion が無い場合は従来通り 0 起点。
+        let (lo, hi) = resolve_radial_domain(
+            &ra(None, None, None, None, true),
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        );
+        assert_eq!((lo, hi), (0.0, 1.0));
+    }
+
+    /// hard bound と自動側が逆転している場合、自動側を hard 側へ寄せてから展開する。
+    /// chart.js の `getMinMax` → `handleTickRangeOptions` と同じ順序。
+    /// 寄せずに無効な自動側を base にすると、5% 展開後もまだ hard bound の反対側に
+    /// 留まり、最終救済で 1ULP 幅のドメインになってしまう。
+    #[test]
+    fn inverted_range_expands_from_the_hard_bound() {
+        // min: 100 (hard) / データ最大 50 → [100, 105] になるべき (1ULP 幅ではなく)。
+        let (lo, hi) = resolve_radial_domain(&ra(Some(100.0), None, None, None, false), 10.0, 50.0);
+        assert_eq!(lo, 100.0, "hard min は動かさない");
+        assert!(
+            hi > 100.0 && (hi - lo) > 1.0,
+            "hard min から 5% 展開されるべき: [{lo}, {hi}]"
+        );
+
+        // 対称ケース: max: -100 (hard) / データ最小 -50 → [-105, -100] 相当。
+        let (lo, hi) =
+            resolve_radial_domain(&ra(None, Some(-100.0), None, None, false), -50.0, -10.0);
+        assert_eq!(hi, -100.0, "hard max は動かさない");
+        assert!(
+            lo < -100.0 && (hi - lo) > 1.0,
+            "hard max から 5% 展開されるべき: [{lo}, {hi}]"
+        );
+    }
+
+    /// f64::MAX 近傍の縮退ドメインでも、有限かつ幅のあるドメインになること。
+    /// `base + offset` はオーバーフローし、`lo + 1.0` は丸めで lo に戻るため、
+    /// 素朴な実装だと幅 0 のまま描画が消える。
+    #[test]
+    fn degenerate_domain_near_f64_max_keeps_finite_width() {
+        let v = f64::MAX;
+        let (lo, hi) = resolve_radial_domain(&ra(None, None, None, None, false), v, v);
+        assert!(
+            lo.is_finite() && hi.is_finite(),
+            "有限であること: [{lo}, {hi}]"
+        );
+        assert!(hi > lo, "幅を持つこと: [{lo}, {hi}]");
+
+        // 両側 hard で min == max == f64::MAX の矛盾指定でも壊れないこと。
+        let (lo, hi) = resolve_radial_domain(&ra(Some(v), Some(v), None, None, false), v, v);
+        assert!(lo.is_finite() && hi.is_finite() && hi > lo, "[{lo}, {hi}]");
     }
 }

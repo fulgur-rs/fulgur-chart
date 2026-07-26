@@ -56,9 +56,9 @@ struct RawOptions {
     scales: Option<RawScales>,
 }
 
-/// `options.scales` の受け皿。x/y の 2 軸のみを typed に扱う。
-/// `deny_unknown_fields` は付けない: 非 strict モードでは `scales.r`(radar/polar)や
-/// `scales.x1`/`y1`(multi-axis)を silently 無視する必要がある(Chart.js 互換)。
+/// `options.scales` の受け皿。x/y の直交 2 軸と r の動径軸を typed に扱う。
+/// `deny_unknown_fields` は付けない: 非 strict モードでは `scales.x1`/`y1`(multi-axis)
+/// を silently 無視する必要がある(Chart.js 互換)。
 /// strict モードでの未知キー拒否は上流の `check_unknown_keys` が担当する。
 #[derive(Deserialize, Default)]
 struct RawScales {
@@ -66,6 +66,32 @@ struct RawScales {
     x: Option<AxisOptions>,
     #[serde(default)]
     y: Option<AxisOptions>,
+    /// radar / polarArea の動径軸。
+    ///
+    /// ここで `RawRadialAxis` に型付けしてしまうと、chart kind が確定する前に検証が走る。
+    /// その結果、非 radial チャートに紛れ込んだ無関係な `scales.r` (例 bar + `"r": 5`) が
+    /// 非 strict モードでも deserialize エラーになってしまう —— main では未知キーとして
+    /// silently 無視されていた挙動の後退。kind が分かるまで生の JSON 値のまま保持する。
+    #[serde(default)]
+    r: Option<serde_json::Value>,
+}
+
+/// `options.scales.r`(radar / polarArea の動径軸)のドメイン指定。
+/// `deny_unknown_fields` は付けない: 非 strict では `ticks` / `angleLines` / `pointLabels`
+/// 等の視覚キーを silently 無視する(Chart.js 互換)。strict は `check_unknown_keys` が担当。
+/// 全フィールドが `Option` なので、どのキーも明示されなかった場合を呼び出し側で判別できる。
+#[derive(Deserialize, Default)]
+struct RawRadialAxis {
+    #[serde(default)]
+    min: Option<f64>,
+    #[serde(default)]
+    max: Option<f64>,
+    #[serde(rename = "suggestedMin", default)]
+    suggested_min: Option<f64>,
+    #[serde(rename = "suggestedMax", default)]
+    suggested_max: Option<f64>,
+    #[serde(rename = "beginAtZero", default)]
+    begin_at_zero: Option<bool>,
 }
 
 /// `options.theme`: 視覚トークンの上書き。各フィールドは任意。
@@ -440,7 +466,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 chart_type.as_deref(),
                 Some("outlabeledPie") | Some("outlabeledDoughnut")
             );
-            check_unknown_keys(json, allow_outlabels)?;
+            let allow_radial_scale =
+                matches!(chart_type.as_deref(), Some("radar") | Some("polarArea"));
+            check_unknown_keys(json, allow_outlabels, allow_radial_scale)?;
         }
     }
 
@@ -809,6 +837,50 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let x_offset = x_opts.and_then(|a| a.offset).unwrap_or(false);
     let y_offset = y_opts.and_then(|a| a.offset).unwrap_or(false);
 
+    // scales.r: radar / polarArea かつ scales.r にドメインキーが明示されているときのみ populate。
+    // 他 kind、`scales.r` 未指定、`scales.r: null` の場合は None を保ち後方互換を維持する。
+    let is_radial = matches!(kind, ChartKind::Radar | ChartKind::PolarArea);
+    let radial_axis = if is_radial {
+        // ここで初めて typed に解釈する。
+        //
+        // 非 strict では型不一致 (例 `"r": 5`、`{"max": "100"}`) を silently 無視する
+        // (Chart.js 互換)。strict では伝播させる: `check_unknown_keys` はキー名しか
+        // 見ないので `{"max": "100"}` のような「キーは正しいが型が違う」入力を
+        // 素通りさせてしまい、`.ok()` で握り潰すと既定ドメインで描画されてしまう。
+        let parsed = match raw.options.scales.as_ref().and_then(|s| s.r.as_ref()) {
+            None => None,
+            Some(v) => match serde_json::from_value::<RawRadialAxis>(v.clone()) {
+                Ok(r) => Some(r),
+                Err(e) if strict => {
+                    return Err(format!("options.scales.r の型が不正です: {e}"));
+                }
+                Err(_) => None,
+            },
+        };
+        parsed
+            .as_ref()
+            // Codex Fix 9: `scales.r: {}` や、`ticks` 等の視覚キーのみを持つ `r` は no-op とする。
+            // ドメインキーが 1 つも無いのに Some(RadialAxis) を返すと layout が override 経路に
+            // 入り、既定の nice ドメイン (例 0..100) が raw データ max (0..95) へ変わってしまう。
+            .filter(|r| {
+                r.min.is_some()
+                    || r.max.is_some()
+                    || r.suggested_min.is_some()
+                    || r.suggested_max.is_some()
+                    || r.begin_at_zero.is_some()
+            })
+            .map(|r| RadialAxis {
+                min: r.min,
+                max: r.max,
+                suggested_min: r.suggested_min,
+                suggested_max: r.suggested_max,
+                // radar / polarArea の既存挙動は 0 起点なので default true。
+                begin_at_zero: r.begin_at_zero.unwrap_or(true),
+            })
+    } else {
+        None
+    };
+
     Ok(ChartSpec {
         kind,
         series,
@@ -847,6 +919,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         data_labels,
         theme,
         decimation,
+        radial_axis,
     })
 }
 
@@ -1002,7 +1075,11 @@ fn legend_pos(l: &Option<RawLegend>) -> LegendPos {
 // IR へ未マップでも、設計で v1 サポート対象に挙げたキーは strict でも受理する
 // （strict が弾くのは未知キーであり、認識済み・未完成キーではない）:
 //   datalabels=Task16(最小データラベル) / scales=Task9 / pointRadius=Task13。
-fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
+fn check_unknown_keys(
+    json: &str,
+    allow_outlabels: bool,
+    allow_radial_scale: bool,
+) -> Result<(), String> {
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return Ok(()), // 不正 JSON は後段パースに委ねる
@@ -1100,26 +1177,51 @@ fn check_unknown_keys(json: &str, allow_outlabels: bool) -> Result<(), String> {
         // scales 配下も検査する。stacked は描画に効く load-bearing キーなので、
         // typo(例 stakced)を strict で取りこぼさないようにする。各軸は設計が認める
         // サブセットのみ許可(stacked のみ実装、他は認識済み・未実装)。
+        // radar/polarArea は直交軸を持たず、動径軸 `r` のみを受け付ける。
         if let Some(scales) = options.get("scales").and_then(|v| v.as_object()) {
-            check_object(scales, &["x", "y"], "options.scales")?;
-            for axis in ["x", "y"] {
-                if let Some(ax) = scales.get(axis).and_then(|v| v.as_object()) {
-                    check_object(
-                        ax,
-                        &[
-                            "stacked",
-                            "min",
-                            "max",
-                            "title",
-                            "grid",
-                            "border",
-                            "beginAtZero",
-                            "suggestedMin",
-                            "suggestedMax",
-                            "offset",
-                        ],
-                        &format!("options.scales.{axis}"),
-                    )?;
+            let allowed_axes: &[&str] = if allow_radial_scale {
+                &["r"]
+            } else {
+                &["x", "y"]
+            };
+            check_object(scales, allowed_axes, "options.scales")?;
+            let allowed_axis_keys: &[&str] = if allow_radial_scale {
+                &["min", "max", "suggestedMin", "suggestedMax", "beginAtZero"]
+            } else {
+                &[
+                    "stacked",
+                    "min",
+                    "max",
+                    "title",
+                    "grid",
+                    "border",
+                    "beginAtZero",
+                    "suggestedMin",
+                    "suggestedMax",
+                    "offset",
+                ]
+            };
+            // Codex Fix 7: axis 値が object でない (例: "r": 5) 場合は strict で拒否する。
+            // 従来は as_object() の None 分岐で無音スキップされていた。chart.js では
+            // 非 object の axis 値は常にエラーなので radial (r) / cartesian (x/y) 双方に適用。
+            //
+            // Codex Fix 10: ただし JSON null は「未指定」として扱う。schema 側の
+            // `BarScales.y` / `RadialLinearScales.r` は `Option<_>` なので null は None に
+            // deserialize される。optional フィールドを nullable に serialize する
+            // クライアント (例: 多くの JSON エンコーダ) が strict で落ちないようにする。
+            // null を許すのは axis レベルのみで、数値・文字列などの非 object 値は従来通り拒否する。
+            for axis in allowed_axes {
+                match scales.get(*axis) {
+                    None => {}
+                    // `"r": null` / `"y": null` → 軸未指定と同義。`options.scales: null`
+                    // が上の as_object() で既に無視されるのと同じ扱い。
+                    Some(v) if v.is_null() => {}
+                    Some(ax_val) => {
+                        let ax = ax_val.as_object().ok_or_else(|| {
+                            format!("options.scales.{axis} は object でなければなりません")
+                        })?;
+                        check_object(ax, allowed_axis_keys, &format!("options.scales.{axis}"))?;
+                    }
                 }
             }
         }
@@ -1610,6 +1712,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 
@@ -1976,6 +2079,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 
@@ -2318,6 +2422,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 
@@ -2541,6 +2646,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 
@@ -2711,6 +2817,7 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 

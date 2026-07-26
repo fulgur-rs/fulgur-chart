@@ -1289,6 +1289,52 @@ fn schema_rejects_unknown_decimation_algorithm() {
 }
 
 #[test]
+fn radar_scales_r_populates_radial_axis() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{"min":-10,"max":50,"suggestedMin":-20,"suggestedMax":80,"beginAtZero":true}}}}"##,
+        false,
+    ).unwrap();
+    let r = spec.radial_axis.expect("radar should populate radial_axis");
+    assert_eq!(r.min, Some(-10.0));
+    assert_eq!(r.max, Some(50.0));
+    assert_eq!(r.suggested_min, Some(-20.0));
+    assert_eq!(r.suggested_max, Some(80.0));
+    assert!(r.begin_at_zero);
+}
+
+#[test]
+fn polar_area_scales_r_populates_radial_axis() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r##"{"type":"polarArea","data":{"labels":["a","b"],"datasets":[{"data":[10,20]}]},
+             "options":{"scales":{"r":{"max":100}}}}"##,
+        false,
+    )
+    .unwrap();
+    let r = spec
+        .radial_axis
+        .expect("polarArea should populate radial_axis");
+    assert_eq!(r.max, Some(100.0));
+    assert!(r.begin_at_zero, "polarArea beginAtZero default true");
+}
+
+#[test]
+fn radar_without_scales_leaves_radial_axis_none() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r#"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]}}"#,
+        false,
+    )
+    .unwrap();
+    assert!(
+        spec.radial_axis.is_none(),
+        "backward compat: no scales → None"
+    );
+}
+
+#[test]
 fn scales_r_axis_silently_accepted_in_non_strict() {
     // radar/polar chart で使う `scales.r` を非 strict で silently 通す(Chart.js 互換)。
     let json = r##"{
@@ -1303,6 +1349,92 @@ fn scales_r_axis_silently_accepted_in_non_strict() {
 }
 
 #[test]
+fn non_radial_charts_leave_radial_axis_none() {
+    use fulgur_chart::frontend::chartjs;
+    let spec = chartjs::parse(
+        r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+             "options":{"scales":{"y":{"beginAtZero":true}}}}"##,
+        false,
+    )
+    .unwrap();
+    assert!(spec.radial_axis.is_none());
+}
+
+#[test]
+fn strict_mode_allows_scales_r_on_radar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":{"min":0,"max":100,"suggestedMin":-5,"suggestedMax":120,"beginAtZero":true}}}}"##;
+    chartjs::parse(json, true).expect("strict mode should accept scales.r on radar");
+}
+
+#[test]
+fn strict_mode_allows_scales_r_on_polar_area() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"polarArea","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+        "options":{"scales":{"r":{"max":50}}}}"##;
+    chartjs::parse(json, true).expect("strict mode should accept scales.r on polarArea");
+}
+
+#[test]
+fn strict_mode_rejects_scales_r_on_bar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"r":{"min":0}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("r") && err.contains("scales"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_scales_r_on_doughnut() {
+    // doughnut は pie と PieSpec を共有する。scales.r は radar/polarArea 専用。
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"doughnut","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"r":{"min":0}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("r") && err.contains("scales"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_scales_r_typo_on_radar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":{"beginAtZeroo":true}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("beginAtZeroo"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_scales_xy_on_radar() {
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"x":{"min":0}}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("x") && err.contains("scales"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_non_object_scales_r_on_radar() {
+    // Codex Fix 7: axis 値が object でない (例: "r": 5) 場合は strict で拒否する。
+    // 従来は as_object() の None 分岐で無音スキップされていたため typo/型ミスが漏れていた。
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":5}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("r") && err.contains("object"), "err: {err}");
+}
+
+#[test]
+fn strict_mode_rejects_non_object_scales_y_on_bar() {
+    // Fix 7 は cartesian にも適用される。
+    use fulgur_chart::frontend::chartjs;
+    let json = r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"y":"foo"}}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(err.contains("y") && err.contains("object"), "err: {err}");
+}
+
+#[test]
 fn scales_r_axis_rejected_in_strict() {
     let json = r##"{
       "type":"line",
@@ -1313,4 +1445,148 @@ fn scales_r_axis_rejected_in_strict() {
         chartjs::parse(json, true).is_err(),
         "strict should reject unknown scale axis"
     );
+}
+
+#[test]
+fn strict_mode_treats_null_scales_axis_as_absent() {
+    // Codex Fix 10: `options.scales.<axis>: null` は「軸未指定」と同義。
+    // schema 側 (`RadialLinearScales.r` / `BarScales.y`) は `Option<_>` なので
+    // null は None に deserialize される。optional フィールドを nullable に
+    // serialize するクライアントが strict で落ちないようにする。
+    let radar = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":null}}}"##;
+    chartjs::parse(radar, true).expect("strict should treat scales.r: null as absent");
+
+    let bar = r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+        "options":{"scales":{"y":null}}}"##;
+    chartjs::parse(bar, true).expect("strict should treat scales.y: null as absent");
+
+    // null 軸は radial_axis を populate しない (未指定と同じ)。
+    let spec = chartjs::parse(radar, false).unwrap();
+    assert!(spec.radial_axis.is_none(), "null 軸は未指定と同義");
+
+    // schema 側も同じ結論に到達すること (value レベルの parity)。
+    for json in [radar, bar] {
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        serde_json::from_value::<fulgur_chart::schema::ChartJsSpec>(v)
+            .expect("schema should deserialize a null axis as unset");
+    }
+
+    // 非 object かつ非 null (数値・文字列) は従来通り拒否する。
+    let bad = r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+        "options":{"scales":{"r":5}}}"##;
+    assert!(chartjs::parse(bad, true).is_err(), "非 object は拒否");
+}
+
+#[test]
+fn empty_scales_r_does_not_populate_radial_axis() {
+    // Codex Fix 9: ドメインキーを 1 つも持たない `scales.r` は no-op。
+    // 空 object でも `Some(RadialAxis)` を返すと layout が override 経路に入り、
+    // 既定の nice ドメインが raw データ範囲に置き換わってしまう。
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{}}}}"##,
+        false,
+    )
+    .unwrap();
+    assert!(spec.radial_axis.is_none(), "空の scales.r は no-op");
+
+    // 視覚キーのみ (非 strict では silently 無視される) も同様に no-op。
+    let spec = chartjs::parse(
+        r##"{"type":"polarArea","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+             "options":{"scales":{"r":{"ticks":{"display":false}}}}}"##,
+        false,
+    )
+    .unwrap();
+    assert!(
+        spec.radial_axis.is_none(),
+        "視覚キーのみの scales.r は no-op"
+    );
+
+    // 逆に、ドメインキーが 1 つでもあれば populate される。
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{"beginAtZero":false}}}}"##,
+        false,
+    )
+    .unwrap();
+    let r = spec
+        .radial_axis
+        .expect("beginAtZero 明示時は populate される");
+    assert!(!r.begin_at_zero);
+}
+
+#[test]
+fn non_radial_charts_ignore_malformed_scales_r_in_non_strict() {
+    // Codex Fix 17 のリグレッションテスト。
+    // `RawScales.r` を `RawRadialAxis` に型付けすると、chart kind が確定する前に
+    // 検証が走り、非 radial チャートに紛れ込んだ無関係な `scales.r` が非 strict でも
+    // deserialize エラーになる。main では未知キーとして silently 無視されていたので
+    // これは後退にあたる。kind が radial のときだけ typed に解釈すること。
+    for json in [
+        r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+             "options":{"scales":{"r":5}}}"##,
+        r##"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+             "options":{"scales":{"r":"nonsense"}}}"##,
+        r##"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+             "options":{"scales":{"r":{"min":"not-a-number"}}}}"##,
+    ] {
+        let spec = chartjs::parse(json, false)
+            .unwrap_or_else(|e| panic!("非 strict では silently 無視されるべき: {e} / {json}"));
+        assert!(
+            spec.radial_axis.is_none(),
+            "非 radial チャートは radial_axis を持たない"
+        );
+    }
+}
+
+#[test]
+fn radial_charts_ignore_malformed_scales_r_in_non_strict() {
+    // radial チャート側でも、型不一致の `scales.r` は非 strict では silently 無視する
+    // (Chart.js 互換)。strict モードでは check_unknown_keys が拒否する。
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":5}}}"##,
+        false,
+    )
+    .expect("非 strict では silently 無視されるべき");
+    assert!(spec.radial_axis.is_none());
+
+    // strict では従来通り拒否されること (パリティ確認)。
+    assert!(
+        chartjs::parse(
+            r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+                 "options":{"scales":{"r":5}}}"##,
+            true,
+        )
+        .is_err(),
+        "strict では非 object の scales.r を拒否する"
+    );
+}
+
+#[test]
+fn strict_mode_rejects_wrong_typed_scales_r_field() {
+    // Codex Fix 20 のリグレッションテスト。
+    // `check_unknown_keys` はキー名しか見ないので `{"max": "100"}` のように
+    // 「キーは正しいが型が違う」入力は素通りする。typed deserialize の失敗を
+    // `.ok()` で握り潰すと、strict なのに既定ドメインで描画されてしまう。
+    for json in [
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{"max":"100"}}}}"##,
+        r##"{"type":"polarArea","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+             "options":{"scales":{"r":{"beginAtZero":"yes"}}}}"##,
+    ] {
+        let err =
+            chartjs::parse(json, true).expect_err("strict は scales.r の型不一致を拒否すべき");
+        assert!(err.contains("scales.r"), "err: {err}");
+    }
+
+    // 非 strict では従来通り silently 無視して既定ドメインで描画する (Chart.js 互換)。
+    let spec = chartjs::parse(
+        r##"{"type":"radar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+             "options":{"scales":{"r":{"max":"100"}}}}"##,
+        false,
+    )
+    .expect("非 strict は silently 無視する");
+    assert!(spec.radial_axis.is_none());
 }

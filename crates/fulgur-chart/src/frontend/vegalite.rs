@@ -290,6 +290,7 @@ pub fn parse_with_limits(
         data_labels: false,
         theme,
         decimation: Decimation::default(),
+        radial_axis: None,
     })
 }
 
