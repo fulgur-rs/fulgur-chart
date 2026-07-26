@@ -75,3 +75,20 @@ fn unsupported_point_r_returns_same_error_for_fallible_svg_png_webp_apis() {
     ];
     assert_eq!(errors, [ERROR, ERROR, ERROR]);
 }
+
+#[test]
+fn unsupported_fallback_point_radius_returns_same_error_for_fallible_apis() {
+    const ERROR: &str = "pointRadius must be finite and no greater than 32768";
+    let spec = chartjs::parse(
+        r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2}]}]}}"#,
+        false,
+    )
+    .unwrap();
+
+    let errors = [
+        render_chart_with_font(&spec, DEFAULT_FONT).unwrap_err(),
+        render_chart_to_png(&spec, 1.0, DEFAULT_FONT).unwrap_err(),
+        render_chart_to_webp(&spec, 1.0, DEFAULT_FONT).unwrap_err(),
+    ];
+    assert_eq!(errors, [ERROR, ERROR, ERROR]);
+}

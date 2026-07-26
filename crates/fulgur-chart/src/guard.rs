@@ -640,20 +640,52 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
 
 pub(crate) fn validate_marker_radii(spec: &ChartSpec) -> Result<(), String> {
     let unsupported = |radius: f64| !radius.is_finite() || radius > MAX_MARKER_RADIUS_PX;
-    if spec
-        .series
-        .iter()
-        .any(|series| series.point_radius.is_some_and(unsupported))
-    {
-        return Err("pointRadius must be finite and no greater than 32768".to_string());
-    }
-    if spec
-        .series
-        .iter()
-        .flat_map(|series| &series.points)
-        .any(|point| point.r.is_some_and(unsupported))
-    {
-        return Err("point.r must be finite and no greater than 32768".to_string());
+    let point_radius_error =
+        || Err("pointRadius must be finite and no greater than 32768".to_string());
+    let point_r_error = || Err("point.r must be finite and no greater than 32768".to_string());
+
+    match &spec.kind {
+        ChartKind::Line => {
+            for series in &spec.series {
+                let reaches_marker = series
+                    .values
+                    .iter()
+                    .take(spec.categories.len())
+                    .any(|value| value.is_finite());
+                if reaches_marker && series.point_radius.is_some_and(unsupported) {
+                    return point_radius_error();
+                }
+            }
+        }
+        ChartKind::Scatter => {
+            for series in &spec.series {
+                let reaches_marker = series
+                    .points
+                    .iter()
+                    .any(|point| point.x.is_finite() && point.y.is_finite());
+                if reaches_marker && series.point_radius.is_some_and(unsupported) {
+                    return point_radius_error();
+                }
+            }
+        }
+        ChartKind::Bubble => {
+            for series in &spec.series {
+                for point in series
+                    .points
+                    .iter()
+                    .filter(|point| point.x.is_finite() && point.y.is_finite())
+                {
+                    if let Some(radius) = point.r {
+                        if unsupported(radius) {
+                            return point_r_error();
+                        }
+                    } else if series.point_radius.is_some_and(unsupported) {
+                        return point_radius_error();
+                    }
+                }
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -808,77 +840,99 @@ mod tests {
     }
 
     #[test]
-    fn explicit_point_radius_accepts_supported_values() {
-        for point_radius in [None, Some(0.0), Some(-1.0), Some(32_768.0)] {
-            let mut spec = base_spec();
-            spec.series[0].point_radius = point_radius;
-            assert!(
-                validate_spec(&spec, &default_limits()).is_ok(),
-                "point_radius={point_radius:?}"
-            );
+    fn unused_marker_radii_are_accepted() {
+        for json in [
+            r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1],"pointRadius":1e40}]}}"#,
+            r#"{"type":"pie","data":{"labels":["a"],"datasets":[{"data":[1],"pointRadius":1e40}]}}"#,
+            r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2,"r":1e40}]}]}}"#,
+            r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2,"r":3}]}]}}"#,
+        ] {
+            let spec = chartjs::parse(json, false).unwrap();
+            assert!(validate_spec(&spec, &default_limits()).is_ok(), "{json}");
         }
     }
 
     #[test]
-    fn explicit_point_radius_rejects_non_finite_and_above_marker_limit() {
+    fn effective_point_radius_is_rejected() {
         const ERROR: &str = "pointRadius must be finite and no greater than 32768";
 
-        for point_radius in [32_769.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            let mut spec = base_spec();
-            spec.series.push(spec.series[0].clone());
-            spec.series[1].point_radius = Some(point_radius);
+        for json in [
+            r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"pointRadius":1e40}]}}"#,
+            r#"{"type":"scatter","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2}]}]}}"#,
+            r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2}]}]}}"#,
+        ] {
+            let spec = chartjs::parse(json, false).unwrap();
             assert_eq!(
                 validate_spec(&spec, &default_limits()),
                 Err(ERROR.to_string()),
-                "point_radius={point_radius:?}"
+                "{json}"
             );
         }
     }
 
     #[test]
-    fn explicit_point_r_accepts_supported_values() {
-        use crate::ir::Point;
-
-        for radius in [None, Some(0.0), Some(-1.0), Some(32_768.0)] {
-            let mut spec = base_spec();
-            spec.series[0].points = vec![Point {
-                x: 1.0,
-                y: 2.0,
-                r: radius,
-            }];
-            assert!(
-                validate_spec(&spec, &default_limits()).is_ok(),
-                "point.r={radius:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn explicit_point_r_rejects_non_finite_and_above_marker_limit_on_later_point() {
-        use crate::ir::Point;
-
+    fn effective_bubble_point_r_is_rejected() {
         const ERROR: &str = "point.r must be finite and no greater than 32768";
+        let spec = chartjs::parse(
+            r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2,"r":3},{"x":3,"y":4,"r":1e40}]}]}}"#,
+            false,
+        )
+        .unwrap();
 
-        for radius in [32_769.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            let mut spec = base_spec();
-            spec.series[0].points = vec![
-                Point {
-                    x: 1.0,
-                    y: 2.0,
-                    r: Some(3.0),
-                },
-                Point {
-                    x: 3.0,
-                    y: 4.0,
-                    r: Some(radius),
-                },
-            ];
-            assert_eq!(
-                validate_spec(&spec, &default_limits()),
-                Err(ERROR.to_string()),
-                "point.r={radius:?}"
-            );
+        assert_eq!(
+            validate_spec(&spec, &default_limits()),
+            Err(ERROR.to_string())
+        );
+    }
+
+    #[test]
+    fn bubble_dataset_radius_is_ignored_when_every_finite_point_has_safe_r() {
+        let spec = chartjs::parse(
+            r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2,"r":3},{"x":3,"y":4,"r":5}]}]}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn bubble_dataset_radius_is_rejected_when_a_finite_point_omits_r() {
+        const ERROR: &str = "pointRadius must be finite and no greater than 32768";
+        let spec = chartjs::parse(
+            r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2,"r":3},{"x":3,"y":4}]}]}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            validate_spec(&spec, &default_limits()),
+            Err(ERROR.to_string())
+        );
+    }
+
+    #[test]
+    fn non_finite_points_do_not_activate_marker_radius_validation() {
+        for json in [
+            r#"{"type":"scatter","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2}]}]}}"#,
+            r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2,"r":1e40}]}]}}"#,
+        ] {
+            let mut spec = chartjs::parse(json, false).unwrap();
+            spec.series[0].points[0].x = f64::NAN;
+            assert!(validate_spec(&spec, &default_limits()).is_ok(), "{json}");
         }
+    }
+
+    #[test]
+    fn values_outside_line_categories_do_not_activate_marker_radius_validation() {
+        let mut spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1,2],"pointRadius":1e40}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.series[0].values[0] = f64::NAN;
+
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
     }
 
     #[test]
