@@ -986,31 +986,81 @@ fn non_strict_temporal_line_rejects_unsupported_color_scheme() {
 }
 
 #[test]
-fn strict_line_rejects_unsupported_channel_type_values() {
-    let err =
-        vegalite::parse(&DOGFOOD_SHAPE.replace("\"temporal\"", "\"temporl\""), true).unwrap_err();
-    assert!(err.contains("encoding.x.type"), "unexpected error: {err}");
+fn line_rejects_non_string_channel_types_with_exact_cross_mode_errors() {
+    for (channel, value, value_type) in [
+        ("x", serde_json::json!(42), "number"),
+        ("x", serde_json::json!(true), "boolean"),
+        ("x", serde_json::json!([]), "array"),
+        ("y", serde_json::json!(42), "number"),
+        ("y", serde_json::json!(true), "boolean"),
+        ("y", serde_json::json!([]), "array"),
+        ("color", serde_json::json!(42), "number"),
+        ("color", serde_json::json!(true), "boolean"),
+        ("color", serde_json::json!([]), "array"),
+    ] {
+        let json = line_with_field(DOGFOOD_SHAPE, &["encoding", channel, "type"], Some(value));
+        let expected = format!("encoding.{channel}.type must be a string, got {value_type}");
+        for strict in [false, true] {
+            assert_eq!(
+                vegalite::parse(&json.to_string(), strict).unwrap_err(),
+                expected,
+                "channel={channel}, strict={strict}"
+            );
+        }
+    }
+}
 
-    let err = vegalite::parse(
-        &DOGFOOD_SHAPE.replace("\"quantitative\"", "\"quantitativ\""),
-        true,
-    )
-    .unwrap_err();
-    assert!(err.contains("encoding.y.type"), "unexpected error: {err}");
+#[test]
+fn line_rejects_unsupported_channel_types_with_exact_cross_mode_errors() {
+    for (channel, value, supported) in [
+        ("x", "temporl", "temporal, nominal, ordinal"),
+        ("y", "nominal", "quantitative"),
+        ("color", "quantitative", "nominal, ordinal"),
+    ] {
+        let json = line_with_field(
+            DOGFOOD_SHAPE,
+            &["encoding", channel, "type"],
+            Some(serde_json::json!(value)),
+        );
+        let expected = format!("encoding.{channel}.type must be one of: {supported}");
+        for strict in [false, true] {
+            assert_eq!(
+                vegalite::parse(&json.to_string(), strict).unwrap_err(),
+                expected,
+                "channel={channel}, strict={strict}"
+            );
+        }
+    }
+}
 
-    let err =
-        vegalite::parse(&DOGFOOD_SHAPE.replace("\"nominal\"", "\"nominl\""), true).unwrap_err();
-    assert!(
-        err.contains("encoding.color.type"),
-        "unexpected error: {err}"
+#[test]
+fn line_channel_types_preserve_missing_null_and_unknown_key_compatibility() {
+    for channel in ["x", "y", "color"] {
+        for value in [None, Some(serde_json::Value::Null)] {
+            let fixture = if channel == "x" {
+                CATEGORICAL_LINE_SHAPE
+            } else {
+                DOGFOOD_SHAPE
+            };
+            let json = line_with_field(fixture, &["encoding", channel, "type"], value);
+            for strict in [false, true] {
+                vegalite::parse(&json.to_string(), strict).unwrap_or_else(|err| {
+                    panic!("channel={channel}, strict={strict}: unexpected error: {err}")
+                });
+            }
+        }
+    }
+
+    let json = line_with_field(
+        CATEGORICAL_LINE_SHAPE,
+        &["encoding", "x", "futureOption"],
+        Some(serde_json::json!(true)),
     );
-
-    let err = vegalite::parse(
-        &DOGFOOD_SHAPE.replace(r#""type":"temporal""#, r#""type":42"#),
-        true,
-    )
-    .unwrap_err();
-    assert!(err.contains("encoding.x.type"), "unexpected error: {err}");
+    vegalite::parse(&json.to_string(), false).unwrap();
+    assert_eq!(
+        vegalite::parse(&json.to_string(), true).unwrap_err(),
+        "unknown key: encoding.x.futureOption"
+    );
 }
 
 #[test]

@@ -50,6 +50,9 @@ pub fn parse_with_limits(
         .get("encoding")
         .and_then(Value::as_object)
         .ok_or_else(|| "encoding がありません".to_string())?;
+    if matches!(kind, ChartKind::Line) {
+        validate_line_channel_types(encoding)?;
+    }
 
     let x_field = channel_field(encoding, "x");
     let y_field = channel_field(encoding, "y");
