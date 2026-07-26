@@ -29,7 +29,12 @@ impl LinearScale {
         } else {
             (v - self.d0) / span
         };
-        self.p0 + t * (self.p1 - self.p0)
+        let pixel_span = self.p1 - self.p0;
+        if pixel_span.is_infinite() && self.p0.is_finite() && self.p1.is_finite() {
+            self.p0 * (1.0 - t) + self.p1 * t
+        } else {
+            self.p0 + t * pixel_span
+        }
     }
 }
 
@@ -537,6 +542,19 @@ mod tests {
             let mapped = s.map(value);
             assert!(mapped.is_finite(), "{value} mapped to {mapped}");
             assert!((mapped - expected).abs() < 1e-9, "{value}: {mapped}");
+        }
+    }
+
+    #[test]
+    fn linear_scale_maps_overflowing_domain_and_pixel_range() {
+        for (p0, p1) in [(-1e308, 1e308), (1e308, -1e308)] {
+            let s = LinearScale::new(-f64::MAX, f64::MAX, p0, p1);
+
+            for (value, expected) in [(-f64::MAX, p0), (0.0, 0.0), (f64::MAX, p1)] {
+                let mapped = s.map(value);
+                assert!(mapped.is_finite(), "{value} mapped to {mapped}");
+                assert_eq!(mapped, expected, "{value}: {mapped}");
+            }
         }
     }
 
