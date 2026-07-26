@@ -326,6 +326,13 @@ mod tests {
     }
 
     #[test]
+    fn bounded_ticks_expands_extreme_singletons_inward() {
+        for value in [f64::MAX, -f64::MAX] {
+            assert_extreme_singleton_domain(&bounded_ticks(value, value, 5), value);
+        }
+    }
+
+    #[test]
     fn vega_dogfood_domain_is_zero_to_sixty_five() {
         let ticks = vega_nice_ticks(0.0, 61.0, 320.0);
         assert_eq!((ticks.min, ticks.max, ticks.step), (0.0, 65.0, 10.0));
@@ -523,7 +530,7 @@ mod tests {
         let t = nice_ticks(5.0, 5.0, 5);
         assert!(t.step > 0.0);
         assert!(!t.ticks.is_empty());
-        assert!(t.min <= 5.0 && t.max >= 5.0);
+        assert_eq!((t.min, t.max), (5.0, 6.0));
     }
 
     #[test]

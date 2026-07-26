@@ -727,23 +727,21 @@ mod tests {
     #[test]
     fn temporal_ticks_cap_huge_width_fixed_ticks_and_preserve_direction() {
         let forward = temporal_ticks(0, 1_000_000, f64::MAX);
-        assert!(forward.len() <= 1_000, "tick count={}", forward.len());
+        assert_eq!(forward.len(), 501);
         assert!(
             forward
                 .windows(2)
                 .all(|pair| pair[0].unix_millis < pair[1].unix_millis)
         );
         let step = forward[1].unix_millis - forward[0].unix_millis;
-        assert!(step > 0);
+        assert_eq!(step, 2_000);
         assert!(
             forward
                 .iter()
                 .all(|tick| tick.unix_millis.rem_euclid(step) == 0)
         );
-        assert!(
-            forward.last().unwrap().unix_millis > 500_000,
-            "the full domain must remain represented instead of truncating early"
-        );
+        assert_eq!(forward.first().unwrap().unix_millis, 0);
+        assert_eq!(forward.last().unwrap().unix_millis, 1_000_000);
 
         let reverse = temporal_ticks(1_000_000, 0, f64::MAX);
         assert_eq!(
@@ -760,11 +758,25 @@ mod tests {
     }
 
     #[test]
+    fn temporal_ticks_cap_huge_width_before_interval_selection() {
+        let huge_width = temporal_ticks(0, MILLIS_PER_HOUR, f64::MAX);
+        let maximum_desired_count = temporal_ticks(0, MILLIS_PER_HOUR, 40_000.0);
+
+        assert_eq!(huge_width, maximum_desired_count);
+        assert_eq!(huge_width.len(), 721);
+        assert!(
+            huge_width
+                .windows(2)
+                .all(|pair| { pair[1].unix_millis - pair[0].unix_millis == 5 * MILLIS_PER_SECOND })
+        );
+    }
+
+    #[test]
     fn temporal_ticks_cap_calendar_and_extreme_domains_before_generation() {
         let min = millis("1900-01-01T00:00:00Z");
         let max = millis("2000-01-01T00:00:00Z");
         let forward = temporal_ticks(min, max, 40_000.0);
-        assert!(forward.len() <= 1_000, "tick count={}", forward.len());
+        assert_eq!(forward.len(), 601);
         assert!(
             forward
                 .windows(2)
@@ -772,9 +784,12 @@ mod tests {
         );
         assert_eq!(forward.first().unwrap().unix_millis, min);
         assert_eq!(forward.last().unwrap().unix_millis, max);
-        assert!(forward.iter().all(|tick| {
-            let date = datetime(tick.unix_millis).expect("calendar tick");
-            date.day() == 1 && (i32::from(u8::from(date.month())) - 1).rem_euclid(2) == 0
+        assert!(forward.windows(2).all(|pair| {
+            let first = datetime(pair[0].unix_millis).expect("calendar tick");
+            let second = datetime(pair[1].unix_millis).expect("calendar tick");
+            let first_index = first.year() * 12 + i32::from(u8::from(first.month())) - 1;
+            let second_index = second.year() * 12 + i32::from(u8::from(second.month())) - 1;
+            first.day() == 1 && second.day() == 1 && second_index - first_index == 2
         }));
 
         let reverse = temporal_ticks(max, min, 40_000.0);
@@ -790,7 +805,10 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        let extreme = temporal_ticks(i64::MIN, i64::MAX, f64::MAX);
+        let extreme_min = calendar_millis(TickUnit::Year, -9_999).unwrap();
+        let extreme_max = calendar_millis(TickUnit::Year, 9_999).unwrap();
+        let extreme = temporal_ticks(extreme_min, extreme_max, f64::MAX);
+        assert!(!extreme.is_empty());
         assert!(extreme.len() <= 1_000);
         assert!(
             extreme
