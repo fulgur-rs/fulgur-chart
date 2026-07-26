@@ -790,6 +790,31 @@ mod tests {
         InputLimits::default()
     }
 
+    fn effective_dataset_radius_specs(point_radius: Option<f64>) -> Vec<ChartSpec> {
+        [
+            r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#,
+            r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2}]}]}}"#,
+            r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2}]}]}}"#,
+        ]
+        .into_iter()
+        .map(|json| {
+            let mut spec = chartjs::parse(json, false).unwrap();
+            spec.series[0].point_radius = point_radius;
+            spec
+        })
+        .collect()
+    }
+
+    fn effective_bubble_point_r_spec(radius: Option<f64>) -> ChartSpec {
+        let mut spec = chartjs::parse(
+            r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2}]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.series[0].points[0].r = radius;
+        spec
+    }
+
     #[test]
     fn temporal_positions_must_match_categories() {
         let mut spec = base_spec();
@@ -853,36 +878,57 @@ mod tests {
     }
 
     #[test]
-    fn effective_point_radius_is_rejected() {
+    fn effective_dataset_point_radius_accepts_supported_boundaries() {
+        for point_radius in [None, Some(0.0), Some(-1.0), Some(32_768.0)] {
+            for spec in effective_dataset_radius_specs(point_radius) {
+                assert!(
+                    validate_spec(&spec, &default_limits()).is_ok(),
+                    "kind={:?}, pointRadius={point_radius:?}",
+                    spec.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn effective_dataset_point_radius_rejects_unsupported_boundaries() {
         const ERROR: &str = "pointRadius must be finite and no greater than 32768";
 
-        for json in [
-            r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"pointRadius":1e40}]}}"#,
-            r#"{"type":"scatter","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2}]}]}}"#,
-            r#"{"type":"bubble","data":{"datasets":[{"pointRadius":1e40,"data":[{"x":1,"y":2}]}]}}"#,
-        ] {
-            let spec = chartjs::parse(json, false).unwrap();
-            assert_eq!(
-                validate_spec(&spec, &default_limits()),
-                Err(ERROR.to_string()),
-                "{json}"
+        for point_radius in [32_769.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for spec in effective_dataset_radius_specs(Some(point_radius)) {
+                assert_eq!(
+                    validate_spec(&spec, &default_limits()),
+                    Err(ERROR.to_string()),
+                    "kind={:?}, pointRadius={point_radius:?}",
+                    spec.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn effective_bubble_point_r_accepts_supported_boundaries() {
+        for radius in [None, Some(0.0), Some(-1.0), Some(32_768.0)] {
+            let spec = effective_bubble_point_r_spec(radius);
+            assert!(
+                validate_spec(&spec, &default_limits()).is_ok(),
+                "point.r={radius:?}"
             );
         }
     }
 
     #[test]
-    fn effective_bubble_point_r_is_rejected() {
+    fn effective_bubble_point_r_rejects_unsupported_boundaries() {
         const ERROR: &str = "point.r must be finite and no greater than 32768";
-        let spec = chartjs::parse(
-            r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2,"r":3},{"x":3,"y":4,"r":1e40}]}]}}"#,
-            false,
-        )
-        .unwrap();
 
-        assert_eq!(
-            validate_spec(&spec, &default_limits()),
-            Err(ERROR.to_string())
-        );
+        for radius in [32_769.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let spec = effective_bubble_point_r_spec(Some(radius));
+            assert_eq!(
+                validate_spec(&spec, &default_limits()),
+                Err(ERROR.to_string()),
+                "point.r={radius:?}"
+            );
+        }
     }
 
     #[test]
