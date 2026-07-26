@@ -169,11 +169,10 @@ pub fn render_chart_to_png_with(
 
 /// 入力上限を指定して ChartSpec を PNG バイト列に直接ラスタライズする。
 ///
-/// `limits` はカスタムフォントで計測した PlotArea の外周 scene 検証だけに使う。
-/// 完全な入力検証は行わないため、呼び出し側は事前に
-/// [`crate::guard::validate_spec`] または [`crate::guard::validate_spec_with_measurer`]
-/// を使うこと。固定の PNG ピクセル面積 hard stop は別途必ず適用され、
-/// `limits` では緩和できない。圧縮は [`PngCompression::Balanced`] を使う。
+/// `limits` を使って完全な入力検証と、カスタムフォントで計測した PlotArea の
+/// 外周 scene 検証を描画前に行う。固定の PNG ピクセル面積 hard stop は別途
+/// 必ず適用され、`limits` では緩和できない。圧縮は
+/// [`PngCompression::Balanced`] を使う。
 pub fn render_chart_to_png_with_limits(
     spec: &crate::ir::ChartSpec,
     scale: f32,
@@ -194,7 +193,7 @@ fn render_chart_to_png_with_options(
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
-    crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &measurer)?;
+    crate::guard::validate_spec_for_render_with_measurer(spec, limits, &measurer)?;
     let scene = crate::layout::build_scene(spec, &measurer);
     scene_to_png_with_face(&scene, scale, &face, compression)
 }
@@ -225,11 +224,9 @@ pub fn render_chart_to_webp(
 
 /// 入力上限を指定して ChartSpec を WebP バイト列に直接ラスタライズする（ロスレス）。
 ///
-/// `limits` はカスタムフォントで計測した PlotArea の外周 scene 検証だけに使う。
-/// 完全な入力検証は行わないため、呼び出し側は事前に
-/// [`crate::guard::validate_spec`] または [`crate::guard::validate_spec_with_measurer`]
-/// を使うこと。固定の WebP ピクセル面積・軸ごとの hard stop は別途必ず適用され、
-/// `limits` では緩和できない。
+/// `limits` を使って完全な入力検証と、カスタムフォントで計測した PlotArea の
+/// 外周 scene 検証を描画前に行う。固定の WebP ピクセル面積・軸ごとの
+/// hard stop は別途必ず適用され、`limits` では緩和できない。
 pub fn render_chart_to_webp_with_limits(
     spec: &crate::ir::ChartSpec,
     scale: f32,
@@ -240,7 +237,7 @@ pub fn render_chart_to_webp_with_limits(
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
-    crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &measurer)?;
+    crate::guard::validate_spec_for_render_with_measurer(spec, limits, &measurer)?;
     let scene = crate::layout::build_scene(spec, &measurer);
     // WebP 専用の上限(軸・面積)で pixmap 確保前に弾き OOM を防ぐ(→ WEBP_LIMITS)。
     let mut pixmap = scene_to_pixmap(&scene, scale, &face, &WEBP_LIMITS)?;

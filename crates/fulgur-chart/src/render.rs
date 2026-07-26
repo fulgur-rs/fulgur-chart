@@ -19,18 +19,17 @@ pub fn render_chart_with_font(
 
 /// 任意フォントと入力上限で描画。font_bytes がパース不能なら Err。
 ///
-/// `limits` はカスタムフォントで計測した PlotArea の外周 scene 検証だけに使う。
-/// 完全な入力検証は行わないため、呼び出し側は事前に
-/// [`crate::guard::validate_spec`] または [`crate::guard::validate_spec_with_measurer`]
-/// を使うこと。PNG/WebP 出力では、これとは別に固定のピクセル面積 hard stop
-/// （WebP は軸ごとの hard stop も）が常に適用され、`limits` では緩和できない。
+/// `limits` を使って完全な入力検証と、カスタムフォントで計測した PlotArea の
+/// 外周 scene 検証を描画前に行う。PNG/WebP 出力では、これとは別に固定の
+/// ピクセル面積 hard stop（WebP は軸ごとの hard stop も）が常に適用され、
+/// `limits` では緩和できない。
 pub fn render_chart_with_font_and_limits(
     spec: &crate::ir::ChartSpec,
     font_bytes: &[u8],
     limits: &crate::guard::InputLimits,
 ) -> Result<String, String> {
     let m = TextMeasurer::new(font_bytes).map_err(|e| format!("フォント読込失敗: {e}"))?;
-    crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &m)?;
+    crate::guard::validate_spec_for_render_with_measurer(spec, limits, &m)?;
     let fam = family_name(font_bytes).unwrap_or_else(|| DEFAULT_FAMILY.to_string());
     // family 名は CSS string としてクォートする。フォント name table はカンマや引用符を
     // 含み得るため、未クォートだと CSS が複数 family と解釈し計測/SVG/PNG の三者一致が崩れる。
