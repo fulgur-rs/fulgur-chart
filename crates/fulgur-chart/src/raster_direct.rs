@@ -1755,6 +1755,28 @@ mod tests {
     }
 
     #[test]
+    fn circle_device_bounds_preserve_invalid_circle_no_draw_semantics() {
+        for radius in [f64::NAN, f64::INFINITY, -1.0] {
+            let scene = circle_scene(radius, 0.0);
+            assert_eq!(validate_circle_device_bounds(&scene, 1.0), Ok(()));
+        }
+
+        for (cx, cy) in [(f64::NAN, 10.0), (10.0, f64::INFINITY)] {
+            let mut scene = circle_scene(3.0, 0.0);
+            if let Prim::Circle {
+                cx: scene_cx,
+                cy: scene_cy,
+                ..
+            } = &mut scene.items[0]
+            {
+                *scene_cx = cx;
+                *scene_cy = cy;
+            }
+            assert_eq!(validate_circle_device_bounds(&scene, 1.0), Ok(()));
+        }
+    }
+
+    #[test]
     fn normal_circle_radii_render_at_supported_scales() {
         let scene = circle_scene(3.0, 1.0);
         for scale in [1.0, 2.0, 10.0] {
