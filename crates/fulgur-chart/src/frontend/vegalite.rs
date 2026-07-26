@@ -224,6 +224,7 @@ pub fn parse_with_limits(
     }
 
     let temporal_data = if temporal_line {
+        validate_temporal_color_channel(encoding)?;
         validate_temporal_view(top)?;
         validate_temporal_color_scheme(encoding)?;
         Some(build_temporal_line(
@@ -1178,6 +1179,23 @@ fn line_interpolation(top: &Map<String, Value>) -> Result<LineInterpolation, Str
             json_value_type(other)
         )),
         None => Ok(LineInterpolation::Linear),
+    }
+}
+
+fn validate_temporal_color_channel(encoding: &Map<String, Value>) -> Result<(), String> {
+    let Some(value) = encoding.get("color").filter(|value| !value.is_null()) else {
+        return Ok(());
+    };
+    let color = value
+        .as_object()
+        .ok_or_else(|| "encoding.color must be an object".to_string())?;
+    match color.get("field") {
+        Some(Value::String(_)) => Ok(()),
+        Some(other) => Err(format!(
+            "encoding.color.field must be a string, got {}",
+            json_value_type(other)
+        )),
+        None => Err("encoding.color.field is required".to_string()),
     }
 }
 

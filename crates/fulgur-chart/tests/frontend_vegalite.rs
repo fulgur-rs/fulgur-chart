@@ -1064,11 +1064,45 @@ fn line_channel_types_preserve_missing_null_and_unknown_key_compatibility() {
 }
 
 #[test]
-fn strict_temporal_line_requires_color_field() {
+fn temporal_line_requires_color_field_in_both_modes() {
     let json = DOGFOOD_SHAPE.replace(r#""field":"metric","#, "");
-    let err = vegalite::parse(&json, true).unwrap_err();
-    assert_eq!(err, "encoding.color.field is required");
-    assert!(vegalite::parse(&json, false).is_ok());
+    for strict in [false, true] {
+        assert_eq!(
+            vegalite::parse(&json, strict).unwrap_err(),
+            "encoding.color.field is required",
+            "strict={strict}"
+        );
+    }
+
+    for color in [serde_json::json!(false), serde_json::json!(42)] {
+        let json = line_with_field(DOGFOOD_SHAPE, &["encoding", "color"], Some(color));
+        for strict in [false, true] {
+            assert_eq!(
+                vegalite::parse(&json.to_string(), strict).unwrap_err(),
+                "encoding.color must be an object",
+                "strict={strict}"
+            );
+        }
+    }
+
+    for color in [None, Some(serde_json::Value::Null)] {
+        let json = line_with_field(DOGFOOD_SHAPE, &["encoding", "color"], color);
+        for strict in [false, true] {
+            vegalite::parse(&json.to_string(), strict)
+                .unwrap_or_else(|err| panic!("strict={strict}: unexpected error: {err}"));
+        }
+    }
+
+    let json = line_with_field(
+        DOGFOOD_SHAPE,
+        &["encoding", "color", "futureOption"],
+        Some(serde_json::json!(true)),
+    );
+    vegalite::parse(&json.to_string(), false).unwrap();
+    assert_eq!(
+        vegalite::parse(&json.to_string(), true).unwrap_err(),
+        "unknown key: encoding.color.futureOption"
+    );
 }
 
 #[test]
