@@ -1,8 +1,8 @@
 use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::{chartjs, vegalite};
-use fulgur_chart::ir::{SizeMode, XPositions};
+use fulgur_chart::ir::{LegendPos, SizeMode, XPositions};
 use fulgur_chart::layout::common;
-use fulgur_chart::model::build_model;
+use fulgur_chart::model::{build_model, build_model_core};
 use fulgur_chart::temporal::parse_rfc3339_millis;
 use fulgur_chart::text::TextMeasurer;
 
@@ -67,6 +67,26 @@ fn plot_area_categorical_line_model_uses_scene_dimensions() {
     assert_eq!(geometry.plot_area.y, frame.plot_top / frame.scene_height);
     assert_eq!(geometry.plot_area.w, plot_width / frame.scene_width);
     assert_eq!(geometry.plot_area.h, plot_height / frame.scene_height);
+}
+
+#[test]
+fn categorical_canvas_unsupported_title_does_not_change_model_counts() {
+    let json = r#"{
+        "type":"bar",
+        "data":{"labels":["a"],"datasets":[{"data":[1]}]}
+    }"#;
+    let mut baseline = chartjs::parse(json, false).unwrap();
+    baseline.legend = LegendPos::Right;
+    assert!(matches!(baseline.x_positions, XPositions::Category));
+    assert_eq!(baseline.size_mode, SizeMode::Canvas);
+    assert!(baseline.series.iter().all(|series| series.name.is_empty()));
+
+    let baseline_counts = build_model_core(&baseline).counts;
+    assert_eq!(baseline_counts.legend_items, 0);
+
+    let mut titled = baseline.clone();
+    titled.legend_title = Some("unsupported title".into());
+    assert_eq!(build_model_core(&titled).counts, baseline_counts);
 }
 
 #[test]

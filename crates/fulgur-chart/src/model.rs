@@ -314,7 +314,7 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
             }
         })
         .collect();
-    let legend_items = if spec.legend_title.is_some() {
+    let legend_items = if crate::layout::common::temporal_plot_right_legend_title(spec).is_some() {
         spec.series.len()
     } else {
         spec.series.iter().filter(|s| !s.name.is_empty()).count()

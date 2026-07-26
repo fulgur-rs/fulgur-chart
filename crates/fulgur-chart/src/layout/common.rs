@@ -209,7 +209,10 @@ pub struct Frame {
     pub temporal_ticks: Vec<TemporalTick>,
 }
 
-/// 凡例の有無を判定する（Top/Bottom/Left/Right かつ名前付き系列が 1 つ以上）。
+/// 凡例の有無を判定する。
+///
+/// Top/Bottom/Left/Right で、supported temporal title-only legend または
+/// 1 つ以上の名前付き系列がある場合に有効化する。
 fn has_legend(spec: &ChartSpec) -> bool {
     matches!(
         spec.legend,
@@ -222,7 +225,7 @@ fn has_legend(spec: &ChartSpec) -> bool {
 ///
 /// Vega-Lite temporal line が生成する PlotArea + Right legend だけを対象にし、
 /// Canvas/category の既存 scene は `legend_title` の有無にかかわらず維持する。
-fn temporal_plot_right_legend_title(spec: &ChartSpec) -> Option<&str> {
+pub(crate) fn temporal_plot_right_legend_title(spec: &ChartSpec) -> Option<&str> {
     if matches!(spec.x_positions, XPositions::Temporal { .. })
         && matches!(spec.size_mode, SizeMode::PlotArea)
         && spec.legend == LegendPos::Right
