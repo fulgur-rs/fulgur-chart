@@ -9,9 +9,9 @@ along the bottom of the plot area, matching Chart.js 4.5.1.
 
 In Chart.js 4.5.1, a horizontal bar's x scale resolves to `position: "bottom"`.
 Its `drawBorder()` implementation draws a horizontal line at the scale's
-`_borderValue` whenever `border.display` is true and the configured width is
-nonzero. The current `build_horizontal` implementation deliberately omits that
-line, so it diverges from the observed upstream behavior.
+`_borderValue` when `border.display` is true, with `border.width` controlling
+the line thickness. The current `build_horizontal` implementation deliberately
+omits that line, so it diverges from the observed upstream behavior.
 
 ## Scope
 
@@ -32,6 +32,9 @@ Immediately after the x-axis grid and tick labels are emitted,
 will append one `Prim::Line` from `(plot_left, plot_bottom)` to
 `(plot_right, plot_bottom)`. The line will use the configured width and dash
 pattern, and either the configured color or the theme text color.
+`display` is the sole emission control: `display=false` omits the primitive,
+while `display=true` emits it regardless of width. A configured `width=0` is
+preserved as `stroke_width=0` on the emitted `Prim::Line`.
 
 The existing y-axis border remains a separate `Prim::Line` from the plot's
 top-left to bottom-left. Keeping the two axes explicit preserves the current
