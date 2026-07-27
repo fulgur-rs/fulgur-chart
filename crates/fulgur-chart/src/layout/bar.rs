@@ -368,9 +368,22 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    // 3. 左軸線(カテゴリ軸=Y のボーダー)。y_axis.border が縦のカテゴリ軸線を支配する。
-    // 横棒は Chart.js 同様、底辺の x_axis.border は描かない(既存挙動を維持: 追加すると
-    // 全 horizontal-bar スナップショットが回帰する)。
+    // 3. 底辺の値軸線(X のボーダー)。x_axis.border が水平線を支配する。
+    let x_border = &spec.x_axis.border;
+    if x_border.display {
+        let border_color = x_border.color.unwrap_or(ink);
+        items.push(Prim::Line {
+            x1: plot_left,
+            y1: plot_bottom,
+            x2: plot_right,
+            y2: plot_bottom,
+            stroke: border_color,
+            stroke_width: x_border.width,
+            dash: x_border.dash.clone(),
+        });
+    }
+
+    // 3a. 左軸線(カテゴリ軸=Y のボーダー)。y_axis.border が縦のカテゴリ軸線を支配する。
     let y_border = &spec.y_axis.border;
     if y_border.display {
         let border_color = y_border.color.unwrap_or(ink);
@@ -385,7 +398,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    // 3b. tick 短線(値軸=X)。x_axis.grid.draw_ticks が true のとき plot_bottom から下方向へ。
+    // 3c. tick 短線(値軸=X)。x_axis.grid.draw_ticks が true のとき plot_bottom から下方向へ。
     // 色は grid.color を継承(既定 ink)。カテゴリ軸(Y)側は Chart.js で通常 tick を描かないためスキップ。
     const TICK_LEN: f64 = 4.0;
     if x_grid_cfg.draw_ticks {
@@ -808,6 +821,7 @@ mod horizontal_axis_style_tests {
     use crate::font::DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::ir::ChartSpec;
+    use crate::layout::common::{OUTER_PAD, X_LABEL_BAND};
     use crate::scene::{Anchor, Prim, Scene};
     use crate::text::TextMeasurer;
 
@@ -896,6 +910,108 @@ mod horizontal_axis_style_tests {
         assert_eq!(
             baseline, 0,
             "y_axis.border.display=false → 左辺ベースライン無し"
+        );
+    }
+
+    #[test]
+    fn horizontal_x_border_style_reaches_bottom_baseline() {
+        let spec = parse(
+            r##"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","theme":{"textColor":"#123456"},"scales":{"x":{"border":{
+                    "width":3,"dash":[5,2]
+                }}}}}"##,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let plot_left = OUTER_PAD
+            + spec
+                .categories
+                .iter()
+                .map(|category| m.width(category, spec.theme.font_size as f32))
+                .fold(0.0_f32, f32::max) as f64
+            + 10.0;
+        let plot_right = spec.width - OUTER_PAD;
+        let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND;
+        let scene = build(&spec, &m);
+        let baseline = scene.items.iter().find_map(|p| match p {
+            Prim::Line {
+                x1,
+                x2,
+                y1,
+                y2,
+                stroke,
+                stroke_width,
+                dash,
+            } if (*x1 - plot_left).abs() < 0.01
+                && (*x2 - plot_right).abs() < 0.01
+                && (*y1 - plot_bottom).abs() < 0.01
+                && (*y2 - plot_bottom).abs() < 0.01 =>
+            {
+                Some((*stroke, *stroke_width, dash.as_slice()))
+            }
+            _ => None,
+        });
+        let (stroke, width, dash) =
+            baseline.expect("x_axis.border should span the bottom plot baseline");
+        assert_eq!(stroke, spec.theme.text_color);
+        assert!((width - 3.0).abs() < 1e-9);
+        assert_eq!(dash, &[5.0, 2.0]);
+    }
+
+    #[test]
+    fn horizontal_x_border_display_controls_bottom_baseline() {
+        fn count_bottom_baseline(
+            scene: &Scene,
+            plot_left: f64,
+            plot_right: f64,
+            plot_bottom: f64,
+        ) -> usize {
+            scene
+                .items
+                .iter()
+                .filter(|p| {
+                    matches!(p,
+                        Prim::Line { x1, x2, y1, y2, .. }
+                            if (*x1 - plot_left).abs() < 0.01
+                                && (*x2 - plot_right).abs() < 0.01
+                                && (*y1 - plot_bottom).abs() < 0.01
+                                && (*y2 - plot_bottom).abs() < 0.01
+                    )
+                })
+                .count()
+        }
+
+        let visible_spec = parse(
+            r##"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"border":{
+                    "display":true
+                }}}}}"##,
+        );
+        let hidden_spec = parse(
+            r##"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"border":{
+                    "display":false
+                }}}}}"##,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let plot_left = OUTER_PAD
+            + visible_spec
+                .categories
+                .iter()
+                .map(|category| m.width(category, visible_spec.theme.font_size as f32))
+                .fold(0.0_f32, f32::max) as f64
+            + 10.0;
+        let plot_right = visible_spec.width - OUTER_PAD;
+        let plot_bottom = visible_spec.height - OUTER_PAD - X_LABEL_BAND;
+        let visible = build(&visible_spec, &m);
+        let hidden = build(&hidden_spec, &m);
+
+        assert_eq!(
+            count_bottom_baseline(&visible, plot_left, plot_right, plot_bottom),
+            1
+        );
+        assert_eq!(
+            count_bottom_baseline(&hidden, plot_left, plot_right, plot_bottom),
+            0
         );
     }
 
