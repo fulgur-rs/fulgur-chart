@@ -779,11 +779,12 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
 
     match &spec.x_positions {
         XPositions::Category => {
-            // 4a. x カテゴリグリッド + ラベル（auto-skip はラベルだけに適用）。
+            // 4a. x カテゴリグリッド + ラベル（auto-skip は表示 tick に適用）。
             let n = spec.categories.len().max(1);
             let slot_w = (frame.plot_right - frame.plot_left) / n as f64;
             let x_grid = &spec.x_axis.grid;
             let grid_color = x_grid.color.unwrap_or(spec.theme.grid_color);
+            let mut grid_path = String::new();
             // 代表ラベル幅（最初の非空ラベル）＋ 4px ギャップを使って step を決める。
             let step = spec
                 .categories
@@ -799,6 +800,9 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                 })
                 .unwrap_or(1);
             for (i, cat) in spec.categories.iter().enumerate() {
+                if cat.is_empty() || i % step != 0 {
+                    continue;
+                }
                 // line は点と同じ配置(offset:false=edge-to-edge / offset:true=band 中心)で
                 // grid/ラベルを点の真下に置く。bar/その他はバンド中心。mixed は band 中心。
                 let x = if matches!(spec.kind, ChartKind::Line) {
@@ -807,18 +811,16 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                     category_center(frame, i, n)
                 };
                 if x_grid.display {
-                    items.push(Prim::Line {
-                        x1: x,
-                        y1: frame.plot_top,
-                        x2: x,
-                        y2: frame.plot_bottom,
-                        stroke: grid_color,
-                        stroke_width: x_grid.line_width,
-                        dash: Vec::new(),
-                    });
-                }
-                if cat.is_empty() || i % step != 0 {
-                    continue;
+                    if !grid_path.is_empty() {
+                        grid_path.push(' ');
+                    }
+                    grid_path.push_str(&format!(
+                        "M {} {} L {} {}",
+                        fmt_num(x),
+                        fmt_num(frame.plot_top),
+                        fmt_num(x),
+                        fmt_num(frame.plot_bottom)
+                    ));
                 }
                 items.push(Prim::Text {
                     x,
@@ -828,6 +830,14 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                     fill: ink,
                     content: cat.clone(),
                     rotate_deg: None,
+                });
+            }
+            if x_grid.display && !grid_path.is_empty() {
+                items.push(Prim::Path {
+                    d: grid_path,
+                    fill: None,
+                    stroke: Some(grid_color),
+                    stroke_width: x_grid.line_width,
                 });
             }
         }
@@ -1724,25 +1734,15 @@ mod tests {
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
 
-        let x_positions: Vec<f64> = items
+        let paths: Vec<_> = items
             .iter()
             .filter_map(|item| match item {
-                Prim::Line {
-                    x1,
-                    y1,
-                    x2,
-                    y2,
-                    stroke,
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(stroke),
                     stroke_width,
-                    ..
-                } if (*x1 - *x2).abs() < 1e-9
-                    && (*y1 - frame.plot_top).abs() < 1e-9
-                    && (*y2 - frame.plot_bottom).abs() < 1e-9
-                    && *stroke == grid
-                    && (*stroke_width - 2.5).abs() < 1e-9 =>
-                {
-                    Some(*x1)
-                }
+                } if *stroke == grid && (*stroke_width - 2.5).abs() < 1e-9 => Some(d),
                 _ => None,
             })
             .collect();
@@ -1753,13 +1753,22 @@ mod tests {
             frame.plot_left + plot_width / 2.0,
             frame.plot_left + plot_width * 5.0 / 6.0,
         ];
-        assert_eq!(x_positions.len(), expected.len());
-        for (actual, expected) in x_positions.iter().zip(expected) {
-            assert!(
-                (actual - expected).abs() < 1e-9,
-                "actual={actual}, expected={expected}"
-            );
-        }
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].matches("M ").count(), expected.len());
+        let expected_path = expected
+            .iter()
+            .map(|x| {
+                format!(
+                    "M {} {} L {} {}",
+                    fmt_num(*x),
+                    fmt_num(frame.plot_top),
+                    fmt_num(*x),
+                    fmt_num(frame.plot_bottom)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(paths[0], &expected_path);
     }
 
     #[test]
@@ -1771,19 +1780,20 @@ mod tests {
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
 
-        let grid_count = items
+        let grid_paths = items
             .iter()
             .filter(|item| {
                 matches!(
                     item,
-                    Prim::Line { x1, y1, x2, y2, .. }
-                        if (*x1 - *x2).abs() < 1e-9
-                            && (*y1 - frame.plot_top).abs() < 1e-9
-                            && (*y2 - frame.plot_bottom).abs() < 1e-9
+                    Prim::Path {
+                        fill: None,
+                        stroke: Some(_),
+                        ..
+                    }
                 )
             })
             .count();
-        assert_eq!(grid_count, 0);
+        assert_eq!(grid_paths, 0);
         for label in ["Cat0000", "Cat0001", "Cat0002"] {
             assert!(
                 items
@@ -1804,44 +1814,56 @@ mod tests {
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
 
-        let x_positions: Vec<f64> = items
+        let paths: Vec<_> = items
             .iter()
             .filter_map(|item| match item {
-                Prim::Line { x1, y1, x2, y2, .. }
-                    if (*x1 - *x2).abs() < 1e-9
-                        && (*y1 - frame.plot_top).abs() < 1e-9
-                        && (*y2 - frame.plot_bottom).abs() < 1e-9 =>
-                {
-                    Some(*x1)
-                }
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(_),
+                    ..
+                } => Some(d),
                 _ => None,
             })
             .collect();
-        assert_eq!(x_positions.len(), 3);
-        assert!((x_positions[0] - frame.plot_left).abs() < 1e-9);
-        assert!((x_positions[2] - frame.plot_right).abs() < 1e-9);
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].matches("M ").count(), 3);
+        assert!(paths[0].starts_with(&format!(
+            "M {} {} L {} {}",
+            fmt_num(frame.plot_left),
+            fmt_num(frame.plot_top),
+            fmt_num(frame.plot_left),
+            fmt_num(frame.plot_bottom),
+        )));
+        assert!(paths[0].ends_with(&format!(
+            "M {} {} L {} {}",
+            fmt_num(frame.plot_right),
+            fmt_num(frame.plot_top),
+            fmt_num(frame.plot_right),
+            fmt_num(frame.plot_bottom),
+        )));
     }
 
     #[test]
-    fn categorical_x_grid_survives_label_auto_skip() {
+    fn categorical_x_grid_follows_auto_skipped_ticks() {
         let spec = make_bar_spec(20, 80.0);
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
 
-        let grid_count = items
+        let grid_path = items
             .iter()
-            .filter(|item| {
-                matches!(
-                    item,
-                    Prim::Line { x1, y1, x2, y2, .. }
-                        if (*x1 - *x2).abs() < 1e-9
-                            && (*y1 - frame.plot_top).abs() < 1e-9
-                            && (*y2 - frame.plot_bottom).abs() < 1e-9
-                )
+            .find_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(_),
+                    ..
+                } => Some(d),
+                _ => None,
             })
-            .count();
+            .expect("visible categorical ticks should share one grid path");
         let label_count = items
             .iter()
             .filter(|item| {
@@ -1854,10 +1876,14 @@ mod tests {
                 )
             })
             .count();
-        assert_eq!(grid_count, 20);
         assert!(
             label_count < 20,
             "dense category labels must be auto-skipped"
+        );
+        assert_eq!(
+            grid_path.matches("M ").count(),
+            label_count,
+            "x-axis grid subpaths must follow the visible category ticks"
         );
     }
 
