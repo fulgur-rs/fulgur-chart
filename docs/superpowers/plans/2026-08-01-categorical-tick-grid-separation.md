@@ -1,6 +1,6 @@
 # Categorical Tick and Grid Compatibility Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Historical implementation plan. Task state is tracked in bd.
 
 **Goal:** Preserve a categorical grid segment for every auto-selected tick, including ticks whose label text is empty.
 
@@ -29,16 +29,16 @@
 - Consumes: `spec.categories`, the computed `step`, and `x_axis.grid` in `draw_frame`.
 - Produces: one batched `Prim::Path` subpath per selected category tick, with `Prim::Text` only for selected non-empty labels.
 
-- [ ] **Step 1: Write the failing regression test**
+**Step 1: Write the failing regression test**
 
-Add a `categorical_x_grid_keeps_tick_for_empty_label` unit test. Construct a three-category bar spec, replace the middle category with an empty string, call `draw_frame`, and assert that the grid path has exactly three `M ` subpaths while only two centered text primitives are present.
+Add a `categorical_x_grid_keeps_tick_for_empty_label` unit test. Construct a three-category bar spec, replace the middle category with an empty string, call `draw_frame`, and assert that the grid path has exactly three `M`-prefixed subpaths while only two centered text primitives are present.
 
 ```rust
 assert_eq!(grid_path.matches("M ").count(), 3);
 assert_eq!(label_count, 2);
 ```
 
-- [ ] **Step 2: Run the regression test and verify it fails**
+**Step 2: Run the regression test and verify it fails**
 
 Run:
 
@@ -48,7 +48,7 @@ cargo test -p fulgur-chart categorical_x_grid_keeps_tick_for_empty_label
 
 Expected: FAIL because the current combined `cat.is_empty() || i % step != 0` guard omits the middle grid subpath.
 
-- [ ] **Step 3: Implement the minimal separation**
+**Step 3: Implement the minimal separation**
 
 Replace the combined guard with a selected-tick guard, append a grid segment for every selected index, and use a second `if cat.is_empty() { continue; }` only before pushing `Prim::Text`.
 
@@ -63,7 +63,7 @@ if cat.is_empty() {
 // push Prim::Text
 ```
 
-- [ ] **Step 4: Run focused and crate tests**
+**Step 4: Run focused and crate tests**
 
 Run:
 
@@ -74,7 +74,7 @@ cargo test -p fulgur-chart
 
 Expected: both commands PASS, including the existing dense-category auto-skip test.
 
-- [ ] **Step 5: Run quality checks**
+**Step 5: Run quality checks**
 
 Run:
 
@@ -87,7 +87,7 @@ cargo bench -p fulgur-chart --bench membench --features dhat-heap --locked -- --
 
 Expected: all commands PASS with the committed benchmark baseline unchanged.
 
-- [ ] **Step 6: Commit the implementation**
+**Step 6: Commit the implementation**
 
 ```bash
 git add crates/fulgur-chart/src/layout/common.rs docs/superpowers/plans/2026-08-01-categorical-tick-grid-separation.md

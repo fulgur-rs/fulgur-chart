@@ -66,22 +66,22 @@ const PNG_HEIGHT: u32 = 900;
 // SVG は cross-platform 決定的なので全プラットフォーム共通の期待値。
 // (native の linux-x86_64 で観測。SVG の決定論は insta スナップショットが全 OS で実証。)
 const SVG_LEN: usize = 3638;
-const SVG_HASH: u64 = 0x3e95_d6d4_8458_aa2b;
+const SVG_HASH: u64 = 0x9745_8add_b99c_4293;
 
-// PNG の exact 期待値は「同一プラットフォーム(linux-x86_64)」専用。
-// wasm32 と linux-x86_64 native の両方で使い、それ以外の native では cfg で除外する
+// PNG の exact 期待値は wasm32 と linux-x86_64 native の同一レンダリング環境用。
+// それ以外の native では cfg で除外する
 // (dead_code 警告回避)。
 // 既定圧縮 Balanced(fdeflate + 適応フィルタ)での値。Fast/High に既定を変えた場合は再生成すること。
 #[cfg(any(
     target_arch = "wasm32",
     all(target_os = "linux", target_arch = "x86_64")
 ))]
-const PNG_LEN_LINUX_X86: usize = 44472;
+const PNG_LEN_LINUX_X86: usize = 44422;
 #[cfg(any(
     target_arch = "wasm32",
     all(target_os = "linux", target_arch = "x86_64")
 ))]
-const PNG_HASH_LINUX_X86: u64 = 0x22e5_442e_c274_036c;
+const PNG_HASH_LINUX_X86: u64 = 0x13ba_b2c2_d628_27a9;
 
 /// SVG: 全プラットフォーム共通で exact byte 一致を検証(cross-platform 決定的)。
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]

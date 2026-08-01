@@ -1,6 +1,6 @@
 # Categorical X-Axis Grid Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Historical implementation plan. Task state is tracked in bd.
 
 **Goal:** Render styled vertical grid lines for categorical Chart.js x axes.
 
@@ -28,17 +28,17 @@
 - Consumes: `ChartSpec.x_axis.grid: AxisGrid`, `line_x`, `category_center`, `Frame`, and `Prim::Line`.
 - Produces: one plot-height vertical `Prim::Line` for each categorical position while x-grid display is enabled.
 
-- [ ] **Step 1: Write the failing tests**
+**Step 1: Write the failing tests**
 
 Add a bar-chart test that sets a distinctive x-grid color and width, calls `draw_frame`, and asserts three plot-height vertical lines at `category_center` positions. Set `display = false` and assert those lines are absent while the `A`/`B`/`C` labels remain. Add a dense-label case proving text auto-skip does not remove grid lines. Add a line-chart test with `offset = false` that asserts the first and final vertical lines use `line_x` at the plot edges.
 
-- [ ] **Step 2: Run tests to verify they fail**
+**Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p fulgur-chart categorical_x_grid --lib`
 
 Expected: FAIL because the categorical `XPositions::Category` branch emits text but no plot-height vertical `Prim::Line`.
 
-- [ ] **Step 3: Write minimal implementation**
+**Step 3: Write minimal implementation**
 
 In the category loop, calculate the x position for every index and conditionally append the vertical line before applying the label's empty/auto-skip guard:
 
@@ -58,19 +58,19 @@ if x_grid.display {
 
 Bind `x_grid` and its resolved color once before the category loop. Keep the existing label x calculation and auto-skip guard solely for text. Do not change temporal rendering.
 
-- [ ] **Step 4: Run focused tests to verify they pass**
+**Step 4: Run focused tests to verify they pass**
 
 Run: `cargo test -p fulgur-chart categorical_x_grid --lib`
 
 Expected: PASS for the new bar and line coordinate/style tests.
 
-- [ ] **Step 5: Run regression tests**
+**Step 5: Run regression tests**
 
 Run: `cargo test -p fulgur-chart layout::common:: --lib`
 
 Expected: PASS, including existing temporal-grid and y-grid assertions.
 
-- [ ] **Step 6: Commit**
+**Step 6: Commit**
 
 ```bash
 git add crates/fulgur-chart/src/layout/common.rs

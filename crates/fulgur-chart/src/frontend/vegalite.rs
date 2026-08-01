@@ -340,7 +340,14 @@ pub fn parse_with_limits(
             suggested_max: None, // Vega-Lite の scale.domainMax は未実装
             begin_at_zero: false,
             offset: false,
-            grid: grid.clone().unwrap_or_default(),
+            grid: if temporal_line {
+                grid.clone().unwrap_or_default()
+            } else {
+                AxisGrid {
+                    display: false,
+                    ..AxisGrid::default()
+                }
+            },
             border: AxisBorder::default(),
         },
         y_axis: AxisSpec {

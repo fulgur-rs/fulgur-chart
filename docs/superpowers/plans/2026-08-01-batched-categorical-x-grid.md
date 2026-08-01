@@ -1,6 +1,6 @@
 # Batched Categorical X-grid Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Historical implementation plan. Task state is tracked in bd.
 
 **Goal:** Render visible categorical x-axis grid segments through one path, preserving chart output while restoring the memory gate.
 
@@ -30,7 +30,7 @@
 - Consumes: `Prim::Path { d: String, fill: Option<Color>, stroke: Option<Color>, stroke_width: f64 }`.
 - Produces: one path containing `M {x} {plot_top} L {x} {plot_bottom}` for every visible categorical tick.
 
-- [ ] **Step 1: Write the failing path-batching test**
+**Step 1: Write the failing path-batching test**
 
   Replace the category-center assertion so a three-category bar chart expects exactly one
   `Prim::Path` with `fill: None`, the configured stroke color and width, and three
@@ -47,14 +47,14 @@
   assert_eq!(paths[0].matches("M ").count(), 3);
   ```
 
-- [ ] **Step 2: Run the focused test to verify RED**
+**Step 2: Run the focused test to verify RED**
 
   Run: `cargo test -p fulgur-chart categorical_x_grid --lib`
 
   Expected: FAIL because the current implementation emits three `Prim::Line` items,
   not one `Prim::Path` with three segments.
 
-- [ ] **Step 3: Emit one path for visible categorical ticks**
+**Step 3: Emit one path for visible categorical ticks**
 
   In the category branch of `draw_frame`, collect each visible tick's existing x
   coordinate into one `String` using separate move/line subpaths. When
@@ -72,14 +72,14 @@
   Keep the existing `Prim::Text` insertion for each visible label. Do not change the
   temporal branch or add a new public primitive.
 
-- [ ] **Step 4: Run focused tests to verify GREEN**
+**Step 4: Run focused tests to verify GREEN**
 
   Run: `cargo test -p fulgur-chart categorical_x_grid --lib`
 
   Expected: PASS. The tests cover category centers, display false, line offset false,
   and auto-skip with one batched path.
 
-- [ ] **Step 5: Regenerate rendering expectations and deterministic runtime values**
+**Step 5: Regenerate rendering expectations and deterministic runtime values**
 
   Run: `INSTA_UPDATE=always cargo test -p fulgur-chart`
 
@@ -90,7 +90,7 @@
   Expected: snapshots and PNG goldens reflect the one-path SVG form; runtime SVG and
   linux-x86 PNG length/hash constants match the regenerated output.
 
-- [ ] **Step 6: Verify quality gates and memory regression**
+**Step 6: Verify quality gates and memory regression**
 
   Run: `cargo fmt --check`
 
@@ -102,7 +102,7 @@
 
   Expected: all commands pass and `bar_small` remains within the existing 25% memory gate.
 
-- [ ] **Step 7: Commit the focused CI fix**
+**Step 7: Commit the focused CI fix**
 
   ```bash
   git add crates/fulgur-chart/src/layout/common.rs crates/fulgur-chart/tests/wasm_runtime.rs crates/fulgur-chart/tests/snapshots crates/fulgur-chart/tests/golden
