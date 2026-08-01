@@ -753,6 +753,15 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .iter()
         .any(|ds| ds.background_color.is_some() || ds.border_color.is_some());
 
+    let has_line_dataset_options = raw
+        .data
+        .datasets
+        .iter()
+        .any(|ds| ds.span_gaps.is_some() || ds.stepped.is_some());
+    if raw.chart_type == "line" && matches!(kind, ChartKind::Mixed) && has_line_dataset_options {
+        return Err("spanGaps and stepped are not supported for mixed charts".to_string());
+    }
+
     let line_dataset_options = if raw.chart_type == "line" {
         raw.data
             .datasets
@@ -3458,6 +3467,19 @@ mod tests {
                     parse(&with_line_option, true).is_err(),
                     "strict {name} root accepted {option}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_line_root_rejects_line_only_options() {
+        for option in [r#""spanGaps":true"#, r#""stepped":"middle""#] {
+            let json = format!(
+                r#"{{"type":"line","data":{{"datasets":[{{"data":[1,null,3],{option}}},{{"type":"bar","data":[2,3,4]}}]}}}}"#
+            );
+            for strict in [false, true] {
+                let err = parse(&json, strict).expect_err("mixed line options must be rejected");
+                assert!(err.contains("mixed"), "unexpected error: {err}");
             }
         }
     }
