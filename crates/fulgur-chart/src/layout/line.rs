@@ -53,24 +53,28 @@ fn step_capacity(point_count: usize, mode: StepMode) -> usize {
     )
 }
 
-fn step_points(points: &[(f64, f64)], mode: StepMode) -> Vec<(f64, f64)> {
-    let Some(&first) = points.first() else {
+fn step_points(
+    points: impl ExactSizeIterator<Item = (f64, f64)> + Clone,
+    mode: StepMode,
+) -> Vec<(f64, f64)> {
+    let point_count = points.len();
+    let Some(first) = points.clone().next() else {
         return Vec::new();
     };
 
-    let mut stepped = Vec::with_capacity(step_capacity(points.len(), mode));
+    let mut stepped = Vec::with_capacity(step_capacity(point_count, mode));
     stepped.push(first);
     let mut push_if_new = |point| {
         if stepped.last() != Some(&point) {
             stepped.push(point);
         }
     };
-    for pair in points.windows(2) {
-        let (x0, y0) = pair[0];
-        let (x1, y1) = pair[1];
+    for (previous, target) in points.clone().zip(points.skip(1)) {
+        let (x0, y0) = previous;
+        let (x1, y1) = target;
         match mode {
-            StepMode::Before => push_if_new((x0, y1)),
-            StepMode::After => push_if_new((x1, y0)),
+            StepMode::Before => push_if_new((x1, y0)),
+            StepMode::After => push_if_new((x0, y1)),
             StepMode::Middle => {
                 let middle_x = (x0 + x1) / 2.0;
                 push_if_new((middle_x, y0));
@@ -90,8 +94,10 @@ enum AreaPoints<'a> {
 fn area_points(segment: &[(f64, f64, usize)], step_mode: Option<StepMode>) -> AreaPoints<'_> {
     step_mode
         .map(|step_mode| {
-            let points = segment.iter().map(|&(x, y, _)| (x, y)).collect::<Vec<_>>();
-            AreaPoints::Stepped(step_points(&points, step_mode))
+            AreaPoints::Stepped(step_points(
+                segment.iter().map(|&(x, y, _)| (x, y)),
+                step_mode,
+            ))
         })
         .unwrap_or(AreaPoints::Borrowed(segment))
 }
@@ -229,15 +235,15 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             if seg.len() < 2 {
                 continue;
             }
-            let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
             if let Some(step_mode) = ser.step_mode {
                 items.push(Prim::Polyline {
-                    points: step_points(&xy, step_mode),
+                    points: step_points(seg.iter().map(|&(x, y, _)| (x, y)), step_mode),
                     stroke: ser.stroke_at(0),
                     stroke_width: ser.stroke_width,
                 });
                 continue;
             }
+            let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
             match ser.interpolation {
                 crate::ir::LineInterpolation::Linear => {
                     items.push(Prim::Polyline {
@@ -672,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn stepped_before_emits_vertical_corners_at_each_previous_point() {
+    fn stepped_before_emits_horizontal_corners_before_each_next_point() {
         let json = r#"{"type":"line","data":{"labels":["a","b","c"],
             "datasets":[{"data":[1, 2, 3], "stepped":"before"}]}}"#;
         let spec = chartjs::parse(json, false).unwrap();
@@ -694,12 +700,12 @@ mod tests {
         let y2 = frame.ys.map(3.0);
         assert_eq!(
             points,
-            vec![(x0, y0), (x0, y1), (x1, y1), (x1, y2), (x2, y2)]
+            vec![(x0, y0), (x1, y0), (x1, y1), (x2, y1), (x2, y2)]
         );
     }
 
     #[test]
-    fn stepped_after_emits_horizontal_corners_before_each_next_point() {
+    fn stepped_after_emits_vertical_corners_at_each_previous_point() {
         let json = r#"{"type":"line","data":{"labels":["a","b","c"],
             "datasets":[{"data":[1, 2, 3], "stepped":"after"}]}}"#;
         let spec = chartjs::parse(json, false).unwrap();
@@ -721,7 +727,7 @@ mod tests {
         let y2 = frame.ys.map(3.0);
         assert_eq!(
             points,
-            vec![(x0, y0), (x1, y0), (x1, y1), (x2, y1), (x2, y2)]
+            vec![(x0, y0), (x0, y1), (x1, y1), (x1, y2), (x2, y2)]
         );
     }
 
@@ -846,8 +852,8 @@ mod tests {
             "M {} {} L {} {} L {} {} ",
             fmt_num(x0),
             fmt_num(y0),
-            fmt_num(x0),
-            fmt_num(y2),
+            fmt_num(x2),
+            fmt_num(y0),
             fmt_num(x2),
             fmt_num(y2),
         );
@@ -896,7 +902,10 @@ mod tests {
 
     #[test]
     fn empty_step_input_emits_no_vertices() {
-        assert_eq!(step_points(&[], StepMode::Before), Vec::new());
+        assert_eq!(
+            step_points(std::iter::empty(), StepMode::Before),
+            Vec::new()
+        );
     }
 
     #[test]
@@ -909,16 +918,16 @@ mod tests {
     }
 
     #[test]
-    fn step_before_and_after_use_chartjs_corner_coordinates() {
-        let points = [(1.0, 2.0), (3.0, 4.0)];
+    fn step_before_and_after_match_chartjs_without_copying_segment_coordinates() {
+        let segment = [(1.0, 2.0, 0), (3.0, 4.0, 1)];
 
         assert_eq!(
-            step_points(&points, StepMode::Before),
-            vec![(1.0, 2.0), (1.0, 4.0), (3.0, 4.0)]
+            step_points(segment.iter().map(|&(x, y, _)| (x, y)), StepMode::Before),
+            vec![(1.0, 2.0), (3.0, 2.0), (3.0, 4.0)]
         );
         assert_eq!(
-            step_points(&points, StepMode::After),
-            vec![(1.0, 2.0), (3.0, 2.0), (3.0, 4.0)]
+            step_points(segment.iter().map(|&(x, y, _)| (x, y)), StepMode::After),
+            vec![(1.0, 2.0), (1.0, 4.0), (3.0, 4.0)]
         );
     }
 
