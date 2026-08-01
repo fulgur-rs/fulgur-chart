@@ -65,16 +65,23 @@ const PNG_HEIGHT: u32 = 900;
 
 // SVG は cross-platform 決定的なので全プラットフォーム共通の期待値。
 // (native の linux-x86_64 で観測。SVG の決定論は insta スナップショットが全 OS で実証。)
-const SVG_LEN: usize = 3483;
-const SVG_HASH: u64 = 0x3af5_841b_b6bb_3b8e;
+const SVG_LEN: usize = 3638;
+const SVG_HASH: u64 = 0x9745_8add_b99c_4293;
 
-// PNG の exact 期待値は「同一プラットフォーム(linux-x86_64)」専用。wasm 限定テストでのみ使う。
-// native ビルドでは未使用になるため cfg で除外する(dead_code 警告回避)。
+// PNG の exact 期待値は wasm32 と linux-x86_64 native の同一レンダリング環境用。
+// それ以外の native では cfg で除外する
+// (dead_code 警告回避)。
 // 既定圧縮 Balanced(fdeflate + 適応フィルタ)での値。Fast/High に既定を変えた場合は再生成すること。
-#[cfg(target_arch = "wasm32")]
-const PNG_LEN_LINUX_X86: usize = 42630;
-#[cfg(target_arch = "wasm32")]
-const PNG_HASH_LINUX_X86: u64 = 0x6ee4_ac9e_6d16_b2e2;
+#[cfg(any(
+    target_arch = "wasm32",
+    all(target_os = "linux", target_arch = "x86_64")
+))]
+const PNG_LEN_LINUX_X86: usize = 44422;
+#[cfg(any(
+    target_arch = "wasm32",
+    all(target_os = "linux", target_arch = "x86_64")
+))]
+const PNG_HASH_LINUX_X86: u64 = 0x13ba_b2c2_d628_27a9;
 
 /// SVG: 全プラットフォーム共通で exact byte 一致を検証(cross-platform 決定的)。
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
@@ -105,12 +112,16 @@ fn png_renders_validly_on_every_platform() {
     );
 }
 
-/// PNG: wasm の出力が同一プラットフォーム(linux-x86_64)の native と byte 一致することを
-/// 検証する。CI の wasm ジョブは ubuntu で走るため、ubuntu native と同一ビットになる。
-/// tiny-skia の浮動小数差は OS 跨ぎで出るため、この exact 比較は wasm(=ubuntu) 限定。
+/// PNG: wasm32 と linux-x86_64 native で、linux-x86_64 の期待 byte と一致することを検証する。
+/// CI の wasm ジョブは ubuntu で走るため、ubuntu native と同一ビットになる。
+/// tiny-skia の浮動小数差は OS 跨ぎで出るため、この exact 比較は上記対象に限定する。
 /// OS 跨ぎの視覚一致は `golden_png.rs` の許容差比較が担保する。
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen_test]
+#[cfg(any(
+    target_arch = "wasm32",
+    all(target_os = "linux", target_arch = "x86_64")
+))]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
 fn png_is_byte_identical_to_linux_x86_native() {
     let png = render_chart_to_png_default(&sample_spec(), PNG_SCALE).expect("PNG 生成成功");
     assert_eq!(

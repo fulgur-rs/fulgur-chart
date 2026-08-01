@@ -682,6 +682,25 @@ pub fn band_width(frame: &Frame, n: usize) -> f64 {
     (frame.plot_right - frame.plot_left) / n.max(1) as f64
 }
 
+fn categorical_tick_step(
+    categories: &[String],
+    slot_w: f64,
+    m: &TextMeasurer,
+    label_font: f64,
+) -> usize {
+    let required_width = categories
+        .iter()
+        .find(|category| !category.is_empty())
+        .map(|label| m.width(label, label_font as f32) as f64 + 4.0)
+        // 空ラベルだけでも subpixel ごとに grid を積まないよう、既存の label gap を最小幅にする。
+        .unwrap_or(4.0);
+    if slot_w > 0.0 && required_width > slot_w {
+        ((required_width / slot_w).ceil() as usize).max(1)
+    } else {
+        1
+    }
+}
+
 /// 共有フレーム描画: タイトル→横グリッド+yラベル→xベースライン→xカテゴリラベル→凡例。
 /// チャート本体(bar/line)はこの後に重ねて描く。
 pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &TextMeasurer) {
@@ -738,7 +757,40 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         });
     }
 
-    // 3. x ベースライン。border.display / border.color / border.width / border.dash を反映。
+    // 3. カテゴリカル x grid。baseline より先に置き、交点を border が覆うようにする。
+    if matches!(spec.x_positions, XPositions::Category) && spec.x_axis.grid.display {
+        let n = spec.categories.len().max(1);
+        let slot_w = (frame.plot_right - frame.plot_left) / n as f64;
+        let step = categorical_tick_step(&spec.categories, slot_w, m, label_font);
+        let mut grid_path = String::new();
+        for i in (0..spec.categories.len()).step_by(step) {
+            let x = if matches!(spec.kind, ChartKind::Line) {
+                line_x(spec, frame, i)
+            } else {
+                category_center(frame, i, n)
+            };
+            if !grid_path.is_empty() {
+                grid_path.push(' ');
+            }
+            grid_path.push_str(&format!(
+                "M {} {} L {} {}",
+                fmt_num(x),
+                fmt_num(frame.plot_top),
+                fmt_num(x),
+                fmt_num(frame.plot_bottom)
+            ));
+        }
+        if !grid_path.is_empty() {
+            items.push(Prim::Path {
+                d: grid_path,
+                fill: None,
+                stroke: Some(spec.x_axis.grid.color.unwrap_or(spec.theme.grid_color)),
+                stroke_width: spec.x_axis.grid.line_width,
+            });
+        }
+    }
+
+    // 3b. x ベースライン。border.display / border.color / border.width / border.dash を反映。
     let border = &spec.x_axis.border;
     if border.display {
         let border_color = border.color.unwrap_or(ink);
@@ -779,36 +831,26 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
 
     match &spec.x_positions {
         XPositions::Category => {
-            // 4a. x カテゴリラベル（auto-skip: ラベル幅 > スロット幅なら間引く）。
+            // 4a. x カテゴリラベル（auto-skip は表示 tick に適用）。
             let n = spec.categories.len().max(1);
             let slot_w = (frame.plot_right - frame.plot_left) / n as f64;
-            // 代表ラベル幅（最初の非空ラベル）＋ 4px ギャップを使って step を決める。
-            let step = spec
-                .categories
-                .iter()
-                .find(|c| !c.is_empty())
-                .map(|lbl| {
-                    let lw = m.width(lbl, label_font as f32) as f64 + 4.0;
-                    if slot_w > 0.0 && lw > slot_w {
-                        ((lw / slot_w).ceil() as usize).max(1)
-                    } else {
-                        1
-                    }
-                })
-                .unwrap_or(1);
+            let step = categorical_tick_step(&spec.categories, slot_w, m, label_font);
             for (i, cat) in spec.categories.iter().enumerate() {
-                if cat.is_empty() || i % step != 0 {
+                if i % step != 0 {
                     continue;
                 }
                 // line は点と同じ配置(offset:false=edge-to-edge / offset:true=band 中心)で
-                // ラベルを点の真下に置く。bar/その他はバンド中心。mixed は band 中心。
-                let label_x = if matches!(spec.kind, ChartKind::Line) {
+                // grid/ラベルを点の真下に置く。bar/その他はバンド中心。mixed は band 中心。
+                let x = if matches!(spec.kind, ChartKind::Line) {
                     line_x(spec, frame, i)
                 } else {
                     category_center(frame, i, n)
                 };
+                if cat.is_empty() {
+                    continue;
+                }
                 items.push(Prim::Text {
-                    x: label_x,
+                    x,
                     y: frame.plot_bottom + X_LABEL_BAND * X_LABEL_CENTER_RATIO,
                     size: label_font,
                     anchor: Anchor::Middle,
@@ -1693,6 +1735,303 @@ mod tests {
             thick,
             "grid.line_width=3.0 は stroke_width に反映されるべき"
         );
+    }
+
+    #[test]
+    fn categorical_x_grid_uses_category_centers_and_style() {
+        let mut spec = make_bar_spec(3, 400.0);
+        let grid = Color {
+            r: 12,
+            g: 34,
+            b: 56,
+            a: 1.0,
+        };
+        spec.x_axis.grid.color = Some(grid);
+        spec.x_axis.grid.line_width = 2.5;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let paths: Vec<_> = items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(stroke),
+                    stroke_width,
+                } if *stroke == grid && (*stroke_width - 2.5).abs() < 1e-9 => Some(d),
+                _ => None,
+            })
+            .collect();
+
+        let plot_width = frame.plot_right - frame.plot_left;
+        let expected = [
+            frame.plot_left + plot_width / 6.0,
+            frame.plot_left + plot_width / 2.0,
+            frame.plot_left + plot_width * 5.0 / 6.0,
+        ];
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].matches("M ").count(), expected.len());
+        let expected_path = expected
+            .iter()
+            .map(|x| {
+                format!(
+                    "M {} {} L {} {}",
+                    fmt_num(*x),
+                    fmt_num(frame.plot_top),
+                    fmt_num(*x),
+                    fmt_num(frame.plot_bottom)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(paths[0], &expected_path);
+    }
+
+    #[test]
+    fn categorical_x_grid_precedes_x_axis_border() {
+        let mut spec = make_bar_spec(3, 400.0);
+        let grid = Color {
+            r: 12,
+            g: 34,
+            b: 56,
+            a: 1.0,
+        };
+        let border = Color {
+            r: 65,
+            g: 43,
+            b: 21,
+            a: 1.0,
+        };
+        spec.x_axis.grid.color = Some(grid);
+        spec.x_axis.border.color = Some(border);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let grid_index = items
+            .iter()
+            .position(
+                |item| matches!(item, Prim::Path { stroke: Some(color), .. } if *color == grid),
+            )
+            .expect("categorical grid path");
+        let border_index = items
+            .iter()
+            .position(|item| {
+                matches!(item,
+                    Prim::Line { x1, y1, x2, y2, stroke, .. }
+                        if (*x1 - frame.plot_left).abs() < 0.01
+                            && (*y1 - frame.plot_bottom).abs() < 0.01
+                            && (*x2 - frame.plot_right).abs() < 0.01
+                            && (*y2 - frame.plot_bottom).abs() < 0.01
+                            && *stroke == border
+                )
+            })
+            .expect("x-axis border");
+        assert!(
+            grid_index < border_index,
+            "the x-axis border must be painted over categorical grid endpoints"
+        );
+    }
+
+    #[test]
+    fn categorical_x_grid_display_false_keeps_labels_without_lines() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.grid.display = false;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let grid_paths = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Prim::Path {
+                        fill: None,
+                        stroke: Some(_),
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(grid_paths, 0);
+        for label in ["Cat0000", "Cat0001", "Cat0002"] {
+            assert!(
+                items
+                    .iter()
+                    .any(|item| { matches!(item, Prim::Text { content, .. } if content == label) })
+            );
+        }
+    }
+
+    #[test]
+    fn categorical_x_grid_line_offset_false_uses_plot_edges() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.kind = ChartKind::Line;
+        spec.series[0].series_type = SeriesType::Line;
+        spec.x_axis.offset = false;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let paths: Vec<_> = items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(_),
+                    ..
+                } => Some(d),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].matches("M ").count(), 3);
+        assert!(paths[0].starts_with(&format!(
+            "M {} {} L {} {}",
+            fmt_num(frame.plot_left),
+            fmt_num(frame.plot_top),
+            fmt_num(frame.plot_left),
+            fmt_num(frame.plot_bottom),
+        )));
+        assert!(paths[0].ends_with(&format!(
+            "M {} {} L {} {}",
+            fmt_num(frame.plot_right),
+            fmt_num(frame.plot_top),
+            fmt_num(frame.plot_right),
+            fmt_num(frame.plot_bottom),
+        )));
+    }
+
+    #[test]
+    fn categorical_x_grid_follows_auto_skipped_ticks() {
+        let spec = make_bar_spec(20, 80.0);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let grid_path = items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(_),
+                    ..
+                } => Some(d),
+                _ => None,
+            })
+            .expect("visible categorical ticks should share one grid path");
+        let label_count = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Prim::Text {
+                        anchor: Anchor::Middle,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert!(
+            label_count < 20,
+            "dense category labels must be auto-skipped"
+        );
+        assert_eq!(
+            grid_path.matches("M ").count(),
+            label_count,
+            "x-axis grid subpaths must follow the visible category ticks"
+        );
+    }
+
+    #[test]
+    fn categorical_x_grid_keeps_tick_for_empty_label() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.categories[1] = String::new();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let grid_path = items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(_),
+                    ..
+                } => Some(d),
+                _ => None,
+            })
+            .expect("visible categorical ticks should share one grid path");
+        let label_count = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Prim::Text {
+                        anchor: Anchor::Middle,
+                        ..
+                    }
+                )
+            })
+            .count();
+
+        assert_eq!(grid_path.matches("M ").count(), 3);
+        assert_eq!(label_count, 2);
+    }
+
+    #[test]
+    fn categorical_x_grid_skips_empty_labels_by_geometry() {
+        let mut spec = make_bar_spec(100, 80.0);
+        for category in &mut spec.categories {
+            category.clear();
+        }
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let grid_path = items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(_),
+                    ..
+                } => Some(d),
+                _ => None,
+            })
+            .expect("empty category ticks should still produce a grid path");
+        let label_count = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Prim::Text {
+                        anchor: Anchor::Middle,
+                        ..
+                    }
+                )
+            })
+            .count();
+
+        assert!(
+            grid_path.matches("M ").count() <= 20,
+            "the 4px minimum tick spacing must cap this 80px-wide chart at 20 grid segments"
+        );
+        assert_eq!(label_count, 0);
     }
 
     #[test]

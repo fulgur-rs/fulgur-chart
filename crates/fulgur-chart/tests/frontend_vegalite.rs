@@ -56,6 +56,35 @@ const CATEGORICAL_LINE_SHAPE: &str = r#"{
 }"#;
 
 #[test]
+fn categorical_vegalite_x_grid_is_disabled_by_default() {
+    let spec = vegalite::parse(BAR_SPEC, true).unwrap();
+    assert!(
+        !spec.x_axis.grid.display,
+        "Chart.js-specific categorical x grids must not alter Vega-Lite defaults"
+    );
+}
+
+#[test]
+fn scatter_vegalite_x_grid_remains_enabled_by_default() {
+    let spec = vegalite::parse(
+        r#"{
+            "mark": "point",
+            "data": {"values": [{"x": 1, "y": 2}]},
+            "encoding": {
+                "x": {"field": "x", "type": "quantitative"},
+                "y": {"field": "y", "type": "quantitative"}
+            }
+        }"#,
+        true,
+    )
+    .unwrap();
+    assert!(
+        spec.x_axis.grid.display,
+        "Vega-Lite scatter keeps the default grid on its quantitative x axis"
+    );
+}
+
+#[test]
 fn temporal_line_sorts_x_and_nominal_color_domain() {
     let spec = vegalite::parse(DOGFOOD_MULTI_SERIES, true).unwrap();
     let expected = vec![

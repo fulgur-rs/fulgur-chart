@@ -278,6 +278,7 @@ pub fn parse_with_limits(
 
     // scatter/rect は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点（chartjs と一致）。
     let y_begin_at_zero = !matches!(kind, ChartKind::Scatter | ChartKind::VegaRect { .. });
+    let scatter = matches!(&kind, ChartKind::Scatter);
     let grid = if temporal_line {
         Some(temporal_axis_grid(top, theme.grid_color)?)
     } else {
@@ -340,7 +341,14 @@ pub fn parse_with_limits(
             suggested_max: None, // Vega-Lite の scale.domainMax は未実装
             begin_at_zero: false,
             offset: false,
-            grid: grid.clone().unwrap_or_default(),
+            grid: if temporal_line || scatter {
+                grid.clone().unwrap_or_default()
+            } else {
+                AxisGrid {
+                    display: false,
+                    ..AxisGrid::default()
+                }
+            },
             border: AxisBorder::default(),
         },
         y_axis: AxisSpec {
