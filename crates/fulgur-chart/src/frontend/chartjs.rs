@@ -758,8 +758,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .datasets
         .iter()
         .any(|ds| ds.span_gaps.is_some() || ds.stepped.is_some());
-    if raw.chart_type == "line" && matches!(kind, ChartKind::Mixed) && has_line_dataset_options {
-        return Err("spanGaps and stepped are not supported for mixed charts".to_string());
+    if raw.chart_type == "line" && !matches!(kind, ChartKind::Line) && has_line_dataset_options {
+        return Err("spanGaps and stepped are only supported for line charts".to_string());
     }
 
     let line_dataset_options = if raw.chart_type == "line" {
@@ -3479,7 +3479,22 @@ mod tests {
             );
             for strict in [false, true] {
                 let err = parse(&json, strict).expect_err("mixed line options must be rejected");
-                assert!(err.contains("mixed"), "unexpected error: {err}");
+                assert!(err.contains("only supported"), "unexpected error: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn line_root_all_bar_override_rejects_line_only_options() {
+        for option in [r#""spanGaps":true"#, r#""stepped":"middle""#] {
+            let json = format!(
+                r#"{{"type":"line","data":{{"datasets":[{{"type":"bar","data":[1,2],{option}}},{{"type":"bar","data":[3,4]}}]}}}}"#
+            );
+
+            for strict in [false, true] {
+                let error = parse(&json, strict)
+                    .expect_err("line-only options must be rejected for all-bar overrides");
+                assert!(error.contains("only supported"), "{error}");
             }
         }
     }

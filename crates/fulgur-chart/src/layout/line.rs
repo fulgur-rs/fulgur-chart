@@ -41,12 +41,24 @@ fn segments_for_valid_points(
 }
 
 /// 隣接する点の間に階段状の折れ点を追加する。
+fn step_capacity(point_count: usize, mode: StepMode) -> usize {
+    let intermediate_per_segment = match mode {
+        StepMode::Before | StepMode::After => 1,
+        StepMode::Middle => 2,
+    };
+    point_count.saturating_add(
+        point_count
+            .saturating_sub(1)
+            .saturating_mul(intermediate_per_segment),
+    )
+}
+
 fn step_points(points: &[(f64, f64)], mode: StepMode) -> Vec<(f64, f64)> {
     let Some(&first) = points.first() else {
         return Vec::new();
     };
 
-    let mut stepped = Vec::with_capacity(points.len().saturating_mul(2).saturating_sub(1));
+    let mut stepped = Vec::with_capacity(step_capacity(points.len(), mode));
     stepped.push(first);
     let mut push_if_new = |point| {
         if stepped.last() != Some(&point) {
@@ -863,6 +875,15 @@ mod tests {
     #[test]
     fn empty_step_input_emits_no_vertices() {
         assert_eq!(step_points(&[], StepMode::Before), Vec::new());
+    }
+
+    #[test]
+    fn step_capacity_matches_mode_specific_vertex_upper_bound() {
+        assert_eq!(step_capacity(0, StepMode::Before), 0);
+        assert_eq!(step_capacity(1, StepMode::After), 1);
+        assert_eq!(step_capacity(3, StepMode::Before), 5);
+        assert_eq!(step_capacity(3, StepMode::After), 5);
+        assert_eq!(step_capacity(3, StepMode::Middle), 7);
     }
 
     #[test]
