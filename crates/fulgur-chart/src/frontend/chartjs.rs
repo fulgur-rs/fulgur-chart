@@ -3354,7 +3354,7 @@ mod tests {
     }
 
     #[test]
-    fn strict_line_parser_matches_schema_for_span_gaps_and_stepped() {
+    fn strict_line_parser_and_public_schema_match_for_span_gaps_and_stepped() {
         for (key, value) in [
             ("spanGaps", "true"),
             ("spanGaps", "false"),
@@ -3370,12 +3370,17 @@ mod tests {
                 r#"{{"type":"line","data":{{"datasets":[{{"data":[1,2],"{key}":{value}}}]}}}}"#
             );
             assert!(
+                serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(&json).is_ok(),
+                "public schema rejected {key}: {value}"
+            );
+            assert!(
                 parse(&json, true).is_ok(),
                 "strict parser rejected {key}: {value}"
             );
         }
 
         let invalid = r#"{"type":"line","data":{"datasets":[{"data":[1,2],"stepped":"left"}]}}"#;
+        assert!(serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(invalid).is_err());
         assert!(parse(invalid, false).is_err());
         assert!(parse(invalid, true).is_err());
     }
