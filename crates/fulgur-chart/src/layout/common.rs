@@ -800,7 +800,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                 })
                 .unwrap_or(1);
             for (i, cat) in spec.categories.iter().enumerate() {
-                if cat.is_empty() || i % step != 0 {
+                if i % step != 0 {
                     continue;
                 }
                 // line は点と同じ配置(offset:false=edge-to-edge / offset:true=band 中心)で
@@ -821,6 +821,9 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                         fmt_num(x),
                         fmt_num(frame.plot_bottom)
                     ));
+                }
+                if cat.is_empty() {
+                    continue;
                 }
                 items.push(Prim::Text {
                     x,
@@ -1885,6 +1888,44 @@ mod tests {
             label_count,
             "x-axis grid subpaths must follow the visible category ticks"
         );
+    }
+
+    #[test]
+    fn categorical_x_grid_keeps_tick_for_empty_label() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.categories[1] = String::new();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let grid_path = items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(_),
+                    ..
+                } => Some(d),
+                _ => None,
+            })
+            .expect("visible categorical ticks should share one grid path");
+        let label_count = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Prim::Text {
+                        anchor: Anchor::Middle,
+                        ..
+                    }
+                )
+            })
+            .count();
+
+        assert_eq!(grid_path.matches("M ").count(), 3);
+        assert_eq!(label_count, 2);
     }
 
     #[test]
