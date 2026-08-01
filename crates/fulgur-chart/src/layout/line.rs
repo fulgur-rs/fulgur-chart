@@ -69,8 +69,8 @@ fn step_points(points: &[(f64, f64)], mode: StepMode) -> Vec<(f64, f64)> {
         let (x0, y0) = pair[0];
         let (x1, y1) = pair[1];
         match mode {
-            StepMode::Before => push_if_new((x1, y0)),
-            StepMode::After => push_if_new((x0, y1)),
+            StepMode::Before => push_if_new((x0, y1)),
+            StepMode::After => push_if_new((x1, y0)),
             StepMode::Middle => {
                 let middle_x = (x0 + x1) / 2.0;
                 push_if_new((middle_x, y0));
@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn stepped_before_emits_horizontal_corners_before_each_next_point() {
+    fn stepped_before_emits_vertical_corners_at_each_previous_point() {
         let json = r#"{"type":"line","data":{"labels":["a","b","c"],
             "datasets":[{"data":[1, 2, 3], "stepped":"before"}]}}"#;
         let spec = chartjs::parse(json, false).unwrap();
@@ -694,12 +694,12 @@ mod tests {
         let y2 = frame.ys.map(3.0);
         assert_eq!(
             points,
-            vec![(x0, y0), (x1, y0), (x1, y1), (x2, y1), (x2, y2)]
+            vec![(x0, y0), (x0, y1), (x1, y1), (x1, y2), (x2, y2)]
         );
     }
 
     #[test]
-    fn stepped_after_emits_vertical_corners_after_each_previous_point() {
+    fn stepped_after_emits_horizontal_corners_before_each_next_point() {
         let json = r#"{"type":"line","data":{"labels":["a","b","c"],
             "datasets":[{"data":[1, 2, 3], "stepped":"after"}]}}"#;
         let spec = chartjs::parse(json, false).unwrap();
@@ -721,7 +721,7 @@ mod tests {
         let y2 = frame.ys.map(3.0);
         assert_eq!(
             points,
-            vec![(x0, y0), (x0, y1), (x1, y1), (x1, y2), (x2, y2)]
+            vec![(x0, y0), (x1, y0), (x1, y1), (x2, y1), (x2, y2)]
         );
     }
 
@@ -846,8 +846,8 @@ mod tests {
             "M {} {} L {} {} L {} {} ",
             fmt_num(x0),
             fmt_num(y0),
-            fmt_num(x2),
-            fmt_num(y0),
+            fmt_num(x0),
+            fmt_num(y2),
             fmt_num(x2),
             fmt_num(y2),
         );
@@ -906,6 +906,20 @@ mod tests {
         assert_eq!(step_capacity(3, StepMode::Before), 5);
         assert_eq!(step_capacity(3, StepMode::After), 5);
         assert_eq!(step_capacity(3, StepMode::Middle), 7);
+    }
+
+    #[test]
+    fn step_before_and_after_use_chartjs_corner_coordinates() {
+        let points = [(1.0, 2.0), (3.0, 4.0)];
+
+        assert_eq!(
+            step_points(&points, StepMode::Before),
+            vec![(1.0, 2.0), (1.0, 4.0), (3.0, 4.0)]
+        );
+        assert_eq!(
+            step_points(&points, StepMode::After),
+            vec![(1.0, 2.0), (3.0, 2.0), (3.0, 4.0)]
+        );
     }
 
     #[test]
