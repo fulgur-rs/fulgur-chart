@@ -48,19 +48,24 @@ fn step_points(points: &[(f64, f64)], mode: StepMode) -> Vec<(f64, f64)> {
 
     let mut stepped = Vec::with_capacity(points.len().saturating_mul(2).saturating_sub(1));
     stepped.push(first);
+    let mut push_if_new = |point| {
+        if stepped.last() != Some(&point) {
+            stepped.push(point);
+        }
+    };
     for pair in points.windows(2) {
         let (x0, y0) = pair[0];
         let (x1, y1) = pair[1];
         match mode {
-            StepMode::Before => stepped.push((x1, y0)),
-            StepMode::After => stepped.push((x0, y1)),
+            StepMode::Before => push_if_new((x1, y0)),
+            StepMode::After => push_if_new((x0, y1)),
             StepMode::Middle => {
                 let middle_x = (x0 + x1) / 2.0;
-                stepped.push((middle_x, y0));
-                stepped.push((middle_x, y1));
+                push_if_new((middle_x, y0));
+                push_if_new((middle_x, y1));
             }
         }
-        stepped.push((x1, y1));
+        push_if_new((x1, y1));
     }
     stepped
 }
@@ -719,6 +724,42 @@ mod tests {
                 (x2, y2),
             ]
         );
+    }
+
+    #[test]
+    fn stepped_flat_pair_omits_adjacent_duplicate_vertices() {
+        for mode in ["before", "after", "middle"] {
+            let json = format!(
+                r#"{{"type":"line","data":{{"labels":["a","b"],
+                    "datasets":[{{"data":[2, 2], "stepped":"{mode}"}}]}}}}"#
+            );
+            let spec = chartjs::parse(&json, false).unwrap();
+            let frame = common::compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+            let points = scene_for(&json)
+                .items
+                .into_iter()
+                .find_map(|item| match item {
+                    Prim::Polyline { points, .. } => Some(points),
+                    _ => None,
+                })
+                .expect("stepped line must be a polyline");
+
+            let start = (common::line_x(&spec, &frame, 0), frame.ys.map(2.0));
+            let end = (common::line_x(&spec, &frame, 1), frame.ys.map(2.0));
+            let expected = match mode {
+                "before" | "after" => vec![start, end],
+                "middle" => vec![start, ((start.0 + end.0) / 2.0, start.1), end],
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                points, expected,
+                "{mode} should retain the direct endpoints"
+            );
+            assert!(
+                points.windows(2).all(|pair| pair[0] != pair[1]),
+                "{mode} emitted adjacent duplicate vertices: {points:?}"
+            );
+        }
     }
 
     #[test]
