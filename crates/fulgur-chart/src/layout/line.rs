@@ -82,6 +82,33 @@ fn step_points(points: &[(f64, f64)], mode: StepMode) -> Vec<(f64, f64)> {
     stepped
 }
 
+enum AreaPoints<'a> {
+    Borrowed(&'a [(f64, f64, usize)]),
+    Stepped(Vec<(f64, f64)>),
+}
+
+fn area_points(segment: &[(f64, f64, usize)], step_mode: Option<StepMode>) -> AreaPoints<'_> {
+    step_mode
+        .map(|step_mode| {
+            let points = segment.iter().map(|&(x, y, _)| (x, y)).collect::<Vec<_>>();
+            AreaPoints::Stepped(step_points(&points, step_mode))
+        })
+        .unwrap_or(AreaPoints::Borrowed(segment))
+}
+
+fn append_area_points(d: &mut String, points: impl IntoIterator<Item = (f64, f64)>) -> (f64, f64) {
+    let mut points = points.into_iter();
+    let (first_x, first_y) = points.next().expect("area segment is non-empty");
+    write!(d, "M {} {} ", fmt_num(first_x), fmt_num(first_y)).unwrap();
+
+    let mut last_x = first_x;
+    for (x, y) in points {
+        write!(d, "L {} {} ", fmt_num(x), fmt_num(y)).unwrap();
+        last_x = x;
+    }
+    (first_x, last_x)
+}
+
 /// line チャートのモデル幾何用の全マーカー点（`model::build_model` が参照）。
 /// レンダリング経路の `build()` は点を独立に計算しデシメーションするため、巨大データでは
 /// この全点列と実際の描画点は乖離する（モデルは chart.js 数値照合用＝間引きなしが正しい）。
@@ -172,18 +199,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if seg.is_empty() {
                     continue;
                 }
-                let points: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
-                let points = ser
-                    .step_mode
-                    .map(|step_mode| step_points(&points, step_mode))
-                    .unwrap_or(points);
                 let mut d = String::new();
-                for (k, &(x, y)) in points.iter().enumerate() {
-                    let cmd = if k == 0 { 'M' } else { 'L' };
-                    write!(d, "{} {} {} ", cmd, fmt_num(x), fmt_num(y)).unwrap();
-                }
-                let (last_x, _) = points[points.len() - 1];
-                let (first_x, _) = points[0];
+                let (first_x, last_x) = match area_points(seg, ser.step_mode) {
+                    AreaPoints::Borrowed(points) => {
+                        append_area_points(&mut d, points.iter().map(|&(x, y, _)| (x, y)))
+                    }
+                    AreaPoints::Stepped(points) => append_area_points(&mut d, points),
+                };
                 write!(
                     d,
                     "L {} {} L {} {} Z",
@@ -884,6 +906,20 @@ mod tests {
         assert_eq!(step_capacity(3, StepMode::Before), 5);
         assert_eq!(step_capacity(3, StepMode::After), 5);
         assert_eq!(step_capacity(3, StepMode::Middle), 7);
+    }
+
+    #[test]
+    fn area_points_borrow_unstepped_segments() {
+        let segment = [(1.0, 2.0, 0), (3.0, 4.0, 1)];
+
+        match area_points(&segment, None) {
+            AreaPoints::Borrowed(points) => assert_eq!(points.as_ptr(), segment.as_ptr()),
+            AreaPoints::Stepped(_) => panic!("unstepped area points must not be copied"),
+        }
+        assert!(matches!(
+            area_points(&segment, Some(StepMode::Middle)),
+            AreaPoints::Stepped(_)
+        ));
     }
 
     #[test]
