@@ -68,8 +68,9 @@ const PNG_HEIGHT: u32 = 900;
 const SVG_LEN: usize = 3638;
 const SVG_HASH: u64 = 0x3e95_d6d4_8458_aa2b;
 
-// PNG の exact 期待値は「同一プラットフォーム(linux-x86_64)」専用。wasm 限定テストでのみ使う。
-// native ビルドでは未使用になるため cfg で除外する(dead_code 警告回避)。
+// PNG の exact 期待値は「同一プラットフォーム(linux-x86_64)」専用。
+// wasm32 と linux-x86_64 native の両方で使い、それ以外の native では cfg で除外する
+// (dead_code 警告回避)。
 // 既定圧縮 Balanced(fdeflate + 適応フィルタ)での値。Fast/High に既定を変えた場合は再生成すること。
 #[cfg(any(
     target_arch = "wasm32",
@@ -111,9 +112,9 @@ fn png_renders_validly_on_every_platform() {
     );
 }
 
-/// PNG: wasm の出力が同一プラットフォーム(linux-x86_64)の native と byte 一致することを
-/// 検証する。CI の wasm ジョブは ubuntu で走るため、ubuntu native と同一ビットになる。
-/// tiny-skia の浮動小数差は OS 跨ぎで出るため、この exact 比較は wasm(=ubuntu) 限定。
+/// PNG: wasm32 と linux-x86_64 native で、linux-x86_64 の期待 byte と一致することを検証する。
+/// CI の wasm ジョブは ubuntu で走るため、ubuntu native と同一ビットになる。
+/// tiny-skia の浮動小数差は OS 跨ぎで出るため、この exact 比較は上記対象に限定する。
 /// OS 跨ぎの視覚一致は `golden_png.rs` の許容差比較が担保する。
 #[cfg(any(
     target_arch = "wasm32",
