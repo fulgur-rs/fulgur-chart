@@ -188,9 +188,40 @@ struct RawDataset {
     fill: FillSpec,
     #[serde(default)]
     tension: f64,
+    #[serde(rename = "spanGaps", default, deserialize_with = "null_or_default")]
+    span_gaps: bool,
+    #[serde(default)]
+    stepped: Option<RawStepped>,
     // scatter のマーカー半径。Series.point_radius へマップする。
     #[serde(rename = "pointRadius", default)]
     point_radius: Option<f64>,
+}
+
+/// Private parser counterpart of the public schema's `Stepped` contract.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawStepped {
+    Bool(bool),
+    Mode(RawSteppedMode),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RawSteppedMode {
+    Before,
+    After,
+    Middle,
+}
+
+impl RawStepped {
+    fn into_step_mode(self) -> Option<StepMode> {
+        match self {
+            Self::Bool(false) => None,
+            Self::Bool(true) | Self::Mode(RawSteppedMode::Before) => Some(StepMode::Before),
+            Self::Mode(RawSteppedMode::After) => Some(StepMode::After),
+            Self::Mode(RawSteppedMode::Middle) => Some(StepMode::Middle),
+        }
+    }
 }
 
 /// `data`: 数値配列(カテゴリ系)、ネスト配列(boxplot)、または点オブジェクト配列(scatter/bubble)。
@@ -783,6 +814,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 stroke_width: ds.border_width.unwrap_or(default_border_width(series_type)),
                 area: ds.fill.is_filled(),
                 interpolation: line_interpolation(normalize_tension(ds.tension)),
+                span_gaps: ds.span_gaps,
+                step_mode: ds.stepped.and_then(RawStepped::into_step_mode),
                 series_type,
                 point_radius: ds.point_radius,
                 box_points,
@@ -1117,6 +1150,8 @@ fn check_unknown_keys(
                             "borderWidth",
                             "fill",
                             "tension",
+                            "spanGaps",
+                            "stepped",
                             "pointRadius",
                         ],
                         &format!("data.datasets[{i}]"),
@@ -1698,6 +1733,8 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         stroke_width: 0.0,
         area: false,
         interpolation: LineInterpolation::Linear,
+        span_gaps: false,
+        step_mode: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -2041,6 +2078,8 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             stroke_width: ds.border_width.unwrap_or(0.0),
             area: false,
             interpolation: LineInterpolation::Linear,
+            span_gaps: false,
+            step_mode: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -2399,6 +2438,8 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         stroke_width: 0.0,
         area: false,
         interpolation: LineInterpolation::Linear,
+        span_gaps: false,
+        step_mode: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -2646,6 +2687,8 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         stroke_width: 0.0,
         area: false,
         interpolation: LineInterpolation::Linear,
+        span_gaps: false,
+        step_mode: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -3281,6 +3324,60 @@ mod tests {
         assert_eq!(spec.series[0].values[0], 1.0);
         assert!(spec.series[0].values[1].is_nan());
         assert_eq!(spec.series[0].values[2], 3.0);
+    }
+
+    #[test]
+    fn parse_line_maps_span_gaps_and_every_stepped_value() {
+        let cases = [
+            (true, "false", None),
+            (false, "true", Some(crate::ir::StepMode::Before)),
+            (false, r#""before""#, Some(crate::ir::StepMode::Before)),
+            (false, r#""after""#, Some(crate::ir::StepMode::After)),
+            (false, r#""middle""#, Some(crate::ir::StepMode::Middle)),
+        ];
+
+        for (span_gaps, stepped, step_mode) in cases {
+            let json = format!(
+                r#"{{"type":"line","data":{{"datasets":[{{"data":[1,null,3],"spanGaps":{span_gaps},"stepped":{stepped}}}]}}}}"#
+            );
+            let spec = parse(&json, false).unwrap();
+            assert_eq!(spec.series[0].span_gaps, span_gaps);
+            assert_eq!(spec.series[0].step_mode, step_mode);
+        }
+
+        let default = parse(
+            r#"{"type":"line","data":{"datasets":[{"data":[1,null,3]}]}}"#,
+            false,
+        )
+        .unwrap();
+        assert!(!default.series[0].span_gaps);
+    }
+
+    #[test]
+    fn strict_line_parser_matches_schema_for_span_gaps_and_stepped() {
+        for (key, value) in [
+            ("spanGaps", "true"),
+            ("spanGaps", "false"),
+            ("spanGaps", "null"),
+            ("stepped", "false"),
+            ("stepped", "true"),
+            ("stepped", r#""before""#),
+            ("stepped", r#""after""#),
+            ("stepped", r#""middle""#),
+            ("stepped", "null"),
+        ] {
+            let json = format!(
+                r#"{{"type":"line","data":{{"datasets":[{{"data":[1,2],"{key}":{value}}}]}}}}"#
+            );
+            assert!(
+                parse(&json, true).is_ok(),
+                "strict parser rejected {key}: {value}"
+            );
+        }
+
+        let invalid = r#"{"type":"line","data":{"datasets":[{"data":[1,2],"stepped":"left"}]}}"#;
+        assert!(parse(invalid, false).is_err());
+        assert!(parse(invalid, true).is_err());
     }
 
     #[test]

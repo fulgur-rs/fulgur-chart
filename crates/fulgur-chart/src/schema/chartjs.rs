@@ -191,9 +191,29 @@ pub struct LineDataset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tension: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub span_gaps: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stepped: Option<Stepped>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fill: Option<FillSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub point_radius: Option<f64>,
+}
+
+/// Line stepping setting: a boolean or one of Chart.js's named step modes.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum Stepped {
+    Bool(bool),
+    Mode(SteppedMode),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SteppedMode {
+    Before,
+    After,
+    Middle,
 }
 
 /// Area fill setting: `true`/`false` or a mode string (e.g. `"origin"`).
@@ -1335,13 +1355,58 @@ pub enum SankeySizeOption {
 
 #[cfg(test)]
 mod tests {
-    use super::{BarDataset, BoxplotDataset, ChartJsSpec, LineDataset, RadarOptions};
+    use super::{
+        BarDataset, BoxplotDataset, ChartJsSpec, LineDataset, RadarOptions, Stepped, SteppedMode,
+    };
 
     #[test]
     fn line_dataset_accepts_null_in_data() {
         let json = r#"{"data":[1,null,3]}"#;
         let d: LineDataset = serde_json::from_str(json).unwrap();
         assert_eq!(d.data, vec![Some(1.0), None, Some(3.0)]);
+    }
+
+    #[test]
+    fn line_dataset_accepts_span_gaps_and_typed_stepped_values() {
+        let cases = [
+            (
+                r#"{"data":[1,2],"spanGaps":true,"stepped":false}"#,
+                Some(true),
+                Stepped::Bool(false),
+            ),
+            (
+                r#"{"data":[1,2],"spanGaps":false,"stepped":true}"#,
+                Some(false),
+                Stepped::Bool(true),
+            ),
+            (
+                r#"{"data":[1,2],"stepped":"before"}"#,
+                None,
+                Stepped::Mode(SteppedMode::Before),
+            ),
+            (
+                r#"{"data":[1,2],"stepped":"after"}"#,
+                None,
+                Stepped::Mode(SteppedMode::After),
+            ),
+            (
+                r#"{"data":[1,2],"stepped":"middle"}"#,
+                None,
+                Stepped::Mode(SteppedMode::Middle),
+            ),
+        ];
+
+        for (json, span_gaps, stepped) in cases {
+            let dataset: LineDataset = serde_json::from_str(json).unwrap();
+            assert_eq!(dataset.span_gaps, span_gaps);
+            assert_eq!(dataset.stepped, Some(stepped));
+        }
+    }
+
+    #[test]
+    fn line_dataset_rejects_unknown_stepped_mode() {
+        let json = r#"{"data":[1,2],"stepped":"left"}"#;
+        assert!(serde_json::from_str::<LineDataset>(json).is_err());
     }
 
     #[test]
