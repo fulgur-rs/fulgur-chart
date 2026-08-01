@@ -728,7 +728,7 @@ mod tests {
 
     #[test]
     fn stepped_flat_pair_omits_adjacent_duplicate_vertices() {
-        for mode in ["before", "after", "middle"] {
+        for (mode, uses_middle_corners) in [("before", false), ("after", false), ("middle", true)] {
             let json = format!(
                 r#"{{"type":"line","data":{{"labels":["a","b"],
                     "datasets":[{{"data":[2, 2], "stepped":"{mode}"}}]}}}}"#
@@ -746,10 +746,10 @@ mod tests {
 
             let start = (common::line_x(&spec, &frame, 0), frame.ys.map(2.0));
             let end = (common::line_x(&spec, &frame, 1), frame.ys.map(2.0));
-            let expected = match mode {
-                "before" | "after" => vec![start, end],
-                "middle" => vec![start, ((start.0 + end.0) / 2.0, start.1), end],
-                _ => unreachable!(),
+            let expected = if uses_middle_corners {
+                vec![start, ((start.0 + end.0) / 2.0, start.1), end]
+            } else {
+                vec![start, end]
             };
             assert_eq!(
                 points, expected,
@@ -819,8 +819,7 @@ mod tests {
         );
         assert!(
             area_paths[0].starts_with(&step_edge),
-            "area must use the same step corner as the stroke: {}",
-            area_paths[0]
+            "area must use the same step corner as the stroke"
         );
     }
 
@@ -837,19 +836,33 @@ mod tests {
                 .any(|item| matches!(item, Prim::Polyline { points, .. } if points.len() == 5)),
             "a stepped line must remain a polyline"
         );
+        let is_cubic_stroke = |item: &Prim| {
+            matches!(
+                item,
+                Prim::Path {
+                    fill: None,
+                    stroke: Some(_),
+                    ..
+                }
+            )
+        };
         assert!(
-            !scene.items.iter().any(|item| {
-                matches!(
-                    item,
-                    Prim::Path {
-                        fill: None,
-                        stroke: Some(_),
-                        ..
-                    }
-                )
-            }),
+            !scene.items.iter().any(is_cubic_stroke),
             "tension must not turn a stepped line into a cubic path"
         );
+        let non_stepped_scene = scene_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+                "datasets":[{"data":[1, 2, 3], "tension": 0.8}]}}"#,
+        );
+        assert!(
+            non_stepped_scene.items.iter().any(is_cubic_stroke),
+            "non-stepped tension must retain its cubic path"
+        );
+    }
+
+    #[test]
+    fn empty_step_input_emits_no_vertices() {
+        assert_eq!(step_points(&[], StepMode::Before), Vec::new());
     }
 
     #[test]
