@@ -880,10 +880,11 @@ mod tests {
             matches!(
                 item,
                 Prim::Path {
+                    d,
                     fill: None,
                     stroke: Some(_),
                     ..
-                }
+                } if d.contains(" C ")
             )
         };
         assert!(
