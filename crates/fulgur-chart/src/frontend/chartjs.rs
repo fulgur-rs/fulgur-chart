@@ -188,9 +188,61 @@ struct RawDataset {
     fill: FillSpec,
     #[serde(default)]
     tension: f64,
+    #[serde(rename = "spanGaps", default)]
+    span_gaps: Option<serde_json::Value>,
+    #[serde(default)]
+    stepped: Option<serde_json::Value>,
     // scatter のマーカー半径。Series.point_radius へマップする。
     #[serde(rename = "pointRadius", default)]
     point_radius: Option<f64>,
+}
+
+/// Private parser counterpart of the public schema's `Stepped` contract.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawStepped {
+    Bool(bool),
+    Mode(RawSteppedMode),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RawSteppedMode {
+    Before,
+    After,
+    Middle,
+}
+
+impl RawStepped {
+    fn into_step_mode(self) -> Option<StepMode> {
+        match self {
+            Self::Bool(false) => None,
+            Self::Bool(true) | Self::Mode(RawSteppedMode::Before) => Some(StepMode::Before),
+            Self::Mode(RawSteppedMode::After) => Some(StepMode::After),
+            Self::Mode(RawSteppedMode::Middle) => Some(StepMode::Middle),
+        }
+    }
+}
+
+/// `spanGaps` / `stepped` are line-root options. Keep their raw JSON on the shared
+/// dataset so non-line roots retain their historical "ignore in non-strict mode"
+/// behavior; validate and map only for root line charts.
+fn parse_line_dataset_options(ds: &RawDataset) -> Result<(bool, Option<StepMode>), String> {
+    let span_gaps = ds
+        .span_gaps
+        .as_ref()
+        .map(|value| serde_json::from_value::<bool>(value.clone()))
+        .transpose()
+        .map_err(|e| format!("spanGaps の型が不正です: {e}"))?
+        .unwrap_or(false);
+    let step_mode = ds
+        .stepped
+        .as_ref()
+        .map(|value| serde_json::from_value::<RawStepped>(value.clone()))
+        .transpose()
+        .map_err(|e| format!("stepped の値が不正です: {e}"))?
+        .and_then(RawStepped::into_step_mode);
+    Ok((span_gaps, step_mode))
 }
 
 /// `data`: 数値配列(カテゴリ系)、ネスト配列(boxplot)、または点オブジェクト配列(scatter/bubble)。
@@ -701,6 +753,25 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .iter()
         .any(|ds| ds.background_color.is_some() || ds.border_color.is_some());
 
+    let has_line_dataset_options = raw
+        .data
+        .datasets
+        .iter()
+        .any(|ds| ds.span_gaps.is_some() || ds.stepped.is_some());
+    if raw.chart_type == "line" && !matches!(kind, ChartKind::Line) && has_line_dataset_options {
+        return Err("spanGaps and stepped are only supported for line charts".to_string());
+    }
+
+    let line_dataset_options = if raw.chart_type == "line" {
+        raw.data
+            .datasets
+            .iter()
+            .map(parse_line_dataset_options)
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        vec![(false, None); raw.data.datasets.len()]
+    };
+
     let series: Vec<Series> = raw
         .data
         .datasets
@@ -783,6 +854,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 stroke_width: ds.border_width.unwrap_or(default_border_width(series_type)),
                 area: ds.fill.is_filled(),
                 interpolation: line_interpolation(normalize_tension(ds.tension)),
+                span_gaps: line_dataset_options[i].0,
+                step_mode: line_dataset_options[i].1,
                 series_type,
                 point_radius: ds.point_radius,
                 box_points,
@@ -1100,14 +1173,28 @@ fn check_unknown_keys(
     };
 
     check_object(top, &["type", "data", "options", "width", "height"], "")?;
+    let line_root = top.get("type").and_then(|value| value.as_str()) == Some("line");
 
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
         check_object(data, &["labels", "datasets"], "data")?;
         if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
             for (i, ds) in datasets.iter().enumerate() {
                 if let Some(ds) = ds.as_object() {
-                    check_object(
-                        ds,
+                    let dataset_keys: &[&str] = if line_root {
+                        &[
+                            "label",
+                            "type",
+                            "data",
+                            "backgroundColor",
+                            "borderColor",
+                            "borderWidth",
+                            "fill",
+                            "tension",
+                            "spanGaps",
+                            "stepped",
+                            "pointRadius",
+                        ]
+                    } else {
                         &[
                             "label",
                             "type",
@@ -1118,9 +1205,9 @@ fn check_unknown_keys(
                             "fill",
                             "tension",
                             "pointRadius",
-                        ],
-                        &format!("data.datasets[{i}]"),
-                    )?;
+                        ]
+                    };
+                    check_object(ds, dataset_keys, &format!("data.datasets[{i}]"))?;
                     // scatter/bubble の点データ {x,y,r} 各オブジェクト内のキーも検査する。
                     // RawPoint は未知キーを無視するため、ここで typo(例 radius)を検出する。
                     if let Some(points) = ds.get("data").and_then(|v| v.as_array()) {
@@ -1698,6 +1785,8 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         stroke_width: 0.0,
         area: false,
         interpolation: LineInterpolation::Linear,
+        span_gaps: false,
+        step_mode: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -2041,6 +2130,8 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             stroke_width: ds.border_width.unwrap_or(0.0),
             area: false,
             interpolation: LineInterpolation::Linear,
+            span_gaps: false,
+            step_mode: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -2399,6 +2490,8 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         stroke_width: 0.0,
         area: false,
         interpolation: LineInterpolation::Linear,
+        span_gaps: false,
+        step_mode: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -2646,6 +2739,8 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         stroke_width: 0.0,
         area: false,
         interpolation: LineInterpolation::Linear,
+        span_gaps: false,
+        step_mode: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -3281,6 +3376,127 @@ mod tests {
         assert_eq!(spec.series[0].values[0], 1.0);
         assert!(spec.series[0].values[1].is_nan());
         assert_eq!(spec.series[0].values[2], 3.0);
+    }
+
+    #[test]
+    fn parse_line_maps_span_gaps_and_every_stepped_value() {
+        let cases = [
+            (true, "false", None),
+            (false, "true", Some(crate::ir::StepMode::Before)),
+            (false, r#""before""#, Some(crate::ir::StepMode::Before)),
+            (false, r#""after""#, Some(crate::ir::StepMode::After)),
+            (false, r#""middle""#, Some(crate::ir::StepMode::Middle)),
+        ];
+
+        for (span_gaps, stepped, step_mode) in cases {
+            let json = format!(
+                r#"{{"type":"line","data":{{"datasets":[{{"data":[1,null,3],"spanGaps":{span_gaps},"stepped":{stepped}}}]}}}}"#
+            );
+            let spec = parse(&json, false).unwrap();
+            assert_eq!(spec.series[0].span_gaps, span_gaps);
+            assert_eq!(spec.series[0].step_mode, step_mode);
+        }
+
+        let default = parse(
+            r#"{"type":"line","data":{"datasets":[{"data":[1,null,3]}]}}"#,
+            false,
+        )
+        .unwrap();
+        assert!(!default.series[0].span_gaps);
+    }
+
+    #[test]
+    fn strict_line_parser_and_public_schema_match_for_span_gaps_and_stepped() {
+        for (key, value) in [
+            ("spanGaps", "true"),
+            ("spanGaps", "false"),
+            ("spanGaps", "null"),
+            ("stepped", "false"),
+            ("stepped", "true"),
+            ("stepped", r#""before""#),
+            ("stepped", r#""after""#),
+            ("stepped", r#""middle""#),
+            ("stepped", "null"),
+        ] {
+            let json = format!(
+                r#"{{"type":"line","data":{{"datasets":[{{"data":[1,2],"{key}":{value}}}]}}}}"#
+            );
+            assert!(
+                serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(&json).is_ok(),
+                "public schema rejected {key}: {value}"
+            );
+            assert!(
+                parse(&json, true).is_ok(),
+                "strict parser rejected {key}: {value}"
+            );
+        }
+
+        let invalid = r#"{"type":"line","data":{"datasets":[{"data":[1,2],"stepped":"left"}]}}"#;
+        assert!(serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(invalid).is_err());
+        assert!(parse(invalid, false).is_err());
+        assert!(parse(invalid, true).is_err());
+    }
+
+    #[test]
+    fn bar_roots_ignore_line_only_options_but_strict_rejects_them() {
+        for option in [r#""stepped":"left""#, r#""spanGaps":1"#] {
+            let cases = [
+                (
+                    "bar",
+                    r#"{"type":"bar","data":{"datasets":[{"data":[3,4]}]}}"#.to_string(),
+                    format!(
+                        r#"{{"type":"bar","data":{{"datasets":[{{"data":[3,4],{option}}}]}}}}"#
+                    ),
+                ),
+                (
+                    "mixed",
+                    r#"{"type":"bar","data":{"datasets":[{"data":[3,4]},{"type":"line","data":[1,2]}]}}"#.to_string(),
+                    format!(
+                        r#"{{"type":"bar","data":{{"datasets":[{{"data":[3,4]}},{{"type":"line","data":[1,2],{option}}}]}}}}"#
+                    ),
+                ),
+            ];
+
+            for (name, absent, with_line_option) in cases {
+                assert_eq!(
+                    parse(&with_line_option, false).unwrap(),
+                    parse(&absent, false).unwrap(),
+                    "non-strict {name} root changed for {option}"
+                );
+                assert!(
+                    parse(&with_line_option, true).is_err(),
+                    "strict {name} root accepted {option}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_line_root_rejects_line_only_options() {
+        for option in [r#""spanGaps":true"#, r#""stepped":"middle""#] {
+            let json = format!(
+                r#"{{"type":"line","data":{{"datasets":[{{"data":[1,null,3],{option}}},{{"type":"bar","data":[2,3,4]}}]}}}}"#
+            );
+            for strict in [false, true] {
+                let err = parse(&json, strict).expect_err("mixed line options must be rejected");
+                assert!(err.contains("only supported"), "unexpected error: {err}");
+            }
+        }
+    }
+
+    #[test]
+    fn line_root_all_bar_override_rejects_line_only_options() {
+        for option in [r#""spanGaps":true"#, r#""stepped":"middle""#] {
+            let json = format!(
+                r#"{{"type":"line","data":{{"datasets":[{{"type":"bar","data":[1,2],{option}}},{{"type":"bar","data":[3,4]}}]}}}}"#
+            );
+
+            for strict in [false, true] {
+                let error = parse(&json, strict)
+                    .expect_err("line-only options must be rejected for all-bar overrides");
+                assert!(error.contains("only supported"), "{error}");
+            }
+        }
     }
 
     #[test]

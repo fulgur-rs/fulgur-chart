@@ -90,6 +90,14 @@ pub enum LineInterpolation {
     Monotone,
 }
 
+/// Line segment stepping direction, independent from input-schema terminology.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepMode {
+    Before,
+    After,
+    Middle,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum SizeMode {
     #[default]
@@ -110,6 +118,10 @@ pub struct Series {
     pub stroke_width: f64,
     pub area: bool, // line のとき塗りつぶすか
     pub interpolation: LineInterpolation,
+    /// Whether a line connects across missing data points.
+    pub span_gaps: bool,
+    /// Optional stepped-line mode. Layout applies it in preference to interpolation.
+    pub step_mode: Option<StepMode>,
     /// 描画種別。混合チャートでのみ意味を持つ(単一種別では未使用)。
     pub series_type: SeriesType,
     /// scatter のマーカー半径(chart.js pointRadius)。None なら既定値。
@@ -538,6 +550,8 @@ mod tests {
             stroke_width: 1.0,
             area: false,
             interpolation: LineInterpolation::Linear,
+            span_gaps: false,
+            step_mode: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -559,6 +573,8 @@ mod tests {
             stroke_width: 1.0,
             area: false,
             interpolation: LineInterpolation::Linear,
+            span_gaps: false,
+            step_mode: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -581,6 +597,8 @@ mod tests {
             stroke_width: 1.0,
             area: false,
             interpolation: LineInterpolation::Linear,
+            span_gaps: false,
+            step_mode: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],

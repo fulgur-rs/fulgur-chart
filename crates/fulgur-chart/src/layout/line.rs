@@ -1,7 +1,7 @@
 //! line / area チャート。共有フレーム(common)の上に折れ線・面・マーカーを重ねる。
 
 use super::{common, monotone::monotone_path};
-use crate::ir::ChartSpec;
+use crate::ir::{ChartSpec, StepMode};
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
@@ -9,6 +9,111 @@ use std::fmt::Write;
 
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
+
+/// 欠損を除いた点列を、元カテゴリの不連続箇所で線分へ分割する。
+/// `span_gaps` 時は不連続をまたいで 1 本の線分として扱う。
+fn segments_for_valid_points(
+    valid: &[(f64, f64, usize)],
+    span_gaps: bool,
+) -> Vec<Vec<(f64, f64, usize)>> {
+    if span_gaps {
+        return (!valid.is_empty())
+            .then(|| valid.to_vec())
+            .into_iter()
+            .collect();
+    }
+
+    let mut segments = Vec::new();
+    let mut current = Vec::new();
+    let mut previous_category = None;
+    for &(x, y, category) in valid {
+        if previous_category.is_some_and(|previous| category != previous + 1) && !current.is_empty()
+        {
+            segments.push(std::mem::take(&mut current));
+        }
+        current.push((x, y, category));
+        previous_category = Some(category);
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+    segments
+}
+
+/// 隣接する点の間に階段状の折れ点を追加する。
+fn step_capacity(point_count: usize, mode: StepMode) -> usize {
+    let intermediate_per_segment = match mode {
+        StepMode::Before | StepMode::After => 1,
+        StepMode::Middle => 2,
+    };
+    point_count.saturating_add(
+        point_count
+            .saturating_sub(1)
+            .saturating_mul(intermediate_per_segment),
+    )
+}
+
+fn step_points(
+    points: impl ExactSizeIterator<Item = (f64, f64)> + Clone,
+    mode: StepMode,
+) -> Vec<(f64, f64)> {
+    let point_count = points.len();
+    let Some(first) = points.clone().next() else {
+        return Vec::new();
+    };
+
+    let mut stepped = Vec::with_capacity(step_capacity(point_count, mode));
+    stepped.push(first);
+    let mut push_if_new = |point| {
+        if stepped.last() != Some(&point) {
+            stepped.push(point);
+        }
+    };
+    for (previous, target) in points.clone().zip(points.skip(1)) {
+        let (x0, y0) = previous;
+        let (x1, y1) = target;
+        match mode {
+            StepMode::Before => push_if_new((x1, y0)),
+            StepMode::After => push_if_new((x0, y1)),
+            StepMode::Middle => {
+                let middle_x = (x0 + x1) / 2.0;
+                push_if_new((middle_x, y0));
+                push_if_new((middle_x, y1));
+            }
+        }
+        push_if_new((x1, y1));
+    }
+    stepped
+}
+
+enum AreaPoints<'a> {
+    Borrowed(&'a [(f64, f64, usize)]),
+    Stepped(Vec<(f64, f64)>),
+}
+
+fn area_points(segment: &[(f64, f64, usize)], step_mode: Option<StepMode>) -> AreaPoints<'_> {
+    step_mode
+        .map(|step_mode| {
+            AreaPoints::Stepped(step_points(
+                segment.iter().map(|&(x, y, _)| (x, y)),
+                step_mode,
+            ))
+        })
+        .unwrap_or(AreaPoints::Borrowed(segment))
+}
+
+fn append_area_points(d: &mut String, points: impl IntoIterator<Item = (f64, f64)>) -> (f64, f64) {
+    let mut points = points.into_iter();
+    let (first_x, first_y) = points.next().expect("area segment is non-empty");
+    write!(d, "M {} {} ", fmt_num(first_x), fmt_num(first_y)).unwrap();
+
+    let mut last_x = first_x;
+    for (x, y) in points {
+        write!(d, "L {} {} ", fmt_num(x), fmt_num(y)).unwrap();
+        last_x = x;
+    }
+    (first_x, last_x)
+}
 
 /// line チャートのモデル幾何用の全マーカー点（`model::build_model` が参照）。
 /// レンダリング経路の `build()` は点を独立に計算しデシメーションするため、巨大データでは
@@ -69,22 +174,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // chart.js の spanGaps=false デフォルトと同じ「欠損で線が途切れる」挙動。
         // 間引きは cat を保持したまま各セグメントへ適用するため、cat を含めて分割する
         // （間引き後に cat で再分割すると全点が gap 扱いになり線が消えるため、再分割しない）。
-        let segments: Vec<Vec<(f64, f64, usize)>> = {
-            let mut segs: Vec<Vec<(f64, f64, usize)>> = Vec::new();
-            let mut cur: Vec<(f64, f64, usize)> = Vec::new();
-            let mut prev_cat: Option<usize> = None;
-            for &(x, y, cat) in &valid {
-                if prev_cat.is_some_and(|pc| cat != pc + 1) && !cur.is_empty() {
-                    segs.push(std::mem::take(&mut cur));
-                }
-                cur.push((x, y, cat));
-                prev_cat = Some(cat);
-            }
-            if !cur.is_empty() {
-                segs.push(cur);
-            }
-            segs
-        };
+        let segments = segments_for_valid_points(&valid, ser.span_gaps);
 
         // デシメーション判定は系列全体の点数で（gap 分割の前後で一貫）。
         // 各セグメントを個別に間引き、line はその結果から直接描く（再分割しない）。
@@ -116,12 +206,12 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     continue;
                 }
                 let mut d = String::new();
-                for (k, &(x, y, _)) in seg.iter().enumerate() {
-                    let cmd = if k == 0 { 'M' } else { 'L' };
-                    write!(d, "{} {} {} ", cmd, fmt_num(x), fmt_num(y)).unwrap();
-                }
-                let (last_x, _, _) = seg[seg.len() - 1];
-                let (first_x, _, _) = seg[0];
+                let (first_x, last_x) = match area_points(seg, ser.step_mode) {
+                    AreaPoints::Borrowed(points) => {
+                        append_area_points(&mut d, points.iter().map(|&(x, y, _)| (x, y)))
+                    }
+                    AreaPoints::Stepped(points) => append_area_points(&mut d, points),
+                };
                 write!(
                     d,
                     "L {} {} L {} {} Z",
@@ -143,6 +233,14 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // 線: セグメントごとに描く(gap で線が途切れる)。間引き済みセグメントから直接描画する。
         for seg in &segments {
             if seg.len() < 2 {
+                continue;
+            }
+            if let Some(step_mode) = ser.step_mode {
+                items.push(Prim::Polyline {
+                    points: step_points(seg.iter().map(|&(x, y, _)| (x, y)), step_mode),
+                    stroke: ser.stroke_at(0),
+                    stroke_width: ser.stroke_width,
+                });
                 continue;
             }
             let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
@@ -550,6 +648,302 @@ mod tests {
             area_paths, 2,
             "area should split into 2 polygons at the gap"
         );
+    }
+
+    #[test]
+    fn span_gaps_bridges_a_null_between_two_line_points() {
+        let without_span_gaps = scene_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[1, null, 3]}]}}"#,
+        );
+        assert!(
+            !without_span_gaps
+                .items
+                .iter()
+                .any(|item| matches!(item, Prim::Polyline { points, .. } if points.len() == 2)),
+            "the default must leave the two valid points disconnected"
+        );
+
+        let with_span_gaps = scene_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[1, null, 3], "spanGaps": true}]}}"#,
+        );
+        assert!(
+            with_span_gaps
+                .items
+                .iter()
+                .any(|item| matches!(item, Prim::Polyline { points, .. } if points.len() == 2)),
+            "spanGaps must join the two valid points"
+        );
+    }
+
+    #[test]
+    fn stepped_before_emits_horizontal_corners_before_each_next_point() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, 2, 3], "stepped":"before"}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let frame = common::compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let points = scene_for(json)
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                Prim::Polyline { points, .. } => Some(points),
+                _ => None,
+            })
+            .expect("stepped line must be a polyline");
+
+        let x0 = common::line_x(&spec, &frame, 0);
+        let x1 = common::line_x(&spec, &frame, 1);
+        let x2 = common::line_x(&spec, &frame, 2);
+        let y0 = frame.ys.map(1.0);
+        let y1 = frame.ys.map(2.0);
+        let y2 = frame.ys.map(3.0);
+        assert_eq!(
+            points,
+            vec![(x0, y0), (x1, y0), (x1, y1), (x2, y1), (x2, y2)]
+        );
+    }
+
+    #[test]
+    fn stepped_after_emits_vertical_corners_at_each_previous_point() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, 2, 3], "stepped":"after"}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let frame = common::compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let points = scene_for(json)
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                Prim::Polyline { points, .. } => Some(points),
+                _ => None,
+            })
+            .expect("stepped line must be a polyline");
+
+        let x0 = common::line_x(&spec, &frame, 0);
+        let x1 = common::line_x(&spec, &frame, 1);
+        let x2 = common::line_x(&spec, &frame, 2);
+        let y0 = frame.ys.map(1.0);
+        let y1 = frame.ys.map(2.0);
+        let y2 = frame.ys.map(3.0);
+        assert_eq!(
+            points,
+            vec![(x0, y0), (x0, y1), (x1, y1), (x1, y2), (x2, y2)]
+        );
+    }
+
+    #[test]
+    fn stepped_middle_emits_two_corners_at_each_midpoint() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, 2, 3], "stepped":"middle"}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let frame = common::compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let points = scene_for(json)
+            .items
+            .into_iter()
+            .find_map(|item| match item {
+                Prim::Polyline { points, .. } => Some(points),
+                _ => None,
+            })
+            .expect("stepped line must be a polyline");
+
+        let x0 = common::line_x(&spec, &frame, 0);
+        let x1 = common::line_x(&spec, &frame, 1);
+        let x2 = common::line_x(&spec, &frame, 2);
+        let y0 = frame.ys.map(1.0);
+        let y1 = frame.ys.map(2.0);
+        let y2 = frame.ys.map(3.0);
+        assert_eq!(
+            points,
+            vec![
+                (x0, y0),
+                ((x0 + x1) / 2.0, y0),
+                ((x0 + x1) / 2.0, y1),
+                (x1, y1),
+                ((x1 + x2) / 2.0, y1),
+                ((x1 + x2) / 2.0, y2),
+                (x2, y2),
+            ]
+        );
+    }
+
+    #[test]
+    fn stepped_flat_pair_omits_adjacent_duplicate_vertices() {
+        for (mode, uses_middle_corners) in [("before", false), ("after", false), ("middle", true)] {
+            let json = format!(
+                r#"{{"type":"line","data":{{"labels":["a","b"],
+                    "datasets":[{{"data":[2, 2], "stepped":"{mode}"}}]}}}}"#
+            );
+            let spec = chartjs::parse(&json, false).unwrap();
+            let frame = common::compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+            let points = scene_for(&json)
+                .items
+                .into_iter()
+                .find_map(|item| match item {
+                    Prim::Polyline { points, .. } => Some(points),
+                    _ => None,
+                })
+                .expect("stepped line must be a polyline");
+
+            let start = (common::line_x(&spec, &frame, 0), frame.ys.map(2.0));
+            let end = (common::line_x(&spec, &frame, 1), frame.ys.map(2.0));
+            let expected = if uses_middle_corners {
+                vec![start, ((start.0 + end.0) / 2.0, start.1), end]
+            } else {
+                vec![start, end]
+            };
+            assert_eq!(
+                points, expected,
+                "{mode} should retain the direct endpoints"
+            );
+            assert!(
+                points.windows(2).all(|pair| pair[0] != pair[1]),
+                "{mode} emitted adjacent duplicate vertices: {points:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn stepped_area_uses_step_corners_and_span_gaps_bridges_its_fill() {
+        let without_span_gaps = scene_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+                "datasets":[{"data":[1, null, 3], "fill": true, "stepped":"before"}]}}"#,
+        );
+        let default_area_count = without_span_gaps
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Prim::Path {
+                        fill: Some(_),
+                        stroke: None,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(default_area_count, 2, "default fill must split at the gap");
+
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1, null, 3], "fill": true, "spanGaps": true,
+            "stepped":"before"}]}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let frame = common::compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let area_paths: Vec<_> = scene_for(json)
+            .items
+            .into_iter()
+            .filter_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: Some(_),
+                    stroke: None,
+                    ..
+                } => Some(d),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(area_paths.len(), 1, "spanGaps fill must be one polygon");
+
+        let x0 = common::line_x(&spec, &frame, 0);
+        let x2 = common::line_x(&spec, &frame, 2);
+        let y0 = frame.ys.map(1.0);
+        let y2 = frame.ys.map(3.0);
+        let step_edge = format!(
+            "M {} {} L {} {} L {} {} ",
+            fmt_num(x0),
+            fmt_num(y0),
+            fmt_num(x2),
+            fmt_num(y0),
+            fmt_num(x2),
+            fmt_num(y2),
+        );
+        assert!(
+            area_paths[0].starts_with(&step_edge),
+            "area must use the same step corner as the stroke"
+        );
+    }
+
+    #[test]
+    fn stepped_line_ignores_nonzero_tension_and_uses_a_polyline() {
+        let scene = scene_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+                "datasets":[{"data":[1, 2, 3], "tension": 0.8, "stepped": true}]}}"#,
+        );
+        assert!(
+            scene
+                .items
+                .iter()
+                .any(|item| matches!(item, Prim::Polyline { points, .. } if points.len() == 5)),
+            "a stepped line must remain a polyline"
+        );
+        let is_cubic_stroke = |item: &Prim| {
+            matches!(
+                item,
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(_),
+                    ..
+                } if d.contains(" C ")
+            )
+        };
+        assert!(
+            !scene.items.iter().any(is_cubic_stroke),
+            "tension must not turn a stepped line into a cubic path"
+        );
+        let non_stepped_scene = scene_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+                "datasets":[{"data":[1, 2, 3], "tension": 0.8}]}}"#,
+        );
+        assert!(
+            non_stepped_scene.items.iter().any(is_cubic_stroke),
+            "non-stepped tension must retain its cubic path"
+        );
+    }
+
+    #[test]
+    fn empty_step_input_emits_no_vertices() {
+        assert_eq!(
+            step_points(std::iter::empty(), StepMode::Before),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn step_capacity_matches_mode_specific_vertex_upper_bound() {
+        assert_eq!(step_capacity(0, StepMode::Before), 0);
+        assert_eq!(step_capacity(1, StepMode::After), 1);
+        assert_eq!(step_capacity(3, StepMode::Before), 5);
+        assert_eq!(step_capacity(3, StepMode::After), 5);
+        assert_eq!(step_capacity(3, StepMode::Middle), 7);
+    }
+
+    #[test]
+    fn step_before_and_after_match_chartjs_without_copying_segment_coordinates() {
+        let segment = [(1.0, 2.0, 0), (3.0, 4.0, 1)];
+
+        assert_eq!(
+            step_points(segment.iter().map(|&(x, y, _)| (x, y)), StepMode::Before),
+            vec![(1.0, 2.0), (3.0, 2.0), (3.0, 4.0)]
+        );
+        assert_eq!(
+            step_points(segment.iter().map(|&(x, y, _)| (x, y)), StepMode::After),
+            vec![(1.0, 2.0), (1.0, 4.0), (3.0, 4.0)]
+        );
+    }
+
+    #[test]
+    fn area_points_borrow_unstepped_segments() {
+        let segment = [(1.0, 2.0, 0), (3.0, 4.0, 1)];
+
+        match area_points(&segment, None) {
+            AreaPoints::Borrowed(points) => assert_eq!(points.as_ptr(), segment.as_ptr()),
+            AreaPoints::Stepped(_) => panic!("unstepped area points must not be copied"),
+        }
+        assert!(matches!(
+            area_points(&segment, Some(StepMode::Middle)),
+            AreaPoints::Stepped(_)
+        ));
     }
 
     #[test]
