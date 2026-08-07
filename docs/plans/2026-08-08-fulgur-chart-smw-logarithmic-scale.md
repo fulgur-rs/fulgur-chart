@@ -1308,7 +1308,7 @@ cargo build 2>&1 | tail -20
 
 ## Task 実行順序の依存関係
 
-```
+```text
 Task 0 (npm install)
 Task 1 (ScaleKind追加) → Task 2 (ValueScale導入・golden無変化確認)
 Task 3 (schema type追加)
