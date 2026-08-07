@@ -1,8 +1,8 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
 use crate::ir::{
-    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, RadialAxis, SizeMode,
-    XPositions,
+    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, RadialAxis, ScaleKind,
+    SizeMode, XPositions,
 };
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, ValueScale, nice_ticks, vega_nice_ticks};
@@ -239,6 +239,9 @@ pub(crate) fn temporal_plot_right_legend_title(spec: &ChartSpec) -> Option<&str>
 /// 値ドメイン(begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
 /// 縦棒(compute)と横棒(build_horizontal)が同一の値域計算を共有する。
 pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
+    if axis.scale_kind == ScaleKind::Logarithmic {
+        return log_value_domain(spec, axis);
+    }
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
     if matches!(
@@ -340,6 +343,97 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     // 上限>下限を保証（縮退時の保険）。
     if domain_max <= domain_min {
         domain_max = domain_min + 1.0;
+    }
+    (domain_min, domain_max)
+}
+
+/// 対数軸専用のドメイン計算。線形版(上の `value_domain` 本体)と異なる点:
+/// `begin_at_zero` は無視、0 は最小正値の1桁下に置換してドメインへ含め、負値
+/// (`frontend/chartjs.rs` で既に NaN 化済みのはず)は通常の有限値フィルタで自然に
+/// 除外される。`suggested_min`/`suggested_max` は正の値のみ尊重する。
+///
+/// 未対応(スコープ外、Task 11 実装者向けメモ): `value_domain` 本体は
+/// `ChartKind::Bar { value_stacked: true, .. }` をカテゴリごとの正負サム(スタック高さ)
+/// として特別扱いするが、この対数版はそれを行わず、全系列の値をフラットに
+/// min/max するだけ。積み上げ棒 + 対数軸の組み合わせは現状 `frontend/chartjs.rs`
+/// 側でも弾かれておらず(`ChartKind::Bar { horizontal: false, .. }` は
+/// `value_stacked` の真偽を問わず対数軸を許可する)、そのまま Task 11 のピクセル
+/// マッピングまで届くとスタック高さではなく個々の値でドメインが決まり、
+/// バーがプロット領域からはみ出しうる。対数スケール上でのスタック合成の意味論
+/// (chart.js 実機がどう扱うか)は未調査のため、ここで独自に決め打ちしない。
+fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
+    let mut min_positive = f64::INFINITY;
+    let mut max_positive = f64::NEG_INFINITY;
+    let mut has_zero = false;
+    for s in &spec.series {
+        for &v in &s.values {
+            if !v.is_finite() {
+                continue;
+            }
+            if v == 0.0 {
+                has_zero = true;
+                continue;
+            }
+            if v > 0.0 {
+                if v < min_positive {
+                    min_positive = v;
+                }
+                if v > max_positive {
+                    max_positive = v;
+                }
+            }
+            // v < 0.0 はここに来ないはず(parse 時に NaN 化済み)が、念のため無視する。
+        }
+    }
+
+    if !min_positive.is_finite() || !max_positive.is_finite() {
+        // 正データが1つもない(空 / 0 のみ / 負のみ)。既定の 1..10 にフォールバック。
+        return (1.0, 10.0);
+    }
+
+    let mut domain_min = if has_zero {
+        let decade_below = min_positive / 10.0;
+        // min_positive が非正規化数(subnormal)近傍だと ÷10 が 0.0 へアンダーフローし、
+        // 「対数ドメインの下端は正」という不変条件を壊しうる。その場合は1桁下げず
+        // min_positive をそのまま使う(実用上あり得ない極小データだが、パニックにも
+        // 0 除算的な誤ったドメインにもしないための防御)。
+        if decade_below.is_finite() && decade_below > 0.0 {
+            decade_below
+        } else {
+            min_positive
+        }
+    } else {
+        min_positive
+    };
+    let mut domain_max = max_positive;
+
+    if let Some(s) = axis.suggested_min
+        && s.is_finite()
+        && s > 0.0
+        && s < domain_min
+    {
+        domain_min = s;
+    }
+    if let Some(s) = axis.suggested_max
+        && s.is_finite()
+        && s > 0.0
+        && s > domain_max
+    {
+        domain_max = s;
+    }
+    if domain_max <= domain_min {
+        // domain_min が f64::MAX 近傍(> f64::MAX/10)だと ×10 が +inf へオーバーフロー
+        // しうる。線形版の `domain_min + 1.0` と違い ×10 は極端な入力で非有限に
+        // なりうるため、その場合は f64::MAX へ丸める(f64::MAX は常に有限かつ
+        // domain_min より大きい: この分岐に入る時点で domain_min <= f64::MAX/10 の
+        // 反例、つまり domain_min < f64::MAX だから)。呼び出し側の log_ticks は
+        // どのみち decade 境界へ丸めるので、×10 と f64::MAX の違いは観測されない。
+        let expanded = domain_min * 10.0;
+        domain_max = if expanded.is_finite() {
+            expanded
+        } else {
+            f64::MAX
+        };
     }
     (domain_min, domain_max)
 }
@@ -1672,6 +1766,82 @@ mod tests {
             min <= 0.0,
             "suggested_min=50 はデータの下端(0.0)を縮小してはいけない: 実際 min={min}"
         );
+    }
+
+    #[test]
+    fn log_value_domain_uses_min_positive_and_max() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![5.0, 50.0, 500.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(min, 5.0);
+        assert_eq!(max, 500.0);
+    }
+
+    #[test]
+    fn log_value_domain_substitutes_zero_with_decade_below_min_positive() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0, 30.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(min, 3.0); // 30 の1桁下
+        assert_eq!(max, 30.0);
+    }
+
+    #[test]
+    fn log_value_domain_ignores_begin_at_zero() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = true;
+        spec.series[0].values = vec![40.0, 80.0];
+        let (min, _max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(min, 40.0); // begin_at_zero=true でも 0 を含めない
+    }
+
+    #[test]
+    fn log_value_domain_ignores_non_positive_suggested_bounds() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.suggested_min = Some(-10.0);
+        spec.y_axis.suggested_max = Some(0.0);
+        spec.series[0].values = vec![10.0, 20.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(min, 10.0);
+        assert_eq!(max, 20.0);
+    }
+
+    #[test]
+    fn log_value_domain_falls_back_when_all_non_positive() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0, f64::NAN]; // NaN は既にネガティブマスク済み想定
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (1.0, 10.0));
+    }
+
+    #[test]
+    fn log_value_domain_degenerate_domain_near_f64_max_stays_finite() {
+        // domain_min == domain_max == 5e307 (> f64::MAX/10) だと、線形版の
+        // `+1.0` に相当する縮退補正が単純な ×10 だと +inf にオーバーフローする。
+        // 有限のまま広がることを固定する回帰テスト。
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![5e307, 5e307];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(min, 5e307);
+        assert!(max.is_finite(), "max should stay finite, got {max}");
+        assert!(max > min, "max={max} should exceed min={min}");
+    }
+
+    #[test]
+    fn log_value_domain_zero_substitution_never_produces_non_positive_min() {
+        // min_positive が最小の非正規化数(subnormal)近傍だと ÷10 が 0.0 へ
+        // アンダーフローしうる。ドメイン下端は常に正であるべき。
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0, 5e-324];
+        let (min, _max) = value_domain(&spec, &spec.y_axis);
+        assert!(min > 0.0, "min should stay positive, got {min}");
     }
 
     #[test]
