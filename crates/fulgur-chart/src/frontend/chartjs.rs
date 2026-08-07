@@ -969,6 +969,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             offset: x_offset,
             grid: axis_grid_from(x_opts.and_then(|a| a.grid.as_ref())),
             border: axis_border_from(x_opts.and_then(|a| a.border.as_ref())),
+            scale_kind: ScaleKind::Linear,
         },
         y_axis: AxisSpec {
             title: axis_title_from(y_opts.and_then(|a| a.title.as_ref())),
@@ -980,6 +981,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             offset: y_offset,
             grid: axis_grid_from(y_opts.and_then(|a| a.grid.as_ref())),
             border: axis_border_from(y_opts.and_then(|a| a.border.as_ref())),
+            scale_kind: ScaleKind::Linear,
         },
         legend: legend_pos(&raw.options.plugins.legend),
         legend_title: None,
@@ -1774,6 +1776,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
             ..Default::default()
         },
         border: AxisBorder::default(),
+        scale_kind: ScaleKind::Linear,
     };
 
     let series = vec![Series {
@@ -2158,6 +2161,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
                 ..Default::default()
             },
             border: AxisBorder::default(),
+            scale_kind: ScaleKind::Linear,
         },
         y_axis: AxisSpec {
             title: None,
@@ -2172,6 +2176,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
                 ..Default::default()
             },
             border: AxisBorder::default(),
+            scale_kind: ScaleKind::Linear,
         },
         legend: legend_pos(&raw.options.plugins.legend),
         legend_title: None,
@@ -2787,6 +2792,7 @@ fn zero_axis() -> AxisSpec {
             display: false,
             ..Default::default()
         },
+        scale_kind: ScaleKind::Linear,
     }
 }
 

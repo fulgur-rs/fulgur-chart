@@ -227,6 +227,15 @@ impl Default for AxisBorder {
     }
 }
 
+/// cartesian 軸のスケール種別。カテゴリ軸(chart種別で暗黙決定)には適用しない。
+/// 数値軸(value axis)のみが Linear/Logarithmic を切り替える。
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub enum ScaleKind {
+    #[default]
+    Linear,
+    Logarithmic,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AxisSpec {
     pub title: Option<AxisTitle>,
@@ -241,6 +250,9 @@ pub struct AxisSpec {
     pub offset: bool,
     pub grid: AxisGrid,
     pub border: AxisBorder,
+    /// 数値軸の目盛スケール種別。カテゴリ軸(XPositions::Category が支配する軸)では
+    /// 意味を持たないが、AxisSpec は x/y 共通型のため常に存在する。
+    pub scale_kind: ScaleKind,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -705,6 +717,7 @@ mod radial_axis_tests {
                 offset: false,
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
+                scale_kind: ScaleKind::Linear,
             },
             y_axis: AxisSpec {
                 title: None,
@@ -716,6 +729,7 @@ mod radial_axis_tests {
                 offset: false,
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
+                scale_kind: ScaleKind::Linear,
             },
             legend: LegendPos::None,
             legend_title: None,
