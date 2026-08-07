@@ -233,6 +233,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                         Anchor::Middle,
                         LABEL_COLOR,
                         v,
+                        false, // polarArea の動径軸は log 対応スコープ外(radial axis)
                     ));
                 }
             }

@@ -292,6 +292,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
     );
     let stacked = placement_stacked && value_stacked;
+    let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     for b in vertical_bar_boxes(spec, &frame) {
         let ser = &spec.series[b.series];
         items.push(Prim::Rect {
@@ -318,6 +319,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 Anchor::Middle,
                 ink,
                 b.value,
+                is_log,
             ));
         } else {
             // 正は上端の少し上(- LABEL_GAP)、負は下端の下にラベル。負側は
@@ -336,6 +338,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 Anchor::Middle,
                 ink,
                 b.value,
+                is_log,
             ));
         }
     }
@@ -667,7 +670,15 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     // log10 が非アフィンなためピクセル中点とズレる(線形軸ではアフィン
                     // 写像なので数学的に一致するが、対数軸では誤った位置になる)。
                     let mid_x = (x0 + x1) / 2.0;
-                    items.push(value_label(mid_x, cy, label_font, Anchor::Middle, ink, v));
+                    items.push(value_label(
+                        mid_x,
+                        cy,
+                        label_font,
+                        Anchor::Middle,
+                        ink,
+                        v,
+                        is_log,
+                    ));
                 }
             }
         } else if placement_stacked {
@@ -698,7 +709,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     } else {
                         (vx - LABEL_GAP, Anchor::End)
                     };
-                    items.push(value_label(cx, cy, label_font, anchor, ink, v));
+                    items.push(value_label(cx, cy, label_font, anchor, ink, v, is_log));
                 }
             }
         } else {
@@ -730,7 +741,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     } else {
                         (vx - LABEL_GAP, Anchor::End)
                     };
-                    items.push(value_label(lx, cy, label_font, anchor, ink, v));
+                    items.push(value_label(lx, cy, label_font, anchor, ink, v, is_log));
                 }
             }
         }
@@ -1990,6 +2001,41 @@ mod horizontal_log_scale_tests {
         assert!(
             (label_x - pixel_mid).abs() < 0.5,
             "label x={label_x} should match pixel-space segment midpoint={pixel_mid}"
+        );
+    }
+
+    /// 実機バグ回帰テスト: データラベルは `common::value_label` を経由するが、
+    /// 対数軸フラグを渡していなかったため常に `fmt_num`(小数2桁丸め)で
+    /// フォーマットされ、0.0003 のような対数軸上の正当な小さい値が "0" という
+    /// 誤ったラベルになっていた(PR #144 の自動レビューで指摘)。
+    #[test]
+    fn data_label_uses_fmt_num_log_precision_on_horizontal_log_axis() {
+        let json = r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[0.0003]}]},
+            "options":{"indexAxis":"y",
+                "scales":{"x":{"type":"logarithmic"}},
+                "plugins":{"datalabels":{"display":true}}}}"#;
+        let spec = parse(json);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+
+        // 横棒(dodge, 非stacked)のデータラベルは正値なら Anchor::Start(bar.rs の
+        // `if v >= base_v { (vx + LABEL_GAP, Anchor::Start) }` 参照)。軸目盛ラベルは
+        // Anchor::Middle/End なので、値そのもので判定すれば十分区別できる。
+        let has_full_precision_label = scene
+            .items
+            .iter()
+            .any(|p| matches!(p, Prim::Text { content, .. } if content == &fmt_num_log(0.0003)));
+        assert!(
+            has_full_precision_label,
+            "対数軸のデータラベルは fmt_num_log の全桁表現(\"0.0003\")を使うべき、\
+             fmt_num(丸めで \"0\")ではない"
+        );
+        assert!(
+            !scene
+                .items
+                .iter()
+                .any(|p| matches!(p, Prim::Text { content, .. } if content == "0")),
+            "0.0003 のデータラベルが \"0\" に丸められて描画されてはならない"
         );
     }
 
