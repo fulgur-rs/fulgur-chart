@@ -355,9 +355,13 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 }
 
 /// 対数軸専用のドメイン計算。線形版(上の `value_domain` 本体)と異なる点:
-/// `begin_at_zero` は無視、0 は最小正値の1桁下に置換してドメインへ含め、負値
-/// (`frontend/chartjs.rs` で既に NaN 化済みのはず)は通常の有限値フィルタで自然に
-/// 除外される。`suggested_min`/`suggested_max` は正の値のみ尊重する。
+/// `begin_at_zero` は「0 をドメインに含める」という線形の意味では効かない(0 は
+/// 対数軸に存在しえない)が、chart.js 実機で確認した通り「最小正値がちょうど
+/// decade 境界(10^n)のとき、その値のバー/点が軸の床と重なって高さ0になる」のを
+/// 避けるため、その1ケースに限り domain_min をさらに1桁下げる効果を持つ
+/// (`is_exact_decade_boundary` 参照)。0 は最小正値の1桁下に置換してドメインへ含め、
+/// 負値(`frontend/chartjs.rs` で既に NaN 化済みのはず)は通常の有限値フィルタで
+/// 自然に除外される。`suggested_min`/`suggested_max` は正の値のみ尊重する。
 ///
 /// 未対応(スコープ外、Task 11 実装者向けメモ): `value_domain` 本体は
 /// `ChartKind::Bar { value_stacked: true, .. }` をカテゴリごとの正負サム(スタック高さ)
@@ -369,6 +373,18 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 /// バーがプロット領域からはみ出しうる(fulgur-chart-bap)。対数スケール上での
 /// スタック合成の意味論(chart.js 実機がどう扱うか)は未調査のため、ここで
 /// 独自に決め打ちしない。
+///
+/// `v` が(丸め誤差を許容して)ちょうど 10 の整数乗かどうかを判定する。
+/// `log_value_domain` の beginAtZero 特例(このコメントの直上、関数doc参照)でのみ
+/// 使う。
+fn is_exact_decade_boundary(v: f64) -> bool {
+    if !v.is_finite() || v <= 0.0 {
+        return false;
+    }
+    let exp = v.log10().round();
+    (10f64.powf(exp) - v).abs() < v * 1e-9
+}
+
 fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut min_positive = f64::INFINITY;
     let mut max_positive = f64::NEG_INFINITY;
@@ -411,17 +427,33 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
             .unwrap_or(10.0);
         (lo, if hi > lo { hi } else { lo * 10.0 })
     } else {
-        let domain_min = if has_zero {
-            let decade_below = min_positive / 10.0;
-            // min_positive が非正規化数(subnormal)近傍だと ÷10 が 0.0 へアンダーフローし、
-            // 「対数ドメインの下端は正」という不変条件を壊しうる。その場合は1桁下げず
-            // min_positive をそのまま使う(実用上あり得ない極小データだが、パニックにも
-            // 0 除算的な誤ったドメインにもしないための防御)。
-            if decade_below.is_finite() && decade_below > 0.0 {
-                decade_below
+        // min_positive を1桁下げる(min_positive/10)、ただし非正規化数(subnormal)
+        // 近傍で 0.0 へアンダーフローする場合は下げず min_positive のまま使う
+        // (「対数ドメインの下端は正」という不変条件の防御。実用上あり得ない極小
+        // データだが、パニックにも 0 除算的な誤ったドメインにもしないため)。
+        let decade_below = || {
+            let d = min_positive / 10.0;
+            if d.is_finite() && d > 0.0 {
+                d
             } else {
                 min_positive
             }
+        };
+        let domain_min = if has_zero {
+            // データに 0 が含まれる場合は begin_at_zero の値によらず常に1桁下げる
+            // (chart.js 実測で確認済み: beginAtZero:false でも 0 混在データの min は
+            // 変わらない)。
+            decade_below()
+        } else if axis.begin_at_zero && is_exact_decade_boundary(min_positive) {
+            // beginAtZero:true かつ最小正値がちょうど 10^n(decade境界そのもの)の
+            // ときだけ、さらに1桁下げる。理由: log_ticks の decade 丸めは通常
+            // min_positive を上回らない直近の 10^n に丸めるため、min_positive 自体が
+            // 10^n ならドメイン下端(=軸の描画上の床)と最小値が完全一致し、その
+            // バー/点の高さが 0 になって消えてしまう(実機で再現・確認済み)。
+            // min_positive が decade 境界ちょうどでなければ(例: 5, 11)、通常の
+            // decade 丸めで既に隙間ができるため何もしない(これも実測で確認済み:
+            // [5,100]/[11,100] は beginAtZero の有無で結果が変わらない)。
+            decade_below()
         } else {
             min_positive
         };
@@ -1903,13 +1935,43 @@ mod tests {
     }
 
     #[test]
-    fn log_value_domain_ignores_begin_at_zero() {
+    fn log_value_domain_ignores_begin_at_zero_when_min_is_not_a_decade_boundary() {
+        // begin_at_zero=true でも 0 は含めない(対数軸に存在しえないため)。
+        // さらに、最小正値(40.0)がちょうど 10^n(decade境界)でない場合は、
+        // beginAtZero によるドメイン下端の追加の1桁下げも起きない
+        // (is_exact_decade_boundary 特例、chart.js 実測: [5,100]/[11,100] 等)。
         let mut spec = make_bar_spec(1, 600.0);
         spec.y_axis.scale_kind = ScaleKind::Logarithmic;
         spec.y_axis.begin_at_zero = true;
         spec.series[0].values = vec![40.0, 80.0];
         let (min, _max) = value_domain(&spec, &spec.y_axis);
-        assert_eq!(min, 40.0); // begin_at_zero=true でも 0 を含めない
+        assert_eq!(min, 40.0);
+    }
+
+    /// 実機バグ回帰テスト: beginAtZero:true(縦棒の既定)かつ最小正値がちょうど
+    /// decade 境界(10^n)のとき、そのままだとドメイン下端(=軸の描画上の床)と
+    /// 最小値が完全一致し、そのバーの高さが 0 になって消えてしまう(実機
+    /// レンダリングで再現・確認済み)。chart.js 実測(tools/ で node chart.js
+    /// 実行して確認: [10,100] beginAtZero:true → min=1)に合わせ、この場合のみ
+    /// さらに1桁下げる。PR #144 の自動レビュー(P1)で指摘。
+    #[test]
+    fn log_value_domain_begin_at_zero_widens_by_one_decade_when_min_is_exact_boundary() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = true;
+        spec.series[0].values = vec![10.0, 100.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (1.0, 100.0));
+    }
+
+    #[test]
+    fn log_value_domain_begin_at_zero_false_does_not_widen_exact_boundary() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = false;
+        spec.series[0].values = vec![10.0, 100.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (10.0, 100.0));
     }
 
     #[test]
@@ -1920,7 +1982,11 @@ mod tests {
         spec.y_axis.suggested_max = Some(0.0);
         spec.series[0].values = vec![10.0, 20.0];
         let (min, max) = value_domain(&spec, &spec.y_axis);
-        assert_eq!(min, 10.0);
+        // make_bar_spec の y_axis は begin_at_zero:true(縦棒の既定)で、最小正値 10.0 は
+        // ちょうど decade 境界(10^1)なので、beginAtZero 特例で1桁下がって 1.0 になる
+        // (chart.js 実測: [10,100] beginAtZero:true → min=1、下記コメント参照)。
+        // 非正の suggested_min/suggested_max(-10/0)が無視されている点は変わらず検証できる。
+        assert_eq!(min, 1.0);
         assert_eq!(max, 20.0);
     }
 
@@ -2212,7 +2278,11 @@ mod tests {
         // 左マージンからはみ出してクリップされる。fmt_num と fmt_num_log で
         // 結果が分岐する値を使わない限り、この Step 4 の分岐は誤って fmt_num の
         // ままでもテストが通ってしまう(実際に一度そのバグを作って確認済み)。
-        let spec = log_spec(vec![0.0001, 1.0], 600.0);
+        let mut spec = log_spec(vec![0.0001, 1.0], 600.0);
+        // beginAtZero:false を明示: 最小値 0.0001 はちょうど decade 境界(10^-4)なので、
+        // 既定の beginAtZero:true のままだとドメインが1桁広がり(0.00001 まで)、
+        // このテストの主眼(ラベル幅計算)から逸れる余分な major tick が増えてしまう。
+        spec.y_axis.begin_at_zero = false;
         let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
         let frame = compute(&spec, &m);
 
