@@ -70,17 +70,49 @@ console.log(JSON.stringify(results, null, 2));
 // 決まり、scale.getLabelForValue(value) は数値の書式化のみを行い可視性は
 // 反映しない (実測で確認済み。docs/plans/2026-08-08-...md の
 // 「Task 6 実測結果」参照)。記憶に頼らずここで実測する。
-
+//
+// IMPORTANT (post-hoc correction, see "Task 6 実測結果" section replacement in
+// the plan doc): `scale.ticks` as read *after* `new Chart(...)` returns is
+// POST-autoSkip -- Chart.js's `Scale.update()` (dist/chart.js:3905-3950) runs
+// `this.ticks = this.buildTicks()` (pure domain math, canvas-size-independent),
+// fires `afterBuildTicks()`, THEN (if `tickOpts.autoSkip`, which defaults to
+// true) reassigns `this.ticks = autoSkip(this, this.ticks)` -- a NEW, thinned
+// array sized for the 800x400 canvas and font metrics. Reading `scale.ticks`
+// post-construction silently captures this canvas-size-dependent thinned
+// array, not `generateTicks()`'s true output. We instead hook
+// `options.scales.y.afterBuildTicks(scale)` (a scale-level callback fired at
+// dist/chart.js:3934, BEFORE the autoSkip reassignment at :3942) and capture
+// a *reference* to `scale.ticks` there. Because `autoSkip()` returns a new
+// array rather than mutating the existing one in place, our captured
+// reference keeps pointing at the full pre-skip array even after the chart
+// finishes updating. `tick.label` is still populated on these captured tick
+// objects: `_convertTicksToLabels()` (dist/chart.js:3936) runs immediately
+// after `afterBuildTicks()` and mutates each tick object's `.label` field
+// in place (dist/chart.js:4028-4039), so by the time we read the array after
+// `new Chart()` returns, labels are already set on our pre-skip reference.
 async function getLogTicks(label, data, yOpts = {}) {
   const canvas = createCanvas(800, 400);
   const ctx = canvas.getContext('2d');
 
+  let preSkipTicks = null;
   const chart = new Chart(ctx, {
     type: 'bar',
     data: { labels: data.map((_, i) => `x${i}`), datasets: [{ data }] },
     options: {
       animation: false,
-      scales: { y: { type: 'logarithmic', ...yOpts } },
+      scales: {
+        y: {
+          type: 'logarithmic',
+          ...yOpts,
+          afterBuildTicks(scale) {
+            // Fires right after generateTicks() populates scale.ticks, and
+            // before autoSkip() thins it down for the canvas. Keep a
+            // reference (not a copy) -- tick.label gets filled in on these
+            // same objects a few lines later in Scale.update().
+            preSkipTicks = scale.ticks;
+          },
+        },
+      },
     },
   });
 
@@ -91,6 +123,10 @@ async function getLogTicks(label, data, yOpts = {}) {
     yOpts,
     min: scale.min,
     max: scale.max,
+    // Pre/post autoSkip counts, kept side by side so the divergence (the
+    // whole point of this rework) is visible directly in the JSON output.
+    preSkipTickCount: preSkipTicks.length,
+    postSkipTickCount: scale.ticks.length,
     // NOTE: `scale.getLabelForValue(value)` only formats a value (thousands
     // separators, decimals) -- it does NOT decide whether a tick's label is
     // actually rendered. The real rendered text is `tick.label`, which is
@@ -103,8 +139,10 @@ async function getLogTicks(label, data, yOpts = {}) {
     // `significand` is a counter produced by `generateTicks()`
     // (dist/chart.js:10412-10448) and is NOT simply the mantissa digit for
     // ticks after the first decade -- see the doc section for the [3,7] case.
-    // We capture both accessors here so the discrepancy is on record.
-    ticks: scale.ticks.map((t, i) => ({
+    // We capture the PRE-skip array here (see comment above getLogTicks);
+    // `index`/`ticks.length` in the visibility formula above therefore refer
+    // to this pre-skip array's own index/length, not the post-skip one.
+    ticks: preSkipTicks.map((t) => ({
       value: t.value,
       major: !!t.major,
       significand: t.significand,

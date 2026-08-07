@@ -543,42 +543,48 @@ git commit -m "test(tools): extend chartjs_ticks.mjs with logarithmic scale refe
 
 ---
 
-### Task 7: Task 6 の実測値で `log_ticks` のラベル可視性ルールを確定・ピン留め
+### Task 7: `log_ticks` の構造不変条件テストを追加(chart.js tick-for-tick / ラベル可視性のピン留めはスコープ外)
+
+**スコープ決定(Task 6 実測結果を受けてユーザー承認済み。詳細は「Task 6 実測結果」節末尾を参照):** 当初案は Task 6 の実測値を使って `log_ticks` の出力(tick 値集合)とラベル可視性ルールの両方を chart.js に一致させる(A)/(B)の2択だったが、pre-skip 実測により chart.js の `generateTicks()` は decade+mantissa(2..9) よりも実質的に複雑であることが判明した(「単一 decade ドメインでは 1.1 刻みまで細分化する」「複数 decade ドメインでは最下位 decade を除く各 decade に mantissa=1.5 の追加 tick が入る」など)。ユーザーはこの複雑さを踏まえ、v1 では `log_ticks` を現状の「decade 境界 + mantissa 2..9」という単純な構造のまま維持し、chart.js とのラベル可視性ルール・tick 値のピン留めは行わないことを決定した。したがって本タスクは(A)/(B)のどちらでもなく、**`log_ticks` の構造的不変条件(chart.js の実装詳細に依存しない、`log_ticks` 自身の契約)を検証するテストを追加する**タスクに置き換わる。
 
 **Files:**
-- Modify: `crates/fulgur-chart/src/scale.rs`
+- Modify: `crates/fulgur-chart/src/scale.rs`(テストモジュールのみ。`log_ticks` 本体の実装は変更しない)
 
-**Step 1:** Task 6 の実測結果を見て、以下のいずれかを選ぶ(実測前に断定しない):
+**Step 1: 現状のテストカバレッジを確認する**
 
-- **(A) major(10^n)のみラベル表示** だった場合: `LogTicks.major`(ラベルあり)/`minor`(ラベルなし)の現状の2分割で十分。Task 5 の実装のまま。
-- **(B) mantissa 1/2/5 もラベル表示** だった場合: `LogTicks` に3値目のラベル可視性が必要。`minor: Vec<f64>` を `minor_labeled: Vec<f64>` と `minor_unlabeled: Vec<f64>` に分けるか、`pub struct LogTick { value: f64, major: bool, labeled: bool }` の `Vec<LogTick>` に構造を変える。**この場合は Task 5 のコードと本ドキュメントの `LogTicks` 定義を実測に合わせて改訂すること(TDD: 実測 → 失敗するテスト → 実装修正)。**
+Task 5 はコミット済みで、`scale.rs` のドキュメントコメント(`log_ticks` 直上、および `LogTicks` 直上)がすでに次の不変条件を明文化している:
+- `major`・`minor` はともに昇順ソート済み。
+- `min == major[0]`、`max == major[major.len() - 1]`(どちらも 10 の整数乗)。
+- `minor` は最上位 decade の mantissa 倍数を含まない。
 
-**Step 2: 実測値をハードコードした `chartjs_compat_log_*` テストを追加(`nice_ticks` の `chartjs_compat_*` と同じパターン)**
+実装時点で `crates/fulgur-chart/src/scale.rs` に存在するテスト(`grep -n "fn log_ticks_" crates/fulgur-chart/src/scale.rs` で確認すること。以下は本タスク着手時点の内容なので、実装前に必ず再確認する):
+- `log_ticks_single_decade` — `log_ticks(3.0, 7.0)` の厳密な値一致(`major`/`minor` の具体値)。
+- `log_ticks_multi_decade` — `log_ticks(30.0, 4000.0)` の `major` 厳密一致 + `minor` の一部を `contains` で確認。
+- `log_ticks_rejects_non_positive_domain_does_not_panic` — 極小ドメインでの有限性のみ。
+- `log_ticks_non_positive_min_still_brackets_domain` — `data_min` が 0/負/NaN のときのフォールバック後、`min>0`・`max>=data_max` を確認(ドメインブラケティングの一部)。
+- `log_ticks_extreme_domain_stays_finite` — `1.5e308..1.7e308` での有限性のみ。
 
-```rust
-// chart.js v4 logarithmic scale の実出力に対するピンテスト。
-// 期待値は tools/chartjs_ticks.mjs (log ケース)の実行結果で確定。
-// 再生成: cd tools && node chartjs_ticks.mjs 2> /tmp/log.json
+これらは「特定の2ケースでの厳密値」と「エッジケースでの有限性」はカバーしているが、**任意の(複数の)"普通の" ドメインに対する昇順性・major が厳密に10の整数乗であること・minor が最上位decadeを含まないこと・(エッジケースを除いた)ドメインブラケティング**を汎用的な性質(property)として検証するテストは無い。本タスクはこのギャップを埋める、比較的小さい追加パスになる見込み(既存実装を大きく書き換える想定ではない)。
 
-#[test]
-fn chartjs_compat_log_single_decade() {
-    // chart.js: data=[3,7] → (Task 6 の実測値で埋める)
-    let t = log_ticks(3.0, 7.0);
-    // assert_eq!(t.min, ...); assert_eq!(t.max, ...); ...
-}
-```
-(具体的な assert は Task 6 の実測結果が出るまでプレースホルダ。実測後に埋める。)
+**Step 2: 構造不変条件テストを追加する**
+
+以下の4つの不変条件を、複数のドメイン(`(3.0, 7.0)`、`(30.0, 4000.0)`、`(0.003, 0.7)`、`(1.0, 1_000_000.0)`、`(1.0, 1000.0)` など、`tools/chartjs_ticks.mjs` の log ケースに対応する「普通の」ドメインでよい)に対して検証する:
+
+1. **ドメインブラケティング:** `ticks.min <= data_min` かつ `ticks.max >= data_max`(ドメイン span が `MAX_LOG_DECADES` に収まる「妥当な」ドメインの場合。極端なドメインでの例外は `scale.rs` の `log_ticks` doc コメントにすでに明記されているので、その注釈済みの例外ケースまで壊す必要はない)。
+2. **昇順性:** `major` と `minor` それぞれが厳密に昇順(`windows(2).all(|w| w[0] < w[1])` 等)。
+3. **major は厳密に10の整数乗:** `major` の各要素 `v` について `v == 10f64.powi(v.log10().round() as i32)`(丸め誤差を許容する場合は妥当な epsilon 比較でもよい)。
+4. **minor は最上位 decade を含まない:** `minor` の全要素が `major.last()` 未満。
 
 **Step 3: テスト実行**
 ```bash
-cargo test -p fulgur-chart chartjs_compat_log 2>&1 | tail -30
+cargo test -p fulgur-chart log_ticks 2>&1 | tail -30
 ```
-Expected: PASS(実装が実測と食い違えば `log_ticks` を修正して再度合わせる)。
+Expected: 新規テスト PASS、既存5テストも regression なし。`log_ticks` の実装(decade+mantissa 2..9 の単純構造)はこれらの不変条件をそもそも満たすように書かれているため、実装修正は基本的に不要のはず。もし不変条件テストが落ちたら、それは `log_ticks` 自体のバグなので実装側を直す。
 
 **Step 4: Commit**
 ```bash
 git add crates/fulgur-chart/src/scale.rs
-git commit -m "test(scale): pin log_ticks label-visibility rule to chart.js observed output"
+git commit -m "test(scale): pin log_ticks structural invariants (bracketing, ascending order, exact powers of ten)"
 ```
 
 ---
@@ -1307,7 +1313,7 @@ Task 3 (schema type追加)
 Task 4 (frontend橋渡し・負値マスク) ← Task 1, Task 3
 Task 5 (log_ticks骨格)
 Task 6 (chartjs_ticks.mjs拡張・実測)
-Task 7 (log_ticksをピン留め) ← Task 5, Task 6
+Task 7 (log_ticks の構造不変条件テストを追加) ← Task 5, Task 6
 Task 8 (value_domain対数分岐) ← Task 1
 Task 10 (fmt_num_log)
 Task 9 (compute()対数分岐・縦軸描画) ← Task 2, Task 7, Task 8, Task 10
@@ -1322,21 +1328,276 @@ Task 15 (全体検証)
 
 ## Task 6 実測結果
 
-**実行環境:** chart.js `4.5.1`(`tools/node_modules/chart.js/package.json`)、node.js `v24.2.0`、`tools/chartjs_ticks.mjs` を `node chartjs_ticks.mjs > /tmp/chartjs_ticks_linear.json 2> /tmp/chartjs_ticks_log.json` で実行(2026-08-08 実施)。
+**実行環境:** chart.js `4.5.1`(`tools/node_modules/chart.js/package.json`)、node.js `v24.2.0`、`tools/chartjs_ticks.mjs` を `node chartjs_ticks.mjs > /tmp/chartjs_ticks_linear.json 2> /tmp/chartjs_ticks_log.json` で実行(2026-08-08 実施、下記の pre-skip 修正版も同日中に再実施)。
 
-### 最重要の発見: Step 1 の設計コミュニケーション(`getLabelForValue`)は実際のラベル可視性を反映しない
+### 訂正: 当初の実測は autoSkip 後の配列を測っていた(バグ)
 
-タスク説明・当初のプラン記述はどちらも「`scale.getLabelForValue(value)` を呼ぶのが最も確実」としていたが、これは**誤り**であることが `chart.js` のソース(`tools/node_modules/chart.js/dist/chart.js`, `tools/node_modules/chart.js/dist/chunks/helpers.dataset.js`)を読んで確認し、かつ実測でも再現した。
+本節はレビューで発見された不具合を受けて全面的に書き換えたものである(旧内容は破棄)。問題の所在:
 
-- `LogarithmicScale.getLabelForValue(value)`(`dist/chart.js:10534`)の実装は:
-  ```js
-  getLabelForValue(value) {
-      return value === undefined ? '0' : formatNumber(value, this.chart.options.locale, this.options.ticks.format);
+- Chart.js の `Scale.update()`(`dist/chart.js:3905-3950`)は次の順で処理する: `this.ticks = this.buildTicks()`(`generateTicks()` によるドメイン計算のみ・canvas サイズに非依存)→ `this.afterBuildTicks()` フック → `this._convertTicksToLabels(this.ticks)`(この時点の配列に対して `tick.label` を設定)→ … → `tickOpts.autoSkip` が true(既定)なら `this.ticks = autoSkip(this, this.ticks)` で **新しい・間引かれた配列に差し替え**(800×400 canvas とフォント計量に基づく)。
+- 当初のスクリプトは `new Chart(...)` 構築後に `scale.ticks` を読んでいたため、これは **post-autoSkip**(canvas サイズ依存)の配列だった。5ケース中 `single decade [3,7]` は元々 canvas に収まっていたため pre/post が同じ(17件)で無傷だったが、残り4ケースは汚染されていた。
+- **自己矛盾の実例:** 旧実測データの `exact powers [1,1000]`(post-skip 20件)で `value: 400` は `label: "400.0"`(表示)と記録されていた。ところが同じ節が導出した可視性ルール `index > 0.8 * ticks.length` を post-skip 配列(20件)上の `value=400` の位置(index=16)に当てはめると `16 > 0.8*20=16` は偽となり、本来なら非表示のはずだった。矛盾の原因は、このルールが実際には chart.js 内部で **pre-skip 配列**の index/length を使って評価されている(`_convertTicksToLabels` は autoSkip の前に呼ばれる)のに、旧ドキュメントは手元の post-skip 配列の index/length で再計算していたことにある。pre-skip 配列(40件)では `value=400` は index=33 であり `33 > 0.8*40=32` は真 → 表示、で矛盾なく一致する。
+
+**修正方法:** `tools/chartjs_ticks.mjs` の `getLogTicks()` を、`options.scales.y.afterBuildTicks(scale)` フック(`autoSkip` 実行前に発火)で `scale.ticks` への参照を保持するよう変更した。`autoSkip()` は元の配列を書き換えず新しい配列を返すため、保持した参照は影響を受けない。`tick.label` は `afterBuildTicks` の直後(同じ `update()` 内)に同じオブジェクトへ書き込まれるため、`new Chart()` が完了した時点で参照を読めばラベルも取得できる。詳細は `tools/chartjs_ticks.mjs` 内のコメント参照。
+
+### Pre-skip / post-skip 件数比較
+
+| ケース | pre-skip 件数 | post-skip 件数(旧実測=汚染値) |
+|---|---|---|
+| single decade [3,7] | 17 | 17(無傷) |
+| multi decade [30,4000] | 24 | 12 |
+| sub-one [0.003,0.7] | 27 | 13 |
+| wide [1,1000000] | 70 | 15 |
+| exact powers [1,1000] | 40 | 20 |
+
+### 訂正後の実測データ(pre-skip、生 JSON)
+
+```json
+[
+  {
+    "label": "single decade [3,7]",
+    "data": [3,7],
+    "yOpts": {},
+    "min": 1,
+    "max": 7,
+    "preSkipTickCount": 17,
+    "postSkipTickCount": 17,
+    "ticks": [
+      { "value": 1, "major": true, "significand": 0, "label": "1.00", "getLabelForValue": "1" },
+      { "value": 1.1, "major": false, "significand": 1, "label": "1.10", "getLabelForValue": "1.1" },
+      { "value": 1.2, "major": false, "significand": 2, "label": "1.20", "getLabelForValue": "1.2" },
+      { "value": 1.3, "major": false, "significand": 3, "label": "1.30", "getLabelForValue": "1.3" },
+      { "value": 1.4, "major": false, "significand": 4, "label": "", "getLabelForValue": "1.4" },
+      { "value": 1.5, "major": false, "significand": 5, "label": "1.50", "getLabelForValue": "1.5" },
+      { "value": 1.6, "major": false, "significand": 6, "label": "", "getLabelForValue": "1.6" },
+      { "value": 1.7, "major": false, "significand": 7, "label": "", "getLabelForValue": "1.7" },
+      { "value": 1.8, "major": false, "significand": 8, "label": "", "getLabelForValue": "1.8" },
+      { "value": 1.9, "major": false, "significand": 9, "label": "", "getLabelForValue": "1.9" },
+      { "value": 2, "major": false, "significand": 10, "label": "2.00", "getLabelForValue": "2" },
+      { "value": 2.5, "major": false, "significand": 15, "label": "2.50", "getLabelForValue": "2.5" },
+      { "value": 3, "major": false, "significand": 2, "label": "3.00", "getLabelForValue": "3" },
+      { "value": 4, "major": false, "significand": 3, "label": "4.00", "getLabelForValue": "4" },
+      { "value": 5, "major": false, "significand": 4, "label": "5.00", "getLabelForValue": "5" },
+      { "value": 6, "major": false, "significand": 5, "label": "6.00", "getLabelForValue": "6" },
+      { "value": 7, "major": false, "significand": 6, "label": "7.00", "getLabelForValue": "7" }
+    ]
+  },
+  {
+    "label": "multi decade [30,4000]",
+    "data": [30,4000],
+    "yOpts": {},
+    "min": 10,
+    "max": 4000,
+    "preSkipTickCount": 24,
+    "postSkipTickCount": 12,
+    "ticks": [
+      { "value": 10, "major": true, "significand": 1, "label": "10", "getLabelForValue": "10" },
+      { "value": 20, "major": false, "significand": 2, "label": "20", "getLabelForValue": "20" },
+      { "value": 30, "major": false, "significand": 3, "label": "30", "getLabelForValue": "30" },
+      { "value": 40, "major": false, "significand": 4, "label": "", "getLabelForValue": "40" },
+      { "value": 50, "major": false, "significand": 5, "label": "50", "getLabelForValue": "50" },
+      { "value": 60, "major": false, "significand": 6, "label": "", "getLabelForValue": "60" },
+      { "value": 70, "major": false, "significand": 7, "label": "", "getLabelForValue": "70" },
+      { "value": 80, "major": false, "significand": 8, "label": "", "getLabelForValue": "80" },
+      { "value": 90, "major": false, "significand": 9, "label": "", "getLabelForValue": "90" },
+      { "value": 100, "major": true, "significand": 10, "label": "100", "getLabelForValue": "100" },
+      { "value": 150, "major": false, "significand": 15, "label": "150", "getLabelForValue": "150" },
+      { "value": 200, "major": false, "significand": 2, "label": "200", "getLabelForValue": "200" },
+      { "value": 300, "major": false, "significand": 3, "label": "300", "getLabelForValue": "300" },
+      { "value": 400, "major": false, "significand": 4, "label": "", "getLabelForValue": "400" },
+      { "value": 500, "major": false, "significand": 5, "label": "500", "getLabelForValue": "500" },
+      { "value": 600, "major": false, "significand": 6, "label": "", "getLabelForValue": "600" },
+      { "value": 700, "major": false, "significand": 7, "label": "", "getLabelForValue": "700" },
+      { "value": 800, "major": false, "significand": 8, "label": "", "getLabelForValue": "800" },
+      { "value": 900, "major": false, "significand": 9, "label": "", "getLabelForValue": "900" },
+      { "value": 1000, "major": true, "significand": 10, "label": "1,000", "getLabelForValue": "1,000" },
+      { "value": 1500, "major": false, "significand": 15, "label": "1,500", "getLabelForValue": "1,500" },
+      { "value": 2000, "major": false, "significand": 2, "label": "2,000", "getLabelForValue": "2,000" },
+      { "value": 3000, "major": false, "significand": 3, "label": "3,000", "getLabelForValue": "3,000" },
+      { "value": 4000, "major": false, "significand": 4, "label": "4,000", "getLabelForValue": "4,000" }
+    ]
+  },
+  {
+    "label": "sub-one [0.003,0.7]",
+    "data": [0.003,0.7],
+    "yOpts": {},
+    "min": 0.001,
+    "max": 0.7,
+    "preSkipTickCount": 27,
+    "postSkipTickCount": 13,
+    "ticks": [
+      { "value": 0.001, "major": true, "significand": 1, "label": "0.001", "getLabelForValue": "0.001" },
+      { "value": 0.002, "major": false, "significand": 2, "label": "0.002", "getLabelForValue": "0.002" },
+      { "value": 0.003, "major": false, "significand": 3, "label": "0.003", "getLabelForValue": "0.003" },
+      { "value": 0.004, "major": false, "significand": 4, "label": "", "getLabelForValue": "0.004" },
+      { "value": 0.005, "major": false, "significand": 5, "label": "0.005", "getLabelForValue": "0.005" },
+      { "value": 0.006, "major": false, "significand": 6, "label": "", "getLabelForValue": "0.006" },
+      { "value": 0.007, "major": false, "significand": 7, "label": "", "getLabelForValue": "0.007" },
+      { "value": 0.008, "major": false, "significand": 8, "label": "", "getLabelForValue": "0.008" },
+      { "value": 0.009, "major": false, "significand": 9, "label": "", "getLabelForValue": "0.009" },
+      { "value": 0.01, "major": true, "significand": 10, "label": "0.010", "getLabelForValue": "0.01" },
+      { "value": 0.015, "major": false, "significand": 15, "label": "0.015", "getLabelForValue": "0.015" },
+      { "value": 0.02, "major": false, "significand": 2, "label": "0.020", "getLabelForValue": "0.02" },
+      { "value": 0.03, "major": false, "significand": 3, "label": "0.030", "getLabelForValue": "0.03" },
+      { "value": 0.04, "major": false, "significand": 4, "label": "", "getLabelForValue": "0.04" },
+      { "value": 0.05, "major": false, "significand": 5, "label": "0.050", "getLabelForValue": "0.05" },
+      { "value": 0.06, "major": false, "significand": 6, "label": "", "getLabelForValue": "0.06" },
+      { "value": 0.07, "major": false, "significand": 7, "label": "", "getLabelForValue": "0.07" },
+      { "value": 0.08, "major": false, "significand": 8, "label": "", "getLabelForValue": "0.08" },
+      { "value": 0.09, "major": false, "significand": 9, "label": "", "getLabelForValue": "0.09" },
+      { "value": 0.1, "major": true, "significand": 10, "label": "0.100", "getLabelForValue": "0.1" },
+      { "value": 0.15, "major": false, "significand": 15, "label": "0.150", "getLabelForValue": "0.15" },
+      { "value": 0.2, "major": false, "significand": 2, "label": "0.200", "getLabelForValue": "0.2" },
+      { "value": 0.3, "major": false, "significand": 3, "label": "0.300", "getLabelForValue": "0.3" },
+      { "value": 0.4, "major": false, "significand": 4, "label": "0.400", "getLabelForValue": "0.4" },
+      { "value": 0.5, "major": false, "significand": 5, "label": "0.500", "getLabelForValue": "0.5" },
+      { "value": 0.6, "major": false, "significand": 6, "label": "0.600", "getLabelForValue": "0.6" },
+      { "value": 0.7, "major": false, "significand": 7, "label": "0.700", "getLabelForValue": "0.7" }
+    ]
+  },
+  {
+    "label": "wide [1,1000000]",
+    "data": [1,1000000],
+    "yOpts": {},
+    "min": 0.1,
+    "max": 1000000,
+    "preSkipTickCount": 70,
+    "postSkipTickCount": 15,
+    "ticks": [
+      { "value": 0.1, "major": true, "significand": 1, "label": "0.1", "getLabelForValue": "0.1" },
+      { "value": 0.2, "major": false, "significand": 2, "label": "0.2", "getLabelForValue": "0.2" },
+      { "value": 0.3, "major": false, "significand": 3, "label": "0.3", "getLabelForValue": "0.3" },
+      { "value": 0.4, "major": false, "significand": 4, "label": "", "getLabelForValue": "0.4" },
+      { "value": 0.5, "major": false, "significand": 5, "label": "0.5", "getLabelForValue": "0.5" },
+      { "value": 0.6, "major": false, "significand": 6, "label": "", "getLabelForValue": "0.6" },
+      { "value": 0.7, "major": false, "significand": 7, "label": "", "getLabelForValue": "0.7" },
+      { "value": 0.8, "major": false, "significand": 8, "label": "", "getLabelForValue": "0.8" },
+      { "value": 0.9, "major": false, "significand": 9, "label": "", "getLabelForValue": "0.9" },
+      { "value": 1, "major": true, "significand": 10, "label": "1.0", "getLabelForValue": "1" },
+      { "value": 1.5, "major": false, "significand": 15, "label": "1.5", "getLabelForValue": "1.5" },
+      { "value": 2, "major": false, "significand": 2, "label": "2.0", "getLabelForValue": "2" },
+      { "value": 3, "major": false, "significand": 3, "label": "3.0", "getLabelForValue": "3" },
+      { "value": 4, "major": false, "significand": 4, "label": "", "getLabelForValue": "4" },
+      { "value": 5, "major": false, "significand": 5, "label": "5.0", "getLabelForValue": "5" },
+      { "value": 6, "major": false, "significand": 6, "label": "", "getLabelForValue": "6" },
+      { "value": 7, "major": false, "significand": 7, "label": "", "getLabelForValue": "7" },
+      { "value": 8, "major": false, "significand": 8, "label": "", "getLabelForValue": "8" },
+      { "value": 9, "major": false, "significand": 9, "label": "", "getLabelForValue": "9" },
+      { "value": 10, "major": true, "significand": 10, "label": "10.0", "getLabelForValue": "10" },
+      { "value": 15, "major": false, "significand": 15, "label": "15.0", "getLabelForValue": "15" },
+      { "value": 20, "major": false, "significand": 2, "label": "20.0", "getLabelForValue": "20" },
+      { "value": 30, "major": false, "significand": 3, "label": "30.0", "getLabelForValue": "30" },
+      { "value": 40, "major": false, "significand": 4, "label": "", "getLabelForValue": "40" },
+      { "value": 50, "major": false, "significand": 5, "label": "50.0", "getLabelForValue": "50" },
+      { "value": 60, "major": false, "significand": 6, "label": "", "getLabelForValue": "60" },
+      { "value": 70, "major": false, "significand": 7, "label": "", "getLabelForValue": "70" },
+      { "value": 80, "major": false, "significand": 8, "label": "", "getLabelForValue": "80" },
+      { "value": 90, "major": false, "significand": 9, "label": "", "getLabelForValue": "90" },
+      { "value": 100, "major": true, "significand": 10, "label": "100.0", "getLabelForValue": "100" },
+      { "value": 150, "major": false, "significand": 15, "label": "150.0", "getLabelForValue": "150" },
+      { "value": 200, "major": false, "significand": 2, "label": "200.0", "getLabelForValue": "200" },
+      { "value": 300, "major": false, "significand": 3, "label": "300.0", "getLabelForValue": "300" },
+      { "value": 400, "major": false, "significand": 4, "label": "", "getLabelForValue": "400" },
+      { "value": 500, "major": false, "significand": 5, "label": "500.0", "getLabelForValue": "500" },
+      { "value": 600, "major": false, "significand": 6, "label": "", "getLabelForValue": "600" },
+      { "value": 700, "major": false, "significand": 7, "label": "", "getLabelForValue": "700" },
+      { "value": 800, "major": false, "significand": 8, "label": "", "getLabelForValue": "800" },
+      { "value": 900, "major": false, "significand": 9, "label": "", "getLabelForValue": "900" },
+      { "value": 1000, "major": true, "significand": 10, "label": "1,000.0", "getLabelForValue": "1,000" },
+      { "value": 1500, "major": false, "significand": 15, "label": "1,500.0", "getLabelForValue": "1,500" },
+      { "value": 2000, "major": false, "significand": 2, "label": "2,000.0", "getLabelForValue": "2,000" },
+      { "value": 3000, "major": false, "significand": 3, "label": "3,000.0", "getLabelForValue": "3,000" },
+      { "value": 4000, "major": false, "significand": 4, "label": "", "getLabelForValue": "4,000" },
+      { "value": 5000, "major": false, "significand": 5, "label": "5,000.0", "getLabelForValue": "5,000" },
+      { "value": 6000, "major": false, "significand": 6, "label": "", "getLabelForValue": "6,000" },
+      { "value": 7000, "major": false, "significand": 7, "label": "", "getLabelForValue": "7,000" },
+      { "value": 8000, "major": false, "significand": 8, "label": "", "getLabelForValue": "8,000" },
+      { "value": 9000, "major": false, "significand": 9, "label": "", "getLabelForValue": "9,000" },
+      { "value": 10000, "major": true, "significand": 10, "label": "10,000.0", "getLabelForValue": "10,000" },
+      { "value": 15000, "major": false, "significand": 15, "label": "15,000.0", "getLabelForValue": "15,000" },
+      { "value": 20000, "major": false, "significand": 2, "label": "20,000.0", "getLabelForValue": "20,000" },
+      { "value": 30000, "major": false, "significand": 3, "label": "30,000.0", "getLabelForValue": "30,000" },
+      { "value": 40000, "major": false, "significand": 4, "label": "", "getLabelForValue": "40,000" },
+      { "value": 50000, "major": false, "significand": 5, "label": "50,000.0", "getLabelForValue": "50,000" },
+      { "value": 60000, "major": false, "significand": 6, "label": "", "getLabelForValue": "60,000" },
+      { "value": 70000, "major": false, "significand": 7, "label": "", "getLabelForValue": "70,000" },
+      { "value": 80000, "major": false, "significand": 8, "label": "80,000.0", "getLabelForValue": "80,000" },
+      { "value": 90000, "major": false, "significand": 9, "label": "90,000.0", "getLabelForValue": "90,000" },
+      { "value": 100000, "major": true, "significand": 10, "label": "100,000.0", "getLabelForValue": "100,000" },
+      { "value": 150000, "major": false, "significand": 15, "label": "150,000.0", "getLabelForValue": "150,000" },
+      { "value": 200000, "major": false, "significand": 2, "label": "200,000.0", "getLabelForValue": "200,000" },
+      { "value": 300000, "major": false, "significand": 3, "label": "300,000.0", "getLabelForValue": "300,000" },
+      { "value": 400000, "major": false, "significand": 4, "label": "400,000.0", "getLabelForValue": "400,000" },
+      { "value": 500000, "major": false, "significand": 5, "label": "500,000.0", "getLabelForValue": "500,000" },
+      { "value": 600000, "major": false, "significand": 6, "label": "600,000.0", "getLabelForValue": "600,000" },
+      { "value": 700000, "major": false, "significand": 7, "label": "700,000.0", "getLabelForValue": "700,000" },
+      { "value": 800000, "major": false, "significand": 8, "label": "800,000.0", "getLabelForValue": "800,000" },
+      { "value": 900000, "major": false, "significand": 9, "label": "900,000.0", "getLabelForValue": "900,000" },
+      { "value": 1000000, "major": true, "significand": 10, "label": "1,000,000.0", "getLabelForValue": "1,000,000" }
+    ]
+  },
+  {
+    "label": "exact powers [1,1000]",
+    "data": [1,1000],
+    "yOpts": {},
+    "min": 0.1,
+    "max": 1000,
+    "preSkipTickCount": 40,
+    "postSkipTickCount": 20,
+    "ticks": [
+      { "value": 0.1, "major": true, "significand": 1, "label": "0.1", "getLabelForValue": "0.1" },
+      { "value": 0.2, "major": false, "significand": 2, "label": "0.2", "getLabelForValue": "0.2" },
+      { "value": 0.3, "major": false, "significand": 3, "label": "0.3", "getLabelForValue": "0.3" },
+      { "value": 0.4, "major": false, "significand": 4, "label": "", "getLabelForValue": "0.4" },
+      { "value": 0.5, "major": false, "significand": 5, "label": "0.5", "getLabelForValue": "0.5" },
+      { "value": 0.6, "major": false, "significand": 6, "label": "", "getLabelForValue": "0.6" },
+      { "value": 0.7, "major": false, "significand": 7, "label": "", "getLabelForValue": "0.7" },
+      { "value": 0.8, "major": false, "significand": 8, "label": "", "getLabelForValue": "0.8" },
+      { "value": 0.9, "major": false, "significand": 9, "label": "", "getLabelForValue": "0.9" },
+      { "value": 1, "major": true, "significand": 10, "label": "1.0", "getLabelForValue": "1" },
+      { "value": 1.5, "major": false, "significand": 15, "label": "1.5", "getLabelForValue": "1.5" },
+      { "value": 2, "major": false, "significand": 2, "label": "2.0", "getLabelForValue": "2" },
+      { "value": 3, "major": false, "significand": 3, "label": "3.0", "getLabelForValue": "3" },
+      { "value": 4, "major": false, "significand": 4, "label": "", "getLabelForValue": "4" },
+      { "value": 5, "major": false, "significand": 5, "label": "5.0", "getLabelForValue": "5" },
+      { "value": 6, "major": false, "significand": 6, "label": "", "getLabelForValue": "6" },
+      { "value": 7, "major": false, "significand": 7, "label": "", "getLabelForValue": "7" },
+      { "value": 8, "major": false, "significand": 8, "label": "", "getLabelForValue": "8" },
+      { "value": 9, "major": false, "significand": 9, "label": "", "getLabelForValue": "9" },
+      { "value": 10, "major": true, "significand": 10, "label": "10.0", "getLabelForValue": "10" },
+      { "value": 15, "major": false, "significand": 15, "label": "15.0", "getLabelForValue": "15" },
+      { "value": 20, "major": false, "significand": 2, "label": "20.0", "getLabelForValue": "20" },
+      { "value": 30, "major": false, "significand": 3, "label": "30.0", "getLabelForValue": "30" },
+      { "value": 40, "major": false, "significand": 4, "label": "", "getLabelForValue": "40" },
+      { "value": 50, "major": false, "significand": 5, "label": "50.0", "getLabelForValue": "50" },
+      { "value": 60, "major": false, "significand": 6, "label": "", "getLabelForValue": "60" },
+      { "value": 70, "major": false, "significand": 7, "label": "", "getLabelForValue": "70" },
+      { "value": 80, "major": false, "significand": 8, "label": "", "getLabelForValue": "80" },
+      { "value": 90, "major": false, "significand": 9, "label": "", "getLabelForValue": "90" },
+      { "value": 100, "major": true, "significand": 10, "label": "100.0", "getLabelForValue": "100" },
+      { "value": 150, "major": false, "significand": 15, "label": "150.0", "getLabelForValue": "150" },
+      { "value": 200, "major": false, "significand": 2, "label": "200.0", "getLabelForValue": "200" },
+      { "value": 300, "major": false, "significand": 3, "label": "300.0", "getLabelForValue": "300" },
+      { "value": 400, "major": false, "significand": 4, "label": "400.0", "getLabelForValue": "400" },
+      { "value": 500, "major": false, "significand": 5, "label": "500.0", "getLabelForValue": "500" },
+      { "value": 600, "major": false, "significand": 6, "label": "600.0", "getLabelForValue": "600" },
+      { "value": 700, "major": false, "significand": 7, "label": "700.0", "getLabelForValue": "700" },
+      { "value": 800, "major": false, "significand": 8, "label": "800.0", "getLabelForValue": "800" },
+      { "value": 900, "major": false, "significand": 9, "label": "900.0", "getLabelForValue": "900" },
+      { "value": 1000, "major": true, "significand": 10, "label": "1,000.0", "getLabelForValue": "1,000" }
+    ]
   }
-  ```
-  これは**常に**数値をロケール書式(桁区切り・小数)でフォーマットするだけで、可視/非表示の判定は一切行わない。全 tick に対して非空文字列を返す。
-- 実際に canvas に描画される文字列は `tick.label` プロパティであり、`Scale.update()` 内の `_convertTicksToLabels()`(`dist/chart.js:3936`, `4190-4202`)→ `generateTickLabels()`(`dist/chart.js:4028-4039`)が `options.ticks.callback` を呼んで設定する。`LogarithmicScale` の既定 `ticks.callback` は `Ticks.formatters.logarithmic`(`dist/chart.js:10452-10459` の `static defaults`)。
-- その `Ticks.formatters.logarithmic` の実体(`dist/chunks/helpers.dataset.js:901-917`):
+]
+```
+
+(完全な生出力は `tools/chartjs_ticks.mjs` を再実行すればいつでも再生成できる: `cd tools && node chartjs_ticks.mjs 2>&1 >/dev/null` で確認可能。)
+
+### 観察事項(parity 実装のためではなく、スコープ決定の根拠として記録する)
+
+- **`single decade [3,7]`(汚染されていなかったケース)が最も強い証拠になる。** ドメインが1 decade に収まる場合、chart.js は decade 境界+mantissa 2..9 では到底説明できない細かい刻み `1, 1.1, 1.2, …, 1.9, 2, 2.5, 3, 4, 5, 6, 7` を生成する。
+- **複数 decade にまたがるケースでも、単純な「decade 境界+mantissa 2..9」より一段複雑。** 全4ケース(multi decade / sub-one / wide / exact powers)で共通して、**tick 範囲の最下位 decade を除く各 decade** に mantissa=1.5 の minor tick が1本追加される(例: `wide` の 1.5 / 15 / 150 / 1,500 / 15,000 / 150,000。最下位 decade である 0.1–1 decade には対応する 0.15 が無い)。この非対称性を生む `generateTicks()`(`dist/chart.js:10412-10448`)側の正確な条件は追跡していない(スコープ外と判断したため)。
+- **ラベル可視性ルール自体(今回はスコープ外だが記録として残す):** `Ticks.formatters.logarithmic`(`dist/chunks/helpers.dataset.js:901-917`)の実体は次の通り。
+
   ```js
   logarithmic (tickValue, index, ticks) {
       if (tickValue === 0) {
@@ -1349,175 +1610,15 @@ Task 15 (全体検証)
       return '';
   }
   ```
-  つまり `getLabelForValue` は書式化(`formatters.numeric` 相当)だけを担当し、可視性は `Ticks.formatters.logarithmic` が担う別レイヤ。両者は完全に別物であり、`getLabelForValue` だけを見ると「全 tick にラベルが付く」という誤った結論になる(実際、修正前の実測で確認済み: 全ケースで空文字列が一つも出なかった)。
 
-この発見を受け、`tools/chartjs_ticks.mjs` の `getLogTicks()` は最終的に次の3フィールドを出力するよう修正した:
-- `significand`: tick 生成時に `generateTicks()`(`dist/chart.js:10412-10448`)が計算する内部カウンタ(後述、mantissa と等しいとは限らない)
-- `label`: 実際に描画される文字列(空文字列 = 非表示)。**これが正解データ。**
-- `getLabelForValue`: 数値書式のみ(ラベル可視性の判定には使えない)
+  ここでの `index`/`ticks.length` は **pre-skip 配列**のものである(このルールは `_convertTicksToLabels()` が autoSkip 前に呼ばれる際に評価されるため)。上記「自己矛盾の実例」で説明した通り、post-skip 配列の index/length で再計算すると矛盾が生じる。この可視性ルール自体の Rust 側ピン留めは、下記のスコープ決定により本プロジェクトでは行わない。
+- `_convertTicksToLabels`(`dist/chart.js:4190-4202`)は `label` が `null`/`undefined` の tick だけを配列から削除し(`isNullOrUndef` 判定)、空文字列 `''` の tick は削除せず「ラベルなしの目盛線(グリッドのみ)」として残す。
+- `getLabelForValue` は数値の書式化(桁区切り・小数桁)のみを行い、可視性判定には使えない(`LogarithmicScale.getLabelForValue`、`dist/chart.js:10534`)。書式そのもの(例: "1,000" や "0.001")は Task 10 の `fmt_num_log` の参考にはなる。
 
-### 実測データ(生 JSON、`/tmp/chartjs_ticks_log.json` の内容)
+### スコープ決定: `log_ticks` は chart.js との tick-for-tick / ラベル可視性ルール parity を目指さない
 
-```json
-[
-  {
-    "label": "single decade [3,7]",
-    "data": [3, 7],
-    "yOpts": {},
-    "min": 1,
-    "max": 7,
-    "ticks": [
-      { "value": 1,   "major": true,  "significand": 0,  "label": "1.00", "getLabelForValue": "1" },
-      { "value": 1.1, "major": false, "significand": 1,  "label": "1.10", "getLabelForValue": "1.1" },
-      { "value": 1.2, "major": false, "significand": 2,  "label": "1.20", "getLabelForValue": "1.2" },
-      { "value": 1.3, "major": false, "significand": 3,  "label": "1.30", "getLabelForValue": "1.3" },
-      { "value": 1.4, "major": false, "significand": 4,  "label": "",     "getLabelForValue": "1.4" },
-      { "value": 1.5, "major": false, "significand": 5,  "label": "1.50", "getLabelForValue": "1.5" },
-      { "value": 1.6, "major": false, "significand": 6,  "label": "",     "getLabelForValue": "1.6" },
-      { "value": 1.7, "major": false, "significand": 7,  "label": "",     "getLabelForValue": "1.7" },
-      { "value": 1.8, "major": false, "significand": 8,  "label": "",     "getLabelForValue": "1.8" },
-      { "value": 1.9, "major": false, "significand": 9,  "label": "",     "getLabelForValue": "1.9" },
-      { "value": 2,   "major": false, "significand": 10, "label": "2.00", "getLabelForValue": "2" },
-      { "value": 2.5, "major": false, "significand": 15, "label": "2.50", "getLabelForValue": "2.5" },
-      { "value": 3,   "major": false, "significand": 2,  "label": "3.00", "getLabelForValue": "3" },
-      { "value": 4,   "major": false, "significand": 3,  "label": "4.00", "getLabelForValue": "4" },
-      { "value": 5,   "major": false, "significand": 4,  "label": "5.00", "getLabelForValue": "5" },
-      { "value": 6,   "major": false, "significand": 5,  "label": "6.00", "getLabelForValue": "6" },
-      { "value": 7,   "major": false, "significand": 6,  "label": "7.00", "getLabelForValue": "7" }
-    ]
-  },
-  {
-    "label": "multi decade [30,4000]",
-    "data": [30, 4000],
-    "yOpts": {},
-    "min": 10,
-    "max": 4000,
-    "ticks": [
-      { "value": 10,   "major": true,  "significand": 1,  "label": "10",    "getLabelForValue": "10" },
-      { "value": 30,   "major": false, "significand": 3,  "label": "30",    "getLabelForValue": "30" },
-      { "value": 60,   "major": false, "significand": 6,  "label": "",      "getLabelForValue": "60" },
-      { "value": 80,   "major": false, "significand": 8,  "label": "",      "getLabelForValue": "80" },
-      { "value": 100,  "major": true,  "significand": 10, "label": "100",   "getLabelForValue": "100" },
-      { "value": 200,  "major": false, "significand": 2,  "label": "200",   "getLabelForValue": "200" },
-      { "value": 400,  "major": false, "significand": 4,  "label": "",      "getLabelForValue": "400" },
-      { "value": 600,  "major": false, "significand": 6,  "label": "",      "getLabelForValue": "600" },
-      { "value": 800,  "major": false, "significand": 8,  "label": "",      "getLabelForValue": "800" },
-      { "value": 1000, "major": true,  "significand": 10, "label": "1,000", "getLabelForValue": "1,000" },
-      { "value": 2000, "major": false, "significand": 2,  "label": "2,000", "getLabelForValue": "2,000" },
-      { "value": 4000, "major": false, "significand": 4,  "label": "4,000", "getLabelForValue": "4,000" }
-    ]
-  },
-  {
-    "label": "sub-one [0.003,0.7]",
-    "data": [0.003, 0.7],
-    "yOpts": {},
-    "min": 0.001,
-    "max": 0.7,
-    "ticks": [
-      { "value": 0.001, "major": true,  "significand": 1,  "label": "0.001", "getLabelForValue": "0.001" },
-      { "value": 0.003, "major": false, "significand": 3,  "label": "0.003", "getLabelForValue": "0.003" },
-      { "value": 0.006, "major": false, "significand": 6,  "label": "",      "getLabelForValue": "0.006" },
-      { "value": 0.008, "major": false, "significand": 8,  "label": "",      "getLabelForValue": "0.008" },
-      { "value": 0.01,  "major": true,  "significand": 10, "label": "0.010", "getLabelForValue": "0.01" },
-      { "value": 0.02,  "major": false, "significand": 2,  "label": "0.020", "getLabelForValue": "0.02" },
-      { "value": 0.04,  "major": false, "significand": 4,  "label": "",      "getLabelForValue": "0.04" },
-      { "value": 0.06,  "major": false, "significand": 6,  "label": "",      "getLabelForValue": "0.06" },
-      { "value": 0.08,  "major": false, "significand": 8,  "label": "",      "getLabelForValue": "0.08" },
-      { "value": 0.1,   "major": true,  "significand": 10, "label": "0.100", "getLabelForValue": "0.1" },
-      { "value": 0.2,   "major": false, "significand": 2,  "label": "0.200", "getLabelForValue": "0.2" },
-      { "value": 0.4,   "major": false, "significand": 4,  "label": "0.400", "getLabelForValue": "0.4" },
-      { "value": 0.6,   "major": false, "significand": 6,  "label": "0.600", "getLabelForValue": "0.6" }
-    ]
-  },
-  {
-    "label": "wide [1,1000000]",
-    "data": [1, 1000000],
-    "yOpts": {},
-    "min": 0.1,
-    "max": 1000000,
-    "ticks": [
-      { "value": 0.1,     "major": true,  "significand": 1,  "label": "0.1",         "getLabelForValue": "0.1" },
-      { "value": 0.6,     "major": false, "significand": 6,  "label": "",            "getLabelForValue": "0.6" },
-      { "value": 1,       "major": true,  "significand": 10, "label": "1.0",         "getLabelForValue": "1" },
-      { "value": 5,       "major": false, "significand": 5,  "label": "5.0",         "getLabelForValue": "5" },
-      { "value": 10,      "major": true,  "significand": 10, "label": "10.0",        "getLabelForValue": "10" },
-      { "value": 50,      "major": false, "significand": 5,  "label": "50.0",        "getLabelForValue": "50" },
-      { "value": 100,     "major": true,  "significand": 10, "label": "100.0",       "getLabelForValue": "100" },
-      { "value": 500,     "major": false, "significand": 5,  "label": "500.0",       "getLabelForValue": "500" },
-      { "value": 1000,    "major": true,  "significand": 10, "label": "1,000.0",     "getLabelForValue": "1,000" },
-      { "value": 5000,    "major": false, "significand": 5,  "label": "5,000.0",     "getLabelForValue": "5,000" },
-      { "value": 10000,   "major": true,  "significand": 10, "label": "10,000.0",    "getLabelForValue": "10,000" },
-      { "value": 50000,   "major": false, "significand": 5,  "label": "50,000.0",    "getLabelForValue": "50,000" },
-      { "value": 100000,  "major": true,  "significand": 10, "label": "100,000.0",   "getLabelForValue": "100,000" },
-      { "value": 500000,  "major": false, "significand": 5,  "label": "500,000.0",   "getLabelForValue": "500,000" },
-      { "value": 1000000, "major": true,  "significand": 10, "label": "1,000,000.0", "getLabelForValue": "1,000,000" }
-    ]
-  },
-  {
-    "label": "exact powers [1,1000]",
-    "data": [1, 1000],
-    "yOpts": {},
-    "min": 0.1,
-    "max": 1000,
-    "ticks": [
-      { "value": 0.1,  "major": true,  "significand": 1,  "label": "0.1",     "getLabelForValue": "0.1" },
-      { "value": 0.3,  "major": false, "significand": 3,  "label": "0.3",     "getLabelForValue": "0.3" },
-      { "value": 0.6,  "major": false, "significand": 6,  "label": "",        "getLabelForValue": "0.6" },
-      { "value": 0.8,  "major": false, "significand": 8,  "label": "",        "getLabelForValue": "0.8" },
-      { "value": 1,    "major": true,  "significand": 10, "label": "1.0",     "getLabelForValue": "1" },
-      { "value": 2,    "major": false, "significand": 2,  "label": "2.0",     "getLabelForValue": "2" },
-      { "value": 4,    "major": false, "significand": 4,  "label": "",        "getLabelForValue": "4" },
-      { "value": 6,    "major": false, "significand": 6,  "label": "",        "getLabelForValue": "6" },
-      { "value": 8,    "major": false, "significand": 8,  "label": "",        "getLabelForValue": "8" },
-      { "value": 10,   "major": true,  "significand": 10, "label": "10.0",    "getLabelForValue": "10" },
-      { "value": 20,   "major": false, "significand": 2,  "label": "20.0",    "getLabelForValue": "20" },
-      { "value": 40,   "major": false, "significand": 4,  "label": "",        "getLabelForValue": "40" },
-      { "value": 60,   "major": false, "significand": 6,  "label": "",        "getLabelForValue": "60" },
-      { "value": 80,   "major": false, "significand": 8,  "label": "",        "getLabelForValue": "80" },
-      { "value": 100,  "major": true,  "significand": 10, "label": "100.0",   "getLabelForValue": "100" },
-      { "value": 200,  "major": false, "significand": 2,  "label": "200.0",   "getLabelForValue": "200" },
-      { "value": 400,  "major": false, "significand": 4,  "label": "400.0",   "getLabelForValue": "400" },
-      { "value": 600,  "major": false, "significand": 6,  "label": "600.0",   "getLabelForValue": "600" },
-      { "value": 800,  "major": false, "significand": 8,  "label": "800.0",   "getLabelForValue": "800" },
-      { "value": 1000, "major": true,  "significand": 10, "label": "1,000.0", "getLabelForValue": "1,000" }
-    ]
-  }
-]
-```
+**決定(ユーザー承認済み。`bd show fulgur-chart-smw` の `acceptance` フィールドに反映済み):** 線形スケールの `nice_ticks` は chart.js の実出力に厳密にピン留めする(`chartjs_compat_*` テスト)が、対数スケールの `log_ticks` については **同様の tick-for-tick 一致・ラベル可視性ルールの再現は v1 のスコープに含めない**。`log_ticks` は現状の「decade 境界に丸め、主目盛=10^n・minor目盛=mantissa 2..9」という単純な構造のまま維持する。
 
-(完全な生出力は `tools/chartjs_ticks.mjs` を再実行すればいつでも再生成できる: `cd tools && node chartjs_ticks.mjs 2>&1 >/dev/null` で確認可能。)
+**根拠:** 上記の「観察事項」で示した通り、chart.js の実際の `generateTicks()` は decade+mantissa(2..9) よりも実質的に複雑(単一 decade ドメインでの細分化、複数 decade ドメインでの非対称な 1.5倍 tick 挿入など)であり、これは autoSkip に汚染されていない `single decade [3,7]` ケースひとつだけでも確認できる。この複雑さを v1 でそのまま移植するコストに対し、対数軸で主目盛(10^n)・副目盛(mantissa)の区別さえ描画できれば実用上十分という判断から、ユーザーは移植を見送ることを決定した。
 
-### 3つの問いへの回答
-
-**Q1. `major: true` になっているのは mantissa=1(10^n ちょうど)の tick だけか?**
-
-**Yes。** 全5ケースを通して `major: true` の tick は必ず value が 10 のべき乗(0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000)のときだけであり、それ以外は例外なく `major: false`。これはソース上も `isMajor(tickVal)`(`dist/chart.js:10391-10394`)が `tickVal / Math.pow(10, log10Floor(tickVal)) === 1` を判定しているだけで確認できる。**`major` は value から直接計算されるフラグであり、`significand`(下記参照)とは独立している。**
-
-**Q2. `label` が空文字列/非表示になっている tick はあるか? あるならどの mantissa のときか?**
-
-**Yes、ある。** 例(`multi decade [30,4000]`より): `{ value: 60, significand: 6, label: "" }`、`{ value: 80, significand: 8, label: "" }`、`{ value: 400, significand: 4, label: "" }`、`{ value: 600, significand: 6, label: "" }`、`{ value: 800, significand: 8, label: "" }`。
-
-非表示になる条件を実測とソース(`Ticks.formatters.logarithmic`, 前掲)から確定すると:
-
-```
-表示 ⟺ [1, 2, 3, 5, 10, 15].includes(tick.significand) OR tickIndex > 0.8 * ticks.length
-```
-
-つまり「mantissa 1/2/5 のみ表示」という設計時の仮説は**不正確**だった。正しくは **mantissa 1, 2, 3, 5 が表示され、4, 6, 7, 8, 9 が非表示**(1桁 decade 内の `significand` は 10進の mantissa 数字と一致する場合)。**3 が表示され 5 だけでなく含まれる点、および 4 が非表示である点**が設計時仮説との差分。
-
-ただし2つの重要な注意点がある:
-
-1. **`significand` は常に mantissa 数字そのものとは限らない。** `generateTicks()`(`dist/chart.js:10412-10448`)は「ドメインの最初の decade」ではより細かい刻み(1.1, 1.2, …, 1.9, 2.0, 2.5)を生成でき、そこでの `significand` は 1〜9, 10, 15 という「歩数カウンタ」であり 10進 mantissa 桁と一致しない(例: `single decade [3,7]` ケースの value=2.5 は mantissa 的には "2.5" だが `significand=15`、value=5 は mantissa "5" だが `significand=4`)。2巡目以降の decade(例: 30, 40, …, 90 のような整数 mantissa の decade)では `significand` は mantissa 数字(2〜9)と一致する。
-2. **tick 配列の末尾 ~20%(`index > 0.8 * ticks.length`)は mantissa に関係なく常に表示される。** 例: `multi decade [30,4000]` の value=4000(significand=4、本来は非表示のはず)が表示されているのは末尾条件による(ticks.length=12, index=11 > 9.6)。同様に `sub-one [0.003,0.7]` の value=0.6(significand=6)も末尾条件で表示。
-3. 加えて、**tick index 0 で `significand` が 0(falsy)になるケースがある**(`single decade [3,7]` の value=1 で `significand: 0`)。この場合 `ticks[index].significand || tickValue / Math.pow(10, floor(log10(tickValue)))` の `||` フォールバックが発火し、実際の mantissa(=1)で判定される(結果的に表示)。`significand` を "既に計算済みのフラグ" として素朴に転記するとこの 0 のケースを見誤る。
-
-**Q3. 一番端(min/max)の tick は major でなくてもラベルが付くか?**
-
-**Yes、付く。** 具体例: `multi decade [30,4000]` の max tick `{ value: 4000, major: false, significand: 4, label: "4,000" }`(mantissa 4 は本来非表示対象だが、末尾 tick のため表示)。`sub-one [0.003,0.7]` の max tick `{ value: 0.6, major: false, significand: 6, label: "0.600" }` も同様(significand 6 は非表示対象だが末尾のため表示)。これは前述の `index > 0.8 * ticks.length` ルールの直接的な帰結であり、「chart.js は目盛の端(データがちょうど収まる境界)を常に読めるようにする」という UX 上の意図と整合する。
-
-### Task 7 への申し送り事項(実装判断はしない、事実のみ記録)
-
-- **ラベル可視性の正しい判定式:** `mantissa ∈ {1,2,3,5} ⟹ 表示`, `mantissa ∈ {4,6,7,8,9} ⟹ 非表示(ただし末尾 tick を除く)`。Task 5 のプランに書かれていた「(A) major のみ」「(B) mantissa 1/2/5」の 2 択のどちらとも一致しない。3 も表示対象に含める必要がある。「末尾 tick は常に表示」という第3の例外ルールも要考慮(または許容してテストケースから除外)。
-- **`single decade [3,7]` ケースは Task 5 の `log_ticks(3.0, 7.0)` の出力とそのまま突き合わせられない。** `crates/fulgur-chart/src/scale.rs` の既存(dead code)実装は `log_ticks(3.0, 7.0)` に対し `min=1.0, max=10.0, major=[1,10], minor=[2,3,4,5,6,7,8,9]` を返す(decade 境界に丸めるのみで、chart.js のような「最初の decade だけ細かく刻む」ズーム挙動は実装していない)。一方 chart.js 実測は `min=1, max=7` で tick 値そのものが `1, 1.1, 1.2, …, 1.9, 2, 2.5, 3, 4, 5, 6, 7` と全く異なる集合になる。**ラベル可視性ルールを Task 7 で `log_ticks` にピンする際は、tick 値の集合が chart.js と一致するケース(例えば `multi decade [30,4000]` や `exact powers [1,1000]` のような、対象 decade 内で mantissa が整数 2〜9 で埋まるケース)を使うか、あるいは可視性ルールのみを抽出して mantissa ベースで再実装するかを Task 7 側で判断する必要がある。**
-- `_convertTicksToLabels`(`dist/chart.js:4190-4202`)は `label` が `null`/`undefined` の tick だけを配列から削除し(`isNullOrUndef` 判定)、空文字列 `''` の tick は削除せず「ラベルなしの目盛線(グリッドのみ)」として残す。Rust 側で「ラベル非表示」を表現する際は「tick 自体を消す」のではなく「ラベル文字列だけを空にする」設計にする方が chart.js の挙動と一致する。
-- `getLabelForValue` は書式化だけを担うため、**数値の書式(桁区切り "1,000" や小数桁 "1.10"/"0.001" など)を再現する目的では引き続き参考になる**(Task 10 の `fmt_num_log` 向け)。ただし桁数は `formatters.numeric` 内部で ticks 間の delta から動的に決まる(`calculateDelta`)ため、それ自体も単純な固定桁数ではない点に注意(例: `single decade [3,7]` は "1.10" のように小数2桁、`multi decade [30,4000]` は "1,000" のように整数)。この点は Task 10 の実測対象になる。
+**今後の方針(Task 7 で詳述):** chart.js の実値・ラベル可視性ルールをピン留めする代わりに、`log_ticks` **自身の構造的不変条件**(ドメインブラケティング、`major`/`minor` の昇順性、`major` が厳密に10の整数乗であること、`minor` が最上位 decade を含まないこと)のみをテストで固定する。
