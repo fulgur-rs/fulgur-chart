@@ -3932,4 +3932,36 @@ mod tests {
             "strict mode should accept scales.y.type"
         );
     }
+
+    #[test]
+    fn scales_y_type_logarithmic_flows_into_spec_for_line() {
+        // y_axis_is_log は `Bar{horizontal:false} | Line` の2アーム。この
+        // テストは type:"line" 単体を通すことで、Line アームだけが担う被覆を
+        // 固定する(`| ChartKind::Line` を消しても Bar 側テストは全部通ってしまうため)。
+        let json = r##"{
+          "type":"line",
+          "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+          "options":{"scales":{"y":{"type":"logarithmic"}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Logarithmic));
+        assert!(matches!(spec.x_axis.scale_kind, ScaleKind::Linear));
+    }
+
+    #[test]
+    fn scales_y_type_logarithmic_is_ignored_on_mixed() {
+        // v1 スコープ外: Mixed(bar+line 混在)は y_axis_is_log のどちらのアームにも
+        // マッチしないため、type:"logarithmic" を指定しても Linear のまま無視される。
+        // Mixed は基本 type:"bar"/"line" + dataset 別 type 上書きで構築する
+        // (bar_base_with_line_dataset_is_mixed 等、tests/frontend_chartjs.rs の既存例に倣う)。
+        let json = r##"{
+          "type":"bar",
+          "data":{"labels":["a","b","c"],
+            "datasets":[{"label":"棒","data":[1,2,3]},{"type":"line","label":"折れ線","data":[4,5,6]}]},
+          "options":{"scales":{"y":{"type":"logarithmic"}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert!(matches!(spec.kind, ChartKind::Mixed));
+        assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Linear));
+    }
 }
