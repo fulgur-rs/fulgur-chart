@@ -205,7 +205,10 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
         let cx = b.x + b.w / 2.0;
         if stacked {
-            // セグメント中央(box 中心 = 値中点; ys は線形なので一致)に値ラベル。
+            // セグメント中央(box 中心)に値ラベル。b.y/b.h は既に ys で写像済みの
+            // ピクセル空間なので、ys が線形か対数(非アフィン)かに関わらず、
+            // ピクセル空間で平均するこの中点計算は常に正しい(値空間で先に
+            // 中点を取ってから map する横棒側の旧実装は対数軸で誤っていた)。
             let mid_y = b.y + b.h / 2.0;
             items.push(value_label(
                 cx,
@@ -545,8 +548,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     fill: ser.fill_at(i),
                 });
                 if spec.data_labels {
-                    // セグメント中央(値中点)に値ラベルを置く。
-                    let mid_x = xs.map((v0 + v1) / 2.0);
+                    // セグメント中央(box 中心)に値ラベルを置く。x0/x1 は既に xs で
+                    // 写像済みのピクセル空間なので、ここで平均する(ピクセル空間の中点)。
+                    // 値空間で (v0+v1)/2.0 を先に計算してから map すると、対数軸では
+                    // log10 が非アフィンなためピクセル中点とズレる(線形軸ではアフィン
+                    // 写像なので数学的に一致するが、対数軸では誤った位置になる)。
+                    let mid_x = (x0 + x1) / 2.0;
                     items.push(value_label(mid_x, cy, label_font, Anchor::Middle, ink, v));
                 }
             }
@@ -1346,11 +1353,54 @@ mod horizontal_log_scale_tests {
             .collect();
         assert_eq!(rects.len(), 3, "3 カテゴリ分の bar (A=5, B=500, C=50000)");
 
-        // 1. 全 bar の左端(baseline)は decade 境界 "1" の x に一致する(0 ではない)。
+        // 0. 独立した基準点: Y 軸(カテゴリ軸)ボーダー線(build_horizontal の "3a" で
+        //    plot_left 変数を直接使って描く、xs/ValueScale::Log を一切経由しない線)。
+        //    x_at_1 も bar の左端も xs.map() 経由で計算されるため、xs の構築自体
+        //    (例えば plot_left/plot_right に誤ったオフセットを混入させるバグ)が
+        //    壊れていても、それらは「お互いに」自己無矛盾のままズレて test をすり抜け
+        //    得る(mutation testing で実証済み: xs 構築時の plot_left/plot_right への
+        //    オフセット注入も、base_v の .clamp(...) 削除も、旧テストは検出できなかった)。
+        //    border_x は xs を経由しない独立した描画経路なので、これを ground truth
+        //    にすることで「x_at_1 や bar 左端が"本当に"正しい plot_left にあるか」を
+        //    内部的な自己無矛盾ではなく検証できる。
+        let border_x = scene
+            .items
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line {
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    stroke,
+                    ..
+                } if (x1 - x2).abs() < 1e-9
+                    && (y2 - y1).abs() > 10.0
+                    && stroke.r == spec.theme.text_color.r
+                    && stroke.g == spec.theme.text_color.g
+                    && stroke.b == spec.theme.text_color.b =>
+                {
+                    Some(*x1)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing y-axis (category axis) border line"));
+        assert!(
+            (x_at_1 - border_x).abs() < 0.5,
+            "major tick \"1\" の x={x_at_1} は Y 軸ボーダー線(独立した plot_left 基準)の \
+             x={border_x} と一致すべき"
+        );
+
+        // 1. 全 bar の左端(baseline)は decade 境界 "1" の x、かつ独立基準の border_x
+        //    にも一致する(0 ではない)。
         for &(x, _) in &rects {
             assert!(
                 (x - x_at_1).abs() < 0.5,
                 "bar の左端 {x} は major tick \"1\" の x={x_at_1} に一致すべき"
+            );
+            assert!(
+                (x - border_x).abs() < 0.5,
+                "bar の左端 {x} は Y 軸ボーダー線(独立基準)の x={border_x} に一致すべき"
             );
         }
 
@@ -1365,6 +1415,149 @@ mod horizontal_log_scale_tests {
         );
 
         assert!(rects.iter().all(|&(_, w)| w > 0.0 && w.is_finite()));
+    }
+
+    #[test]
+    fn stacked_data_label_midpoint_uses_pixel_space_not_value_space_under_log_scale() {
+        // 積み上げ横棒 + 対数 x 軸、2系列 [10, 90](単一カテゴリ)。
+        // 系列2 のセグメントは値空間で [10, 100]。対数軸では log10 が非アフィンなため、
+        // 「値空間の中点 (10+100)/2=55 を map したピクセル位置」(旧実装のバグ)と
+        // 「セグメント両端を先に map してからピクセル空間で平均する中点」(正しい)は
+        // 一致しない。コードレビューで実測: 800px canvas 上で ~184px の誤差。
+        let json = r#"{"type":"bar","data":{"labels":["A"],
+            "datasets":[{"data":[10]},{"data":[90]}]},
+            "options":{"indexAxis":"y",
+                "scales":{"x":{"type":"logarithmic","stacked":true},"y":{"stacked":true}},
+                "plugins":{"datalabels":{"display":true}}}}"#;
+        let spec = parse(json);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+
+        // 2 系列 × 1 カテゴリ → Rect は 2 本。x 昇順に並べると
+        // [0]=系列1(値空間 [0,10])、[1]=系列2(値空間 [10,100])。
+        let mut rects: Vec<(f64, f64, f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .collect();
+        rects.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert_eq!(rects.len(), 2, "1 カテゴリ × 2 系列で 2 本の Rect");
+        let (seg2_x, seg2_y, seg2_w, seg2_h) = rects[1];
+        let pixel_mid = seg2_x + seg2_w / 2.0; // 修正後の正しい中点(ピクセル空間で平均)
+
+        // 旧実装(バグ)が出す位置を独立に再現する: map(10)/map(100) は既に描画済みの
+        // Rect 端から読み取り、その2点間を log10(55) で内分する(map 自体は
+        // bars_grow_from_axis_floor_not_zero と同じ log10-補間手法で独立に検証済み)。
+        let map10 = seg2_x;
+        let map100 = seg2_x + seg2_w;
+        let t = (55.0_f64.log10() - 10.0_f64.log10()) / (100.0_f64.log10() - 10.0_f64.log10());
+        let buggy_x = map10 + t * (map100 - map10);
+
+        // 実際に描画されたデータラベル("90")の x 座標。x 軸の major tick ラベルにも
+        // 偶然 "90" が現れうる(線形軸の nice_ticks 次第)ため、セグメント2の行の
+        // 縦範囲 [seg2_y, seg2_y+seg2_h] 内にあるものだけをデータラベルとみなす
+        // (軸目盛ラベルは常にプロット領域の外側・下端の固定 y に描かれるため区別できる)。
+        let label_x = scene
+            .items
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text {
+                    x,
+                    y,
+                    content,
+                    anchor: Anchor::Middle,
+                    ..
+                } if content == "90" && *y >= seg2_y && *y <= seg2_y + seg2_h => Some(*x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing data label for value 90"));
+
+        // このシナリオでは buggy_x と pixel_mid が有意に(50px 以上)乖離する
+        // ことをまず確認する(対数軸で非アフィンなズレが実際に起きる設定であることの担保)。
+        assert!(
+            (buggy_x - pixel_mid).abs() > 50.0,
+            "test scenario should reproduce a large value-space-vs-pixel-space gap: \
+             buggy_x={buggy_x} pixel_mid={pixel_mid}"
+        );
+
+        // 修正後の実装はピクセル空間中点に一致し、旧バグの位置には一致しない。
+        assert!(
+            (label_x - pixel_mid).abs() < 0.5,
+            "label x={label_x} should match pixel-space segment midpoint={pixel_mid}"
+        );
+        assert!(
+            (label_x - buggy_x).abs() > 50.0,
+            "label x={label_x} should NOT match the old value-space-then-map midpoint={buggy_x}"
+        );
+    }
+
+    #[test]
+    fn stacked_data_label_midpoint_unaffected_by_fix_under_linear_scale() {
+        // Issue 1 の修正(値空間の中点を map → 先に map してからピクセル空間で平均)は、
+        // 線形軸では数学的に無演算(LinearScale.map はアフィン写像なので
+        // map((v0+v1)/2) == (map(v0)+map(v1))/2 が常に成立)。
+        // 対数軸版のテストと全く同じ構造(同じ値 [10,90]、同じ判定手法)で、
+        // 「新実装(pixel_mid)」と「旧実装が出していたはずの位置(buggy_x)」が
+        // 線形軸では一致することを直接示す(= 修正が線形パスの挙動を変えていない証明)。
+        let json = r#"{"type":"bar","data":{"labels":["A"],
+            "datasets":[{"data":[10]},{"data":[90]}]},
+            "options":{"indexAxis":"y",
+                "scales":{"x":{"stacked":true},"y":{"stacked":true}},
+                "plugins":{"datalabels":{"display":true}}}}"#;
+        let spec = parse(json);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+
+        let mut rects: Vec<(f64, f64, f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .collect();
+        rects.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert_eq!(rects.len(), 2, "1 カテゴリ × 2 系列で 2 本の Rect");
+        let (seg2_x, seg2_y, seg2_w, seg2_h) = rects[1];
+        let pixel_mid = seg2_x + seg2_w / 2.0;
+
+        // 線形軸での「値空間の中点を map した位置」(旧実装相当)。map10/map100 は
+        // 線形なので単純な線形補間で独立に再現できる。
+        let map10 = seg2_x;
+        let map100 = seg2_x + seg2_w;
+        let t = (55.0 - 10.0) / (100.0 - 10.0);
+        let buggy_x = map10 + t * (map100 - map10);
+
+        // "90" は線形軸の nice_ticks 目盛りラベルとしても現れうる(このケースで実際に
+        // 衝突する)ため、セグメント2の行の縦範囲で絞り込んでデータラベルだけを拾う。
+        let label_x = scene
+            .items
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text {
+                    x,
+                    y,
+                    content,
+                    anchor: Anchor::Middle,
+                    ..
+                } if content == "90" && *y >= seg2_y && *y <= seg2_y + seg2_h => Some(*x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing data label for value 90"));
+
+        // 線形軸では pixel_mid と buggy_x が(浮動小数点誤差の範囲で)完全に一致する。
+        assert!(
+            (buggy_x - pixel_mid).abs() < 1e-6,
+            "linear scale: value-space-then-map should equal pixel-space midpoint exactly \
+             (affine map): buggy_x={buggy_x} pixel_mid={pixel_mid}"
+        );
+        assert!(
+            (label_x - pixel_mid).abs() < 0.5,
+            "label x={label_x} should match pixel-space segment midpoint={pixel_mid}"
+        );
     }
 
     #[test]
