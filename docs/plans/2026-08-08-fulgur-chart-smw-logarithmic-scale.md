@@ -532,6 +532,8 @@ cat /tmp/chartjs_ticks_log.json
 3. 一番端(min/max)の tick は major でなくてもラベルが付くか?
 
 > **【実測により判明した重要な訂正】** 上記 Step 1 のコメント「既定の tick フォーマッタを直接呼び、実際に描画されるラベル文字列を取る」は誤りだった。`scale.getLabelForValue(value)` は数値フォーマット(桁区切り・小数桁)のみを行い、ラベルの可視性(空文字列になるかどうか)は一切反映しない。実際に描画されるラベルは `tick.label`(`generateTickLabels()` が `options.ticks.callback`、既定は `Ticks.formatters.logarithmic`、を通して設定する値)であり、両者は全く別物だった。実装した `tools/chartjs_ticks.mjs` は `label: t.label` と `getLabelForValue: scale.getLabelForValue(t.value)` を両方出力するよう修正済み。詳細と根拠は文末の「Task 6 実測結果」節を参照。
+>
+> **【さらなる訂正: autoSkip 汚染】** 上記 Step 1 のサンプルコードのように `scale.ticks` を `new Chart()` 構築後にそのまま読むと、**post-autoSkip**(canvasサイズ・フォントサイズ依存で間引き後)の配列になる。`generateTicks()`(純粋なドメイン計算、canvas非依存)の本当の出力を見るには `options.scales.y.afterBuildTicks(scale)` フックで `autoSkip()` 実行前に `scale.ticks` を捕捉する必要がある。実装済みの `tools/chartjs_ticks.mjs`(`getLogTicks` 関数)はこの修正を反映済み — 上記コードサンプルは Step 1 執筆時点の初版であり、**実際に動くコードやコマンドを再実行する場合は `tools/chartjs_ticks.mjs` の現物と文末「Task 6 実測結果」節を参照すること(このサンプルをコピーしない)**。また、この autoSkip 汚染とその帰結(Chart.js とのtick値/ラベル可視性ルールの厳密一致は不可能)を踏まえ、本プロジェクトは対数軸で Chart.js との tick-for-tick 一致を追わない方針とした(詳細は Task 7 参照)。
 
 **Step 4: この実測結果を `docs/plans/2026-08-08-fulgur-chart-smw-logarithmic-scale.md` の本セクションの下に追記する(次タスクの入力になるため記録を残す)。**
 
