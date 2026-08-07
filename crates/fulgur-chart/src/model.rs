@@ -691,9 +691,12 @@ mod tests {
 
     #[test]
     fn vertical_bar_reports_logarithmic_y_axis_without_leaking_step_sentinel() {
+        // beginAtZero:false を明示: 最小値 1 はちょうど decade 境界(10^0)なので、
+        // 既定の beginAtZero:true のままだとドメインが1桁広がり(0.1 まで)、
+        // このテストの主眼(introspection API の kind/step)から逸れてしまう。
         let json = r#"{"type":"bar","data":{"labels":["a","b","c"],
           "datasets":[{"data":[1,10,100]}]},
-          "options":{"scales":{"y":{"type":"logarithmic"}}}}"#;
+          "options":{"scales":{"y":{"type":"logarithmic","beginAtZero":false}}}}"#;
         let spec = chartjs::parse(json, false).unwrap();
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let model = build_model(&spec, &m);

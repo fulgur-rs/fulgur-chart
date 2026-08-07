@@ -1671,9 +1671,16 @@ mod horizontal_log_scale_tests {
     fn grid_lines_count_covers_major_and_minor_ticks() {
         // 2 decade ドメイン [1,100] → major=[1,10,100](3本)、
         // minor=mantissa 2..9 × 2 decades(16本) = 縦グリッド計 19 本。
+        // beginAtZero:false を明示: 横棒の値軸は既定 beginAtZero:true で、
+        // 最小値 1 はちょうど decade 境界(10^0)なので既定のままだと
+        // log_value_domain の beginAtZero 特例でドメインが [0.1,100] に広がり
+        // (major/minor 本数が変わる)、このテストの主眼(グリッド本数の集計)から
+        // 逸れてしまう。beginAtZero の対数軸特例自体は layout/common.rs 側の
+        // log_value_domain_begin_at_zero_widens_by_one_decade_when_min_is_exact_boundary
+        // で個別に検証済み。
         let spec = parse(
             r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,100]}]},
-                "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic"}}}}"#,
+                "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic","beginAtZero":false}}}}"#,
         );
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = build(&spec, &m);
@@ -1688,7 +1695,7 @@ mod horizontal_log_scale_tests {
     fn grid_display_false_drops_both_major_and_minor_gridlines() {
         let spec = parse(
             r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,100]}]},
-                "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic","grid":{"display":false}}}}}"#,
+                "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic","beginAtZero":false,"grid":{"display":false}}}}}"#,
         );
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = build(&spec, &m);
@@ -1724,7 +1731,7 @@ mod horizontal_log_scale_tests {
         // (Task 9 で common.rs::compute()/draw_frame() に施したのと同じ修正を横棒にも適用)。
         let spec = parse(
             r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,100]}]},
-                "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic","grid":{"drawTicks":true}}}}}"#,
+                "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic","beginAtZero":false,"grid":{"drawTicks":true}}}}}"#,
         );
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = build(&spec, &m);
