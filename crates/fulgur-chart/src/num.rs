@@ -29,6 +29,107 @@ pub fn fmt_num(v: f64) -> String {
     s
 }
 
+/// 対数軸の目盛ラベル用。`fmt_num` と違い小数点以下を2桁に丸めない
+/// (log軸は 0.0001 のような広いレンジの値を扱うため)。
+///
+/// # 実装方針: 固定小数点位置ではなく有効数字ベースで丸める
+///
+/// 当初案(`format!("{v:.15}")` で固定15桁に丸めてから末尾 0 を trim する案)は
+/// 実測の結果 2 種類の不具合を起こすことが分かったため採用しなかった:
+///
+/// 1. **極小値での桁溢れ**: `log_ticks` の minor tick は
+///    `mantissa as f64 * 10f64.powi(exp)` で生成され、`exp` は理論上
+///    `-308` まで届く(`scale.rs` の `MAX_LOG_DECADES` 参照)。固定15桁丸めだと
+///    `exp <= -16` あたりから小数第15桁までしか表現できず、本来 mantissa が
+///    5〜9 で異なるはずの値(例: `5e-16`〜`9e-16`)がすべて同じ
+///    `"0.000000000000001"` に潰れてしまう。さらに `exp <= -19` 程度では
+///    非ゼロの目盛値が丸めで完全に `"0"` になり、ラベルとして意味をなさない。
+/// 2. **乗算誤差の露出**: 逆に `format!("{v}")`(最短往復表現)を使う案も
+///    試したが、こちらは真逆の問題を起こす。`log_ticks` の mantissa 計算は
+///    `3.0 * 10f64.powi(-1)` のような乗算で行われ、これは厳密に `0.3` には
+///    ならず(浮動小数点表現の都合で `0.30000000000000004` に丸め込まれた
+///    値になる)、最短往復表現ではその誤差桁がそのまま桁として出力されてしまう
+///    (実測: `"0.30000000000000004"`)。
+///
+/// 上記いずれの方式でも壊れるため、実測に基づき「有効数字 12 桁に丸めてから
+/// 末尾 0 を trim する」方式を採用した。`f64` の実効精度は有効数字
+/// 15〜17 桁程度であり(15 桁から乗算誤差が見え始めることを実測で確認済み)、
+/// 12 桁ならその誤差の遥か手前で丸め切れるため上記の(2)を回避できる。
+/// 同時に "何桁目に丸めるか" を値の大きさに応じて動かす(固定小数点ではなく
+/// 有効数字ベース)ため、値がどれだけ小さくても mantissa の桁を失わず
+/// 上記の(1)も回避できる。`exp` を `-324..=308`(subnormal 境界を含む
+/// `f64` の全表現域)まで、`mantissa` を `1..=9` まで総当たりして
+/// この2種の不具合が再現しないことを確認済み(このモジュールのテスト参照)。
+///
+/// ticks.format(fulgur-chart-pof、別issue)が実装されたら、明示指定時は
+/// そちらを優先し、未指定時のデフォルトとしてこの関数を使い続ける想定。
+pub fn fmt_num_log(v: f64) -> String {
+    if !v.is_finite() {
+        return "0".to_string();
+    }
+    if v == 0.0 {
+        return "0".to_string(); // -0.0 も含め正規化
+    }
+
+    // 有効数字 12 桁。詳細は関数doc参照: 15 桁以上では乗算誤差が桁として
+    // 露出し始めることを実測で確認しているため、十分なマージンを取った値。
+    const SIG_DIGITS: usize = 12;
+
+    let sign = if v.is_sign_negative() { "-" } else { "" };
+    let v_abs = v.abs();
+
+    // `{:.11e}` は "D.DDDDDDDDDDDeEXP" 形式(仮数部12桁、指数部は既に
+    // 正しく桁上げ処理済み)を返す。Rust の書式化エンジンが丸めと
+    // 桁上げ(例: 9.9999999999996 → "1.00000000000000e1")を保証するため、
+    // ここでの文字列分解は安全。
+    let sci = format!("{v_abs:.*e}", SIG_DIGITS - 1);
+    let Some((mantissa_str, exp_str)) = sci.split_once('e') else {
+        // f64 の LowerExp 実装は有限かつ非ゼロな値に対して常に 'e' を含む
+        // 文字列を返すため、通常この分岐には到達しない。到達した場合でも
+        // panic させず "0" にフォールバックする(このcrate全体の方針)。
+        return "0".to_string();
+    };
+    let Ok(exp) = exp_str.parse::<i32>() else {
+        return "0".to_string();
+    };
+
+    let digits: String = mantissa_str.chars().filter(|c| *c != '.').collect();
+    let digits = digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+
+    // 平文の10進表記では文字列長がおおよそ |exp| に比例する。極端な指数
+    // (例: 10^100)では100文字超の巨大なラベルになり、y軸ラベル幅の計測
+    // (layout/common.rs::compute() 参照)がプロット領域をほぼゼロ幅まで
+    // 圧迫してしまう不具合を実機レンダリングで確認した。この閾値を超えたら
+    // 指数表記(例: "1.23e18")に切り替え、ラベル長を有効数字桁数程度に抑える。
+    const MAX_PLAIN_EXPONENT: i32 = 15;
+    if exp.abs() > MAX_PLAIN_EXPONENT {
+        let mantissa_fmt = if digits.len() <= 1 {
+            digits.to_string()
+        } else {
+            format!("{}.{}", &digits[..1], &digits[1..])
+        };
+        return format!("{sign}{mantissa_fmt}e{exp}");
+    }
+
+    // digits の先頭が小数点の何桁目に来るか(1 なら "D.DDD..." の直後に点)。
+    let point_pos = exp + 1;
+    let mut out = String::new();
+    if point_pos <= 0 {
+        out.push_str("0.");
+        out.push_str(&"0".repeat((-point_pos) as usize));
+        out.push_str(digits);
+    } else if (point_pos as usize) >= digits.len() {
+        out.push_str(digits);
+        out.push_str(&"0".repeat(point_pos as usize - digits.len()));
+    } else {
+        out.push_str(&digits[..point_pos as usize]);
+        out.push('.');
+        out.push_str(&digits[point_pos as usize..]);
+    }
+    format!("{sign}{out}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,5 +160,146 @@ mod tests {
         // 巨大でも有限の値は "0" に化けず、実際の桁数で描画される。
         assert_ne!(s, "0", "huge finite must not collapse to 0: {s}");
         assert!(s.starts_with('1') && s.len() > 100, "got {s}");
+    }
+
+    #[test]
+    fn fmt_num_log_preserves_small_magnitudes() {
+        assert_eq!(fmt_num_log(0.001), "0.001");
+        assert_eq!(fmt_num_log(1.0), "1");
+        assert_eq!(fmt_num_log(1000.0), "1000");
+        assert_eq!(fmt_num_log(0.0001), "0.0001");
+    }
+
+    #[test]
+    fn fmt_num_log_non_finite_falls_back_to_zero() {
+        assert_eq!(fmt_num_log(f64::NAN), "0");
+        assert_eq!(fmt_num_log(f64::INFINITY), "0");
+        assert_eq!(fmt_num_log(f64::NEG_INFINITY), "0");
+    }
+
+    #[test]
+    fn fmt_num_log_zero_is_normalized() {
+        assert_eq!(fmt_num_log(0.0), "0");
+        assert_eq!(fmt_num_log(-0.0), "0"); // 負ゼロを正規化
+    }
+
+    /// `-0.0` や `NEG_INFINITY` の早期returnを経由せず、実際に `sign`
+    /// 変数のロジックを通る負の有限値で符号が保持されることを確認する。
+    #[test]
+    fn fmt_num_log_negative_values_keep_sign() {
+        assert_eq!(fmt_num_log(-1234.5), "-1234.5");
+        assert_eq!(fmt_num_log(-0.003), "-0.003");
+    }
+
+    /// `log_ticks` が生成する実際の tick 値の形(`mantissa as f64 *
+    /// 10f64.powi(exp)`)で桁上げ・乗算誤差が漏れ出ないことを確認する。
+    /// この形の値は例えば `3.0 * 10f64.powi(-1)` が厳密に `0.3` にならず
+    /// `0.30000000000000004` になる、というような f64 の乗算誤差を含む。
+    /// 単純な最短往復表現(`format!("{v}")`)ではこの誤差桁がそのまま
+    /// 出力されてしまうことを実測で確認済み(このテストが退行を防ぐ)。
+    #[test]
+    fn fmt_num_log_avoids_multiplication_rounding_garbage() {
+        let cases: &[(f64, i32, &str)] = &[
+            (3.0, -2, "0.03"),
+            (7.0, 5, "700000"),
+            (1.0, -10, "0.0000000001"),
+            (9.0, -1, "0.9"),
+            (3.0, -1, "0.3"),
+            (6.0, -1, "0.6"),
+            (7.0, -1, "0.7"),
+            (3.0, -9, "0.000000003"),
+            (6.0, -9, "0.000000006"),
+            (9.0, -9, "0.000000009"),
+            // exp=25 は MAX_PLAIN_EXPONENT(15)を超えるため指数表記に切り替わる
+            // (下記 fmt_num_log_switches_to_scientific_notation_beyond_threshold
+            // 参照)。ここでも乗算誤差が桁として漏れないことは確認しておく。
+            (3.0, 25, "3e25"),
+            (7.0, 25, "7e25"),
+        ];
+        for &(mantissa, exp, expected) in cases {
+            let v = mantissa * 10f64.powi(exp);
+            assert_eq!(
+                fmt_num_log(v),
+                expected,
+                "mantissa={mantissa} exp={exp} v={v:e}"
+            );
+        }
+    }
+
+    /// `log_ticks` の minor tick は理論上 `exp` が `-308` 付近まで届きうる
+    /// (`scale.rs::MAX_LOG_DECADES` 参照)。固定小数点桁(例: 小数第15桁)で
+    /// 丸める素朴な実装だと、この範囲で mantissa の異なる値が同じ文字列に
+    /// 潰れてしまう(実測: `5e-16`〜`9e-16` が全て `"0.000000000000001"` に
+    /// 潰れる)。有効数字ベースの丸めならこれを回避できることを確認する。
+    /// なお exp=-16 は MAX_PLAIN_EXPONENT(15)を超えるため、出力自体は
+    /// 指数表記("5e-16" 等)になる — mantissa の先頭桁で distinctness を見る。
+    #[test]
+    fn fmt_num_log_preserves_distinct_extreme_small_magnitudes() {
+        let five = fmt_num_log(5.0 * 10f64.powi(-16));
+        let six = fmt_num_log(6.0 * 10f64.powi(-16));
+        let nine = fmt_num_log(9.0 * 10f64.powi(-16));
+        assert_ne!(five, six, "5e-16 and 6e-16 must not collapse together");
+        assert_ne!(six, nine, "6e-16 and 9e-16 must not collapse together");
+        assert!(five.starts_with('5'), "got {five}");
+        assert!(six.starts_with('6'), "got {six}");
+        assert!(nine.starts_with('9'), "got {nine}");
+    }
+
+    /// 実機バグ回帰テスト: 対数軸の目盛が極端な指数(例: 10^100)になると、
+    /// 平文の10進表記では「1」に続けて指数と同じ桁数の0が並ぶ超長文字列
+    /// (10^100 なら101文字)になる。この文字列を y 軸ラベル幅計測
+    /// (layout/common.rs::compute())にそのまま使うと、プロット領域が
+    /// ほぼゼロ幅まで圧迫されて棒が消える不具合を実機レンダリングで確認した
+    /// (PR #144 の自動レビューで指摘)。指数表記への切り替えでラベル長を
+    /// 有効数字桁数程度(20文字未満)に抑えられていることを確認する。
+    #[test]
+    fn fmt_num_log_switches_to_scientific_notation_beyond_threshold() {
+        let s = fmt_num_log(1e100);
+        assert!(
+            s.len() < 20,
+            "extreme-magnitude label must stay short, got {} chars: {s}",
+            s.len()
+        );
+        assert!(s.contains('e'), "expected scientific notation, got {s}");
+        assert_eq!(s, "1e100");
+
+        let small = fmt_num_log(1e-100);
+        assert!(small.len() < 20, "got {} chars: {small}", small.len());
+        assert_eq!(small, "1e-100");
+
+        // 閾値以内(exp=15)は従来どおり平文の10進表記のまま。
+        assert_eq!(fmt_num_log(1e15), "1000000000000000");
+        // 閾値超え(exp=16)は指数表記に切り替わる。
+        assert_eq!(fmt_num_log(1e16), "1e16");
+    }
+
+    /// `f64` の全表現域(subnormal 境界を含む exp -324..=308, mantissa 1..=9)を
+    /// 総当たりし、非有限値や空文字列を絶対に返さないことを確認する
+    /// (この crate の "パニックしない" 方針に合わせた網羅テスト)。
+    /// `log_ticks` の exp は `MAX_LOG_DECADES`(=308)により下限 `-308` で
+    /// クランプされるため実際には `-324` まで届かない(`scale.rs` 参照)。
+    /// このスイープはそれより広い、f64 の全表現域を掃く上位互換である。
+    ///
+    /// さらに、この crate 全体の「非ゼロ値が `"0"` に潰れてはならない」
+    /// 方針(このモジュールの doc comment 参照: 固定小数点位置での丸めは
+    /// 極小値を `"0"` に潰す不具合を起こした)を、全域を掃く唯一のテスト
+    /// でもある。
+    #[test]
+    fn fmt_num_log_never_panics_or_produces_empty_across_full_range() {
+        for exp in -324..=308 {
+            for mantissa in 1..=9 {
+                let v = mantissa as f64 * 10f64.powi(exp);
+                if v == 0.0 || !v.is_finite() {
+                    continue;
+                }
+                let s = fmt_num_log(v);
+                assert!(!s.is_empty(), "exp={exp} mantissa={mantissa} v={v:e}");
+                assert_ne!(s, "-", "exp={exp} mantissa={mantissa} v={v:e}");
+                assert_ne!(
+                    s, "0",
+                    "nonzero value must not collapse to 0: exp={exp} mantissa={mantissa} v={v:e}"
+                );
+            }
+        }
     }
 }

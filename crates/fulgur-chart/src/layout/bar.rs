@@ -191,6 +191,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
     );
     let stacked = placement_stacked && value_stacked;
+    let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     for b in vertical_bar_boxes(spec, &frame) {
         let ser = &spec.series[b.series];
         items.push(Prim::Rect {
@@ -205,7 +206,10 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
         let cx = b.x + b.w / 2.0;
         if stacked {
-            // セグメント中央(box 中心 = 値中点; ys は線形なので一致)に値ラベル。
+            // セグメント中央(box 中心)に値ラベル。b.y/b.h は既に ys で写像済みの
+            // ピクセル空間なので、ys が線形か対数(非アフィン)かに関わらず、
+            // ピクセル空間で平均するこの中点計算は常に正しい(値空間で先に
+            // 中点を取ってから map する横棒側の旧実装は対数軸で誤っていた)。
             let mid_y = b.y + b.h / 2.0;
             items.push(value_label(
                 cx,
@@ -214,6 +218,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 Anchor::Middle,
                 ink,
                 b.value,
+                is_log,
             ));
         } else {
             // 正は上端の少し上(- LABEL_GAP)、負は下端の下にラベル。負側は
@@ -232,6 +237,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 Anchor::Middle,
                 ink,
                 b.value,
+                is_log,
             ));
         }
     }
@@ -246,9 +252,10 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 /// 横棒(indexAxis:"y"): 値軸=X(左→右非反転)、カテゴリ軸=Y(上→下)。
 /// 縦向き前提の common::compute/draw_frame は使わず、転置レイアウトを自前で描く。
 fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
+    use crate::ir::ScaleKind;
     use crate::layout::common::*;
     use crate::num::fmt_num;
-    use crate::scale::{LinearScale, nice_ticks};
+    use crate::scale::{LinearScale, NiceTicks, ValueScale, nice_ticks};
     use crate::scene::Anchor;
 
     let ink = spec.theme.text_color;
@@ -256,7 +263,24 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     // 横棒は値軸が x のため x_axis を渡す（begin_at_zero/suggested も x_axis から読む）。
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
-    let ticks = nice_ticks(dmin, dmax, 10);
+    let is_log = spec.x_axis.scale_kind == ScaleKind::Logarithmic;
+    let (ticks, minor_ticks) = if is_log {
+        let log = crate::scale::log_ticks(dmin, dmax);
+        (
+            NiceTicks {
+                min: log.min,
+                max: log.max,
+                // 対数軸では decade 間隔が一定でない(1,10,100,...)ため "step" は
+                // 意味を持たない。0.0 は Task 9(common.rs::compute())と同じ log 専用の
+                // 番兵(nice_ticks は常に step>0 を返す)。
+                step: 0.0,
+                ticks: log.major,
+            },
+            log.minor,
+        )
+    } else {
+        (nice_ticks(dmin, dmax, 10), Vec::new())
+    };
 
     // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。
     let mut max_cat_w = 0.0_f32;
@@ -322,8 +346,19 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
 
-    // 値→X(非反転)。
-    let xs = LinearScale::new(ticks.min, ticks.max, plot_left, plot_right);
+    // 値→X(非反転)。対数軸は log10 空間の LinearScale を内側に持つ ValueScale::Log。
+    // ticks.min/max は log_ticks が返す 10^n の decade 境界(常に正)なので、
+    // その log10() は有限かつ ticks.min < ticks.max(log_ticks は hi_exp > lo_exp を保証)。
+    let xs = if is_log {
+        ValueScale::Log {
+            inner: LinearScale::new(ticks.min.log10(), ticks.max.log10(), plot_left, plot_right),
+            floor: ticks.min,
+        }
+    } else {
+        ValueScale::Linear(LinearScale::new(
+            ticks.min, ticks.max, plot_left, plot_right,
+        ))
+    };
 
     let mut items: Vec<Prim> = Vec::new();
 
@@ -363,9 +398,34 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             size: label_font,
             anchor: Anchor::Middle,
             fill: ink,
-            content: fmt_num(t),
+            content: if is_log {
+                crate::num::fmt_num_log(t)
+            } else {
+                fmt_num(t)
+            },
             rotate_deg: None,
         });
+    }
+    // 2b. 対数軸の minor グリッド(mantissa 2..9、ラベルなし)。線形軸では
+    // minor_ticks が常に空なので no-op。major と同じ濃さだと decade 境界が
+    // 埋もれるため、common.rs::draw_frame と同様に半透明で薄く描く。
+    if x_grid_cfg.display {
+        let minor_grid_color = crate::ir::Color {
+            a: x_grid_color.a * 0.5,
+            ..x_grid_color
+        };
+        for &t in &minor_ticks {
+            let x = xs.map(t);
+            items.push(Prim::Line {
+                x1: x,
+                y1: plot_top,
+                x2: x,
+                y2: plot_bottom,
+                stroke: minor_grid_color,
+                stroke_width: x_grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
     }
 
     // 3. 底辺の値軸線(X のボーダー)。x_axis.border が水平線を支配する。
@@ -400,10 +460,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     // 3c. tick 短線(値軸=X)。x_axis.grid.draw_ticks が true のとき plot_bottom から下方向へ。
     // 色は grid.color を継承(既定 ink)。カテゴリ軸(Y)側は Chart.js で通常 tick を描かないためスキップ。
+    // 対数軸では minor_ticks(mantissa 2..9)にも同じ短線を描く(2b の minor グリッド線と
+    // 1:1 対応させる。Task 9 で common.rs::compute() に施したのと同じ修正)。
     const TICK_LEN: f64 = 4.0;
     if x_grid_cfg.draw_ticks {
         let tick_color = x_grid_cfg.color.unwrap_or(ink);
-        for &t in &ticks.ticks {
+        for &t in ticks.ticks.iter().chain(minor_ticks.iter()) {
             let x = xs.map(t);
             items.push(Prim::Line {
                 x1: x,
@@ -494,9 +556,21 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     fill: ser.fill_at(i),
                 });
                 if spec.data_labels {
-                    // セグメント中央(値中点)に値ラベルを置く。
-                    let mid_x = xs.map((v0 + v1) / 2.0);
-                    items.push(value_label(mid_x, cy, label_font, Anchor::Middle, ink, v));
+                    // セグメント中央(box 中心)に値ラベルを置く。x0/x1 は既に xs で
+                    // 写像済みのピクセル空間なので、ここで平均する(ピクセル空間の中点)。
+                    // 値空間で (v0+v1)/2.0 を先に計算してから map すると、対数軸では
+                    // log10 が非アフィンなためピクセル中点とズレる(線形軸ではアフィン
+                    // 写像なので数学的に一致するが、対数軸では誤った位置になる)。
+                    let mid_x = (x0 + x1) / 2.0;
+                    items.push(value_label(
+                        mid_x,
+                        cy,
+                        label_font,
+                        Anchor::Middle,
+                        ink,
+                        v,
+                        is_log,
+                    ));
                 }
             }
         } else if placement_stacked {
@@ -527,7 +601,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     } else {
                         (vx - LABEL_GAP, Anchor::End)
                     };
-                    items.push(value_label(cx, cy, label_font, anchor, ink, v));
+                    items.push(value_label(cx, cy, label_font, anchor, ink, v, is_log));
                 }
             }
         } else {
@@ -559,7 +633,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     } else {
                         (vx - LABEL_GAP, Anchor::End)
                     };
-                    items.push(value_label(lx, cy, label_font, anchor, ink, v));
+                    items.push(value_label(lx, cy, label_font, anchor, ink, v, is_log));
                 }
             }
         }
@@ -1072,5 +1146,498 @@ mod horizontal_axis_style_tests {
             )
         });
         assert!(has_x_title, "x_axis.title は水平テキストで描画");
+    }
+}
+
+#[cfg(test)]
+mod horizontal_log_scale_tests {
+    //! 横棒(indexAxis:"y")の対数 X 軸: major/minor grid, log-aware ラベル, tick 刻み,
+    //! baseline(bar が軸下端から生える)を検証する。Task 9(common.rs::compute()/draw_frame(),
+    //! 縦軸)と対になる、build_horizontal 専用の対数分岐テスト。
+
+    use super::build;
+    use crate::font::DEFAULT_FONT;
+    use crate::frontend::chartjs;
+    use crate::ir::{ChartSpec, ScaleKind};
+    use crate::num::fmt_num_log;
+    use crate::scene::{Anchor, Prim, Scene};
+    use crate::text::TextMeasurer;
+
+    fn parse(json: &str) -> ChartSpec {
+        chartjs::parse(json, false).expect("parse")
+    }
+
+    fn scene_for(json: &str) -> Scene {
+        let spec = parse(json);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        build(&spec, &m)
+    }
+
+    /// 3カテゴリ、値は各 decade の中央(mantissa=5)を跨ぐ: 5(1..10圏)/500(100..1000圏)/50000(10000..100000圏)。
+    const LOG_JSON: &str = r#"{"type":"bar","data":{"labels":["A","B","C"],
+        "datasets":[{"data":[5, 500, 50000]}]},
+        "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic"}}}}"#;
+
+    /// 値軸(=X)のグリッド線を検出: y1!=y2 かつ x1==x2(垂直線)で grid_color。
+    /// (horizontal_axis_style_tests::count_vertical_gridlines と同じ判定。テストモジュールを跨いで
+    /// private fn を共有できないため複製する。)
+    fn count_vertical_gridlines(scene: &Scene, spec: &ChartSpec) -> usize {
+        scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, stroke, .. }
+                        if (x1 - x2).abs() < 0.01
+                            && (y1 - y2).abs() > 1.0
+                            && stroke.r == spec.theme.grid_color.r
+                            && stroke.g == spec.theme.grid_color.g
+                            && stroke.b == spec.theme.grid_color.b
+                )
+            })
+            .count()
+    }
+
+    #[test]
+    fn scale_kind_is_logarithmic_and_scoped_to_x_axis_only() {
+        let spec = parse(LOG_JSON);
+        assert!(matches!(spec.x_axis.scale_kind, ScaleKind::Logarithmic));
+        // カテゴリ軸(=Y)は値軸ではないので Linear のまま(scale_kind に意味を持たないが、
+        // 誤って y_axis 側を対数化していないことを確認する)。
+        assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Linear));
+    }
+
+    #[test]
+    fn major_labels_use_fmt_num_log_and_cover_every_decade_boundary() {
+        let scene = scene_for(LOG_JSON);
+        // 値ラベルは Anchor::Middle で描かれる(カテゴリラベルは Anchor::End、
+        // 凡例/タイトルはこの spec に存在しない)。
+        let mut labels: Vec<String> = scene
+            .items
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Text {
+                    content,
+                    anchor: Anchor::Middle,
+                    ..
+                } => Some(content.clone()),
+                _ => None,
+            })
+            .collect();
+        labels.sort();
+        // データ 5..50000 → decade 境界は 1..100000(6 major tick)。
+        let expected: Vec<String> = ["1", "10", "100", "1000", "10000", "100000"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(labels, expected);
+        // fmt_num_log の丸めなし表現であることの直接確認(fmt_num との違いが出るケースで検証)。
+        let sub_one_scene = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[0.0003]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic"}}}}"#,
+        );
+        let has_full_precision_label = sub_one_scene.items.iter().any(|p| {
+            matches!(p,
+                Prim::Text { content, anchor: Anchor::Middle, .. }
+                    if content == &fmt_num_log(0.0001)
+            )
+        });
+        assert!(
+            has_full_precision_label,
+            "sub-1 の対数ラベルは fmt_num_log の全桁表現を使う"
+        );
+    }
+
+    #[test]
+    fn grid_lines_count_covers_major_and_minor_ticks() {
+        // 2 decade ドメイン [1,100] → major=[1,10,100](3本)、
+        // minor=mantissa 2..9 × 2 decades(16本) = 縦グリッド計 19 本。
+        // beginAtZero:false を明示: 横棒の値軸は既定 beginAtZero:true で、
+        // 最小値 1 はちょうど decade 境界(10^0)なので既定のままだと
+        // log_value_domain の beginAtZero 特例でドメインが [0.1,100] に広がり
+        // (major/minor 本数が変わる)、このテストの主眼(グリッド本数の集計)から
+        // 逸れてしまう。beginAtZero の対数軸特例自体は layout/common.rs 側の
+        // log_value_domain_begin_at_zero_widens_by_one_decade_when_min_is_exact_boundary
+        // で個別に検証済み。
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,100]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic","beginAtZero":false}}}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        assert_eq!(
+            count_vertical_gridlines(&scene, &spec),
+            3 + 16,
+            "major(3) + minor(16) の縦グリッド線"
+        );
+    }
+
+    #[test]
+    fn grid_display_false_drops_both_major_and_minor_gridlines() {
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,100]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic","beginAtZero":false,"grid":{"display":false}}}}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        assert_eq!(
+            count_vertical_gridlines(&scene, &spec),
+            0,
+            "grid.display=false → major/minor とも縦グリッド 0 本"
+        );
+        // ラベルは display とは独立に残る(既存の線形パスと同じ挙動)。
+        let label_count = scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p,
+                    Prim::Text {
+                        anchor: Anchor::Middle,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            label_count, 3,
+            "major tick ラベル(1,10,100)は grid.display と無関係に残る"
+        );
+    }
+
+    #[test]
+    fn draw_ticks_true_covers_major_and_minor_tick_marks() {
+        // gridline は major+minor 両方に描く一方、tick 刻みが major だけだと
+        // 「グリッド線はあるのに対応する軸の刻みが無い」という見た目の不整合が生じる
+        // (Task 9 で common.rs::compute()/draw_frame() に施したのと同じ修正を横棒にも適用)。
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,100]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic","beginAtZero":false,"grid":{"drawTicks":true}}}}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        // tick 短線: x1==x2, y2-y1==4.0 (プロット下側 plot_bottom→plot_bottom+4)。
+        let tick_count = scene
+            .items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, .. }
+                        if (x1 - x2).abs() < 0.01 && ((*y2 - *y1) - 4.0).abs() < 1e-9
+                )
+            })
+            .count();
+        assert_eq!(
+            tick_count,
+            3 + 16,
+            "log 軸の tick 刻み数は major(3)+minor(16) の本数と一致すべき"
+        );
+    }
+
+    #[test]
+    fn bars_grow_from_axis_floor_not_zero() {
+        // base_v = 0.0.clamp(ticks.min, ticks.max) は対数軸でも ticks.min(常に正の
+        // decade 境界)に評価される(0.0 は決して正のドメインに含まれないため)。
+        // よって全ての bar は左端(plot_left = xs.map(ticks.min))から生える。
+        // Task 11 Step 3: この行は変更していないので、その挙動を実測で確認する。
+        //
+        // 実装内部の ValueScale を直接使わず、描画済みの major ラベル("1"/"10")の
+        // x 座標だけから期待値を導出する(log10 補間)。これにより「対数写像そのもの」を
+        // 独立に検証できる(単に3本の bar の x が互いに一致するだけの弱い保証ではない)。
+        let spec = parse(LOG_JSON);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+
+        let label_x = |wanted: &str| -> f64 {
+            scene
+                .items
+                .iter()
+                .find_map(|p| match p {
+                    Prim::Text {
+                        x,
+                        content,
+                        anchor: Anchor::Middle,
+                        ..
+                    } if content == wanted => Some(*x),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing major tick label {wanted:?}"))
+        };
+        let x_at_1 = label_x("1");
+        let x_at_10 = label_x("10");
+
+        let rects: Vec<(f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, w, .. } => Some((*x, *w)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rects.len(), 3, "3 カテゴリ分の bar (A=5, B=500, C=50000)");
+
+        // 0. 独立した基準点: Y 軸(カテゴリ軸)ボーダー線(build_horizontal の "3a" で
+        //    plot_left 変数を直接使って描く、xs/ValueScale::Log を一切経由しない線)。
+        //    x_at_1 も bar の左端も xs.map() 経由で計算されるため、xs の構築自体
+        //    (例えば plot_left/plot_right に誤ったオフセットを混入させるバグ)が
+        //    壊れていても、それらは「お互いに」自己無矛盾のままズレて test をすり抜け
+        //    得る(mutation testing で実証済み: xs 構築時の plot_left/plot_right への
+        //    オフセット注入も、base_v の .clamp(...) 削除も、旧テストは検出できなかった)。
+        //    border_x は xs を経由しない独立した描画経路なので、これを ground truth
+        //    にすることで「x_at_1 や bar 左端が"本当に"正しい plot_left にあるか」を
+        //    内部的な自己無矛盾ではなく検証できる。
+        let border_x = scene
+            .items
+            .iter()
+            .find_map(|p| match p {
+                Prim::Line {
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    stroke,
+                    ..
+                } if (x1 - x2).abs() < 1e-9
+                    && (y2 - y1).abs() > 10.0
+                    && stroke.r == spec.theme.text_color.r
+                    && stroke.g == spec.theme.text_color.g
+                    && stroke.b == spec.theme.text_color.b =>
+                {
+                    Some(*x1)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing y-axis (category axis) border line"));
+        assert!(
+            (x_at_1 - border_x).abs() < 0.5,
+            "major tick \"1\" の x={x_at_1} は Y 軸ボーダー線(独立した plot_left 基準)の \
+             x={border_x} と一致すべき"
+        );
+
+        // 1. 全 bar の左端(baseline)は decade 境界 "1" の x、かつ独立基準の border_x
+        //    にも一致する(0 ではない)。
+        for &(x, _) in &rects {
+            assert!(
+                (x - x_at_1).abs() < 0.5,
+                "bar の左端 {x} は major tick \"1\" の x={x_at_1} に一致すべき"
+            );
+            assert!(
+                (x - border_x).abs() < 0.5,
+                "bar の左端 {x} は Y 軸ボーダー線(独立基準)の x={border_x} に一致すべき"
+            );
+        }
+
+        // 2. bar A(値=5)の右端は、"1"/"10" ラベル間を log10(5)≈0.69897 で内分した
+        //    位置(= mantissa=5 の minor gridline)に一致する。対数写像自体のピン留め。
+        let expected_x_at_5 = x_at_1 + (x_at_10 - x_at_1) * 5.0_f64.log10();
+        let (bar_a_x, bar_a_w) = rects[0];
+        assert!(
+            (bar_a_x + bar_a_w - expected_x_at_5).abs() < 0.5,
+            "bar A の右端 {} should land on log10-interpolated x={expected_x_at_5}",
+            bar_a_x + bar_a_w
+        );
+
+        assert!(rects.iter().all(|&(_, w)| w > 0.0 && w.is_finite()));
+    }
+
+    #[test]
+    fn stacked_data_label_midpoint_uses_pixel_space_not_value_space_under_log_scale() {
+        // 積み上げ横棒 + 対数 x 軸、2系列 [10, 90](単一カテゴリ)。
+        // 系列2 のセグメントは値空間で [10, 100]。対数軸では log10 が非アフィンなため、
+        // 「値空間の中点 (10+100)/2=55 を map したピクセル位置」(旧実装のバグ)と
+        // 「セグメント両端を先に map してからピクセル空間で平均する中点」(正しい)は
+        // 一致しない。コードレビューで実測: 800px canvas 上で ~184px の誤差。
+        //
+        // 「対数軸の値軸 × value_stacked」の組み合わせは frontend::chartjs::parse が
+        // 現在は明示エラーで拒否する(log_value_domain がスタック合計を計算しないため
+        // ドメインが過小になる別バグ、fulgur-chart-bap 参照)。この layout レベルの
+        // テストが検証したいのは build_horizontal 自体のピクセル空間中点計算の正しさ
+        // であり、frontend の禁止とは独立した性質(bindings 等で ChartSpec を直接
+        // 組み立てた場合にも成り立つべき)なので、まず対数軸なしで parse させてから
+        // scale_kind だけを直接差し替えて対数軸 + stacked の ChartSpec を作る。
+        let json = r#"{"type":"bar","data":{"labels":["A"],
+            "datasets":[{"data":[10]},{"data":[90]}]},
+            "options":{"indexAxis":"y",
+                "scales":{"x":{"stacked":true},"y":{"stacked":true}},
+                "plugins":{"datalabels":{"display":true}}}}"#;
+        let mut spec = parse(json);
+        spec.x_axis.scale_kind = ScaleKind::Logarithmic;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+
+        // 2 系列 × 1 カテゴリ → Rect は 2 本。x 昇順に並べると
+        // [0]=系列1(値空間 [0,10])、[1]=系列2(値空間 [10,100])。
+        let mut rects: Vec<(f64, f64, f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .collect();
+        rects.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert_eq!(rects.len(), 2, "1 カテゴリ × 2 系列で 2 本の Rect");
+        let (seg2_x, seg2_y, seg2_w, seg2_h) = rects[1];
+        let pixel_mid = seg2_x + seg2_w / 2.0; // 修正後の正しい中点(ピクセル空間で平均)
+
+        // 旧実装(バグ)が出す位置を独立に再現する: map(10)/map(100) は既に描画済みの
+        // Rect 端から読み取り、その2点間を log10(55) で内分する(map 自体は
+        // bars_grow_from_axis_floor_not_zero と同じ log10-補間手法で独立に検証済み)。
+        let map10 = seg2_x;
+        let map100 = seg2_x + seg2_w;
+        let t = (55.0_f64.log10() - 10.0_f64.log10()) / (100.0_f64.log10() - 10.0_f64.log10());
+        let buggy_x = map10 + t * (map100 - map10);
+
+        // 実際に描画されたデータラベル("90")の x 座標。x 軸の major tick ラベルにも
+        // 偶然 "90" が現れうる(線形軸の nice_ticks 次第)ため、セグメント2の行の
+        // 縦範囲 [seg2_y, seg2_y+seg2_h] 内にあるものだけをデータラベルとみなす
+        // (軸目盛ラベルは常にプロット領域の外側・下端の固定 y に描かれるため区別できる)。
+        let label_x = scene
+            .items
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text {
+                    x,
+                    y,
+                    content,
+                    anchor: Anchor::Middle,
+                    ..
+                } if content == "90" && *y >= seg2_y && *y <= seg2_y + seg2_h => Some(*x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing data label for value 90"));
+
+        // このシナリオでは buggy_x と pixel_mid が有意に(50px 以上)乖離する
+        // ことをまず確認する(対数軸で非アフィンなズレが実際に起きる設定であることの担保)。
+        assert!(
+            (buggy_x - pixel_mid).abs() > 50.0,
+            "test scenario should reproduce a large value-space-vs-pixel-space gap: \
+             buggy_x={buggy_x} pixel_mid={pixel_mid}"
+        );
+
+        // 修正後の実装はピクセル空間中点に一致し、旧バグの位置には一致しない。
+        assert!(
+            (label_x - pixel_mid).abs() < 0.5,
+            "label x={label_x} should match pixel-space segment midpoint={pixel_mid}"
+        );
+        assert!(
+            (label_x - buggy_x).abs() > 50.0,
+            "label x={label_x} should NOT match the old value-space-then-map midpoint={buggy_x}"
+        );
+    }
+
+    #[test]
+    fn stacked_data_label_midpoint_unaffected_by_fix_under_linear_scale() {
+        // Issue 1 の修正(値空間の中点を map → 先に map してからピクセル空間で平均)は、
+        // 線形軸では数学的に無演算(LinearScale.map はアフィン写像なので
+        // map((v0+v1)/2) == (map(v0)+map(v1))/2 が常に成立)。
+        // 対数軸版のテストと全く同じ構造(同じ値 [10,90]、同じ判定手法)で、
+        // 「新実装(pixel_mid)」と「旧実装が出していたはずの位置(buggy_x)」が
+        // 線形軸では一致することを直接示す(= 修正が線形パスの挙動を変えていない証明)。
+        let json = r#"{"type":"bar","data":{"labels":["A"],
+            "datasets":[{"data":[10]},{"data":[90]}]},
+            "options":{"indexAxis":"y",
+                "scales":{"x":{"stacked":true},"y":{"stacked":true}},
+                "plugins":{"datalabels":{"display":true}}}}"#;
+        let spec = parse(json);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+
+        let mut rects: Vec<(f64, f64, f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .collect();
+        rects.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert_eq!(rects.len(), 2, "1 カテゴリ × 2 系列で 2 本の Rect");
+        let (seg2_x, seg2_y, seg2_w, seg2_h) = rects[1];
+        let pixel_mid = seg2_x + seg2_w / 2.0;
+
+        // 線形軸での「値空間の中点を map した位置」(旧実装相当)。map10/map100 は
+        // 線形なので単純な線形補間で独立に再現できる。
+        let map10 = seg2_x;
+        let map100 = seg2_x + seg2_w;
+        let t = (55.0 - 10.0) / (100.0 - 10.0);
+        let buggy_x = map10 + t * (map100 - map10);
+
+        // "90" は線形軸の nice_ticks 目盛りラベルとしても現れうる(このケースで実際に
+        // 衝突する)ため、セグメント2の行の縦範囲で絞り込んでデータラベルだけを拾う。
+        let label_x = scene
+            .items
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text {
+                    x,
+                    y,
+                    content,
+                    anchor: Anchor::Middle,
+                    ..
+                } if content == "90" && *y >= seg2_y && *y <= seg2_y + seg2_h => Some(*x),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing data label for value 90"));
+
+        // 線形軸では pixel_mid と buggy_x が(浮動小数点誤差の範囲で)完全に一致する。
+        assert!(
+            (buggy_x - pixel_mid).abs() < 1e-6,
+            "linear scale: value-space-then-map should equal pixel-space midpoint exactly \
+             (affine map): buggy_x={buggy_x} pixel_mid={pixel_mid}"
+        );
+        assert!(
+            (label_x - pixel_mid).abs() < 0.5,
+            "label x={label_x} should match pixel-space segment midpoint={pixel_mid}"
+        );
+    }
+
+    /// 実機バグ回帰テスト: データラベルは `common::value_label` を経由するが、
+    /// 対数軸フラグを渡していなかったため常に `fmt_num`(小数2桁丸め)で
+    /// フォーマットされ、0.0003 のような対数軸上の正当な小さい値が "0" という
+    /// 誤ったラベルになっていた(PR #144 の自動レビューで指摘)。
+    #[test]
+    fn data_label_uses_fmt_num_log_precision_on_horizontal_log_axis() {
+        let json = r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[0.0003]}]},
+            "options":{"indexAxis":"y",
+                "scales":{"x":{"type":"logarithmic"}},
+                "plugins":{"datalabels":{"display":true}}}}"#;
+        let spec = parse(json);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+
+        // 横棒(dodge, 非stacked)のデータラベルは正値なら Anchor::Start(bar.rs の
+        // `if v >= base_v { (vx + LABEL_GAP, Anchor::Start) }` 参照)。軸目盛ラベルは
+        // Anchor::Middle/End なので、値そのもので判定すれば十分区別できる。
+        let has_full_precision_label = scene
+            .items
+            .iter()
+            .any(|p| matches!(p, Prim::Text { content, .. } if content == &fmt_num_log(0.0003)));
+        assert!(
+            has_full_precision_label,
+            "対数軸のデータラベルは fmt_num_log の全桁表現(\"0.0003\")を使うべき、\
+             fmt_num(丸めで \"0\")ではない"
+        );
+        assert!(
+            !scene
+                .items
+                .iter()
+                .any(|p| matches!(p, Prim::Text { content, .. } if content == "0")),
+            "0.0003 のデータラベルが \"0\" に丸められて描画されてはならない"
+        );
+    }
+
+    #[test]
+    fn linear_x_axis_has_no_minor_gridlines_regression() {
+        // type 未指定(既定 Linear)では従来通り minor グリッドは出ない(is_log 分岐が
+        // 誤って常時発火していないことの回帰確認)。
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,100]}]},
+                "options":{"indexAxis":"y"}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        // nice_ticks(1,100,10) は 10 刻み程度の major のみで、log の 19 本には遠く及ばない。
+        assert!(count_vertical_gridlines(&scene, &spec) < 19);
     }
 }

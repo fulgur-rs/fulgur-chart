@@ -1,11 +1,11 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
 use crate::ir::{
-    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, RadialAxis, SizeMode,
-    XPositions,
+    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, RadialAxis, ScaleKind,
+    SizeMode, XPositions,
 };
 use crate::num::fmt_num;
-use crate::scale::{LinearScale, NiceTicks, nice_ticks, vega_nice_ticks};
+use crate::scale::{LinearScale, NiceTicks, ValueScale, nice_ticks, vega_nice_ticks};
 use crate::scene::{Anchor, Prim};
 use crate::temporal::{TemporalTick, temporal_ticks};
 use crate::text::TextMeasurer;
@@ -205,7 +205,9 @@ pub struct Frame {
     pub plot_top: f64,
     pub plot_bottom: f64,
     pub ticks: NiceTicks,
-    pub ys: LinearScale,
+    pub ys: ValueScale,
+    /// 対数軸のラベルなし minor 目盛(mantissa 2..9)。線形軸では常に空。
+    pub minor_ticks: Vec<f64>,
     pub temporal_ticks: Vec<TemporalTick>,
 }
 
@@ -236,9 +238,17 @@ pub(crate) fn temporal_plot_right_legend_title(spec: &ChartSpec) -> Option<&str>
     }
 }
 
-/// 値ドメイン(begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
+/// 値ドメイン(線形軸: begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
 /// 縦棒(compute)と横棒(build_horizontal)が同一の値域計算を共有する。
+///
+/// 対数軸(`scale_kind == Logarithmic`)は `log_value_domain` へ早期分岐する。
+/// この分岐では上記2性質はどちらも成立しない: begin_at_zero は非適用、
+/// 空データ/正データなしの場合は `0..1` ではなく `1..10` を返す。詳細は
+/// `log_value_domain` のドキュメントを参照。
 pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
+    if axis.scale_kind == ScaleKind::Logarithmic {
+        return log_value_domain(spec, axis);
+    }
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
     if matches!(
@@ -344,6 +354,148 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     (domain_min, domain_max)
 }
 
+/// 対数軸専用のドメイン計算。線形版(上の `value_domain` 本体)と異なる点:
+/// `begin_at_zero` は「0 をドメインに含める」という線形の意味では効かない(0 は
+/// 対数軸に存在しえない)が、chart.js 実機で確認した通り「最小正値がちょうど
+/// decade 境界(10^n)のとき、その値のバー/点が軸の床と重なって高さ0になる」のを
+/// 避けるため、その1ケースに限り domain_min をさらに1桁下げる効果を持つ
+/// (`is_exact_decade_boundary` 参照)。0 は最小正値の1桁下に置換してドメインへ含め、
+/// 負値(`frontend/chartjs.rs` で既に NaN 化済みのはず)は通常の有限値フィルタで
+/// 自然に除外される。`suggested_min`/`suggested_max` は正の値のみ尊重する。
+///
+/// 未対応(スコープ外、Task 11 実装者向けメモ): `value_domain` 本体は
+/// `ChartKind::Bar { value_stacked: true, .. }` をカテゴリごとの正負サム(スタック高さ)
+/// として特別扱いするが、この対数版はそれを行わず、全系列の値をフラットに
+/// min/max するだけ。積み上げ棒 + 対数軸の組み合わせは現状 `frontend/chartjs.rs`
+/// 側でも弾かれておらず(`ChartKind::Bar { horizontal: false, .. }` は
+/// `value_stacked` の真偽を問わず対数軸を許可する)、そのまま Task 11 のピクセル
+/// マッピングまで届くとスタック高さではなく個々の値でドメインが決まり、
+/// バーがプロット領域からはみ出しうる(fulgur-chart-bap)。対数スケール上での
+/// スタック合成の意味論(chart.js 実機がどう扱うか)は未調査のため、ここで
+/// 独自に決め打ちしない。
+///
+/// `v` が(丸め誤差を許容して)ちょうど 10 の整数乗かどうかを判定する。
+/// `log_value_domain` の beginAtZero 特例(このコメントの直上、関数doc参照)でのみ
+/// 使う。
+fn is_exact_decade_boundary(v: f64) -> bool {
+    if !v.is_finite() || v <= 0.0 {
+        return false;
+    }
+    let exp = v.log10().round();
+    (10f64.powf(exp) - v).abs() < v * 1e-9
+}
+
+fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
+    let mut min_positive = f64::INFINITY;
+    let mut max_positive = f64::NEG_INFINITY;
+    let mut has_zero = false;
+    for s in &spec.series {
+        for &v in &s.values {
+            if !v.is_finite() {
+                continue;
+            }
+            if v == 0.0 {
+                has_zero = true;
+                continue;
+            }
+            if v > 0.0 {
+                if v < min_positive {
+                    min_positive = v;
+                }
+                if v > max_positive {
+                    max_positive = v;
+                }
+            }
+            // v < 0.0 はここに来ないはず(parse 時に NaN 化済み)が、念のため無視する。
+        }
+    }
+
+    let (mut domain_min, mut domain_max) = if !min_positive.is_finite() || !max_positive.is_finite()
+    {
+        // 正データが1つもない(空 / 0 のみ / 負のみ)。線形版(データなし → suggested を
+        // 初期シードにする、chart.js 互換)に倣い、正の suggested_min/suggested_max が
+        // あればそれを初期シードにする(どちらか一方だけでも可)。begin_at_zero は
+        // 対数軸では無関係(0 はドメインに含められない)。下の suggested 適用ブロックを
+        // 素通りしないよう、ここで早期 return せず通常経路に合流させる。
+        let lo = axis
+            .suggested_min
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .unwrap_or(1.0);
+        let hi = axis
+            .suggested_max
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .unwrap_or(10.0);
+        (lo, if hi > lo { hi } else { lo * 10.0 })
+    } else {
+        // min_positive を1桁下げる(min_positive/10)、ただし非正規化数(subnormal)
+        // 近傍で 0.0 へアンダーフローする場合は下げず min_positive のまま使う
+        // (「対数ドメインの下端は正」という不変条件の防御。実用上あり得ない極小
+        // データだが、パニックにも 0 除算的な誤ったドメインにもしないため)。
+        let decade_below = || {
+            let d = min_positive / 10.0;
+            if d.is_finite() && d > 0.0 {
+                d
+            } else {
+                min_positive
+            }
+        };
+        let domain_min = if has_zero {
+            // データに 0 が含まれる場合は begin_at_zero の値によらず常に1桁下げる
+            // (chart.js 実測で確認済み: beginAtZero:false でも 0 混在データの min は
+            // 変わらない)。
+            decade_below()
+        } else if axis.begin_at_zero && is_exact_decade_boundary(min_positive) {
+            // beginAtZero:true かつ最小正値がちょうど 10^n(decade境界そのもの)の
+            // ときだけ、さらに1桁下げる。理由: log_ticks の decade 丸めは通常
+            // min_positive を上回らない直近の 10^n に丸めるため、min_positive 自体が
+            // 10^n ならドメイン下端(=軸の描画上の床)と最小値が完全一致し、その
+            // バー/点の高さが 0 になって消えてしまう(実機で再現・確認済み)。
+            // min_positive が decade 境界ちょうどでなければ(例: 5, 11)、通常の
+            // decade 丸めで既に隙間ができるため何もしない(これも実測で確認済み:
+            // [5,100]/[11,100] は beginAtZero の有無で結果が変わらない)。
+            decade_below()
+        } else {
+            min_positive
+        };
+        (domain_min, max_positive)
+    };
+
+    if let Some(s) = axis.suggested_min
+        && s.is_finite()
+        && s > 0.0
+        && s < domain_min
+    {
+        domain_min = s;
+    }
+    if let Some(s) = axis.suggested_max
+        && s.is_finite()
+        && s > 0.0
+        && s > domain_max
+    {
+        domain_max = s;
+    }
+    if domain_max <= domain_min {
+        // domain_min が f64::MAX 近傍(> f64::MAX/10)だと ×10 が +inf へオーバーフロー
+        // しうる。線形版の `domain_min + 1.0` と違い ×10 は極端な入力で非有限に
+        // なりうるため、その場合は f64::MAX(有限の中で広げられる最大値)へ丸める。
+        // これは domain_min < f64::MAX を保証しない: domain_min 自身が f64::MAX の
+        // とき(例: 単一の f64::MAX 値のみのデータ)は f64::MAX == domain_min のままで
+        // 縮退が解消されない。ただし線形版も同じ入力極限で
+        // `f64::MAX + 1.0 == f64::MAX`(丸めで無変化)という同じ性質を持つため、
+        // これは対数専用の後退ではない。この関数(`value_domain` 経由含む)は pub であり、
+        // 戻り値 (f64, f64) は「常に有限」という契約を将来のどんな呼び出し元に対しても
+        // 維持すべきなので、今日の唯一の呼び出し元 log_ticks が非有限入力を許容する
+        // (scale.rs のコメント参照)ことに頼らず、ここで有限性を保証しておく。
+        let expanded = domain_min * 10.0;
+        domain_max = if expanded.is_finite() {
+            expanded
+        } else {
+            f64::MAX
+        };
+    }
+    (domain_min, domain_max)
+}
+
 /// Text laid from an axis start edge toward its end edge may overflow either
 /// side depending on its anchor. Returns `(before_start, after_end)`.
 fn aligned_title_overflow(
@@ -359,23 +511,49 @@ fn aligned_title_overflow(
     }
 }
 
-/// spec から y ドメイン(begin_at_zero尊重)・nice_ticks・y軸ラベル幅・プロット領域・凡例帯を計算。
+/// spec から y ドメイン(線形軸: begin_at_zero尊重。対数軸は `value_domain` 参照)・
+/// nice_ticks・y軸ラベル幅・プロット領域・凡例帯を計算。
 pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y ドメイン。
     let (domain_min, domain_max) = value_domain(spec, &spec.y_axis);
-    let ticks = if matches!(spec.size_mode, SizeMode::PlotArea)
+    let is_log = spec.y_axis.scale_kind == ScaleKind::Logarithmic;
+    let (ticks, minor_ticks) = if is_log {
+        let log = crate::scale::log_ticks(domain_min, domain_max);
+        (
+            NiceTicks {
+                min: log.min,
+                max: log.max,
+                // 対数軸では decade 間隔が一定でない(1,10,100,...)ため "step" は
+                // 意味を持たない。0.0 は「非対数の step とは値域が異なる」ことを示す
+                // 番兵(nice_ticks/vega_nice_ticks は常に step>0 を返すため 0.0 は
+                // log 専用の合図になる)。model.rs の introspection API はこの番兵を
+                // 外部に漏らさないよう `step: None` に変換して公開する
+                // (`model.rs::logarithmic_axis` 参照)。
+                step: 0.0,
+                ticks: log.major,
+            },
+            log.minor,
+        )
+    } else if matches!(spec.size_mode, SizeMode::PlotArea)
         && matches!(spec.kind, ChartKind::Line)
         && matches!(spec.x_positions, XPositions::Temporal { .. })
     {
-        vega_nice_ticks(domain_min, domain_max, spec.height)
+        (
+            vega_nice_ticks(domain_min, domain_max, spec.height),
+            Vec::new(),
+        )
     } else {
-        nice_ticks(domain_min, domain_max, 10)
+        (nice_ticks(domain_min, domain_max, 10), Vec::new())
     };
 
-    // y 軸ラベル幅。
+    // y 軸ラベル幅。対数軸は fmt_num_log を使う(幅の広いラベルでクリップさせない)。
     let mut max_w = 0.0_f32;
     for &t in &ticks.ticks {
-        let s = fmt_num(t);
+        let s = if is_log {
+            crate::num::fmt_num_log(t)
+        } else {
+            fmt_num(t)
+        };
         let w = m.width(&s, spec.theme.font_size as f32);
         if w > max_w {
             max_w = w;
@@ -596,8 +774,24 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         }
     };
 
-    // y スケール（上下反転）。
-    let ys = LinearScale::new(ticks.min, ticks.max, plot_bottom, plot_top);
+    // y スケール（上下反転）。対数軸は log10 空間の LinearScale を内側に持つ
+    // ValueScale::Log。ticks.min/max は log_ticks が返す 10^n の decade 境界
+    // (常に正)なので、その log10() は有限かつ ticks.min < ticks.max
+    // (log_ticks は hi_exp > lo_exp を保証する)。floor は ValueScale::Log::map が
+    // 0/負値/丸め誤差を log10 前にクランプする下限として使う。
+    let ys = if is_log {
+        ValueScale::Log {
+            inner: LinearScale::new(ticks.min.log10(), ticks.max.log10(), plot_bottom, plot_top),
+            floor: ticks.min,
+        }
+    } else {
+        ValueScale::Linear(LinearScale::new(
+            ticks.min,
+            ticks.max,
+            plot_bottom,
+            plot_top,
+        ))
+    };
     let temporal_ticks = match &spec.x_positions {
         XPositions::Temporal { unix_millis } => unix_millis
             .first()
@@ -616,6 +810,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         plot_bottom,
         ticks,
         ys,
+        minor_ticks,
         temporal_ticks,
     }
 }
@@ -730,9 +925,10 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         });
     }
 
-    // 2. 横グリッド + y 軸ラベル。
+    // 2. 横グリッド + y 軸ラベル(主目盛)。対数軸は fmt_num_log でラベルを描く。
     let grid_cfg = &spec.y_axis.grid;
     let grid_color = grid_cfg.color.unwrap_or(spec.theme.grid_color);
+    let is_log = spec.y_axis.scale_kind == ScaleKind::Logarithmic;
     for &t in &frame.ticks.ticks {
         let y = frame.ys.map(t);
         if grid_cfg.display {
@@ -752,9 +948,36 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             size: label_font,
             anchor: Anchor::End,
             fill: ink,
-            content: fmt_num(t),
+            content: if is_log {
+                crate::num::fmt_num_log(t)
+            } else {
+                fmt_num(t)
+            },
             rotate_deg: None,
         });
+    }
+    // 2b. 対数軸の minor グリッド(mantissa 2..9、ラベルなし)。線形軸では
+    // frame.minor_ticks が常に空なので no-op。1 decade あたり major の8倍(mantissa
+    // 2..9)の本数になり、major と同じ濃さだと decade 境界が埋もれる。Chart.js に
+    // 倣い、視認性のため半透明(アルファ半減)で薄く描く(tick-for-tick parity ではなく
+    // 見た目の可読性目的の意図的な調整。scale.rs::LogTicks の非目標セクション参照)。
+    if grid_cfg.display {
+        let minor_grid_color = Color {
+            a: grid_color.a * 0.5,
+            ..grid_color
+        };
+        for &t in &frame.minor_ticks {
+            let y = frame.ys.map(t);
+            items.push(Prim::Line {
+                x1: frame.plot_left,
+                y1: y,
+                x2: frame.plot_right,
+                y2: y,
+                stroke: minor_grid_color,
+                stroke_width: grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
     }
 
     // 3. カテゴリカル x grid。baseline より先に置き、交点を border が覆うようにする。
@@ -807,6 +1030,10 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
 
     // 3b. y 軸目盛(tick 刻み)。draw_ticks=true のとき、plot_left から外側へ短線を描く。
     // 色は grid.color を継承する(Chart.js 既定と同じ挙動: grid.color が gridline と tick の両方を制御)。
+    // 対数軸では frame.minor_ticks(mantissa 2..9)にも同じ短線を描く。2b で minor
+    // グリッド線をラベルなしで描いているのと対称に、tick 刻みも major/minor を
+    // 揃えないと「グリッド線はあるのに対応する軸の刻みが無い」という見た目の
+    // 不整合が生じるため(gridline と tick 刻みは 1:1 対応させる)。
     const TICK_LEN: f64 = 4.0;
     let ticks_cfg = &spec.y_axis.grid;
     if ticks_cfg.draw_ticks {
@@ -815,7 +1042,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         } else {
             ticks_cfg.color.unwrap_or(ink)
         };
-        for &t in &frame.ticks.ticks {
+        for &t in frame.ticks.ticks.iter().chain(frame.minor_ticks.iter()) {
             let y = frame.ys.map(t);
             items.push(Prim::Line {
                 x1: frame.plot_left - TICK_LEN,
@@ -1104,16 +1331,34 @@ pub fn legend_entry_width(m: &TextMeasurer, name: &str, font_size: f64) -> f64 {
     12.0 + 4.0 + m.width(name, font_size as f32) as f64 + 16.0
 }
 
-/// 値ラベルの Prim::Text を生成する(フォント=size、内容=fmt_num(v))。
+/// 値ラベルの Prim::Text を生成する(フォント=size、内容=fmt_num(v)/fmt_num_log(v))。
 /// 全チャート種でデータラベル生成を一元化する。x/y/anchor/fill/size は呼び出し側が決める。
-pub fn value_label(x: f64, y: f64, size: f64, anchor: Anchor, fill: Color, v: f64) -> Prim {
+/// `is_log` は値軸が対数スケールかどうか(対数軸を持ちうるのは Bar/Line のみ。
+/// pie/mixed/radial 等、対数軸を取りえない呼び出し元は常に `false` を渡す)。
+/// `false` なら従来通り `fmt_num`(小数2桁丸め)、`true` なら `fmt_num_log`
+/// (有効数字ベース、広レンジ対応)を使う — 対数軸では `fmt_num` の丸めにより
+/// 0.0003 のような小さい実値のラベルが "0" に潰れてしまうため(実機バグ、
+/// PR #144 の自動レビューで指摘)。
+pub fn value_label(
+    x: f64,
+    y: f64,
+    size: f64,
+    anchor: Anchor,
+    fill: Color,
+    v: f64,
+    is_log: bool,
+) -> Prim {
     Prim::Text {
         x,
         y,
         size,
         anchor,
         fill,
-        content: fmt_num(v),
+        content: if is_log {
+            crate::num::fmt_num_log(v)
+        } else {
+            fmt_num(v)
+        },
         rotate_deg: None,
     }
 }
@@ -1124,7 +1369,7 @@ mod tests {
     use crate::font::DEFAULT_FONT;
     use crate::ir::{
         AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, LegendPos,
-        LineInterpolation, Point, Series, SeriesType, SizeMode, XPositions,
+        LineInterpolation, Point, ScaleKind, Series, SeriesType, SizeMode, XPositions,
     };
     use crate::text::TextMeasurer;
 
@@ -1165,6 +1410,7 @@ mod tests {
                 offset: false,
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
+                scale_kind: ScaleKind::Linear,
             },
             y_axis: AxisSpec {
                 title: None,
@@ -1176,6 +1422,7 @@ mod tests {
                 offset: false,
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
+                scale_kind: ScaleKind::Linear,
             },
             legend: LegendPos::None,
             legend_title: None,
@@ -1664,6 +1911,410 @@ mod tests {
         assert!(
             min <= 0.0,
             "suggested_min=50 はデータの下端(0.0)を縮小してはいけない: 実際 min={min}"
+        );
+    }
+
+    #[test]
+    fn log_value_domain_uses_min_positive_and_max() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![5.0, 50.0, 500.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(min, 5.0);
+        assert_eq!(max, 500.0);
+    }
+
+    #[test]
+    fn log_value_domain_substitutes_zero_with_decade_below_min_positive() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0, 30.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(min, 3.0); // 30 の1桁下
+        assert_eq!(max, 30.0);
+    }
+
+    #[test]
+    fn log_value_domain_ignores_begin_at_zero_when_min_is_not_a_decade_boundary() {
+        // begin_at_zero=true でも 0 は含めない(対数軸に存在しえないため)。
+        // さらに、最小正値(40.0)がちょうど 10^n(decade境界)でない場合は、
+        // beginAtZero によるドメイン下端の追加の1桁下げも起きない
+        // (is_exact_decade_boundary 特例、chart.js 実測: [5,100]/[11,100] 等)。
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = true;
+        spec.series[0].values = vec![40.0, 80.0];
+        let (min, _max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(min, 40.0);
+    }
+
+    /// 実機バグ回帰テスト: beginAtZero:true(縦棒の既定)かつ最小正値がちょうど
+    /// decade 境界(10^n)のとき、そのままだとドメイン下端(=軸の描画上の床)と
+    /// 最小値が完全一致し、そのバーの高さが 0 になって消えてしまう(実機
+    /// レンダリングで再現・確認済み)。chart.js 実測(tools/ で node chart.js
+    /// 実行して確認: [10,100] beginAtZero:true → min=1)に合わせ、この場合のみ
+    /// さらに1桁下げる。PR #144 の自動レビュー(P1)で指摘。
+    #[test]
+    fn log_value_domain_begin_at_zero_widens_by_one_decade_when_min_is_exact_boundary() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = true;
+        spec.series[0].values = vec![10.0, 100.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (1.0, 100.0));
+    }
+
+    #[test]
+    fn log_value_domain_begin_at_zero_false_does_not_widen_exact_boundary() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = false;
+        spec.series[0].values = vec![10.0, 100.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (10.0, 100.0));
+    }
+
+    #[test]
+    fn log_value_domain_ignores_non_positive_suggested_bounds() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.suggested_min = Some(-10.0);
+        spec.y_axis.suggested_max = Some(0.0);
+        spec.series[0].values = vec![10.0, 20.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        // make_bar_spec の y_axis は begin_at_zero:true(縦棒の既定)で、最小正値 10.0 は
+        // ちょうど decade 境界(10^1)なので、beginAtZero 特例で1桁下がって 1.0 になる
+        // (chart.js 実測: [10,100] beginAtZero:true → min=1、下記コメント参照)。
+        // 非正の suggested_min/suggested_max(-10/0)が無視されている点は変わらず検証できる。
+        assert_eq!(min, 1.0);
+        assert_eq!(max, 20.0);
+    }
+
+    #[test]
+    fn log_value_domain_positive_suggested_bounds_widen_domain() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.suggested_min = Some(0.5);
+        spec.y_axis.suggested_max = Some(1000.0);
+        spec.series[0].values = vec![10.0, 20.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (0.5, 1000.0));
+    }
+
+    #[test]
+    fn log_value_domain_falls_back_when_all_non_positive() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0, f64::NAN]; // NaN は既にネガティブマスク済み想定
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (1.0, 10.0));
+    }
+
+    /// 実機バグ回帰テスト: データが空/0のみ/負のみの場合、正の
+    /// suggested_min/suggested_max が指定されていてもハードコードされた 1..10 に
+    /// 潰れ、明示的に設定した軸オプションが無視されていた(PR #144 の自動レビューで
+    /// 指摘)。線形版(データなし → suggested を初期シードにする)と同じ契約に揃える。
+    #[test]
+    fn log_value_domain_honors_suggested_bounds_when_no_positive_data() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0]; // 正データなし
+        spec.y_axis.suggested_min = Some(0.01);
+        spec.y_axis.suggested_max = Some(100.0);
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (0.01, 100.0));
+    }
+
+    #[test]
+    fn log_value_domain_honors_single_suggested_bound_when_no_positive_data() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0];
+        spec.y_axis.suggested_max = Some(500.0);
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(
+            (min, max),
+            (1.0, 500.0),
+            "suggested_min 未指定時は既定の1.0を使う"
+        );
+    }
+
+    #[test]
+    fn log_value_domain_degenerate_domain_near_f64_max_stays_finite() {
+        // domain_min == domain_max == 5e307 (> f64::MAX/10) だと、線形版の
+        // `+1.0` に相当する縮退補正が単純な ×10 だと +inf にオーバーフローする。
+        // 有限のまま広がることを固定する回帰テスト。
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![5e307, 5e307];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(min, 5e307);
+        assert!(max.is_finite(), "max should stay finite, got {max}");
+        assert!(max > min, "max={max} should exceed min={min}");
+    }
+
+    #[test]
+    fn log_value_domain_zero_substitution_never_produces_non_positive_min() {
+        // min_positive が最小の非正規化数(subnormal)近傍だと ÷10 が 0.0 へ
+        // アンダーフローしうる。ドメイン下端は常に正であるべき。
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0, 5e-324];
+        let (min, _max) = value_domain(&spec, &spec.y_axis);
+        assert!(min > 0.0, "min should stay positive, got {min}");
+    }
+
+    /// 対数 y 軸の ChartSpec を組み立てる共通ヘルパ。
+    fn log_spec(values: Vec<f64>, width: f64) -> ChartSpec {
+        let mut spec = make_bar_spec(1, width);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = values;
+        spec
+    }
+
+    /// 対数軸の compute() が返す `Frame` を検証する共通ヘルパ。
+    fn compute_log_frame(values: Vec<f64>, width: f64) -> Frame {
+        let spec = log_spec(values, width);
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        compute(&spec, &m)
+    }
+
+    #[test]
+    fn compute_log_scale_ys_is_log_variant_with_ticks_min_as_floor() {
+        let frame = compute_log_frame(vec![1.0, 100_000.0], 600.0);
+        match &frame.ys {
+            ValueScale::Log { inner: _, floor } => {
+                assert_eq!(*floor, frame.ticks.min);
+            }
+            ValueScale::Linear(_) => panic!("expected ValueScale::Log for a logarithmic axis"),
+        }
+        // 軸は上下反転しているので、最小 tick はプロット下端、最大 tick は上端。
+        assert_eq!(frame.ys.map(frame.ticks.min), frame.plot_bottom);
+        assert_eq!(frame.ys.map(frame.ticks.max), frame.plot_top);
+        // 中間の decade(10^2 = 100)は下端と上端の間、かつ単調減少の位置に来るべき。
+        let mid_y = frame.ys.map(100.0);
+        assert!(
+            mid_y > frame.plot_top && mid_y < frame.plot_bottom,
+            "mid_y={mid_y} should be strictly between plot_top={} and plot_bottom={}",
+            frame.plot_top,
+            frame.plot_bottom
+        );
+    }
+
+    #[test]
+    fn compute_log_scale_step_is_zero_sentinel() {
+        // 対数軸では decade 間隔が一定でないため、step は 0.0 の番兵を返す
+        // (nice_ticks/vega_nice_ticks は常に正の step を返すため、0.0 は
+        // 呼び出し側が「これは log_ticks 経由の Frame だ」と判定できる合図になる)。
+        let frame = compute_log_frame(vec![1.0, 100.0], 600.0);
+        assert_eq!(frame.ticks.step, 0.0);
+    }
+
+    #[test]
+    fn compute_log_scale_minor_ticks_populated_and_bracketed_by_majors() {
+        let frame = compute_log_frame(vec![1.0, 1000.0], 600.0);
+        assert!(
+            !frame.minor_ticks.is_empty(),
+            "minor ticks should be populated for a multi-decade log domain"
+        );
+        for &t in &frame.minor_ticks {
+            assert!(
+                t > frame.ticks.min && t < frame.ticks.max,
+                "minor tick {t} should lie strictly inside [{}, {}]",
+                frame.ticks.min,
+                frame.ticks.max
+            );
+        }
+    }
+
+    #[test]
+    fn compute_linear_scale_minor_ticks_stays_empty() {
+        // 線形軸では常に minor_ticks が空であることを固定する回帰テスト
+        // (log 専用フィールドが線形パスへ意図せず漏れ出さないことの保証)。
+        let spec = make_bar_spec(3, 400.0);
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        assert!(frame.minor_ticks.is_empty());
+        assert!(matches!(frame.ys, ValueScale::Linear(_)));
+    }
+
+    #[test]
+    fn compute_log_scale_realistic_domains_produce_reasonable_tick_counts() {
+        // fulgur-chart-8so(log_ticks の目盛数上限未実装)は既知の追跡issueだが、
+        // それはドメインが極端(数百 decade)に広い/縮退した場合の話であり、
+        // ここで確認するのは「現実的な」ドメイン(1..100000 や 0.01..1000 のような
+        // 数桁レンジ)では目盛数が数十本程度に収まり、数千本には爆発しないこと。
+        for (values, max_major, max_minor) in [
+            (vec![1.0, 100_000.0], 10, 80),
+            (vec![0.01, 1000.0], 10, 80),
+            (vec![42.0, 1337.0], 6, 32),
+        ] {
+            let frame = compute_log_frame(values.clone(), 600.0);
+            assert!(
+                frame.ticks.ticks.len() <= max_major,
+                "values={values:?}: major tick count {} exceeds {max_major}",
+                frame.ticks.ticks.len()
+            );
+            assert!(
+                frame.minor_ticks.len() <= max_minor,
+                "values={values:?}: minor tick count {} exceeds {max_minor}",
+                frame.minor_ticks.len()
+            );
+        }
+    }
+
+    #[test]
+    fn draw_frame_log_scale_labels_major_ticks_only_with_fmt_num_log() {
+        let spec = log_spec(vec![1.0, 100_000.0], 600.0);
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let y_labels: Vec<&String> = items
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Text { x, content, .. } if (*x - (frame.plot_left - 6.0)).abs() < 0.01 => {
+                    Some(content)
+                }
+                _ => None,
+            })
+            .collect();
+        // ラベルは major tick の数だけ(minor にはラベルを付けない)。
+        assert_eq!(y_labels.len(), frame.ticks.ticks.len());
+        // 対数フォーマッタなので大きい値も指数表記に丸められず全桁表示される。
+        assert!(
+            y_labels.iter().any(|s| s.as_str() == "100000"),
+            "{y_labels:?}"
+        );
+        assert!(y_labels.iter().any(|s| s.as_str() == "1"), "{y_labels:?}");
+    }
+
+    #[test]
+    fn draw_frame_log_scale_grid_includes_major_and_minor_lines() {
+        let spec = log_spec(vec![1.0, 100.0], 600.0);
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let horizontal_grid_lines = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { y1, y2, x1, x2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && (*x1 - frame.plot_left).abs() < 0.01
+                            && (*x2 - frame.plot_right).abs() < 0.01
+                )
+            })
+            .count();
+        // major(frame.ticks.ticks) + minor(frame.minor_ticks) 本のグリッド線 + baseline 1本。
+        assert_eq!(
+            horizontal_grid_lines,
+            frame.ticks.ticks.len() + frame.minor_ticks.len() + 1
+        );
+    }
+
+    #[test]
+    fn draw_frame_log_scale_grid_display_false_skips_major_and_minor_lines() {
+        let mut spec = log_spec(vec![1.0, 100.0], 600.0);
+        spec.y_axis.grid.display = false;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let horizontal_grid_lines = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { y1, y2, x1, x2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && (*x1 - frame.plot_left).abs() < 0.01
+                            && (*x2 - frame.plot_right).abs() < 0.01
+                )
+            })
+            .count();
+        // baseline (border) の 1 本だけが残る。
+        assert_eq!(horizontal_grid_lines, 1);
+    }
+
+    #[test]
+    fn draw_frame_log_scale_draw_ticks_covers_major_and_minor() {
+        // gridline(2b)は major/minor 両方に描く一方、tick 刻み(3b)が major だけだと
+        // 「グリッド線はあるのに対応する軸の刻みが無い」という見た目の不整合が生じる。
+        // 対数軸では tick 刻みも major+minor の本数だけ描かれることを固定する。
+        let mut spec = log_spec(vec![1.0, 100.0], 600.0);
+        spec.y_axis.grid.draw_ticks = true;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let tick_count = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && ((*x2 - *x1) - 4.0).abs() < 1e-9
+                            && (*x2 - frame.plot_left).abs() < 0.01
+                )
+            })
+            .count();
+        assert_eq!(
+            tick_count,
+            frame.ticks.ticks.len() + frame.minor_ticks.len(),
+            "log 軸の tick 刻み数は major+minor の本数と一致すべき"
+        );
+    }
+
+    #[test]
+    fn compute_log_scale_widens_plot_left_for_full_precision_labels() {
+        // Step 4: y 軸ラベル幅計算も fmt_num_log を使うべき。fmt_num(0.0001) は
+        // 小数2桁丸めで "0" に潰れる(幅が狭い)が、fmt_num_log(0.0001) は
+        // "0.0001" をそのまま返す(幅が広い)。fmt_num のままだと "0.0001" ラベルが
+        // 左マージンからはみ出してクリップされる。fmt_num と fmt_num_log で
+        // 結果が分岐する値を使わない限り、この Step 4 の分岐は誤って fmt_num の
+        // ままでもテストが通ってしまう(実際に一度そのバグを作って確認済み)。
+        let mut spec = log_spec(vec![0.0001, 1.0], 600.0);
+        // beginAtZero:false を明示: 最小値 0.0001 はちょうど decade 境界(10^-4)なので、
+        // 既定の beginAtZero:true のままだとドメインが1桁広がり(0.00001 まで)、
+        // このテストの主眼(ラベル幅計算)から逸れる余分な major tick が増えてしまう。
+        spec.y_axis.begin_at_zero = false;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+
+        let font = spec.theme.font_size as f32;
+        assert_eq!(fmt_num(0.0001), "0", "sanity: fmt_num rounds this to 0");
+        assert_eq!(
+            crate::num::fmt_num_log(0.0001),
+            "0.0001",
+            "sanity: fmt_num_log keeps full precision"
+        );
+        let narrow_w = m.width("0", font) as f64;
+        let wide_w = m.width("0.0001", font) as f64;
+        assert!(
+            wide_w > narrow_w,
+            "test fixture assumption: {wide_w} > {narrow_w}"
+        );
+
+        // plot_left は Step 4 の fmt_num_log 経由の幅計算に一致する
+        // (OUTER_PAD + max_w + 10.0; make_bar_spec は Canvas サイズモード・
+        // 凡例なし・y軸タイトルなしなので legend_left/y_title_w は 0)。
+        let expected_plot_left = OUTER_PAD + wide_w + 10.0;
+        assert!(
+            (frame.plot_left - expected_plot_left).abs() < 1e-6,
+            "plot_left={} should match fmt_num_log-based width {expected_plot_left}",
+            frame.plot_left
+        );
+        // fmt_num の(誤った)幅を使っていたら plot_left はこれより狭くなる。
+        let plot_left_if_fmt_num_were_used = OUTER_PAD + narrow_w + 10.0;
+        assert!(
+            frame.plot_left > plot_left_if_fmt_num_were_used,
+            "plot_left={} should exceed the fmt_num-based (narrower) width {plot_left_if_fmt_num_were_used}",
+            frame.plot_left
         );
     }
 

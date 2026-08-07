@@ -152,17 +152,24 @@ pub fn line_points(
 
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let frame = common::compute(spec, m);
+    let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
 
     let mut items: Vec<Prim> = Vec::new();
     common::draw_frame(&mut items, spec, &frame, m);
 
     for ser in &spec.series {
         // 有効点列: (x, y, 元カテゴリインデックス)。欠損・非有限値を除外。
+        // 対数y軸では 0 も欠損(gap)として扱う: chart.js は log 軸上の値0を
+        // "skip" 点として扱い(ドメイン計算にだけ使い、マーカー・線分は描かない)、
+        // その実測(tools/ で node chart.js 実行して確認)に合わせている。
         // 元インデックスはラベル lookup と gap 検出に使う。
         let valid: Vec<(f64, f64, usize)> = (0..spec.categories.len())
             .filter_map(|i| {
                 let v = ser.values.get(i).copied()?;
                 if !v.is_finite() {
+                    return None;
+                }
+                if is_log && v == 0.0 {
                     return None;
                 }
                 let x = common::line_x(spec, &frame, i);
@@ -317,6 +324,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     Anchor::Middle,
                     spec.theme.text_color,
                     ser.values[cat],
+                    is_log,
                 ));
             }
         }
@@ -675,6 +683,51 @@ mod tests {
                 .any(|item| matches!(item, Prim::Polyline { points, .. } if points.len() == 2)),
             "spanGaps must join the two valid points"
         );
+    }
+
+    /// 実機バグ回帰テスト: chart.js は対数y軸上の値0を "skip" 点として扱い(marker
+    /// も接続線も描かない、ドメイン計算にのみ使う)。修正前は 0 を通常の有限値として
+    /// 扱い、軸の床(floor)にクランプされた位置へマーカーと接続線を描いてしまい、
+    /// 実際のデータにない「V字」の谷が見えてしまっていた(tools/ で node chart.js
+    /// 実行して skip:true を確認、PR #144 の自動レビューで指摘)。
+    #[test]
+    fn logarithmic_line_treats_zero_as_a_gap_not_a_floor_clamped_point() {
+        let scene = scene_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[1, 0, 10]}]},
+               "options":{"scales":{"y":{"type":"logarithmic"}}}}"#,
+        );
+        assert!(
+            !scene
+                .items
+                .iter()
+                .any(|item| matches!(item, Prim::Polyline { points, .. } if points.len() >= 2)),
+            "0 を挟む2区間はどちらも単独点(gap)であり、2点以上を結ぶ折れ線は出ないはず"
+        );
+        let marker_count = scene
+            .items
+            .iter()
+            .filter(|item| matches!(item, Prim::Circle { .. }))
+            .count();
+        assert_eq!(
+            marker_count, 2,
+            "値0の点にはマーカーを描かない(gapとしてskip)"
+        );
+    }
+
+    #[test]
+    fn linear_line_still_draws_zero_as_a_normal_point() {
+        // 線形軸では 0 は通常の有限値のまま(対数軸限定の挙動であることの回帰確認)。
+        let scene = scene_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[1, 0, 10]}]}}"#,
+        );
+        let marker_count = scene
+            .items
+            .iter()
+            .filter(|item| matches!(item, Prim::Circle { .. }))
+            .count();
+        assert_eq!(marker_count, 3, "線形軸では値0も通常の点として描く");
     }
 
     #[test]

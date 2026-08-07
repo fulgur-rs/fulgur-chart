@@ -1,0 +1,19 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": ["A", "B", "C", "D", "E"],
+    "datasets": [
+      {
+        "label": "Requests",
+        "data": [5, 50, 500, 5000, 50000],
+        "backgroundColor": "#36a2eb"
+      }
+    ]
+  },
+  "options": {
+    "scales": { "y": { "type": "logarithmic" } },
+    "plugins": {
+      "title": { "display": true, "text": "Requests (log scale)" }
+    }
+  }
+}
