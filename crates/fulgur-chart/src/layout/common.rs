@@ -482,7 +482,8 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
                 // 意味を持たない。0.0 は「非対数の step とは値域が異なる」ことを示す
                 // 番兵(nice_ticks/vega_nice_ticks は常に step>0 を返すため 0.0 は
                 // log 専用の合図になる)。model.rs の introspection API はこの番兵を
-                // まだ意識していない(Task 12 で対応予定)。
+                // 外部に漏らさないよう `step: None` に変換して公開する
+                // (`model.rs::logarithmic_axis` 参照)。
                 step: 0.0,
                 ticks: log.major,
             },
