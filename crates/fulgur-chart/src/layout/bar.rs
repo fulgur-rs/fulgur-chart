@@ -512,8 +512,13 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
     // 2b. 対数軸の minor グリッド(mantissa 2..9、ラベルなし)。線形軸では
-    // minor_ticks が常に空なので no-op。
+    // minor_ticks が常に空なので no-op。major と同じ濃さだと decade 境界が
+    // 埋もれるため、common.rs::draw_frame と同様に半透明で薄く描く。
     if x_grid_cfg.display {
+        let minor_grid_color = crate::ir::Color {
+            a: x_grid_color.a * 0.5,
+            ..x_grid_color
+        };
         for &t in &minor_ticks {
             let x = xs.map(t);
             items.push(Prim::Line {
@@ -521,7 +526,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 y1: plot_top,
                 x2: x,
                 y2: plot_bottom,
-                stroke: x_grid_color,
+                stroke: minor_grid_color,
                 stroke_width: x_grid_cfg.line_width,
                 dash: Vec::new(),
             });
@@ -1653,7 +1658,7 @@ mod horizontal_log_scale_tests {
 
     #[test]
     fn grid_lines_count_covers_major_and_minor_ticks() {
-        // 単一 decade ドメイン [1,100] → major=[1,10,100](3本)、
+        // 2 decade ドメイン [1,100] → major=[1,10,100](3本)、
         // minor=mantissa 2..9 × 2 decades(16本) = 縦グリッド計 19 本。
         let spec = parse(
             r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,100]}]},
@@ -1843,12 +1848,21 @@ mod horizontal_log_scale_tests {
         // 「値空間の中点 (10+100)/2=55 を map したピクセル位置」(旧実装のバグ)と
         // 「セグメント両端を先に map してからピクセル空間で平均する中点」(正しい)は
         // 一致しない。コードレビューで実測: 800px canvas 上で ~184px の誤差。
+        //
+        // 「対数軸の値軸 × value_stacked」の組み合わせは frontend::chartjs::parse が
+        // 現在は明示エラーで拒否する(log_value_domain がスタック合計を計算しないため
+        // ドメインが過小になる別バグ、fulgur-chart-bap 参照)。この layout レベルの
+        // テストが検証したいのは build_horizontal 自体のピクセル空間中点計算の正しさ
+        // であり、frontend の禁止とは独立した性質(bindings 等で ChartSpec を直接
+        // 組み立てた場合にも成り立つべき)なので、まず対数軸なしで parse させてから
+        // scale_kind だけを直接差し替えて対数軸 + stacked の ChartSpec を作る。
         let json = r#"{"type":"bar","data":{"labels":["A"],
             "datasets":[{"data":[10]},{"data":[90]}]},
             "options":{"indexAxis":"y",
-                "scales":{"x":{"type":"logarithmic","stacked":true},"y":{"stacked":true}},
+                "scales":{"x":{"stacked":true},"y":{"stacked":true}},
                 "plugins":{"datalabels":{"display":true}}}}"#;
-        let spec = parse(json);
+        let mut spec = parse(json);
+        spec.x_axis.scale_kind = ScaleKind::Logarithmic;
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = build(&spec, &m);
 
