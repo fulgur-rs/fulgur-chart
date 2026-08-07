@@ -132,6 +132,71 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
     }
 }
 
+/// 対数スケールの目盛りセット。`major` は 10^n(ラベル表示対象)、`minor` は
+/// 各 decade の mantissa 2..9 倍(ラベルなしグリッド用)。両方とも値空間(データ空間)の
+/// 実値であり、log10 変換は `ValueScale::Log` が写像時に行う。
+#[derive(Clone, Debug, PartialEq)]
+pub struct LogTicks {
+    pub min: f64,
+    pub max: f64,
+    pub major: Vec<f64>,
+    pub minor: Vec<f64>,
+}
+
+/// nice_ticks の MAX_TICK_INTERVALS と同じ趣旨: 極端なドメイン(例 1..1e300)で
+/// decade 数が爆発しないよう上限を設ける。この値は `10f64.powi` が有限を保てる
+/// 指数の限界(10^308 は有限、10^309 は inf)とも一致させ、指数クランプの境界にも使う。
+const MAX_LOG_DECADES: i32 = 308;
+
+/// `data_min`..`data_max`(共に正の有限値)を 10^n の decade 境界に丸め、
+/// 主目盛(10^n)と minor目盛(mantissa 2..9)を生成する。
+/// 呼び出し側契約: `data_min > 0.0 && data_max >= data_min && 両方有限`。
+pub fn log_ticks(data_min: f64, data_max: f64) -> LogTicks {
+    let data_min = if data_min.is_finite() && data_min > 0.0 {
+        data_min
+    } else {
+        f64::MIN_POSITIVE
+    };
+    let data_max = if data_max.is_finite() && data_max >= data_min {
+        data_max
+    } else {
+        data_min * 10.0
+    };
+
+    // 指数を [-MAX_LOG_DECADES, MAX_LOG_DECADES] にクランプし、10f64.powi が
+    // オーバーフローして inf にならないようにする。lo_exp 側は上限を 1 減らし、
+    // hi_exp_raw 側は下限を 1 増やしておくことで、直後の「区間は最低 1 decade」
+    // 保証(hi_exp = max(hi_exp_raw, lo_exp + 1))が clamp 上限を再び超えて
+    // 押し出すことがないようにする。
+    let lo_exp = (data_min.log10().floor() as i32).clamp(-MAX_LOG_DECADES, MAX_LOG_DECADES - 1);
+    let hi_exp_raw = (data_max.log10().ceil() as i32).clamp(-MAX_LOG_DECADES + 1, MAX_LOG_DECADES);
+    let hi_exp = hi_exp_raw.max(lo_exp + 1);
+    // decade 数が上限を超える場合は、実データの上端を表す hi_exp を保ったまま
+    // lo_exp を引き上げて範囲を狭める。逆に hi_exp を下げてしまうと、実際の
+    // data_max より小さい max を返すことになり、「min/max はドメインを覆う
+    // decade 境界である」という契約を破ってしまう。
+    let lo_exp = lo_exp.max(hi_exp - MAX_LOG_DECADES);
+
+    let mut major = Vec::new();
+    let mut minor = Vec::new();
+    for exp in lo_exp..=hi_exp {
+        let decade = 10f64.powi(exp);
+        major.push(decade);
+        if exp < hi_exp {
+            for mantissa in 2..=9 {
+                minor.push(mantissa as f64 * decade);
+            }
+        }
+    }
+
+    LogTicks {
+        min: 10f64.powi(lo_exp),
+        max: 10f64.powi(hi_exp),
+        major,
+        minor,
+    }
+}
+
 /// Vega-Lite のdogfood line chart用に、ゼロ基準と半step余白を持つ目盛りを返す。
 pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTicks {
     let target = if plot_height.is_finite() && plot_height > 0.0 {
@@ -739,5 +804,56 @@ mod tests {
         assert_eq!(t.min, 0.0);
         assert_eq!(t.max, 10000.0);
         assert_eq!(t.ticks.len(), 11);
+    }
+
+    #[test]
+    fn log_ticks_single_decade() {
+        let t = log_ticks(3.0, 7.0);
+        assert_eq!(t.min, 1.0);
+        assert_eq!(t.max, 10.0);
+        assert_eq!(t.major, vec![1.0, 10.0]);
+        assert_eq!(t.minor, vec![2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    fn log_ticks_multi_decade() {
+        let t = log_ticks(30.0, 4000.0);
+        assert_eq!(t.min, 10.0);
+        assert_eq!(t.max, 10000.0);
+        assert_eq!(t.major, vec![10.0, 100.0, 1000.0, 10000.0]);
+        assert!(t.minor.contains(&20.0));
+        assert!(t.minor.contains(&9000.0));
+    }
+
+    #[test]
+    fn log_ticks_rejects_non_positive_domain_does_not_panic() {
+        let t = log_ticks(f64::MIN_POSITIVE, f64::MIN_POSITIVE * 10.0);
+        assert!(t.min.is_finite() && t.min > 0.0);
+        assert!(t.max.is_finite() && t.max > t.min);
+    }
+
+    #[test]
+    fn log_ticks_non_positive_min_still_brackets_domain() {
+        // data_min<=0 や NaN は呼び出し側契約違反だが、Task 4 でマスクされた負値が
+        // ここまで来る現実的な経路がある。data_min を f64::MIN_POSITIVE に
+        // フォールバックさせても、実データの上端(data_max)は必ず覆われること。
+        for data_min in [0.0, -5.0, f64::NAN] {
+            let t = log_ticks(data_min, 100.0);
+            assert!(t.min.is_finite() && t.min > 0.0, "{data_min}: {t:?}");
+            assert!(t.max.is_finite() && t.max >= 100.0, "{data_min}: {t:?}");
+            assert!(t.major.iter().all(|v| v.is_finite()), "{data_min}: {t:?}");
+        }
+    }
+
+    #[test]
+    fn log_ticks_extreme_domain_stays_finite() {
+        // data_max が f64 の指数上限付近にあると、ちょうど覆う decade 境界
+        // (10^309)が inf になってしまう。この場合は正確なブラケットより
+        // 有限性を優先し、min/max/major/minor が全て有限であること。
+        let t = log_ticks(1.5e308, 1.7e308);
+        assert!(t.min.is_finite() && t.min > 0.0, "{t:?}");
+        assert!(t.max.is_finite() && t.max > t.min, "{t:?}");
+        assert!(t.major.iter().all(|v| v.is_finite()), "{t:?}");
+        assert!(t.minor.iter().all(|v| v.is_finite()), "{t:?}");
     }
 }
