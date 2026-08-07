@@ -531,6 +531,8 @@ cat /tmp/chartjs_ticks_log.json
 2. `label` が空文字列/非表示になっている tick はあるか? あるなら、どの mantissa(1/2/5 など)のときか?
 3. 一番端(min/max)の tick は major でなくてもラベルが付くか?
 
+> **【実測により判明した重要な訂正】** 上記 Step 1 のコメント「既定の tick フォーマッタを直接呼び、実際に描画されるラベル文字列を取る」は誤りだった。`scale.getLabelForValue(value)` は数値フォーマット(桁区切り・小数桁)のみを行い、ラベルの可視性(空文字列になるかどうか)は一切反映しない。実際に描画されるラベルは `tick.label`(`generateTickLabels()` が `options.ticks.callback`、既定は `Ticks.formatters.logarithmic`、を通して設定する値)であり、両者は全く別物だった。実装した `tools/chartjs_ticks.mjs` は `label: t.label` と `getLabelForValue: scale.getLabelForValue(t.value)` を両方出力するよう修正済み。詳細と根拠は文末の「Task 6 実測結果」節を参照。
+
 **Step 4: この実測結果を `docs/plans/2026-08-08-fulgur-chart-smw-logarithmic-scale.md` の本セクションの下に追記する(次タスクの入力になるため記録を残す)。**
 
 **Step 5: Commit**
@@ -1315,3 +1317,207 @@ Task 13 (統合テスト) ← Task 4, Task 9, Task 11
 Task 14 (golden PNG) ← Task 9, Task 11
 Task 15 (全体検証)
 ```
+
+---
+
+## Task 6 実測結果
+
+**実行環境:** chart.js `4.5.1`(`tools/node_modules/chart.js/package.json`)、node.js `v24.2.0`、`tools/chartjs_ticks.mjs` を `node chartjs_ticks.mjs > /tmp/chartjs_ticks_linear.json 2> /tmp/chartjs_ticks_log.json` で実行(2026-08-08 実施)。
+
+### 最重要の発見: Step 1 の設計コミュニケーション(`getLabelForValue`)は実際のラベル可視性を反映しない
+
+タスク説明・当初のプラン記述はどちらも「`scale.getLabelForValue(value)` を呼ぶのが最も確実」としていたが、これは**誤り**であることが `chart.js` のソース(`tools/node_modules/chart.js/dist/chart.js`, `tools/node_modules/chart.js/dist/chunks/helpers.dataset.js`)を読んで確認し、かつ実測でも再現した。
+
+- `LogarithmicScale.getLabelForValue(value)`(`dist/chart.js:10534`)の実装は:
+  ```js
+  getLabelForValue(value) {
+      return value === undefined ? '0' : formatNumber(value, this.chart.options.locale, this.options.ticks.format);
+  }
+  ```
+  これは**常に**数値をロケール書式(桁区切り・小数)でフォーマットするだけで、可視/非表示の判定は一切行わない。全 tick に対して非空文字列を返す。
+- 実際に canvas に描画される文字列は `tick.label` プロパティであり、`Scale.update()` 内の `_convertTicksToLabels()`(`dist/chart.js:3936`, `4190-4202`)→ `generateTickLabels()`(`dist/chart.js:4028-4039`)が `options.ticks.callback` を呼んで設定する。`LogarithmicScale` の既定 `ticks.callback` は `Ticks.formatters.logarithmic`(`dist/chart.js:10452-10459` の `static defaults`)。
+- その `Ticks.formatters.logarithmic` の実体(`dist/chunks/helpers.dataset.js:901-917`):
+  ```js
+  logarithmic (tickValue, index, ticks) {
+      if (tickValue === 0) {
+          return '0';
+      }
+      const remain = ticks[index].significand || tickValue / Math.pow(10, Math.floor(log10(tickValue)));
+      if ([1, 2, 3, 5, 10, 15].includes(remain) || index > 0.8 * ticks.length) {
+          return formatters.numeric.call(this, tickValue, index, ticks);
+      }
+      return '';
+  }
+  ```
+  つまり `getLabelForValue` は書式化(`formatters.numeric` 相当)だけを担当し、可視性は `Ticks.formatters.logarithmic` が担う別レイヤ。両者は完全に別物であり、`getLabelForValue` だけを見ると「全 tick にラベルが付く」という誤った結論になる(実際、修正前の実測で確認済み: 全ケースで空文字列が一つも出なかった)。
+
+この発見を受け、`tools/chartjs_ticks.mjs` の `getLogTicks()` は最終的に次の3フィールドを出力するよう修正した:
+- `significand`: tick 生成時に `generateTicks()`(`dist/chart.js:10412-10448`)が計算する内部カウンタ(後述、mantissa と等しいとは限らない)
+- `label`: 実際に描画される文字列(空文字列 = 非表示)。**これが正解データ。**
+- `getLabelForValue`: 数値書式のみ(ラベル可視性の判定には使えない)
+
+### 実測データ(生 JSON、`/tmp/chartjs_ticks_log.json` の内容)
+
+```json
+[
+  {
+    "label": "single decade [3,7]",
+    "data": [3, 7],
+    "yOpts": {},
+    "min": 1,
+    "max": 7,
+    "ticks": [
+      { "value": 1,   "major": true,  "significand": 0,  "label": "1.00", "getLabelForValue": "1" },
+      { "value": 1.1, "major": false, "significand": 1,  "label": "1.10", "getLabelForValue": "1.1" },
+      { "value": 1.2, "major": false, "significand": 2,  "label": "1.20", "getLabelForValue": "1.2" },
+      { "value": 1.3, "major": false, "significand": 3,  "label": "1.30", "getLabelForValue": "1.3" },
+      { "value": 1.4, "major": false, "significand": 4,  "label": "",     "getLabelForValue": "1.4" },
+      { "value": 1.5, "major": false, "significand": 5,  "label": "1.50", "getLabelForValue": "1.5" },
+      { "value": 1.6, "major": false, "significand": 6,  "label": "",     "getLabelForValue": "1.6" },
+      { "value": 1.7, "major": false, "significand": 7,  "label": "",     "getLabelForValue": "1.7" },
+      { "value": 1.8, "major": false, "significand": 8,  "label": "",     "getLabelForValue": "1.8" },
+      { "value": 1.9, "major": false, "significand": 9,  "label": "",     "getLabelForValue": "1.9" },
+      { "value": 2,   "major": false, "significand": 10, "label": "2.00", "getLabelForValue": "2" },
+      { "value": 2.5, "major": false, "significand": 15, "label": "2.50", "getLabelForValue": "2.5" },
+      { "value": 3,   "major": false, "significand": 2,  "label": "3.00", "getLabelForValue": "3" },
+      { "value": 4,   "major": false, "significand": 3,  "label": "4.00", "getLabelForValue": "4" },
+      { "value": 5,   "major": false, "significand": 4,  "label": "5.00", "getLabelForValue": "5" },
+      { "value": 6,   "major": false, "significand": 5,  "label": "6.00", "getLabelForValue": "6" },
+      { "value": 7,   "major": false, "significand": 6,  "label": "7.00", "getLabelForValue": "7" }
+    ]
+  },
+  {
+    "label": "multi decade [30,4000]",
+    "data": [30, 4000],
+    "yOpts": {},
+    "min": 10,
+    "max": 4000,
+    "ticks": [
+      { "value": 10,   "major": true,  "significand": 1,  "label": "10",    "getLabelForValue": "10" },
+      { "value": 30,   "major": false, "significand": 3,  "label": "30",    "getLabelForValue": "30" },
+      { "value": 60,   "major": false, "significand": 6,  "label": "",      "getLabelForValue": "60" },
+      { "value": 80,   "major": false, "significand": 8,  "label": "",      "getLabelForValue": "80" },
+      { "value": 100,  "major": true,  "significand": 10, "label": "100",   "getLabelForValue": "100" },
+      { "value": 200,  "major": false, "significand": 2,  "label": "200",   "getLabelForValue": "200" },
+      { "value": 400,  "major": false, "significand": 4,  "label": "",      "getLabelForValue": "400" },
+      { "value": 600,  "major": false, "significand": 6,  "label": "",      "getLabelForValue": "600" },
+      { "value": 800,  "major": false, "significand": 8,  "label": "",      "getLabelForValue": "800" },
+      { "value": 1000, "major": true,  "significand": 10, "label": "1,000", "getLabelForValue": "1,000" },
+      { "value": 2000, "major": false, "significand": 2,  "label": "2,000", "getLabelForValue": "2,000" },
+      { "value": 4000, "major": false, "significand": 4,  "label": "4,000", "getLabelForValue": "4,000" }
+    ]
+  },
+  {
+    "label": "sub-one [0.003,0.7]",
+    "data": [0.003, 0.7],
+    "yOpts": {},
+    "min": 0.001,
+    "max": 0.7,
+    "ticks": [
+      { "value": 0.001, "major": true,  "significand": 1,  "label": "0.001", "getLabelForValue": "0.001" },
+      { "value": 0.003, "major": false, "significand": 3,  "label": "0.003", "getLabelForValue": "0.003" },
+      { "value": 0.006, "major": false, "significand": 6,  "label": "",      "getLabelForValue": "0.006" },
+      { "value": 0.008, "major": false, "significand": 8,  "label": "",      "getLabelForValue": "0.008" },
+      { "value": 0.01,  "major": true,  "significand": 10, "label": "0.010", "getLabelForValue": "0.01" },
+      { "value": 0.02,  "major": false, "significand": 2,  "label": "0.020", "getLabelForValue": "0.02" },
+      { "value": 0.04,  "major": false, "significand": 4,  "label": "",      "getLabelForValue": "0.04" },
+      { "value": 0.06,  "major": false, "significand": 6,  "label": "",      "getLabelForValue": "0.06" },
+      { "value": 0.08,  "major": false, "significand": 8,  "label": "",      "getLabelForValue": "0.08" },
+      { "value": 0.1,   "major": true,  "significand": 10, "label": "0.100", "getLabelForValue": "0.1" },
+      { "value": 0.2,   "major": false, "significand": 2,  "label": "0.200", "getLabelForValue": "0.2" },
+      { "value": 0.4,   "major": false, "significand": 4,  "label": "0.400", "getLabelForValue": "0.4" },
+      { "value": 0.6,   "major": false, "significand": 6,  "label": "0.600", "getLabelForValue": "0.6" }
+    ]
+  },
+  {
+    "label": "wide [1,1000000]",
+    "data": [1, 1000000],
+    "yOpts": {},
+    "min": 0.1,
+    "max": 1000000,
+    "ticks": [
+      { "value": 0.1,     "major": true,  "significand": 1,  "label": "0.1",         "getLabelForValue": "0.1" },
+      { "value": 0.6,     "major": false, "significand": 6,  "label": "",            "getLabelForValue": "0.6" },
+      { "value": 1,       "major": true,  "significand": 10, "label": "1.0",         "getLabelForValue": "1" },
+      { "value": 5,       "major": false, "significand": 5,  "label": "5.0",         "getLabelForValue": "5" },
+      { "value": 10,      "major": true,  "significand": 10, "label": "10.0",        "getLabelForValue": "10" },
+      { "value": 50,      "major": false, "significand": 5,  "label": "50.0",        "getLabelForValue": "50" },
+      { "value": 100,     "major": true,  "significand": 10, "label": "100.0",       "getLabelForValue": "100" },
+      { "value": 500,     "major": false, "significand": 5,  "label": "500.0",       "getLabelForValue": "500" },
+      { "value": 1000,    "major": true,  "significand": 10, "label": "1,000.0",     "getLabelForValue": "1,000" },
+      { "value": 5000,    "major": false, "significand": 5,  "label": "5,000.0",     "getLabelForValue": "5,000" },
+      { "value": 10000,   "major": true,  "significand": 10, "label": "10,000.0",    "getLabelForValue": "10,000" },
+      { "value": 50000,   "major": false, "significand": 5,  "label": "50,000.0",    "getLabelForValue": "50,000" },
+      { "value": 100000,  "major": true,  "significand": 10, "label": "100,000.0",   "getLabelForValue": "100,000" },
+      { "value": 500000,  "major": false, "significand": 5,  "label": "500,000.0",   "getLabelForValue": "500,000" },
+      { "value": 1000000, "major": true,  "significand": 10, "label": "1,000,000.0", "getLabelForValue": "1,000,000" }
+    ]
+  },
+  {
+    "label": "exact powers [1,1000]",
+    "data": [1, 1000],
+    "yOpts": {},
+    "min": 0.1,
+    "max": 1000,
+    "ticks": [
+      { "value": 0.1,  "major": true,  "significand": 1,  "label": "0.1",     "getLabelForValue": "0.1" },
+      { "value": 0.3,  "major": false, "significand": 3,  "label": "0.3",     "getLabelForValue": "0.3" },
+      { "value": 0.6,  "major": false, "significand": 6,  "label": "",        "getLabelForValue": "0.6" },
+      { "value": 0.8,  "major": false, "significand": 8,  "label": "",        "getLabelForValue": "0.8" },
+      { "value": 1,    "major": true,  "significand": 10, "label": "1.0",     "getLabelForValue": "1" },
+      { "value": 2,    "major": false, "significand": 2,  "label": "2.0",     "getLabelForValue": "2" },
+      { "value": 4,    "major": false, "significand": 4,  "label": "",        "getLabelForValue": "4" },
+      { "value": 6,    "major": false, "significand": 6,  "label": "",        "getLabelForValue": "6" },
+      { "value": 8,    "major": false, "significand": 8,  "label": "",        "getLabelForValue": "8" },
+      { "value": 10,   "major": true,  "significand": 10, "label": "10.0",    "getLabelForValue": "10" },
+      { "value": 20,   "major": false, "significand": 2,  "label": "20.0",    "getLabelForValue": "20" },
+      { "value": 40,   "major": false, "significand": 4,  "label": "",        "getLabelForValue": "40" },
+      { "value": 60,   "major": false, "significand": 6,  "label": "",        "getLabelForValue": "60" },
+      { "value": 80,   "major": false, "significand": 8,  "label": "",        "getLabelForValue": "80" },
+      { "value": 100,  "major": true,  "significand": 10, "label": "100.0",   "getLabelForValue": "100" },
+      { "value": 200,  "major": false, "significand": 2,  "label": "200.0",   "getLabelForValue": "200" },
+      { "value": 400,  "major": false, "significand": 4,  "label": "400.0",   "getLabelForValue": "400" },
+      { "value": 600,  "major": false, "significand": 6,  "label": "600.0",   "getLabelForValue": "600" },
+      { "value": 800,  "major": false, "significand": 8,  "label": "800.0",   "getLabelForValue": "800" },
+      { "value": 1000, "major": true,  "significand": 10, "label": "1,000.0", "getLabelForValue": "1,000" }
+    ]
+  }
+]
+```
+
+(完全な生出力は `tools/chartjs_ticks.mjs` を再実行すればいつでも再生成できる: `cd tools && node chartjs_ticks.mjs 2>&1 >/dev/null` で確認可能。)
+
+### 3つの問いへの回答
+
+**Q1. `major: true` になっているのは mantissa=1(10^n ちょうど)の tick だけか?**
+
+**Yes。** 全5ケースを通して `major: true` の tick は必ず value が 10 のべき乗(0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000, 100000, 1000000)のときだけであり、それ以外は例外なく `major: false`。これはソース上も `isMajor(tickVal)`(`dist/chart.js:10391-10394`)が `tickVal / Math.pow(10, log10Floor(tickVal)) === 1` を判定しているだけで確認できる。**`major` は value から直接計算されるフラグであり、`significand`(下記参照)とは独立している。**
+
+**Q2. `label` が空文字列/非表示になっている tick はあるか? あるならどの mantissa のときか?**
+
+**Yes、ある。** 例(`multi decade [30,4000]`より): `{ value: 60, significand: 6, label: "" }`、`{ value: 80, significand: 8, label: "" }`、`{ value: 400, significand: 4, label: "" }`、`{ value: 600, significand: 6, label: "" }`、`{ value: 800, significand: 8, label: "" }`。
+
+非表示になる条件を実測とソース(`Ticks.formatters.logarithmic`, 前掲)から確定すると:
+
+```
+表示 ⟺ [1, 2, 3, 5, 10, 15].includes(tick.significand) OR tickIndex > 0.8 * ticks.length
+```
+
+つまり「mantissa 1/2/5 のみ表示」という設計時の仮説は**不正確**だった。正しくは **mantissa 1, 2, 3, 5 が表示され、4, 6, 7, 8, 9 が非表示**(1桁 decade 内の `significand` は 10進の mantissa 数字と一致する場合)。**3 が表示され 5 だけでなく含まれる点、および 4 が非表示である点**が設計時仮説との差分。
+
+ただし2つの重要な注意点がある:
+
+1. **`significand` は常に mantissa 数字そのものとは限らない。** `generateTicks()`(`dist/chart.js:10412-10448`)は「ドメインの最初の decade」ではより細かい刻み(1.1, 1.2, …, 1.9, 2.0, 2.5)を生成でき、そこでの `significand` は 1〜9, 10, 15 という「歩数カウンタ」であり 10進 mantissa 桁と一致しない(例: `single decade [3,7]` ケースの value=2.5 は mantissa 的には "2.5" だが `significand=15`、value=5 は mantissa "5" だが `significand=4`)。2巡目以降の decade(例: 30, 40, …, 90 のような整数 mantissa の decade)では `significand` は mantissa 数字(2〜9)と一致する。
+2. **tick 配列の末尾 ~20%(`index > 0.8 * ticks.length`)は mantissa に関係なく常に表示される。** 例: `multi decade [30,4000]` の value=4000(significand=4、本来は非表示のはず)が表示されているのは末尾条件による(ticks.length=12, index=11 > 9.6)。同様に `sub-one [0.003,0.7]` の value=0.6(significand=6)も末尾条件で表示。
+3. 加えて、**tick index 0 で `significand` が 0(falsy)になるケースがある**(`single decade [3,7]` の value=1 で `significand: 0`)。この場合 `ticks[index].significand || tickValue / Math.pow(10, floor(log10(tickValue)))` の `||` フォールバックが発火し、実際の mantissa(=1)で判定される(結果的に表示)。`significand` を "既に計算済みのフラグ" として素朴に転記するとこの 0 のケースを見誤る。
+
+**Q3. 一番端(min/max)の tick は major でなくてもラベルが付くか?**
+
+**Yes、付く。** 具体例: `multi decade [30,4000]` の max tick `{ value: 4000, major: false, significand: 4, label: "4,000" }`(mantissa 4 は本来非表示対象だが、末尾 tick のため表示)。`sub-one [0.003,0.7]` の max tick `{ value: 0.6, major: false, significand: 6, label: "0.600" }` も同様(significand 6 は非表示対象だが末尾のため表示)。これは前述の `index > 0.8 * ticks.length` ルールの直接的な帰結であり、「chart.js は目盛の端(データがちょうど収まる境界)を常に読めるようにする」という UX 上の意図と整合する。
+
+### Task 7 への申し送り事項(実装判断はしない、事実のみ記録)
+
+- **ラベル可視性の正しい判定式:** `mantissa ∈ {1,2,3,5} ⟹ 表示`, `mantissa ∈ {4,6,7,8,9} ⟹ 非表示(ただし末尾 tick を除く)`。Task 5 のプランに書かれていた「(A) major のみ」「(B) mantissa 1/2/5」の 2 択のどちらとも一致しない。3 も表示対象に含める必要がある。「末尾 tick は常に表示」という第3の例外ルールも要考慮(または許容してテストケースから除外)。
+- **`single decade [3,7]` ケースは Task 5 の `log_ticks(3.0, 7.0)` の出力とそのまま突き合わせられない。** `crates/fulgur-chart/src/scale.rs` の既存(dead code)実装は `log_ticks(3.0, 7.0)` に対し `min=1.0, max=10.0, major=[1,10], minor=[2,3,4,5,6,7,8,9]` を返す(decade 境界に丸めるのみで、chart.js のような「最初の decade だけ細かく刻む」ズーム挙動は実装していない)。一方 chart.js 実測は `min=1, max=7` で tick 値そのものが `1, 1.1, 1.2, …, 1.9, 2, 2.5, 3, 4, 5, 6, 7` と全く異なる集合になる。**ラベル可視性ルールを Task 7 で `log_ticks` にピンする際は、tick 値の集合が chart.js と一致するケース(例えば `multi decade [30,4000]` や `exact powers [1,1000]` のような、対象 decade 内で mantissa が整数 2〜9 で埋まるケース)を使うか、あるいは可視性ルールのみを抽出して mantissa ベースで再実装するかを Task 7 側で判断する必要がある。**
+- `_convertTicksToLabels`(`dist/chart.js:4190-4202`)は `label` が `null`/`undefined` の tick だけを配列から削除し(`isNullOrUndef` 判定)、空文字列 `''` の tick は削除せず「ラベルなしの目盛線(グリッドのみ)」として残す。Rust 側で「ラベル非表示」を表現する際は「tick 自体を消す」のではなく「ラベル文字列だけを空にする」設計にする方が chart.js の挙動と一致する。
+- `getLabelForValue` は書式化だけを担うため、**数値の書式(桁区切り "1,000" や小数桁 "1.10"/"0.001" など)を再現する目的では引き続き参考になる**(Task 10 の `fmt_num_log` 向け)。ただし桁数は `formatters.numeric` 内部で ticks 間の delta から動的に決まる(`calculateDelta`)ため、それ自体も単純な固定桁数ではない点に注意(例: `single decade [3,7]` は "1.10" のように小数2桁、`multi decade [30,4000]` は "1,000" のように整数)。この点は Task 10 の実測対象になる。
