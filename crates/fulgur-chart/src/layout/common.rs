@@ -5,7 +5,7 @@ use crate::ir::{
     XPositions,
 };
 use crate::num::fmt_num;
-use crate::scale::{LinearScale, NiceTicks, nice_ticks, vega_nice_ticks};
+use crate::scale::{LinearScale, NiceTicks, ValueScale, nice_ticks, vega_nice_ticks};
 use crate::scene::{Anchor, Prim};
 use crate::temporal::{TemporalTick, temporal_ticks};
 use crate::text::TextMeasurer;
@@ -205,7 +205,7 @@ pub struct Frame {
     pub plot_top: f64,
     pub plot_bottom: f64,
     pub ticks: NiceTicks,
-    pub ys: LinearScale,
+    pub ys: ValueScale,
     pub temporal_ticks: Vec<TemporalTick>,
 }
 
@@ -597,7 +597,12 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     };
 
     // y スケール（上下反転）。
-    let ys = LinearScale::new(ticks.min, ticks.max, plot_bottom, plot_top);
+    let ys = ValueScale::Linear(LinearScale::new(
+        ticks.min,
+        ticks.max,
+        plot_bottom,
+        plot_top,
+    ));
     let temporal_ticks = match &spec.x_positions {
         XPositions::Temporal { unix_millis } => unix_millis
             .first()

@@ -349,7 +349,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     use crate::layout::common::*;
     use crate::num::fmt_num;
-    use crate::scale::{LinearScale, nice_ticks};
+    use crate::scale::{LinearScale, ValueScale, nice_ticks};
     use crate::scene::Anchor;
 
     let ink = spec.theme.text_color;
@@ -430,7 +430,9 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
 
     // 値→X(非反転)。
-    let xs = LinearScale::new(ticks.min, ticks.max, plot_left, plot_right);
+    let xs = ValueScale::Linear(LinearScale::new(
+        ticks.min, ticks.max, plot_left, plot_right,
+    ));
 
     let mut items: Vec<Prim> = Vec::new();
 
