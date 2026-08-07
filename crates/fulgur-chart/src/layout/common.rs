@@ -424,10 +424,13 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     if domain_max <= domain_min {
         // domain_min が f64::MAX 近傍(> f64::MAX/10)だと ×10 が +inf へオーバーフロー
         // しうる。線形版の `domain_min + 1.0` と違い ×10 は極端な入力で非有限に
-        // なりうるため、その場合は f64::MAX へ丸める(f64::MAX は常に有限かつ
-        // domain_min より大きい: この分岐に入る時点で domain_min <= f64::MAX/10 の
-        // 反例、つまり domain_min < f64::MAX だから)。呼び出し側の log_ticks は
-        // どのみち decade 境界へ丸めるので、×10 と f64::MAX の違いは観測されない。
+        // なりうるため、その場合は f64::MAX(有限の中で広げられる最大値)へ丸める。
+        // これは domain_min < f64::MAX を保証しない: domain_min 自身が f64::MAX の
+        // とき(例: 単一の f64::MAX 値のみのデータ)は f64::MAX == domain_min のままで
+        // 縮退が解消されない。ただし線形版も同じ入力極限で
+        // `f64::MAX + 1.0 == f64::MAX`(丸めで無変化)という同じ性質を持つため、
+        // これは対数専用の後退ではない。呼び出し側の log_ticks はどのみち decade
+        // 境界へ丸め、非有限入力もパニックせず処理する(scale.rs のコメント参照)。
         let expanded = domain_min * 10.0;
         domain_max = if expanded.is_finite() {
             expanded
