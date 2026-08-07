@@ -24,6 +24,7 @@ const NAMES: &[&str] = &[
     "line_with_null",
     "bar_with_null",
     "boxplot_with_null",
+    "bar_logarithmic",
 ];
 
 /// 1 チャンネルあたりの絶対差がこの値を超えたら「差分ピクセル」と数える。
