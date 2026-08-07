@@ -191,8 +191,8 @@ pub fn log_ticks(data_min: f64, data_max: f64) -> LogTicks {
     //   MAX_LOG_DECADES を超えることがなくなる(例: data_min = f64::MAX の
     //   とき、この上限がなければ lo_exp=308 → hi_exp=309 → 10^309 = inf)。
     // - hi_exp_raw の上限を MAX_LOG_DECADES に制限すること。これがないと、
-    //   data_max が f64::MAX 付近のとき hi_exp_raw が MAX_LOG_DECADES(=309)
-    //   を超え、10f64.powi(hi_exp) がオーバーフローし得る。
+    //   data_max が f64::MAX 付近のとき hi_exp_raw が 309 になり、
+    //   MAX_LOG_DECADES(=308) を超えて 10f64.powi(hi_exp) がオーバーフローし得る。
     //
     // lo_exp の下限(-MAX_LOG_DECADES)はオーバーフロー防止ではなく、
     // 10f64.powi(lo_exp) が 0 にアンダーフローするのを防ぐためのもの
