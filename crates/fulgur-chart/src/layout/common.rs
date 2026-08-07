@@ -206,6 +206,8 @@ pub struct Frame {
     pub plot_bottom: f64,
     pub ticks: NiceTicks,
     pub ys: ValueScale,
+    /// 対数軸のラベルなし minor 目盛(mantissa 2..9)。線形軸では常に空。
+    pub minor_ticks: Vec<f64>,
     pub temporal_ticks: Vec<TemporalTick>,
 }
 
@@ -469,19 +471,43 @@ fn aligned_title_overflow(
 pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y ドメイン。
     let (domain_min, domain_max) = value_domain(spec, &spec.y_axis);
-    let ticks = if matches!(spec.size_mode, SizeMode::PlotArea)
+    let is_log = spec.y_axis.scale_kind == ScaleKind::Logarithmic;
+    let (ticks, minor_ticks) = if is_log {
+        let log = crate::scale::log_ticks(domain_min, domain_max);
+        (
+            NiceTicks {
+                min: log.min,
+                max: log.max,
+                // 対数軸では decade 間隔が一定でない(1,10,100,...)ため "step" は
+                // 意味を持たない。0.0 は「非対数の step とは値域が異なる」ことを示す
+                // 番兵(nice_ticks/vega_nice_ticks は常に step>0 を返すため 0.0 は
+                // log 専用の合図になる)。model.rs の introspection API はこの番兵を
+                // まだ意識していない(Task 12 で対応予定)。
+                step: 0.0,
+                ticks: log.major,
+            },
+            log.minor,
+        )
+    } else if matches!(spec.size_mode, SizeMode::PlotArea)
         && matches!(spec.kind, ChartKind::Line)
         && matches!(spec.x_positions, XPositions::Temporal { .. })
     {
-        vega_nice_ticks(domain_min, domain_max, spec.height)
+        (
+            vega_nice_ticks(domain_min, domain_max, spec.height),
+            Vec::new(),
+        )
     } else {
-        nice_ticks(domain_min, domain_max, 10)
+        (nice_ticks(domain_min, domain_max, 10), Vec::new())
     };
 
-    // y 軸ラベル幅。
+    // y 軸ラベル幅。対数軸は fmt_num_log を使う(幅の広いラベルでクリップさせない)。
     let mut max_w = 0.0_f32;
     for &t in &ticks.ticks {
-        let s = fmt_num(t);
+        let s = if is_log {
+            crate::num::fmt_num_log(t)
+        } else {
+            fmt_num(t)
+        };
         let w = m.width(&s, spec.theme.font_size as f32);
         if w > max_w {
             max_w = w;
@@ -702,13 +728,24 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         }
     };
 
-    // y スケール（上下反転）。
-    let ys = ValueScale::Linear(LinearScale::new(
-        ticks.min,
-        ticks.max,
-        plot_bottom,
-        plot_top,
-    ));
+    // y スケール（上下反転）。対数軸は log10 空間の LinearScale を内側に持つ
+    // ValueScale::Log。ticks.min/max は log_ticks が返す 10^n の decade 境界
+    // (常に正)なので、その log10() は有限かつ ticks.min < ticks.max
+    // (log_ticks は hi_exp > lo_exp を保証する)。floor は ValueScale::Log::map が
+    // 0/負値/丸め誤差を log10 前にクランプする下限として使う。
+    let ys = if is_log {
+        ValueScale::Log {
+            inner: LinearScale::new(ticks.min.log10(), ticks.max.log10(), plot_bottom, plot_top),
+            floor: ticks.min,
+        }
+    } else {
+        ValueScale::Linear(LinearScale::new(
+            ticks.min,
+            ticks.max,
+            plot_bottom,
+            plot_top,
+        ))
+    };
     let temporal_ticks = match &spec.x_positions {
         XPositions::Temporal { unix_millis } => unix_millis
             .first()
@@ -727,6 +764,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         plot_bottom,
         ticks,
         ys,
+        minor_ticks,
         temporal_ticks,
     }
 }
@@ -841,9 +879,10 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         });
     }
 
-    // 2. 横グリッド + y 軸ラベル。
+    // 2. 横グリッド + y 軸ラベル(主目盛)。対数軸は fmt_num_log でラベルを描く。
     let grid_cfg = &spec.y_axis.grid;
     let grid_color = grid_cfg.color.unwrap_or(spec.theme.grid_color);
+    let is_log = spec.y_axis.scale_kind == ScaleKind::Logarithmic;
     for &t in &frame.ticks.ticks {
         let y = frame.ys.map(t);
         if grid_cfg.display {
@@ -863,9 +902,29 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             size: label_font,
             anchor: Anchor::End,
             fill: ink,
-            content: fmt_num(t),
+            content: if is_log {
+                crate::num::fmt_num_log(t)
+            } else {
+                fmt_num(t)
+            },
             rotate_deg: None,
         });
+    }
+    // 2b. 対数軸の minor グリッド(mantissa 2..9、ラベルなし)。線形軸では
+    // frame.minor_ticks が常に空なので no-op。
+    if grid_cfg.display {
+        for &t in &frame.minor_ticks {
+            let y = frame.ys.map(t);
+            items.push(Prim::Line {
+                x1: frame.plot_left,
+                y1: y,
+                x2: frame.plot_right,
+                y2: y,
+                stroke: grid_color,
+                stroke_width: grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
     }
 
     // 3. カテゴリカル x grid。baseline より先に置き、交点を border が覆うようにする。
@@ -918,6 +977,10 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
 
     // 3b. y 軸目盛(tick 刻み)。draw_ticks=true のとき、plot_left から外側へ短線を描く。
     // 色は grid.color を継承する(Chart.js 既定と同じ挙動: grid.color が gridline と tick の両方を制御)。
+    // 対数軸では frame.minor_ticks(mantissa 2..9)にも同じ短線を描く。2b で minor
+    // グリッド線をラベルなしで描いているのと対称に、tick 刻みも major/minor を
+    // 揃えないと「グリッド線はあるのに対応する軸の刻みが無い」という見た目の
+    // 不整合が生じるため(gridline と tick 刻みは 1:1 対応させる)。
     const TICK_LEN: f64 = 4.0;
     let ticks_cfg = &spec.y_axis.grid;
     if ticks_cfg.draw_ticks {
@@ -926,7 +989,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         } else {
             ticks_cfg.color.unwrap_or(ink)
         };
-        for &t in &frame.ticks.ticks {
+        for &t in frame.ticks.ticks.iter().chain(frame.minor_ticks.iter()) {
             let y = frame.ys.map(t);
             items.push(Prim::Line {
                 x1: frame.plot_left - TICK_LEN,
@@ -1865,6 +1928,256 @@ mod tests {
         spec.series[0].values = vec![0.0, 5e-324];
         let (min, _max) = value_domain(&spec, &spec.y_axis);
         assert!(min > 0.0, "min should stay positive, got {min}");
+    }
+
+    /// 対数 y 軸の ChartSpec を組み立てる共通ヘルパ。
+    fn log_spec(values: Vec<f64>, width: f64) -> ChartSpec {
+        let mut spec = make_bar_spec(1, width);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = values;
+        spec
+    }
+
+    /// 対数軸の compute() が返す `Frame` を検証する共通ヘルパ。
+    fn compute_log_frame(values: Vec<f64>, width: f64) -> Frame {
+        let spec = log_spec(values, width);
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        compute(&spec, &m)
+    }
+
+    #[test]
+    fn compute_log_scale_ys_is_log_variant_with_ticks_min_as_floor() {
+        let frame = compute_log_frame(vec![1.0, 100_000.0], 600.0);
+        match &frame.ys {
+            ValueScale::Log { inner: _, floor } => {
+                assert_eq!(*floor, frame.ticks.min);
+            }
+            ValueScale::Linear(_) => panic!("expected ValueScale::Log for a logarithmic axis"),
+        }
+        // 軸は上下反転しているので、最小 tick はプロット下端、最大 tick は上端。
+        assert_eq!(frame.ys.map(frame.ticks.min), frame.plot_bottom);
+        assert_eq!(frame.ys.map(frame.ticks.max), frame.plot_top);
+        // 中間の decade(10^2 = 100)は下端と上端の間、かつ単調減少の位置に来るべき。
+        let mid_y = frame.ys.map(100.0);
+        assert!(
+            mid_y > frame.plot_top && mid_y < frame.plot_bottom,
+            "mid_y={mid_y} should be strictly between plot_top={} and plot_bottom={}",
+            frame.plot_top,
+            frame.plot_bottom
+        );
+    }
+
+    #[test]
+    fn compute_log_scale_step_is_zero_sentinel() {
+        // 対数軸では decade 間隔が一定でないため、step は 0.0 の番兵を返す
+        // (nice_ticks/vega_nice_ticks は常に正の step を返すため、0.0 は
+        // 呼び出し側が「これは log_ticks 経由の Frame だ」と判定できる合図になる)。
+        let frame = compute_log_frame(vec![1.0, 100.0], 600.0);
+        assert_eq!(frame.ticks.step, 0.0);
+    }
+
+    #[test]
+    fn compute_log_scale_minor_ticks_populated_and_bracketed_by_majors() {
+        let frame = compute_log_frame(vec![1.0, 1000.0], 600.0);
+        assert!(
+            !frame.minor_ticks.is_empty(),
+            "minor ticks should be populated for a multi-decade log domain"
+        );
+        for &t in &frame.minor_ticks {
+            assert!(
+                t > frame.ticks.min && t < frame.ticks.max,
+                "minor tick {t} should lie strictly inside [{}, {}]",
+                frame.ticks.min,
+                frame.ticks.max
+            );
+        }
+    }
+
+    #[test]
+    fn compute_linear_scale_minor_ticks_stays_empty() {
+        // 線形軸では常に minor_ticks が空であることを固定する回帰テスト
+        // (log 専用フィールドが線形パスへ意図せず漏れ出さないことの保証)。
+        let spec = make_bar_spec(3, 400.0);
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        assert!(frame.minor_ticks.is_empty());
+        assert!(matches!(frame.ys, ValueScale::Linear(_)));
+    }
+
+    #[test]
+    fn compute_log_scale_realistic_domains_produce_reasonable_tick_counts() {
+        // fulgur-chart-8so(log_ticks の目盛数上限未実装)は既知の追跡issueだが、
+        // それはドメインが極端(数百 decade)に広い/縮退した場合の話であり、
+        // ここで確認するのは「現実的な」ドメイン(1..100000 や 0.01..1000 のような
+        // 数桁レンジ)では目盛数が数十本程度に収まり、数千本には爆発しないこと。
+        for (values, max_major, max_minor) in [
+            (vec![1.0, 100_000.0], 10, 80),
+            (vec![0.01, 1000.0], 10, 80),
+            (vec![42.0, 1337.0], 6, 32),
+        ] {
+            let frame = compute_log_frame(values.clone(), 600.0);
+            assert!(
+                frame.ticks.ticks.len() <= max_major,
+                "values={values:?}: major tick count {} exceeds {max_major}",
+                frame.ticks.ticks.len()
+            );
+            assert!(
+                frame.minor_ticks.len() <= max_minor,
+                "values={values:?}: minor tick count {} exceeds {max_minor}",
+                frame.minor_ticks.len()
+            );
+        }
+    }
+
+    #[test]
+    fn draw_frame_log_scale_labels_major_ticks_only_with_fmt_num_log() {
+        let spec = log_spec(vec![1.0, 100_000.0], 600.0);
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let y_labels: Vec<&String> = items
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Text { x, content, .. } if (*x - (frame.plot_left - 6.0)).abs() < 0.01 => {
+                    Some(content)
+                }
+                _ => None,
+            })
+            .collect();
+        // ラベルは major tick の数だけ(minor にはラベルを付けない)。
+        assert_eq!(y_labels.len(), frame.ticks.ticks.len());
+        // 対数フォーマッタなので大きい値も指数表記に丸められず全桁表示される。
+        assert!(
+            y_labels.iter().any(|s| s.as_str() == "100000"),
+            "{y_labels:?}"
+        );
+        assert!(y_labels.iter().any(|s| s.as_str() == "1"), "{y_labels:?}");
+    }
+
+    #[test]
+    fn draw_frame_log_scale_grid_includes_major_and_minor_lines() {
+        let spec = log_spec(vec![1.0, 100.0], 600.0);
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let horizontal_grid_lines = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { y1, y2, x1, x2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && (*x1 - frame.plot_left).abs() < 0.01
+                            && (*x2 - frame.plot_right).abs() < 0.01
+                )
+            })
+            .count();
+        // major(frame.ticks.ticks) + minor(frame.minor_ticks) 本のグリッド線 + baseline 1本。
+        assert_eq!(
+            horizontal_grid_lines,
+            frame.ticks.ticks.len() + frame.minor_ticks.len() + 1
+        );
+    }
+
+    #[test]
+    fn draw_frame_log_scale_grid_display_false_skips_major_and_minor_lines() {
+        let mut spec = log_spec(vec![1.0, 100.0], 600.0);
+        spec.y_axis.grid.display = false;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let horizontal_grid_lines = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { y1, y2, x1, x2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && (*x1 - frame.plot_left).abs() < 0.01
+                            && (*x2 - frame.plot_right).abs() < 0.01
+                )
+            })
+            .count();
+        // baseline (border) の 1 本だけが残る。
+        assert_eq!(horizontal_grid_lines, 1);
+    }
+
+    #[test]
+    fn draw_frame_log_scale_draw_ticks_covers_major_and_minor() {
+        // gridline(2b)は major/minor 両方に描く一方、tick 刻み(3b)が major だけだと
+        // 「グリッド線はあるのに対応する軸の刻みが無い」という見た目の不整合が生じる。
+        // 対数軸では tick 刻みも major+minor の本数だけ描かれることを固定する。
+        let mut spec = log_spec(vec![1.0, 100.0], 600.0);
+        spec.y_axis.grid.draw_ticks = true;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let tick_count = items
+            .iter()
+            .filter(|p| {
+                matches!(p,
+                    Prim::Line { x1, x2, y1, y2, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && ((*x2 - *x1) - 4.0).abs() < 1e-9
+                            && (*x2 - frame.plot_left).abs() < 0.01
+                )
+            })
+            .count();
+        assert_eq!(
+            tick_count,
+            frame.ticks.ticks.len() + frame.minor_ticks.len(),
+            "log 軸の tick 刻み数は major+minor の本数と一致すべき"
+        );
+    }
+
+    #[test]
+    fn compute_log_scale_widens_plot_left_for_full_precision_labels() {
+        // Step 4: y 軸ラベル幅計算も fmt_num_log を使うべき。fmt_num(0.0001) は
+        // 小数2桁丸めで "0" に潰れる(幅が狭い)が、fmt_num_log(0.0001) は
+        // "0.0001" をそのまま返す(幅が広い)。fmt_num のままだと "0.0001" ラベルが
+        // 左マージンからはみ出してクリップされる。fmt_num と fmt_num_log で
+        // 結果が分岐する値を使わない限り、この Step 4 の分岐は誤って fmt_num の
+        // ままでもテストが通ってしまう(実際に一度そのバグを作って確認済み)。
+        let spec = log_spec(vec![0.0001, 1.0], 600.0);
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+
+        let font = spec.theme.font_size as f32;
+        assert_eq!(fmt_num(0.0001), "0", "sanity: fmt_num rounds this to 0");
+        assert_eq!(
+            crate::num::fmt_num_log(0.0001),
+            "0.0001",
+            "sanity: fmt_num_log keeps full precision"
+        );
+        let narrow_w = m.width("0", font) as f64;
+        let wide_w = m.width("0.0001", font) as f64;
+        assert!(
+            wide_w > narrow_w,
+            "test fixture assumption: {wide_w} > {narrow_w}"
+        );
+
+        // plot_left は Step 4 の fmt_num_log 経由の幅計算に一致する
+        // (OUTER_PAD + max_w + 10.0; make_bar_spec は Canvas サイズモード・
+        // 凡例なし・y軸タイトルなしなので legend_left/y_title_w は 0)。
+        let expected_plot_left = OUTER_PAD + wide_w + 10.0;
+        assert!(
+            (frame.plot_left - expected_plot_left).abs() < 1e-6,
+            "plot_left={} should match fmt_num_log-based width {expected_plot_left}",
+            frame.plot_left
+        );
+        // fmt_num の(誤った)幅を使っていたら plot_left はこれより狭くなる。
+        let plot_left_if_fmt_num_were_used = OUTER_PAD + narrow_w + 10.0;
+        assert!(
+            frame.plot_left > plot_left_if_fmt_num_were_used,
+            "plot_left={} should exceed the fmt_num-based (narrower) width {plot_left_if_fmt_num_were_used}",
+            frame.plot_left
+        );
     }
 
     #[test]
