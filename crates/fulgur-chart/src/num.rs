@@ -168,6 +168,14 @@ mod tests {
         assert_eq!(fmt_num_log(-0.0), "0"); // 負ゼロを正規化
     }
 
+    /// `-0.0` や `NEG_INFINITY` の早期returnを経由せず、実際に `sign`
+    /// 変数のロジックを通る負の有限値で符号が保持されることを確認する。
+    #[test]
+    fn fmt_num_log_negative_values_keep_sign() {
+        assert_eq!(fmt_num_log(-1234.5), "-1234.5");
+        assert_eq!(fmt_num_log(-0.003), "-0.003");
+    }
+
     /// `log_ticks` が生成する実際の tick 値の形(`mantissa as f64 *
     /// 10f64.powi(exp)`)で桁上げ・乗算誤差が漏れ出ないことを確認する。
     /// この形の値は例えば `3.0 * 10f64.powi(-1)` が厳密に `0.3` にならず
@@ -217,9 +225,17 @@ mod tests {
         assert!(nine.ends_with('9'), "got {nine}");
     }
 
-    /// `log_ticks` の全域(major/minor, mantissa 1..=9, exp -324..=308)を
+    /// `f64` の全表現域(subnormal 境界を含む exp -324..=308, mantissa 1..=9)を
     /// 総当たりし、非有限値や空文字列を絶対に返さないことを確認する
     /// (この crate の "パニックしない" 方針に合わせた網羅テスト)。
+    /// `log_ticks` の exp は `MAX_LOG_DECADES`(=308)により下限 `-308` で
+    /// クランプされるため実際には `-324` まで届かない(`scale.rs` 参照)。
+    /// このスイープはそれより広い、f64 の全表現域を掃く上位互換である。
+    ///
+    /// さらに、この crate 全体の「非ゼロ値が `"0"` に潰れてはならない」
+    /// 方針(このモジュールの doc comment 参照: 固定小数点位置での丸めは
+    /// 極小値を `"0"` に潰す不具合を起こした)を、全域を掃く唯一のテスト
+    /// でもある。
     #[test]
     fn fmt_num_log_never_panics_or_produces_empty_across_full_range() {
         for exp in -324..=308 {
@@ -231,6 +247,10 @@ mod tests {
                 let s = fmt_num_log(v);
                 assert!(!s.is_empty(), "exp={exp} mantissa={mantissa} v={v:e}");
                 assert_ne!(s, "-", "exp={exp} mantissa={mantissa} v={v:e}");
+                assert_ne!(
+                    s, "0",
+                    "nonzero value must not collapse to 0: exp={exp} mantissa={mantissa} v={v:e}"
+                );
             }
         }
     }
