@@ -394,26 +394,39 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         }
     }
 
-    if !min_positive.is_finite() || !max_positive.is_finite() {
-        // 正データが1つもない(空 / 0 のみ / 負のみ)。既定の 1..10 にフォールバック。
-        return (1.0, 10.0);
-    }
-
-    let mut domain_min = if has_zero {
-        let decade_below = min_positive / 10.0;
-        // min_positive が非正規化数(subnormal)近傍だと ÷10 が 0.0 へアンダーフローし、
-        // 「対数ドメインの下端は正」という不変条件を壊しうる。その場合は1桁下げず
-        // min_positive をそのまま使う(実用上あり得ない極小データだが、パニックにも
-        // 0 除算的な誤ったドメインにもしないための防御)。
-        if decade_below.is_finite() && decade_below > 0.0 {
-            decade_below
+    let (mut domain_min, mut domain_max) = if !min_positive.is_finite() || !max_positive.is_finite()
+    {
+        // 正データが1つもない(空 / 0 のみ / 負のみ)。線形版(データなし → suggested を
+        // 初期シードにする、chart.js 互換)に倣い、正の suggested_min/suggested_max が
+        // あればそれを初期シードにする(どちらか一方だけでも可)。begin_at_zero は
+        // 対数軸では無関係(0 はドメインに含められない)。下の suggested 適用ブロックを
+        // 素通りしないよう、ここで早期 return せず通常経路に合流させる。
+        let lo = axis
+            .suggested_min
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .unwrap_or(1.0);
+        let hi = axis
+            .suggested_max
+            .filter(|s| s.is_finite() && *s > 0.0)
+            .unwrap_or(10.0);
+        (lo, if hi > lo { hi } else { lo * 10.0 })
+    } else {
+        let domain_min = if has_zero {
+            let decade_below = min_positive / 10.0;
+            // min_positive が非正規化数(subnormal)近傍だと ÷10 が 0.0 へアンダーフローし、
+            // 「対数ドメインの下端は正」という不変条件を壊しうる。その場合は1桁下げず
+            // min_positive をそのまま使う(実用上あり得ない極小データだが、パニックにも
+            // 0 除算的な誤ったドメインにもしないための防御)。
+            if decade_below.is_finite() && decade_below > 0.0 {
+                decade_below
+            } else {
+                min_positive
+            }
         } else {
             min_positive
-        }
-    } else {
-        min_positive
+        };
+        (domain_min, max_positive)
     };
-    let mut domain_max = max_positive;
 
     if let Some(s) = axis.suggested_min
         && s.is_finite()
@@ -1911,6 +1924,35 @@ mod tests {
         spec.series[0].values = vec![0.0, f64::NAN]; // NaN は既にネガティブマスク済み想定
         let (min, max) = value_domain(&spec, &spec.y_axis);
         assert_eq!((min, max), (1.0, 10.0));
+    }
+
+    /// 実機バグ回帰テスト: データが空/0のみ/負のみの場合、正の
+    /// suggested_min/suggested_max が指定されていてもハードコードされた 1..10 に
+    /// 潰れ、明示的に設定した軸オプションが無視されていた(PR #144 の自動レビューで
+    /// 指摘)。線形版(データなし → suggested を初期シードにする)と同じ契約に揃える。
+    #[test]
+    fn log_value_domain_honors_suggested_bounds_when_no_positive_data() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0]; // 正データなし
+        spec.y_axis.suggested_min = Some(0.01);
+        spec.y_axis.suggested_max = Some(100.0);
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (0.01, 100.0));
+    }
+
+    #[test]
+    fn log_value_domain_honors_single_suggested_bound_when_no_positive_data() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0];
+        spec.y_axis.suggested_max = Some(500.0);
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(
+            (min, max),
+            (1.0, 500.0),
+            "suggested_min 未指定時は既定の1.0を使う"
+        );
     }
 
     #[test]
