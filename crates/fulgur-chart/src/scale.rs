@@ -136,12 +136,33 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
 /// 各 decade の mantissa 2..9 倍(ラベルなしグリッド用)。両方とも値空間(データ空間)の
 /// 実値であり、log10 変換は `ValueScale::Log` が写像時に行う。
 ///
-/// 不変条件(Task 9 が `ticks.min`/`ticks.max` を実写像のクランプ境界として
-/// 直接使う予定のため、ここに明示しておく):
+/// # テストされている構造的不変条件
+///
+/// 以下は `log_ticks` のテストモジュール(`log_ticks_brackets_domain_for_reasonable_inputs`
+/// 等の property スタイルテスト群、および単体テスト)で複数のドメインに対して
+/// 固定されている契約。Task 9 が `ticks.min`/`ticks.max` を実写像のクランプ境界として
+/// 直接使うため、ここに明示しておく:
+/// - **ドメインブラケティング:** 縮退していない「妥当な」ドメインでは
+///   `min <= data_min` かつ `max >= data_max`(極端/縮退したドメインでの例外は
+///   `log_ticks` 関数のドキュメントコメントを参照)。
 /// - `major`・`minor` はともに昇順ソート済み。
+/// - `major` の各要素は厳密に 10 の整数乗(`10^n`)。
 /// - `min == major[0]`、`max == major[major.len() - 1]`(どちらも 10 の整数乗)。
 /// - `minor` は最上位 decade(`major` の最後の要素が表す decade)の mantissa
 ///   倍数を含まない。含めると必ず `max` を超えてしまうため、意図的に除外している。
+/// - `log_ticks` はどんな有限入力の組(順序が `data_min > data_max` でも、
+///   負値・0・NaN が混じっていても)に対してもパニックしない。
+///
+/// # 非目標: chart.js との tick-for-tick / ラベル可視性ルールの parity
+///
+/// chart.js 実機の `generateTicks()` は decade+mantissa(2..9) よりも複雑な規則
+/// (単一 decade ドメインでの細分化、複数 decade ドメインでの非対称な mantissa=1.5
+/// tick 挿入)とラベル可視性ルール(`Ticks.formatters.logarithmic`)を持つが、
+/// `log_ticks` は意図的にこれらを再現しない。上記の構造的不変条件のみが
+/// テスト・保証される範囲であり、それ以上を期待しないこと。
+/// 経緯・実測根拠: `docs/plans/2026-08-08-fulgur-chart-smw-logarithmic-scale.md`
+/// の「Task 6 実測結果」節(特に末尾の「スコープ決定」小節)、および
+/// `bd show fulgur-chart-smw` の acceptance フィールド。
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogTicks {
     pub min: f64,
@@ -894,5 +915,149 @@ mod tests {
         assert!(t.max.is_finite() && t.max > t.min, "{t:?}");
         assert!(t.major.iter().all(|v| v.is_finite()), "{t:?}");
         assert!(t.minor.iter().all(|v| v.is_finite()), "{t:?}");
+    }
+
+    // --- 構造的不変条件の property スタイルテスト(Task 7) --------------------
+    //
+    // 以下は特定の1-2ケースの厳密値ではなく、「妥当な」(縮退していない)複数の
+    // ドメインに対して log_ticks 自身の契約(chart.js の実装詳細には依存しない)
+    // を汎用的に検証する。ケース一覧は tools/chartjs_ticks.mjs の log ケース
+    // (single/multi decade, sub-one, wide, exact powers)に対応させている。
+
+    /// property テスト共通の「妥当な」ドメイン一覧: 単一 decade・複数 decade・
+    /// sub-one(1未満)・広域・ちょうど10の整数乗境界、をそれぞれ代表させる。
+    const REASONABLE_LOG_DOMAINS: [(f64, f64); 5] = [
+        (3.0, 7.0),         // 単一 decade
+        (30.0, 4000.0),     // 複数 decade
+        (0.003, 0.7),       // sub-one(1未満)にまたがる
+        (1.0, 1_000_000.0), // 広域(6 decade)
+        (1.0, 1000.0),      // ちょうど10の整数乗の境界
+    ];
+
+    #[test]
+    fn log_ticks_brackets_domain_for_reasonable_inputs() {
+        for &(data_min, data_max) in &REASONABLE_LOG_DOMAINS {
+            let t = log_ticks(data_min, data_max);
+            assert!(
+                t.min <= data_min,
+                "domain {data_min}..{data_max}: min {} > data_min {data_min}: {t:?}",
+                t.min
+            );
+            assert!(
+                t.max >= data_max,
+                "domain {data_min}..{data_max}: max {} < data_max {data_max}: {t:?}",
+                t.max
+            );
+        }
+    }
+
+    #[test]
+    fn log_ticks_major_and_minor_are_strictly_ascending() {
+        for &(data_min, data_max) in &REASONABLE_LOG_DOMAINS {
+            let t = log_ticks(data_min, data_max);
+            assert!(
+                t.major.windows(2).all(|w| w[0] < w[1]),
+                "domain {data_min}..{data_max}: major not ascending: {:?}",
+                t.major
+            );
+            assert!(
+                t.minor.windows(2).all(|w| w[0] < w[1]),
+                "domain {data_min}..{data_max}: minor not ascending: {:?}",
+                t.minor
+            );
+        }
+    }
+
+    #[test]
+    fn log_ticks_major_values_are_exact_powers_of_ten() {
+        for &(data_min, data_max) in &REASONABLE_LOG_DOMAINS {
+            let t = log_ticks(data_min, data_max);
+            for &v in &t.major {
+                let rounded_exp = v.log10().round();
+                assert!(
+                    (v.log10() - rounded_exp).abs() < 1e-9,
+                    "domain {data_min}..{data_max}: major value {v} is not a power of ten \
+                     (log10={}, nearest integer={rounded_exp})",
+                    v.log10()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn log_ticks_min_max_match_major_endpoints() {
+        for &(data_min, data_max) in &REASONABLE_LOG_DOMAINS {
+            let t = log_ticks(data_min, data_max);
+            assert_eq!(
+                t.min,
+                *t.major.first().expect("major must be non-empty"),
+                "domain {data_min}..{data_max}: {t:?}"
+            );
+            assert_eq!(
+                t.max,
+                *t.major.last().expect("major must be non-empty"),
+                "domain {data_min}..{data_max}: {t:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_ticks_minor_excludes_top_decade() {
+        for &(data_min, data_max) in &REASONABLE_LOG_DOMAINS {
+            let t = log_ticks(data_min, data_max);
+            assert!(
+                t.minor.iter().all(|&v| v < t.max),
+                "domain {data_min}..{data_max}: minor contains a value >= max ({}): {:?}",
+                t.max,
+                t.minor
+            );
+        }
+    }
+
+    #[test]
+    fn log_ticks_never_panics_across_finite_and_pathological_inputs() {
+        // 「有限な入力の組」に加えて、実運用で入り込みうる非有限値(NaN/inf)や
+        // data_min > data_max の順序違反も総当たりで確認する(既存の単体テストは
+        // それぞれ個別のケースをピン留めしているが、ここでは組み合わせを網羅する)。
+        let probes = [
+            f64::NEG_INFINITY,
+            -1e300,
+            -1.0,
+            0.0,
+            f64::MIN_POSITIVE,
+            f64::EPSILON,
+            1.0,
+            100.0,
+            1e300,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        for &data_min in &probes {
+            for &data_max in &probes {
+                // パニックしないことが主目的だが、呼び出しに成功しただけでは
+                // 一部の組み合わせ(例: data_min=0.0, data_max=100.0 のような
+                // 縮退入力は f64::MIN_POSITIVE へのフォールバック経由で
+                // 数百 decade に及ぶ major/minor を構築しうる、既知の
+                // 未解決ギャップ: fulgur-chart-8so)を素通りしてしまう。
+                // min/max だけでなく major/minor の全要素も有限であることまで
+                // 確認し、この重い呼び出しを実際に検証に使う。
+                let t = log_ticks(data_min, data_max);
+                assert!(
+                    t.min.is_finite() && t.max.is_finite(),
+                    "data_min={data_min}, data_max={data_max}: min/max not finite: {t:?}"
+                );
+                assert!(
+                    t.major.iter().all(|v| v.is_finite()),
+                    "data_min={data_min}, data_max={data_max}: major contains non-finite value: {:?}",
+                    t.major
+                );
+                assert!(
+                    t.minor.iter().all(|v| v.is_finite()),
+                    "data_min={data_min}, data_max={data_max}: minor contains non-finite value: {:?}",
+                    t.minor
+                );
+            }
+        }
     }
 }
