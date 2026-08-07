@@ -251,7 +251,10 @@ pub struct AxisSpec {
     pub grid: AxisGrid,
     pub border: AxisBorder,
     /// 数値軸の目盛スケール種別。カテゴリ軸(XPositions::Category が支配する軸)では
-    /// 意味を持たないが、AxisSpec は x/y 共通型のため常に存在する。
+    /// 意味を持たないが、AxisSpec は x/y 共通型のため常に存在する。現状
+    /// `ChartKind::Bar{..}` / `Line` の値軸のみが Logarithmic を消費する
+    /// (frontend/chartjs.rs でその2 kind の値軸以外は常に Linear に強制される)。
+    /// scatter/bubble 等への対応は別issue(fulgur-chart-rwe)。
     pub scale_kind: ScaleKind,
 }
 
