@@ -210,6 +210,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     Anchor::Middle,
                     LABEL_COLOR,
                     v,
+                    false, // pie/doughnut に対数軸の概念はない
                 ));
             }
             a0 = a1;

@@ -1299,16 +1299,34 @@ pub fn legend_entry_width(m: &TextMeasurer, name: &str, font_size: f64) -> f64 {
     12.0 + 4.0 + m.width(name, font_size as f32) as f64 + 16.0
 }
 
-/// 値ラベルの Prim::Text を生成する(フォント=size、内容=fmt_num(v))。
+/// 値ラベルの Prim::Text を生成する(フォント=size、内容=fmt_num(v)/fmt_num_log(v))。
 /// 全チャート種でデータラベル生成を一元化する。x/y/anchor/fill/size は呼び出し側が決める。
-pub fn value_label(x: f64, y: f64, size: f64, anchor: Anchor, fill: Color, v: f64) -> Prim {
+/// `is_log` は値軸が対数スケールかどうか(対数軸を持ちうるのは Bar/Line のみ。
+/// pie/mixed/radial 等、対数軸を取りえない呼び出し元は常に `false` を渡す)。
+/// `false` なら従来通り `fmt_num`(小数2桁丸め)、`true` なら `fmt_num_log`
+/// (有効数字ベース、広レンジ対応)を使う — 対数軸では `fmt_num` の丸めにより
+/// 0.0003 のような小さい実値のラベルが "0" に潰れてしまうため(実機バグ、
+/// PR #144 の自動レビューで指摘)。
+pub fn value_label(
+    x: f64,
+    y: f64,
+    size: f64,
+    anchor: Anchor,
+    fill: Color,
+    v: f64,
+    is_log: bool,
+) -> Prim {
     Prim::Text {
         x,
         y,
         size,
         anchor,
         fill,
-        content: fmt_num(v),
+        content: if is_log {
+            crate::num::fmt_num_log(v)
+        } else {
+            fmt_num(v)
+        },
         rotate_deg: None,
     }
 }

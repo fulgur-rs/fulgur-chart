@@ -317,6 +317,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     Anchor::Middle,
                     spec.theme.text_color,
                     ser.values[cat],
+                    spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic,
                 ));
             }
         }
