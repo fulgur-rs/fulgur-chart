@@ -236,8 +236,13 @@ pub(crate) fn temporal_plot_right_legend_title(spec: &ChartSpec) -> Option<&str>
     }
 }
 
-/// 値ドメイン(begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
+/// 値ドメイン(線形軸: begin_at_zero尊重・空データ→0..1・縮退補正)を算出する。
 /// 縦棒(compute)と横棒(build_horizontal)が同一の値域計算を共有する。
+///
+/// 対数軸(`scale_kind == Logarithmic`)は `log_value_domain` へ早期分岐する。
+/// この分岐では上記2性質はどちらも成立しない: begin_at_zero は非適用、
+/// 空データ/正データなしの場合は `0..1` ではなく `1..10` を返す。詳細は
+/// `log_value_domain` のドキュメントを参照。
 pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     if axis.scale_kind == ScaleKind::Logarithmic {
         return log_value_domain(spec, axis);
@@ -359,8 +364,9 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 /// 側でも弾かれておらず(`ChartKind::Bar { horizontal: false, .. }` は
 /// `value_stacked` の真偽を問わず対数軸を許可する)、そのまま Task 11 のピクセル
 /// マッピングまで届くとスタック高さではなく個々の値でドメインが決まり、
-/// バーがプロット領域からはみ出しうる。対数スケール上でのスタック合成の意味論
-/// (chart.js 実機がどう扱うか)は未調査のため、ここで独自に決め打ちしない。
+/// バーがプロット領域からはみ出しうる(fulgur-chart-bap)。対数スケール上での
+/// スタック合成の意味論(chart.js 実機がどう扱うか)は未調査のため、ここで
+/// 独自に決め打ちしない。
 fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut min_positive = f64::INFINITY;
     let mut max_positive = f64::NEG_INFINITY;
@@ -429,8 +435,10 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         // とき(例: 単一の f64::MAX 値のみのデータ)は f64::MAX == domain_min のままで
         // 縮退が解消されない。ただし線形版も同じ入力極限で
         // `f64::MAX + 1.0 == f64::MAX`(丸めで無変化)という同じ性質を持つため、
-        // これは対数専用の後退ではない。呼び出し側の log_ticks はどのみち decade
-        // 境界へ丸め、非有限入力もパニックせず処理する(scale.rs のコメント参照)。
+        // これは対数専用の後退ではない。この関数(`value_domain` 経由含む)は pub であり、
+        // 戻り値 (f64, f64) は「常に有限」という契約を将来のどんな呼び出し元に対しても
+        // 維持すべきなので、今日の唯一の呼び出し元 log_ticks が非有限入力を許容する
+        // (scale.rs のコメント参照)ことに頼らず、ここで有限性を保証しておく。
         let expanded = domain_min * 10.0;
         domain_max = if expanded.is_finite() {
             expanded
@@ -456,7 +464,8 @@ fn aligned_title_overflow(
     }
 }
 
-/// spec から y ドメイン(begin_at_zero尊重)・nice_ticks・y軸ラベル幅・プロット領域・凡例帯を計算。
+/// spec から y ドメイン(線形軸: begin_at_zero尊重。対数軸は `value_domain` 参照)・
+/// nice_ticks・y軸ラベル幅・プロット領域・凡例帯を計算。
 pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y ドメイン。
     let (domain_min, domain_max) = value_domain(spec, &spec.y_axis);
@@ -1811,6 +1820,17 @@ mod tests {
         let (min, max) = value_domain(&spec, &spec.y_axis);
         assert_eq!(min, 10.0);
         assert_eq!(max, 20.0);
+    }
+
+    #[test]
+    fn log_value_domain_positive_suggested_bounds_widen_domain() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.suggested_min = Some(0.5);
+        spec.y_axis.suggested_max = Some(1000.0);
+        spec.series[0].values = vec![10.0, 20.0];
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (0.5, 1000.0));
     }
 
     #[test]
