@@ -97,6 +97,21 @@ pub fn fmt_num_log(v: f64) -> String {
     let digits = digits.trim_end_matches('0');
     let digits = if digits.is_empty() { "0" } else { digits };
 
+    // 平文の10進表記では文字列長がおおよそ |exp| に比例する。極端な指数
+    // (例: 10^100)では100文字超の巨大なラベルになり、y軸ラベル幅の計測
+    // (layout/common.rs::compute() 参照)がプロット領域をほぼゼロ幅まで
+    // 圧迫してしまう不具合を実機レンダリングで確認した。この閾値を超えたら
+    // 指数表記(例: "1.23e18")に切り替え、ラベル長を有効数字桁数程度に抑える。
+    const MAX_PLAIN_EXPONENT: i32 = 15;
+    if exp.abs() > MAX_PLAIN_EXPONENT {
+        let mantissa_fmt = if digits.len() <= 1 {
+            digits.to_string()
+        } else {
+            format!("{}.{}", &digits[..1], &digits[1..])
+        };
+        return format!("{sign}{mantissa_fmt}e{exp}");
+    }
+
     // digits の先頭が小数点の何桁目に来るか(1 なら "D.DDD..." の直後に点)。
     let point_pos = exp + 1;
     let mut out = String::new();
@@ -195,8 +210,11 @@ mod tests {
             (3.0, -9, "0.000000003"),
             (6.0, -9, "0.000000006"),
             (9.0, -9, "0.000000009"),
-            (3.0, 25, "30000000000000000000000000"),
-            (7.0, 25, "70000000000000000000000000"),
+            // exp=25 は MAX_PLAIN_EXPONENT(15)を超えるため指数表記に切り替わる
+            // (下記 fmt_num_log_switches_to_scientific_notation_beyond_threshold
+            // 参照)。ここでも乗算誤差が桁として漏れないことは確認しておく。
+            (3.0, 25, "3e25"),
+            (7.0, 25, "7e25"),
         ];
         for &(mantissa, exp, expected) in cases {
             let v = mantissa * 10f64.powi(exp);
@@ -213,6 +231,8 @@ mod tests {
     /// 丸める素朴な実装だと、この範囲で mantissa の異なる値が同じ文字列に
     /// 潰れてしまう(実測: `5e-16`〜`9e-16` が全て `"0.000000000000001"` に
     /// 潰れる)。有効数字ベースの丸めならこれを回避できることを確認する。
+    /// なお exp=-16 は MAX_PLAIN_EXPONENT(15)を超えるため、出力自体は
+    /// 指数表記("5e-16" 等)になる — mantissa の先頭桁で distinctness を見る。
     #[test]
     fn fmt_num_log_preserves_distinct_extreme_small_magnitudes() {
         let five = fmt_num_log(5.0 * 10f64.powi(-16));
@@ -220,9 +240,37 @@ mod tests {
         let nine = fmt_num_log(9.0 * 10f64.powi(-16));
         assert_ne!(five, six, "5e-16 and 6e-16 must not collapse together");
         assert_ne!(six, nine, "6e-16 and 9e-16 must not collapse together");
-        assert!(five.ends_with('5'), "got {five}");
-        assert!(six.ends_with('6'), "got {six}");
-        assert!(nine.ends_with('9'), "got {nine}");
+        assert!(five.starts_with('5'), "got {five}");
+        assert!(six.starts_with('6'), "got {six}");
+        assert!(nine.starts_with('9'), "got {nine}");
+    }
+
+    /// 実機バグ回帰テスト: 対数軸の目盛が極端な指数(例: 10^100)になると、
+    /// 平文の10進表記では「1」に続けて指数と同じ桁数の0が並ぶ超長文字列
+    /// (10^100 なら101文字)になる。この文字列を y 軸ラベル幅計測
+    /// (layout/common.rs::compute())にそのまま使うと、プロット領域が
+    /// ほぼゼロ幅まで圧迫されて棒が消える不具合を実機レンダリングで確認した
+    /// (PR #144 の自動レビューで指摘)。指数表記への切り替えでラベル長を
+    /// 有効数字桁数程度(20文字未満)に抑えられていることを確認する。
+    #[test]
+    fn fmt_num_log_switches_to_scientific_notation_beyond_threshold() {
+        let s = fmt_num_log(1e100);
+        assert!(
+            s.len() < 20,
+            "extreme-magnitude label must stay short, got {} chars: {s}",
+            s.len()
+        );
+        assert!(s.contains('e'), "expected scientific notation, got {s}");
+        assert_eq!(s, "1e100");
+
+        let small = fmt_num_log(1e-100);
+        assert!(small.len() < 20, "got {} chars: {small}", small.len());
+        assert_eq!(small, "1e-100");
+
+        // 閾値以内(exp=15)は従来どおり平文の10進表記のまま。
+        assert_eq!(fmt_num_log(1e15), "1000000000000000");
+        // 閾値超え(exp=16)は指数表記に切り替わる。
+        assert_eq!(fmt_num_log(1e16), "1e16");
     }
 
     /// `f64` の全表現域(subnormal 境界を含む exp -324..=308, mantissa 1..=9)を
