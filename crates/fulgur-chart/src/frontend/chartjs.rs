@@ -359,6 +359,12 @@ impl<T: Clone> ScalarOrArray<T> {
 // `ChartSpec` 構築時に `axis_from` 経路で呼び出される。
 // ---------------------------------------------------------------------------
 
+/// `axis.type == "logarithmic"` かどうかを判定する。それ以外の値
+/// (`"category"`/`"time"`/`"linear"` やタイポ、未指定)は false 扱い。
+fn is_logarithmic(opts: Option<&AxisOptions>) -> bool {
+    opts.and_then(|a| a.r#type.as_deref()) == Some("logarithmic")
+}
+
 /// `axis.title` を IR の [`AxisTitle`] に変換する。
 ///
 /// 以下のいずれかで [`None`] を返す:
@@ -772,6 +778,31 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         vec![(false, None); raw.data.datasets.len()]
     };
 
+    // typed `AxisOptions` 経由で読むことで、`beginAtZero` 等の camelCase タイポは
+    // schema deserialize 時に拒否される(silent 素通り防止)。series 構築より前に
+    // hoist するのは、対数軸の負値マスキング(下記 value_axis_is_log)が series 構築中に
+    // これらを参照する必要があるため。
+    let x_opts = raw.options.scales.as_ref().and_then(|s| s.x.as_ref());
+    let y_opts = raw.options.scales.as_ref().and_then(|s| s.y.as_ref());
+
+    // v1 スコープ: 縦棒・横棒・折れ線の「値軸」のみ log を許可する。
+    // カテゴリ軸や他 kind への type:"logarithmic" 指定は黙って無視(Linear のまま)。
+    let x_axis_is_log = matches!(
+        kind,
+        ChartKind::Bar {
+            horizontal: true,
+            ..
+        }
+    ) && is_logarithmic(x_opts);
+    let y_axis_is_log = matches!(
+        kind,
+        ChartKind::Bar {
+            horizontal: false,
+            ..
+        } | ChartKind::Line
+    ) && is_logarithmic(y_opts);
+    let value_axis_is_log = x_axis_is_log || y_axis_is_log;
+
     let series: Vec<Series> = raw
         .data
         .datasets
@@ -784,7 +815,19 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             } else if is_boxplot {
                 (vec![], vec![], ds.data.into_box_points())
             } else {
-                (ds.data.into_values(), vec![], vec![])
+                let mut values = ds.data.into_values();
+                if value_axis_is_log {
+                    // 対数軸では負値は描画不能(chart.js 互換)。既存の null→NaN センチネル経路に
+                    // 乗せることで、bar.rs/line.rs の既存の `!v.is_finite() { continue }` が
+                    // そのままギャップとして扱ってくれる(新しいスキップ機構を作らない)。
+                    // 0 はここでは変えない(0 → decade 下限への置換は value_domain 側の責務、後続タスク)。
+                    for v in &mut values {
+                        if v.is_finite() && *v < 0.0 {
+                            *v = f64::NAN;
+                        }
+                    }
+                }
+                (values, vec![], vec![])
             };
             let n = if is_point_based {
                 points.len()
@@ -890,11 +933,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let is_line = matches!(kind, ChartKind::Line);
     let value_begin_at_zero = !is_point_based && !is_sparkline && !is_line;
 
-    // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する。
-    // typed `AxisOptions` 経由で読むことで、`beginAtZero` 等の camelCase タイポは
-    // schema deserialize 時に拒否される(silent 素通り防止)。
-    let x_opts = raw.options.scales.as_ref().and_then(|s| s.x.as_ref());
-    let y_opts = raw.options.scales.as_ref().and_then(|s| s.y.as_ref());
+    // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する
+    // (x_opts/y_opts 自体は series 構築より前に hoist 済み)。
     let x_begin_at_zero = x_opts
         .and_then(|a| a.begin_at_zero)
         .unwrap_or(is_horizontal && value_begin_at_zero);
@@ -969,7 +1009,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             offset: x_offset,
             grid: axis_grid_from(x_opts.and_then(|a| a.grid.as_ref())),
             border: axis_border_from(x_opts.and_then(|a| a.border.as_ref())),
-            scale_kind: ScaleKind::Linear,
+            scale_kind: if x_axis_is_log {
+                ScaleKind::Logarithmic
+            } else {
+                ScaleKind::Linear
+            },
         },
         y_axis: AxisSpec {
             title: axis_title_from(y_opts.and_then(|a| a.title.as_ref())),
@@ -981,7 +1025,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             offset: y_offset,
             grid: axis_grid_from(y_opts.and_then(|a| a.grid.as_ref())),
             border: axis_border_from(y_opts.and_then(|a| a.border.as_ref())),
-            scale_kind: ScaleKind::Linear,
+            scale_kind: if y_axis_is_log {
+                ScaleKind::Logarithmic
+            } else {
+                ScaleKind::Linear
+            },
         },
         legend: legend_pos(&raw.options.plugins.legend),
         legend_title: None,
@@ -1292,6 +1340,7 @@ fn check_unknown_keys(
                     "stacked",
                     "min",
                     "max",
+                    "type",
                     "title",
                     "grid",
                     "border",
@@ -3786,5 +3835,101 @@ mod tests {
         let spec = parse(json, false).expect("parse ok");
         assert_eq!(spec.y_axis.border.dash, vec![4.0, 4.0]);
         assert!((spec.y_axis.border.width - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scales_y_type_logarithmic_flows_into_spec_for_vertical_bar() {
+        // 縦棒の値軸は y。type:"logarithmic" が y_axis.scale_kind::Logarithmic になり、
+        // カテゴリ軸である x はそのまま Linear であること。
+        let json = r##"{
+          "type":"bar",
+          "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+          "options":{"scales":{"y":{"type":"logarithmic"}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Logarithmic));
+        assert!(matches!(spec.x_axis.scale_kind, ScaleKind::Linear));
+    }
+
+    #[test]
+    fn scales_x_type_logarithmic_flows_into_spec_for_horizontal_bar() {
+        // 横棒(indexAxis:y)の値軸は x。type:"logarithmic" が x_axis.scale_kind::Logarithmic に
+        // なり、カテゴリ軸である y はそのまま Linear であること。
+        let json = r##"{
+          "type":"bar",
+          "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+          "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic"}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert!(matches!(spec.x_axis.scale_kind, ScaleKind::Logarithmic));
+        assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Linear));
+    }
+
+    #[test]
+    fn scales_x_type_logarithmic_is_ignored_on_vertical_bar_category_axis() {
+        // v1 スコープ外: 縦棒の x はカテゴリ軸なので type:"logarithmic" を黙って無視する
+        // (Linear のまま)。
+        let json = r##"{
+          "type":"bar",
+          "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+          "options":{"scales":{"x":{"type":"logarithmic"}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert!(matches!(spec.x_axis.scale_kind, ScaleKind::Linear));
+        assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Linear));
+    }
+
+    #[test]
+    fn scales_y_type_logarithmic_is_ignored_on_pie() {
+        // v1 スコープ外: pie には値軸自体が無い。type:"logarithmic" を指定しても
+        // strict でなければエラーにせず、単に無視する。
+        let json = r##"{
+          "type":"pie",
+          "data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},
+          "options":{"scales":{"y":{"type":"logarithmic"}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Linear));
+    }
+
+    #[test]
+    fn logarithmic_y_axis_masks_negative_values_to_nan_but_keeps_zero() {
+        // 負値は NaN 化(既存の null→NaN スキップ経路に乗せる)、0 はそのまま。
+        let json = r##"{
+          "type":"bar",
+          "data":{"labels":["a","b","c"],"datasets":[{"data":[-5, 0, 10]}]},
+          "options":{"scales":{"y":{"type":"logarithmic"}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        let values = &spec.series[0].values;
+        assert!(values[0].is_nan(), "negative value should become NaN");
+        assert_eq!(values[1], 0.0, "zero should stay 0.0");
+        assert_eq!(values[2], 10.0);
+    }
+
+    #[test]
+    fn linear_y_axis_does_not_mask_negative_values() {
+        // 対数軸でない場合は負値マスキングを一切行わない(既存挙動を保つ)。
+        let json = r##"{
+          "type":"bar",
+          "data":{"labels":["a","b"],"datasets":[{"data":[-5, 10]}]}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert_eq!(spec.series[0].values[0], -5.0);
+        assert_eq!(spec.series[0].values[1], 10.0);
+    }
+
+    #[test]
+    fn strict_mode_accepts_scales_y_type_key() {
+        // Task 4: strict allow-list に "type" を追加したことを確認する回帰テスト。
+        let json = r##"{
+          "type":"bar",
+          "data":{"labels":["a"],"datasets":[{"data":[1]}]},
+          "options":{"scales":{"y":{"type":"logarithmic"}}}
+        }"##;
+        assert!(
+            parse(json, true).is_ok(),
+            "strict mode should accept scales.y.type"
+        );
     }
 }
