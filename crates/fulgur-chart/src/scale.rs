@@ -135,6 +135,13 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
 /// 対数スケールの目盛りセット。`major` は 10^n(ラベル表示対象)、`minor` は
 /// 各 decade の mantissa 2..9 倍(ラベルなしグリッド用)。両方とも値空間(データ空間)の
 /// 実値であり、log10 変換は `ValueScale::Log` が写像時に行う。
+///
+/// 不変条件(Task 9 が `ticks.min`/`ticks.max` を実写像のクランプ境界として
+/// 直接使う予定のため、ここに明示しておく):
+/// - `major`・`minor` はともに昇順ソート済み。
+/// - `min == major[0]`、`max == major[major.len() - 1]`(どちらも 10 の整数乗)。
+/// - `minor` は最上位 decade(`major` の最後の要素が表す decade)の mantissa
+///   倍数を含まない。含めると必ず `max` を超えてしまうため、意図的に除外している。
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogTicks {
     pub min: f64,
@@ -151,30 +158,62 @@ const MAX_LOG_DECADES: i32 = 308;
 /// `data_min`..`data_max`(共に正の有限値)を 10^n の decade 境界に丸め、
 /// 主目盛(10^n)と minor目盛(mantissa 2..9)を生成する。
 /// 呼び出し側契約: `data_min > 0.0 && data_max >= data_min && 両方有限`。
+///
+/// 注意: `min <= data_min` は無条件の保証ではない。ドメインが
+/// `MAX_LOG_DECADES`(308)decade 以内に収まり、かつ `data_min >= f64::MIN_POSITIVE`
+/// である場合にのみ成り立つ。それ以外の極端/縮退した入力
+/// (例: `data_min` が非正規化数(subnormal)に近い極小値、あるいはドメインが
+/// 308 decade を超えて広がる場合)では、指数クランプにより `min` が
+/// `data_min` を上回ることがある。
 pub fn log_ticks(data_min: f64, data_max: f64) -> LogTicks {
     let data_min = if data_min.is_finite() && data_min > 0.0 {
         data_min
     } else {
         f64::MIN_POSITIVE
     };
+    // data_min が f64::MAX 付近(例: 1.7e308)だと、この乗算自体が inf に
+    // オーバーフローし得る。それでも正しく動くのは暗黙の頑健性による: 後段の
+    // data_max.log10().ceil() as i32 という f64→i32 キャストは Rust の cast
+    // セマンティクスにより inf を i32::MAX に飽和させ、続く
+    // .min(MAX_LOG_DECADES) がそれを有限範囲に収める。
     let data_max = if data_max.is_finite() && data_max >= data_min {
         data_max
     } else {
         data_min * 10.0
     };
 
-    // 指数を [-MAX_LOG_DECADES, MAX_LOG_DECADES] にクランプし、10f64.powi が
-    // オーバーフローして inf にならないようにする。lo_exp 側は上限を 1 減らし、
-    // hi_exp_raw 側は下限を 1 増やしておくことで、直後の「区間は最低 1 decade」
-    // 保証(hi_exp = max(hi_exp_raw, lo_exp + 1))が clamp 上限を再び超えて
-    // 押し出すことがないようにする。
+    // 指数を [-MAX_LOG_DECADES, MAX_LOG_DECADES] の範囲に収め、10f64.powi が
+    // オーバーフローして inf にならないようにする。
+    //
+    // オーバーフロー防止に実際に効いているのは次の 2 箇所だけ:
+    // - lo_exp の上限を MAX_LOG_DECADES - 1 に制限すること。これにより、
+    //   直後の hi_exp = max(hi_exp_raw, lo_exp + 1) で lo_exp + 1 が
+    //   MAX_LOG_DECADES を超えることがなくなる(例: data_min = f64::MAX の
+    //   とき、この上限がなければ lo_exp=308 → hi_exp=309 → 10^309 = inf)。
+    // - hi_exp_raw の上限を MAX_LOG_DECADES に制限すること。これがないと、
+    //   data_max が f64::MAX 付近のとき hi_exp_raw が MAX_LOG_DECADES(=309)
+    //   を超え、10f64.powi(hi_exp) がオーバーフローし得る。
+    //
+    // lo_exp の下限(-MAX_LOG_DECADES)はオーバーフロー防止ではなく、
+    // 10f64.powi(lo_exp) が 0 にアンダーフローするのを防ぐためのもの
+    // (data_min が非正規化数(subnormal)に近い極小値だと、クランプ前の
+    // floor(log10(data_min)) はこれよりもさらに負になり得る。例:
+    // f64 最小の非正規化数 5e-324 では floor(log10(..)) = -324)。
+    //
+    // hi_exp_raw には下限クランプを付けていない: lo_exp の下限が
+    // -MAX_LOG_DECADES である以上 lo_exp + 1 は常に -MAX_LOG_DECADES + 1
+    // 以上になるため、hi_exp = max(hi_exp_raw, lo_exp + 1) は hi_exp_raw
+    // 側に下限クランプを足しても足さなくても結果が変わらない(= 何を
+    // 設定しても不活性)。追加すると「対称に見える」だけで実質的な意味は
+    // ないため、意図的に付けていない。
     let lo_exp = (data_min.log10().floor() as i32).clamp(-MAX_LOG_DECADES, MAX_LOG_DECADES - 1);
-    let hi_exp_raw = (data_max.log10().ceil() as i32).clamp(-MAX_LOG_DECADES + 1, MAX_LOG_DECADES);
+    let hi_exp_raw = (data_max.log10().ceil() as i32).min(MAX_LOG_DECADES);
     let hi_exp = hi_exp_raw.max(lo_exp + 1);
     // decade 数が上限を超える場合は、実データの上端を表す hi_exp を保ったまま
     // lo_exp を引き上げて範囲を狭める。逆に hi_exp を下げてしまうと、実際の
     // data_max より小さい max を返すことになり、「min/max はドメインを覆う
-    // decade 境界である」という契約を破ってしまう。
+    // decade 境界である」という契約を破ってしまう。この結果、極端な入力では
+    // min(= 10^lo_exp) が data_min を上回ることがある(関数doc コメント参照)。
     let lo_exp = lo_exp.max(hi_exp - MAX_LOG_DECADES);
 
     let mut major = Vec::new();
