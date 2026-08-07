@@ -886,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn log_ticks_rejects_non_positive_domain_does_not_panic() {
+    fn log_ticks_handles_subnormal_scale_domain_without_panicking() {
         let t = log_ticks(f64::MIN_POSITIVE, f64::MIN_POSITIVE * 10.0);
         assert!(t.min.is_finite() && t.min > 0.0);
         assert!(t.max.is_finite() && t.max > t.min);
