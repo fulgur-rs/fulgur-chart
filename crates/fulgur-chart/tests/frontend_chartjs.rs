@@ -1,5 +1,5 @@
 use fulgur_chart::frontend::chartjs;
-use fulgur_chart::ir::{ChartKind, Point, SeriesType};
+use fulgur_chart::ir::{ChartKind, Point, ScaleKind, SeriesType};
 
 #[test]
 fn parses_minimal_bar_spec() {
@@ -1589,4 +1589,111 @@ fn strict_mode_rejects_wrong_typed_scales_r_field() {
     )
     .expect("非 strict は silently 無視する");
     assert!(spec.radial_axis.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Logarithmic scale (options.scales.<axis>.type == "logarithmic")
+//
+// `frontend/chartjs.rs` の `mod tests` (white-box) 側で is_logarithmic/masking
+// の分岐網羅は既に取れている(vertical/horizontal bar・line・pie・mixed・strict
+// allow-list の "type" 単体受理)。ここでは公開 API 経由でしか見えない挙動、
+// つまり (a) 対数軸が他の軸オプション(title/grid/suggestedMin)と共存しても
+// 壊れないこと、(b) x 軸側(横棒)のマスキング分岐、(c) strict の allow-list が
+// 軸種別(radial vs cartesian)で非対称であること、(d) 未知の type 文字列が
+// strict でもエラーにならないこと、を確認する。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn strict_end_to_end_bar_chart_with_logarithmic_y_axis_and_axis_options() {
+    // 実運用に近い chart.js JSON: 対数 y 軸に title/grid/suggestedMin/suggestedMax
+    // を同居させ、strict でも通ること・IR 側で両方がちゃんと共存することを検証する。
+    let json = r##"{
+      "type":"bar",
+      "data":{"labels":["a","b","c"],"datasets":[{"label":"売上","data":[1,10,100]}]},
+      "options":{
+        "scales":{
+          "y":{
+            "type":"logarithmic",
+            "title":{"display":true,"text":"件数"},
+            "grid":{"display":false},
+            "suggestedMin":1,
+            "suggestedMax":1000
+          }
+        }
+      }
+    }"##;
+    let spec = chartjs::parse(json, true).expect("strict は既知キーの組み合わせを受理する");
+    assert_eq!(spec.y_axis.scale_kind, ScaleKind::Logarithmic);
+    let title = spec.y_axis.title.as_ref().expect("title should be Some");
+    assert_eq!(title.text, "件数");
+    assert!(!spec.y_axis.grid.display);
+    assert_eq!(spec.y_axis.suggested_min, Some(1.0));
+    assert_eq!(spec.y_axis.suggested_max, Some(1000.0));
+}
+
+#[test]
+fn horizontal_bar_logarithmic_x_axis_masks_negative_values() {
+    // 縦棒(y が値軸)の負値マスキングは white-box テストで既に確認済み。
+    // ここでは横棒(indexAxis:"y" → x が値軸)側の分岐、つまり x_axis_is_log の
+    // OR 経路がマスキングを正しく駆動することを公開 API から確認する。
+    let json = r##"{
+      "type":"bar",
+      "data":{"labels":["a","b","c"],"datasets":[{"data":[1,-5,10]}]},
+      "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic"}}}
+    }"##;
+    let spec = chartjs::parse(json, false).expect("parse ok");
+    assert_eq!(spec.x_axis.scale_kind, ScaleKind::Logarithmic);
+    let values = &spec.series[0].values;
+    assert!(values[1].is_nan(), "negative value should become NaN");
+    assert_eq!(values[0], 1.0);
+    assert_eq!(values[2], 10.0);
+}
+
+#[test]
+fn strict_mode_rejects_scales_r_type_key_on_radar() {
+    // Task 4 は cartesian (x/y) の allow-list にのみ "type" を追加した。radial (r) の
+    // allow-list ([min, max, suggestedMin, suggestedMax, beginAtZero], `RadialLinearAxisOptions`
+    // のフィールド集合と一致)には含まれていないため、strict モードで scales.r.type は
+    // x/y とは非対称に拒否される(v1 は radial 軸の対数化をそもそもサポートしない)。
+    // 拒否は値ではなくキーの存在で決まる ("type":"logarithmic" でも "type":"linear" でも
+    // 同じエラーになる) ため、テスト名・コメントはキー起因であることを明示する。
+    let json = r##"{
+      "type":"radar",
+      "data":{"labels":["a","b","c"],"datasets":[{"data":[1,2,3]}]},
+      "options":{"scales":{"r":{"type":"logarithmic"}}}
+    }"##;
+    let err = chartjs::parse(json, true).expect_err("radial の type は strict allow-list に無い");
+    assert!(
+        err.contains("options.scales.r.type") || err.contains("scales.r"),
+        "err: {err}"
+    );
+
+    // 非 strict では `RawScales.r` が生の serde_json::Value のまま保持され (chartjs.rs
+    // 冒頭コメント参照)、`type` はドメインキー(min/max/suggestedMin/suggestedMax/
+    // beginAtZero)ではないので `empty_scales_r_does_not_populate_radial_axis` の
+    // "視覚キーのみ" ケースと同じく no-op(radial_axis は populate されない)。
+    let spec = chartjs::parse(json, false).expect("非 strict は silently 無視する");
+    assert!(
+        spec.radial_axis.is_none(),
+        "type 単体はドメインキーではないので no-op"
+    );
+}
+
+#[test]
+fn unknown_scale_type_value_is_accepted_in_strict_mode_and_defaults_to_linear() {
+    // `AxisOptions.type` は closed enum ではなく Option<String> (schema/common.rs 参照)。
+    // 既存 Chart.js JSON が "category"/"time" のような非対数値を明示することは多く、
+    // strict モードでもエラーにせず素通りし、IR 側では Linear 既定に倒れることを
+    // 公開 API 経由で確認する。
+    let json = r##"{
+      "type":"bar",
+      "data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"y":{"type":"category"}}}
+    }"##;
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict は未知の type 値をエラーにしない"
+    );
+    let spec = chartjs::parse(json, false).expect("parse ok");
+    assert_eq!(spec.y_axis.scale_kind, ScaleKind::Linear);
 }
