@@ -293,6 +293,33 @@ fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
     }
 }
 
+/// 値→ピクセル写像。線形はそのまま `LinearScale` に委譲し、対数は内部で
+/// `log10` 変換してから同じ `LinearScale` に委譲する。呼び出し側は
+/// `ValueScale::map(v)` だけを見ればよく、線形/対数の分岐を意識しない。
+#[derive(Debug, Clone)]
+pub enum ValueScale {
+    Linear(LinearScale),
+    Log {
+        /// ログ空間(log10(d0)..log10(d1))を写す内部スケール。
+        inner: LinearScale,
+        /// この値以下は floor にクランプしてから log10 する(0 や丸め誤差での
+        /// 負値が -inf/NaN を作らないための総関数化)。呼び出し側で「floor 未満は
+        /// 描画しない」判断が必要な場合(負値スキップ)は、ここに来る前に
+        /// 呼び出し側がフィルタ済みである前提(このタスクでは Linear 経路のみ使うため
+        /// floor 分岐は Task 8 まで到達しない)。
+        floor: f64,
+    },
+}
+
+impl ValueScale {
+    pub fn map(&self, v: f64) -> f64 {
+        match self {
+            ValueScale::Linear(s) => s.map(v),
+            ValueScale::Log { inner, floor } => inner.map(v.max(*floor).log10()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
