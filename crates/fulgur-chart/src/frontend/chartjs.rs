@@ -803,6 +803,16 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     ) && is_logarithmic(y_opts);
     let value_axis_is_log = x_axis_is_log || y_axis_is_log;
 
+    // 対数軸の値軸(value axis)と積み上げ(value_stacked)の併用は log_value_domain が
+    // カテゴリごとの積み上げ合計を計算しないため、ドメイン上限が実際のスタック高さより
+    // 小さくなり棒がプロット領域外へ描画される(fulgur-chart-bap)。対応するまで明示エラーにする。
+    if value_axis_is_log && value_stacked {
+        return Err(
+            "対数軸の値軸(scales.{x,y}.type: 'logarithmic')は積み上げ(stacked)と併用できません"
+                .to_string(),
+        );
+    }
+
     let series: Vec<Series> = raw
         .data
         .datasets
@@ -3963,5 +3973,51 @@ mod tests {
         let spec = parse(json, false).expect("parse ok");
         assert!(matches!(spec.kind, ChartKind::Mixed));
         assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Linear));
+    }
+
+    #[test]
+    fn logarithmic_value_stacked_y_axis_is_rejected() {
+        // log_value_domain はカテゴリごとの積み上げ合計を計算しないため、対数y軸 +
+        // 値の積み上げ(value_stacked)を許すとドメイン上限が実際のスタック高さより
+        // 小さくなり棒がプロット領域外へ描画される(fulgur-chart-bap)。対応するまで拒否。
+        let json = r#"{ "type":"bar",
+          "data":{"labels":["a"],"datasets":[
+            {"label":"s1","data":[10]},{"label":"s2","data":[10]}
+          ]},
+          "options":{"scales":{"x":{"stacked":true},"y":{"stacked":true,"type":"logarithmic"}}} }"#;
+        let err = parse(json, false).expect_err("stacked + log y軸は拒否されるべき");
+        assert!(
+            err.contains("logarithmic") || err.contains("対数"),
+            "err: {err}"
+        );
+    }
+
+    #[test]
+    fn logarithmic_value_stacked_x_axis_is_rejected_on_horizontal_bar() {
+        // 横棒(indexAxis:"y")では値軸が x。同じ理由で x 軸の対数+積み上げも拒否する。
+        let json = r#"{ "type":"bar",
+          "data":{"labels":["a"],"datasets":[
+            {"label":"s1","data":[10]},{"label":"s2","data":[10]}
+          ]},
+          "options":{"indexAxis":"y",
+            "scales":{"x":{"stacked":true,"type":"logarithmic"},"y":{"stacked":true}}} }"#;
+        let err = parse(json, false).expect_err("stacked + log x軸は拒否されるべき");
+        assert!(
+            err.contains("logarithmic") || err.contains("対数"),
+            "err: {err}"
+        );
+    }
+
+    #[test]
+    fn logarithmic_placement_stacked_only_is_still_allowed() {
+        // placement_stacked(index軸のみの積み上げ、値域は個別値のまま)は
+        // log_value_domain のドメイン計算に影響しないため、対数軸と併用可能。
+        let json = r#"{ "type":"bar",
+          "data":{"labels":["a"],"datasets":[
+            {"label":"s1","data":[10]},{"label":"s2","data":[20]}
+          ]},
+          "options":{"scales":{"x":{"stacked":true},"y":{"type":"logarithmic"}}} }"#;
+        let spec = parse(json, false).expect("placement_stacked のみは対数軸と両立できる");
+        assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Logarithmic));
     }
 }
