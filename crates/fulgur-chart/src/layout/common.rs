@@ -912,8 +912,15 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         });
     }
     // 2b. 対数軸の minor グリッド(mantissa 2..9、ラベルなし)。線形軸では
-    // frame.minor_ticks が常に空なので no-op。
+    // frame.minor_ticks が常に空なので no-op。1 decade あたり major の8倍(mantissa
+    // 2..9)の本数になり、major と同じ濃さだと decade 境界が埋もれる。Chart.js に
+    // 倣い、視認性のため半透明(アルファ半減)で薄く描く(tick-for-tick parity ではなく
+    // 見た目の可読性目的の意図的な調整。scale.rs::LogTicks の非目標セクション参照)。
     if grid_cfg.display {
+        let minor_grid_color = Color {
+            a: grid_color.a * 0.5,
+            ..grid_color
+        };
         for &t in &frame.minor_ticks {
             let y = frame.ys.map(t);
             items.push(Prim::Line {
@@ -921,7 +928,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                 y1: y,
                 x2: frame.plot_right,
                 y2: y,
-                stroke: grid_color,
+                stroke: minor_grid_color,
                 stroke_width: grid_cfg.line_width,
                 dash: Vec::new(),
             });
