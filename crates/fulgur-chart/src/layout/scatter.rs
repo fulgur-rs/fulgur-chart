@@ -535,7 +535,7 @@ mod tests {
     use crate::font::DEFAULT_FONT;
     use crate::ir::{
         AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, Color,
-        LegendPos, LineInterpolation, Point, Series, SeriesType, SizeMode, XPositions,
+        LegendPos, LineInterpolation, Point, ScaleKind, Series, SeriesType, SizeMode, XPositions,
     };
     use crate::text::TextMeasurer;
 
@@ -575,6 +575,7 @@ mod tests {
                 offset: false,
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
+                scale_kind: ScaleKind::Linear,
             },
             y_axis: AxisSpec {
                 title: None,
@@ -586,6 +587,7 @@ mod tests {
                 offset: false,
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
+                scale_kind: ScaleKind::Linear,
             },
             legend: LegendPos::None,
             legend_title: None,
