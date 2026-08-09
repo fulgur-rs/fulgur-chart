@@ -257,6 +257,14 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 横棒は値軸が x のため x_axis を渡す（begin_at_zero/suggested も x_axis から読む）。
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
     let ticks = nice_ticks(dmin, dmax, 10);
+    let max_tick_label_width = ticks
+        .ticks
+        .iter()
+        .map(|&tick| {
+            let label = fmt_num(tick);
+            m.width(&label, label_font as f32) as f64
+        })
+        .fold(0.0, f64::max);
 
     // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。
     let mut max_cat_w = 0.0_f32;
@@ -318,7 +326,8 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         0.0
     };
     let plot_left = OUTER_PAD + cat_w + y_title_w + legend_left;
-    let plot_right = spec.width - OUTER_PAD - legend_right;
+    let plot_right =
+        (spec.width - OUTER_PAD - legend_right - max_tick_label_width / 2.0).max(plot_left);
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
 
@@ -821,7 +830,9 @@ mod horizontal_axis_style_tests {
     use crate::font::DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::ir::ChartSpec;
-    use crate::layout::common::{OUTER_PAD, X_LABEL_BAND};
+    use crate::layout::common::{OUTER_PAD, X_LABEL_BAND, value_domain};
+    use crate::num::fmt_num;
+    use crate::scale::nice_ticks;
     use crate::scene::{Anchor, Prim, Scene};
     use crate::text::TextMeasurer;
 
@@ -833,6 +844,20 @@ mod horizontal_axis_style_tests {
         let spec = parse(json);
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         build(&spec, &m)
+    }
+
+    fn horizontal_plot_right(spec: &ChartSpec, m: &TextMeasurer<'_>) -> f64 {
+        let (dmin, dmax) = value_domain(spec, &spec.x_axis);
+        let ticks = nice_ticks(dmin, dmax, 10);
+        let max_tick_label_width = ticks
+            .ticks
+            .iter()
+            .map(|&tick| {
+                let label = fmt_num(tick);
+                m.width(&label, spec.theme.font_size as f32) as f64
+            })
+            .fold(0.0, f64::max);
+        spec.width - OUTER_PAD - max_tick_label_width / 2.0
     }
 
     /// 値軸(=X)のグリッド線を検出: y1!=y2 かつ x1==x2(垂直線)で grid_color。
@@ -929,7 +954,7 @@ mod horizontal_axis_style_tests {
                 .map(|category| m.width(category, spec.theme.font_size as f32))
                 .fold(0.0_f32, f32::max) as f64
             + 10.0;
-        let plot_right = spec.width - OUTER_PAD;
+        let plot_right = horizontal_plot_right(&spec, &m);
         let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND;
         let scene = build(&spec, &m);
         let baseline = scene.items.iter().find_map(|p| match p {
@@ -1000,7 +1025,7 @@ mod horizontal_axis_style_tests {
                 .map(|category| m.width(category, visible_spec.theme.font_size as f32))
                 .fold(0.0_f32, f32::max) as f64
             + 10.0;
-        let plot_right = visible_spec.width - OUTER_PAD;
+        let plot_right = horizontal_plot_right(&visible_spec, &m);
         let plot_bottom = visible_spec.height - OUTER_PAD - X_LABEL_BAND;
         let visible = build(&visible_spec, &m);
         let hidden = build(&hidden_spec, &m);
@@ -1072,5 +1097,35 @@ mod horizontal_axis_style_tests {
             )
         });
         assert!(has_x_title, "x_axis.title は水平テキストで描画");
+    }
+
+    #[test]
+    fn horizontal_rightmost_tick_label_fits_inside_canvas() {
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[{"data":[5,500,95000]}]},
+                 "options":{"indexAxis":"y"}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let (x, size) = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Text {
+                    x,
+                    size,
+                    anchor: Anchor::Middle,
+                    content,
+                    ..
+                } if content == "100000" => Some((*x, *size)),
+                _ => None,
+            })
+            .expect("最大 x 軸目盛 100000 が描画される");
+        let half_width = m.width("100000", size as f32) as f64 / 2.0;
+        assert!(
+            x + half_width <= scene.width + 1e-9,
+            "右端目盛ラベルが canvas 外へ出ている: x={x}, half_width={half_width}, width={}",
+            scene.width
+        );
     }
 }
