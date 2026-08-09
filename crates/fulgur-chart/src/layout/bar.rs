@@ -11,6 +11,8 @@ const GROUP_RATIO: f64 = 0.8;
 const BAND_PAD_RATIO: f64 = 0.1;
 /// bar 幅の塗り比。
 const BAR_FILL_RATIO: f64 = 0.9;
+/// 極端に長い目盛ラベルでも LinearScale のプロット幅を 0 にしない下限。
+const MIN_HORIZONTAL_PLOT_WIDTH: f64 = 1.0;
 
 /// 縦棒1本のデータ矩形(ピクセル空間)。`series`=dataset index, `index`=category index。
 /// `value` はラベル描画用に元値を保持する(geometry には出力しない)。
@@ -162,6 +164,44 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 }
 
+/// 横棒の値軸端ラベル用のプロット境界を算出する。
+///
+/// 端のラベルは中央寄せなので、左端と右端を別々に余白化する。右端は最後の
+/// tick の幅だけを使い、左端はラベルが canvas の左端を越える場合にだけ補う。
+/// 余白が大きすぎる有限値では比例縮小し、LinearScale が全値を同一点へ写すのを
+/// 防ぐため最低限のプロット幅を残す。
+fn horizontal_plot_bounds(
+    base_left: f64,
+    base_right: f64,
+    ticks: &[f64],
+    m: &TextMeasurer,
+    label_font: f64,
+) -> (f64, f64) {
+    let half_tick_width = |tick: f64| {
+        let label = crate::num::fmt_num(tick);
+        m.width(&label, label_font as f32) as f64 / 2.0
+    };
+    let left_pad = ticks
+        .first()
+        .map(|&tick| (half_tick_width(tick) - base_left).max(0.0))
+        .unwrap_or(0.0);
+    let right_pad = ticks
+        .last()
+        .map(|&tick| half_tick_width(tick))
+        .unwrap_or(0.0);
+    let available_width = (base_right - base_left).max(0.0);
+    let max_edge_padding = (available_width - MIN_HORIZONTAL_PLOT_WIDTH).max(0.0);
+    let edge_padding = left_pad + right_pad;
+    let scale = if edge_padding > max_edge_padding && edge_padding > 0.0 {
+        max_edge_padding / edge_padding
+    } else {
+        1.0
+    };
+    let plot_left = base_left + left_pad * scale;
+    let plot_right = (base_right - right_pad * scale).max(plot_left);
+    (plot_left, plot_right)
+}
+
 fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     use super::common::{LABEL_GAP, value_label};
     use crate::scene::Anchor;
@@ -257,15 +297,6 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 横棒は値軸が x のため x_axis を渡す（begin_at_zero/suggested も x_axis から読む）。
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
     let ticks = nice_ticks(dmin, dmax, 10);
-    let max_tick_label_width = ticks
-        .ticks
-        .iter()
-        .map(|&tick| {
-            let label = fmt_num(tick);
-            m.width(&label, label_font as f32) as f64
-        })
-        .fold(0.0, f64::max);
-
     // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。
     let mut max_cat_w = 0.0_f32;
     for c in &spec.categories {
@@ -325,9 +356,14 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     } else {
         0.0
     };
-    let plot_left = OUTER_PAD + cat_w + y_title_w + legend_left;
-    let plot_right =
-        (spec.width - OUTER_PAD - legend_right - max_tick_label_width / 2.0).max(plot_left);
+    let base_left = OUTER_PAD + cat_w + y_title_w + legend_left;
+    let (plot_left, plot_right) = horizontal_plot_bounds(
+        base_left,
+        spec.width - OUTER_PAD - legend_right,
+        &ticks.ticks,
+        m,
+        label_font,
+    );
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
 
@@ -826,7 +862,7 @@ mod horizontal_axis_style_tests {
     //! 横棒(indexAxis:"y") のグリッド/ボーダー/軸タイトル反映テスト。
     //! ChartJS フロントエンドを経由して spec を組む(scales.x/y と options.plugins.title を直に指定できる)。
 
-    use super::build;
+    use super::{build, horizontal_plot_bounds};
     use crate::font::DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::ir::ChartSpec;
@@ -849,15 +885,45 @@ mod horizontal_axis_style_tests {
     fn horizontal_plot_right(spec: &ChartSpec, m: &TextMeasurer<'_>) -> f64 {
         let (dmin, dmax) = value_domain(spec, &spec.x_axis);
         let ticks = nice_ticks(dmin, dmax, 10);
-        let max_tick_label_width = ticks
-            .ticks
+        let max_cat_w = spec
+            .categories
             .iter()
-            .map(|&tick| {
-                let label = fmt_num(tick);
-                m.width(&label, spec.theme.font_size as f32) as f64
-            })
-            .fold(0.0, f64::max);
-        spec.width - OUTER_PAD - max_tick_label_width / 2.0
+            .map(|category| m.width(category, spec.theme.font_size as f32))
+            .fold(0.0_f32, f32::max);
+        let cat_w = max_cat_w as f64 + 10.0;
+        let y_title_w = spec
+            .y_axis
+            .title
+            .as_ref()
+            .map(|title| title.font_size.unwrap_or(spec.theme.font_size * 1.1) + 6.0)
+            .unwrap_or(0.0);
+        let has_legend = spec.series.iter().any(|series| !series.name.is_empty());
+        let series_names: Vec<String> = spec
+            .series
+            .iter()
+            .map(|series| series.name.clone())
+            .collect();
+        let legend_left = if has_legend && spec.legend == crate::ir::LegendPos::Left {
+            crate::layout::common::legend_band_width_vertical(
+                m,
+                &series_names,
+                spec.theme.font_size,
+            )
+        } else {
+            0.0
+        };
+        let legend_right = if has_legend && spec.legend == crate::ir::LegendPos::Right {
+            crate::layout::common::legend_band_width_vertical(
+                m,
+                &series_names,
+                spec.theme.font_size,
+            )
+        } else {
+            0.0
+        };
+        let base_left = OUTER_PAD + cat_w + y_title_w + legend_left;
+        let base_right = spec.width - OUTER_PAD - legend_right;
+        horizontal_plot_bounds(base_left, base_right, &ticks.ticks, m, spec.theme.font_size).1
     }
 
     /// 値軸(=X)のグリッド線を検出: y1!=y2 かつ x1==x2(垂直線)で grid_color。
@@ -1126,6 +1192,120 @@ mod horizontal_axis_style_tests {
             x + half_width <= scene.width + 1e-9,
             "右端目盛ラベルが canvas 外へ出ている: x={x}, half_width={half_width}, width={}",
             scene.width
+        );
+    }
+
+    #[test]
+    fn horizontal_right_edge_padding_uses_terminal_tick_width() {
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[-1000,-500]}]},
+                 "options":{"indexAxis":"y"}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let (_, plot_right) = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Line {
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    stroke,
+                    ..
+                } if (*x2 - *x1) > 1.0
+                    && (*y1 - *y2).abs() < 1e-9
+                    && *stroke == spec.theme.text_color =>
+                {
+                    Some((*x1, *x2))
+                }
+                _ => None,
+            })
+            .expect("x 軸の下辺が描画される");
+        let ticks = {
+            let (dmin, dmax) = value_domain(&spec, &spec.x_axis);
+            nice_ticks(dmin, dmax, 10)
+        };
+        let first_width = m.width(&fmt_num(ticks.ticks[0]), spec.theme.font_size as f32);
+        let last_width = m.width(
+            &fmt_num(*ticks.ticks.last().expect("目盛がある")),
+            spec.theme.font_size as f32,
+        );
+        assert!(
+            first_width > last_width,
+            "左端の負値目盛が右端の 0 より幅広い入力であること"
+        );
+        let expected = spec.width - OUTER_PAD - last_width as f64 / 2.0;
+        assert!(
+            (plot_right - expected).abs() < 1e-9,
+            "右端の余白は終端目盛幅だけで決める: actual={plot_right}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn horizontal_extreme_tick_labels_keep_nonzero_plot_width() {
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1e308,5e307]}]},
+                 "options":{"indexAxis":"y"}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let (plot_left, plot_right) = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Line {
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    stroke,
+                    ..
+                } if (*y1 - *y2).abs() < 1e-9 && *stroke == spec.theme.text_color => {
+                    Some((*x1, *x2))
+                }
+                _ => None,
+            })
+            .expect("x 軸の下辺が描画される");
+        assert!(
+            plot_right > plot_left,
+            "極端に幅広い目盛ラベルでもプロット領域を潰さない: left={plot_left}, right={plot_right}"
+        );
+    }
+
+    #[test]
+    fn horizontal_plot_right_includes_right_legend_width() {
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"label":"売上","data":[10,20]}]},
+                 "options":{"indexAxis":"y","plugins":{"legend":{"position":"right"}}}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let (_, plot_right) = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Line {
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    stroke,
+                    ..
+                } if (*x2 - *x1) > 1.0
+                    && (*y1 - *y2).abs() < 1e-9
+                    && *stroke == spec.theme.text_color =>
+                {
+                    Some((*x1, *x2))
+                }
+                _ => None,
+            })
+            .expect("x 軸の下辺が描画される");
+        let expected = horizontal_plot_right(&spec, &m);
+        assert!(
+            (plot_right - expected).abs() < 1e-9,
+            "テスト用 plot_right は右凡例帯を本体と同じく考慮する: actual={plot_right}, expected={expected}"
         );
     }
 }
