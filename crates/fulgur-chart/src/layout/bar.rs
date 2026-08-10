@@ -164,6 +164,36 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 }
 
+/// TextMeasurer が受け取れる有限なフォントサイズへ正規化する。
+fn finite_measure_font_size(font_size: f64) -> f32 {
+    if font_size.is_finite() {
+        font_size.clamp(0.0, f32::MAX as f64) as f32
+    } else if font_size.is_sign_positive() {
+        f32::MAX
+    } else {
+        0.0
+    }
+}
+
+/// 横棒レイアウト用の文字幅。非有限の計測結果は境界計算へ伝播させない。
+fn finite_text_width(m: &TextMeasurer, text: &str, font_size: f64) -> f64 {
+    let width = m.width(text, finite_measure_font_size(font_size));
+    if width.is_finite() {
+        (width as f64).max(0.0)
+    } else {
+        0.0
+    }
+}
+
+/// 横棒の左右凡例帯幅。巨大な fontSize でも有限な境界を返す。
+fn horizontal_legend_band_width(m: &TextMeasurer, names: &[String], font_size: f64) -> f64 {
+    let max_width = names
+        .iter()
+        .map(|name| finite_text_width(m, name, font_size))
+        .fold(0.0, f64::max);
+    12.0 + 4.0 + max_width + 16.0
+}
+
 /// 横棒の値軸端ラベル用のプロット境界を算出する。
 ///
 /// 端のラベルは中央寄せなので、左端と右端を別々に余白化する。右端は最後の
@@ -177,9 +207,22 @@ fn horizontal_plot_bounds(
     m: &TextMeasurer,
     label_font: f64,
 ) -> (f64, f64) {
+    let base_left = if base_left.is_finite() {
+        base_left
+    } else {
+        0.0
+    };
+    let mut base_right = if base_right.is_finite() {
+        base_right
+    } else {
+        base_left
+    };
+    if base_right - base_left < MIN_HORIZONTAL_PLOT_WIDTH {
+        base_right = base_left + MIN_HORIZONTAL_PLOT_WIDTH;
+    }
     let half_tick_width = |tick: f64| {
         let label = crate::num::fmt_num(tick);
-        m.width(&label, label_font as f32) as f64 / 2.0
+        finite_text_width(m, &label, label_font) / 2.0
     };
     let left_pad = ticks
         .first()
@@ -298,14 +341,14 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
     let ticks = nice_ticks(dmin, dmax, 10);
     // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。
-    let mut max_cat_w = 0.0_f32;
+    let mut max_cat_w = 0.0_f64;
     for c in &spec.categories {
-        let w = m.width(c, label_font as f32);
+        let w = finite_text_width(m, c, label_font);
         if w > max_cat_w {
             max_cat_w = w;
         }
     }
-    let cat_w = max_cat_w as f64 + 10.0;
+    let cat_w = max_cat_w + 10.0;
 
     // 凡例の有無(縦棒と同じ判定: Top/Bottom/Left/Right かつ名前付き系列あり)。
     let has_legend = matches!(
@@ -334,12 +377,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // Left/Right の凡例帯幅(系列名から算出)。
     let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
     let legend_left = if has_legend && spec.legend == crate::ir::LegendPos::Left {
-        legend_band_width_vertical(m, &series_names, label_font)
+        horizontal_legend_band_width(m, &series_names, label_font)
     } else {
         0.0
     };
     let legend_right = if has_legend && spec.legend == crate::ir::LegendPos::Right {
-        legend_band_width_vertical(m, &series_names, label_font)
+        horizontal_legend_band_width(m, &series_names, label_font)
     } else {
         0.0
     };
@@ -862,7 +905,10 @@ mod horizontal_axis_style_tests {
     //! 横棒(indexAxis:"y") のグリッド/ボーダー/軸タイトル反映テスト。
     //! ChartJS フロントエンドを経由して spec を組む(scales.x/y と options.plugins.title を直に指定できる)。
 
-    use super::{build, horizontal_plot_bounds};
+    use super::{
+        MIN_HORIZONTAL_PLOT_WIDTH, build, finite_text_width, horizontal_legend_band_width,
+        horizontal_plot_bounds,
+    };
     use crate::font::DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::ir::ChartSpec;
@@ -888,9 +934,9 @@ mod horizontal_axis_style_tests {
         let max_cat_w = spec
             .categories
             .iter()
-            .map(|category| m.width(category, spec.theme.font_size as f32))
-            .fold(0.0_f32, f32::max);
-        let cat_w = max_cat_w as f64 + 10.0;
+            .map(|category| finite_text_width(m, category, spec.theme.font_size))
+            .fold(0.0, f64::max);
+        let cat_w = max_cat_w + 10.0;
         let y_title_w = spec
             .y_axis
             .title
@@ -904,20 +950,12 @@ mod horizontal_axis_style_tests {
             .map(|series| series.name.clone())
             .collect();
         let legend_left = if has_legend && spec.legend == crate::ir::LegendPos::Left {
-            crate::layout::common::legend_band_width_vertical(
-                m,
-                &series_names,
-                spec.theme.font_size,
-            )
+            horizontal_legend_band_width(m, &series_names, spec.theme.font_size)
         } else {
             0.0
         };
         let legend_right = if has_legend && spec.legend == crate::ir::LegendPos::Right {
-            crate::layout::common::legend_band_width_vertical(
-                m,
-                &series_names,
-                spec.theme.font_size,
-            )
+            horizontal_legend_band_width(m, &series_names, spec.theme.font_size)
         } else {
             0.0
         };
@@ -1306,6 +1344,70 @@ mod horizontal_axis_style_tests {
         assert!(
             (plot_right - expected).abs() < 1e-9,
             "テスト用 plot_right は右凡例帯を本体と同じく考慮する: actual={plot_right}, expected={expected}"
+        );
+    }
+
+    #[test]
+    fn horizontal_narrow_canvas_preserves_minimum_plot_width() {
+        let spec = parse(
+            r#"{"type":"bar","width":30,"data":{"labels":["長いカテゴリラベル"],"datasets":[{"label":"右凡例","data":[10]}]},
+                 "options":{"indexAxis":"y","plugins":{"legend":{"position":"right"}}}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let (plot_left, plot_right) = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Line {
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    stroke,
+                    ..
+                } if (*y1 - *y2).abs() < 1e-9 && *stroke == spec.theme.text_color => {
+                    Some((*x1, *x2))
+                }
+                _ => None,
+            })
+            .expect("x 軸の下辺が描画される");
+        assert!(plot_left.is_finite() && plot_right.is_finite());
+        assert!(
+            plot_right - plot_left >= MIN_HORIZONTAL_PLOT_WIDTH - 1e-9,
+            "狭い canvas でも最小プロット幅を確保する: left={plot_left}, right={plot_right}"
+        );
+    }
+
+    #[test]
+    fn horizontal_font_size_above_f32_range_keeps_layout_finite() {
+        let spec = parse(
+            r#"{"type":"bar","data":{"labels":[""],"datasets":[{"data":[10]}]},
+                 "options":{"indexAxis":"y","theme":{"fontSize":1e40}}}"#,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let (plot_left, plot_right) = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Line {
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    stroke,
+                    ..
+                } if (*y1 - *y2).abs() < 1e-9 && *stroke == spec.theme.text_color => {
+                    Some((*x1, *x2))
+                }
+                _ => None,
+            })
+            .expect("x 軸の下辺が描画される");
+        assert!(plot_left.is_finite() && plot_right.is_finite());
+        assert!(
+            plot_right - plot_left >= MIN_HORIZONTAL_PLOT_WIDTH - 1e-9,
+            "巨大 fontSize でもプロット境界を有限かつ非縮退にする: left={plot_left}, right={plot_right}"
         );
     }
 }
