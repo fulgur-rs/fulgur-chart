@@ -356,12 +356,14 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 
 /// 対数軸専用のドメイン計算。線形版(上の `value_domain` 本体)と異なる点:
 /// `begin_at_zero` は「0 をドメインに含める」という線形の意味では効かない(0 は
-/// 対数軸に存在しえない)が、chart.js 実機で確認した通り「最小正値がちょうど
-/// decade 境界(10^n)のとき、その値のバー/点が軸の床と重なって高さ0になる」のを
-/// 避けるため、その1ケースに限り domain_min をさらに1桁下げる効果を持つ
-/// (`is_exact_decade_boundary` 参照)。0 は最小正値の1桁下に置換してドメインへ含め、
-/// 負値(`frontend/chartjs.rs` で既に NaN 化済みのはず)は通常の有限値フィルタで
-/// 自然に除外される。`suggested_min`/`suggested_max` は正の値のみ尊重する。
+/// 対数軸に存在しえない)が、chart.js 実機で確認した通り、代わりに domain_min を
+/// 最小正値の "decade floor"(10^floor(log10(min_positive)))へ切り下げる効果を
+/// 持つ(`crate::scale::is_exact_decade_boundary` 参照。床がちょうど min_positive
+/// 自身と一致する — 例えば min_positive がすでに 10^n の — 場合は、その値の
+/// バー/点が軸の床と重なって高さ0になるのを避けるため、さらにもう1桁下げる)。
+/// 0 は最小正値の1桁下に置換してドメインへ含め、負値(`frontend/chartjs.rs` で
+/// 既に NaN 化済みのはず)は通常の有限値フィルタで自然に除外される。
+/// `suggested_min`/`suggested_max` は正の値のみ尊重する。
 ///
 /// 未対応(スコープ外、Task 11 実装者向けメモ): `value_domain` 本体は
 /// `ChartKind::Bar { value_stacked: true, .. }` をカテゴリごとの正負サム(スタック高さ)
