@@ -1098,7 +1098,10 @@ mod tests {
             t.major.len(),
             t.minor.len()
         );
-        assert!(t.minor.is_empty(), "expected minor ticks to be dropped: {t:?}");
+        assert!(
+            t.minor.is_empty(),
+            "expected minor ticks to be dropped: {t:?}"
+        );
         // ガードが効いても、ドメインを覆う契約(min<=フォールバック後data_min,
         // max>=data_max)は major のみで維持される。
         assert!(t.max >= 100.0, "{t:?}");
