@@ -140,8 +140,10 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
 ///
 /// 以下は `log_ticks` のテストモジュール(`log_ticks_brackets_domain_for_reasonable_inputs`
 /// 等の property スタイルテスト群、および単体テスト)で複数のドメインに対して
-/// 固定されている契約。Task 9 が `ticks.min`/`ticks.max` を実写像のクランプ境界として
-/// 直接使うため、ここに明示しておく:
+/// 固定されている契約。`log_ticks` 自身はもう実写像のクランプ境界には使われていない
+/// (それは `log_ticks_within` の役割 — このモジュール下部の doc 参照。`log_ticks` は
+/// 「decade 境界へ外側丸めした目盛集合」が欲しい汎用ユーティリティとして引き続き
+/// 独立にテストされている)が、契約は変わらないためここに明示しておく:
 /// - **ドメインブラケティング:** 縮退していない「妥当な」ドメインでは
 ///   `min <= data_min` かつ `max >= data_max`(極端/縮退したドメインでの例外は
 ///   `log_ticks` 関数のドキュメントコメントを参照)。
@@ -175,6 +177,18 @@ pub struct LogTicks {
 /// decade 数が爆発しないよう上限を設ける。この値は `10f64.powi` が有限を保てる
 /// 指数の限界(10^308 は有限、10^309 は inf)とも一致させ、指数クランプの境界にも使う。
 const MAX_LOG_DECADES: i32 = 308;
+
+/// `v` が(丸め誤差を許容して)ちょうど 10 の整数乗かどうかを判定する。
+/// `layout::common::log_value_domain` の beginAtZero 特例と、`log_ticks_within` の
+/// decade 指数判定(浮動小数の `log10()` が厳密な整数を返すとは限らないための
+/// 補正)の両方で使う。
+pub(crate) fn is_exact_decade_boundary(v: f64) -> bool {
+    if !v.is_finite() || v <= 0.0 {
+        return false;
+    }
+    let exp = v.log10().round();
+    (10f64.powf(exp) - v).abs() < v * 1e-9
+}
 
 /// `data_min`..`data_max`(共に正の有限値)を 10^n の decade 境界に丸め、
 /// 主目盛(10^n)と minor目盛(mantissa 2..9)を生成する。
@@ -252,6 +266,115 @@ pub fn log_ticks(data_min: f64, data_max: f64) -> LogTicks {
     LogTicks {
         min: 10f64.powi(lo_exp),
         max: 10f64.powi(hi_exp),
+        major,
+        minor,
+    }
+}
+
+/// `domain_min`..`domain_max`(共に正の有限値、tight/生ドメイン)の**内側**に
+/// 収まる対数目盛を生成する。`log_ticks` と異なりドメインを decade 境界へ
+/// 外側丸め**しない** — `min`/`max` は渡した `domain_min`/`domain_max` を
+/// そのまま返す。
+///
+/// 存在理由: `ValueScale::Log` のピクセル写像は(chart.js 実機で確認した通り)
+/// tight データドメインをそのまま使う。`log_ticks` の decade 外側丸め済み範囲を
+/// 写像に使うと、実データがプロット高さの一部にしか使われず圧縮されて見える
+/// バグになる(PR #144 の自動レビュー P1 指摘)。かといって `log_ticks` の目盛を
+/// そのままフィルタなしで使うと、範囲外の目盛がプロット境界の外側へ描かれて
+/// しまう。この関数は両方を満たす: 目盛は必ず `[domain_min, domain_max]` の
+/// 内側だけに生成される。
+///
+/// ドメイン内に decade 境界(10^n)が1つも収まらない場合(例: `[3.0, 7.0]`、
+/// `[11.0, 89.0]`)、major が空になりラベルが1つも出せなくなる。この場合は
+/// `nice_ticks` による線形の等間隔目盛にフォールバックし、`major` に詰めて返す
+/// (`minor` は空のまま)。
+///
+/// # 非目標
+///
+/// `log_ticks` の非目標(このモジュール上部の `LogTicks` doc 参照)と同じく、
+/// chart.js 実機の `generateTicks()` が単一 decade ドメインで生成する非常に
+/// 細かい(0.1刻み等)非 decade 目盛や、そのラベル可視性の間引きルールは
+/// 再現しない。ここでのフォールバックは「ドメイン内に収まる、ラベル可能な
+/// 目盛が最低限存在すること」だけを保証する独自の簡略版。
+pub fn log_ticks_within(domain_min: f64, domain_max: f64) -> LogTicks {
+    let domain_min = if domain_min.is_finite() && domain_min > 0.0 {
+        domain_min
+    } else {
+        f64::MIN_POSITIVE
+    };
+
+    // v の decade 指数を求める。log_ticks と同じ理由(浮動小数の log10() は
+    // ちょうど 10^n でも整数を返すとは限らない)で、境界値は round()、
+    // それ以外は floor() を使う。v が非有限(inf/NaN)でも log10()/as i32 の
+    // 飽和キャストにより有限範囲へ収まる。
+    let exp_of = |v: f64| -> i32 {
+        let e = if is_exact_decade_boundary(v) {
+            v.log10().round()
+        } else {
+            v.log10().floor()
+        };
+        (e as i32).clamp(-MAX_LOG_DECADES, MAX_LOG_DECADES)
+    };
+    let lo_exp = exp_of(domain_min);
+
+    let domain_max = if domain_max.is_finite() && domain_max >= domain_min {
+        domain_max
+    } else {
+        // domain_min * 10.0 だと domain_min が f64::MAX 近傍のとき inf に
+        // オーバーフローしうる(log_ticks で回避済みの罠と同じ)。指数空間で
+        // 1桁上げてから 10f64.powi で折り返す方が常に有限。それでもなお
+        // domain_min を下回る場合(lo_exp が既に MAX_LOG_DECADES で頭打ちの
+        // 極端な入力)は domain_min 自身に潰し、縮退した1点ドメインにする。
+        (10f64.powi((lo_exp + 1).min(MAX_LOG_DECADES))).max(domain_min)
+    };
+
+    let hi_exp = exp_of(domain_max).max(lo_exp);
+
+    let mut major = Vec::new();
+    let mut minor = Vec::new();
+    for exp in lo_exp..=hi_exp {
+        let decade = 10f64.powi(exp);
+        for mantissa in 1..=9 {
+            let v = mantissa as f64 * decade;
+            if v < domain_min || v > domain_max {
+                continue;
+            }
+            if mantissa == 1 {
+                major.push(v);
+            } else {
+                minor.push(v);
+            }
+        }
+    }
+
+    if major.is_empty() {
+        // decade 境界がドメイン内に1つもない: 線形 nice_ticks へフォールバック。
+        // nice_ticks は「見た目のいい」軸境界へ外側丸めする設計(例:
+        // nice_ticks(100,10000,10) は min=0 まで広げる)なので、生成される
+        // tick 自体が domain_min/domain_max の外へはみ出しうる。tight ドメインで
+        // 描く以上そのままは使えないため、ドメイン内のものだけへ絞り込む。
+        // 絞り込んだ結果が空になる(丸めが極端でどの nice tick もドメインに
+        // 収まらない)場合は、ドメイン自身の両端をそのまま目盛にする
+        // (最低限ラベルが2本は出ることを保証する最終フォールバック)。
+        let mut fallback: Vec<f64> = nice_ticks(domain_min, domain_max, 10)
+            .ticks
+            .into_iter()
+            .filter(|&v| v >= domain_min && v <= domain_max)
+            .collect();
+        if fallback.is_empty() {
+            fallback = vec![domain_min, domain_max];
+        }
+        return LogTicks {
+            min: domain_min,
+            max: domain_max,
+            major: fallback,
+            minor: Vec::new(),
+        };
+    }
+
+    LogTicks {
+        min: domain_min,
+        max: domain_max,
         major,
         minor,
     }
@@ -431,7 +554,8 @@ pub enum ValueScale {
         /// 負値が -inf/NaN を作らないための総関数化)。呼び出し側で「floor 未満は
         /// 描画しない」判断が必要な場合(負値スキップ)は、ここに来る前に
         /// 呼び出し側がフィルタ済みである前提(`layout/common.rs::compute()` が
-        /// 対数y軸で構築する — floor は `log_ticks` が返す decade 境界 `ticks.min`)。
+        /// 対数y軸で構築する — floor は `log_ticks_within` が返す tight ドメイン下端
+        /// `ticks.min` = `domain_min`)。
         floor: f64,
     },
 }
@@ -1055,6 +1179,119 @@ mod tests {
                 assert!(
                     t.minor.iter().all(|v| v.is_finite()),
                     "data_min={data_min}, data_max={data_max}: minor contains non-finite value: {:?}",
+                    t.minor
+                );
+            }
+        }
+    }
+
+    // --- log_ticks_within (PR #144 P1 修正: tight ドメイン写像用) ---------------
+
+    #[test]
+    fn log_ticks_within_min_max_equal_the_given_tight_domain() {
+        // log_ticks と違い、外側丸めせず渡した domain をそのまま折り返す。
+        for &(domain_min, domain_max) in &[(3.0, 7.0), (40.0, 4000.0), (1.0, 100.0)] {
+            let t = log_ticks_within(domain_min, domain_max);
+            assert_eq!(t.min, domain_min, "domain {domain_min}..{domain_max}");
+            assert_eq!(t.max, domain_max, "domain {domain_min}..{domain_max}");
+        }
+    }
+
+    #[test]
+    fn log_ticks_within_all_ticks_lie_inside_the_domain() {
+        // gridline/tick がプロット境界の外へはみ出さないことを保証する不変条件
+        // (P1 の実害: 範囲外の目盛は tight ドメインでピクセル写像すると
+        // プロット領域の外側へ描かれてしまう)。
+        for &(domain_min, domain_max) in &[
+            (3.0, 7.0),
+            (11.0, 89.0),
+            (40.0, 4000.0),
+            (1.0, 100.0),
+            (0.003, 0.7),
+            (5.0, 50000.0),
+        ] {
+            let t = log_ticks_within(domain_min, domain_max);
+            for &v in t.major.iter().chain(t.minor.iter()) {
+                assert!(
+                    v >= domain_min && v <= domain_max,
+                    "domain {domain_min}..{domain_max}: tick {v} escapes the domain: {t:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn log_ticks_within_sub_decade_domain_falls_back_to_nice_ticks_and_is_non_empty() {
+        // [3,7] には 10^n が1つも収まらない(10 も 1 も domain 外)ため major が
+        // 空になり得る。この場合は nice_ticks へフォールバックし、ラベル可能な
+        // 目盛が最低1本は出ることを保証する(空だと軸にラベルが1つも出ない
+        // 退行になる)。
+        let t = log_ticks_within(3.0, 7.0);
+        assert!(!t.major.is_empty(), "{t:?}");
+        assert!(t.minor.is_empty(), "フォールバック時 minor は空: {t:?}");
+        for &v in &t.major {
+            assert!((3.0..=7.0).contains(&v), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn log_ticks_within_no_decade_boundary_between_endpoints_also_falls_back() {
+        // [11,89] も 10^n(10 と 100)がどちらも domain 外なので同じフォールバックに入る。
+        let t = log_ticks_within(11.0, 89.0);
+        assert!(!t.major.is_empty(), "{t:?}");
+        for &v in &t.major {
+            assert!((11.0..=89.0).contains(&v), "{t:?}");
+        }
+    }
+
+    #[test]
+    fn log_ticks_within_multi_decade_domain_uses_decade_plus_mantissa_ticks() {
+        // ドメイン内に 10^n が2つ(100, 1000)収まる場合は、フォールバックに入らず
+        // decade+mantissa 経路を使う。
+        let t = log_ticks_within(40.0, 4000.0);
+        assert_eq!(t.major, vec![100.0, 1000.0]);
+        assert!(t.minor.contains(&50.0));
+        assert!(t.minor.contains(&4000.0)); // 4*1000, domain_max ちょうど。
+        assert!(!t.minor.contains(&5000.0)); // domain_max=4000 を超えるので含まれない。
+    }
+
+    #[test]
+    fn log_ticks_within_exact_decade_boundaries_include_both_endpoints_as_major() {
+        let t = log_ticks_within(1.0, 1000.0);
+        assert_eq!(t.major, vec![1.0, 10.0, 100.0, 1000.0]);
+    }
+
+    #[test]
+    fn log_ticks_within_never_panics_across_finite_and_pathological_inputs() {
+        let probes = [
+            f64::NEG_INFINITY,
+            -1e300,
+            -1.0,
+            0.0,
+            f64::MIN_POSITIVE,
+            f64::EPSILON,
+            1.0,
+            100.0,
+            1e300,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NAN,
+        ];
+        for &domain_min in &probes {
+            for &domain_max in &probes {
+                let t = log_ticks_within(domain_min, domain_max);
+                assert!(
+                    t.min.is_finite() && t.max.is_finite(),
+                    "domain_min={domain_min}, domain_max={domain_max}: min/max not finite: {t:?}"
+                );
+                assert!(
+                    t.major.iter().all(|v| v.is_finite()),
+                    "domain_min={domain_min}, domain_max={domain_max}: major contains non-finite value: {:?}",
+                    t.major
+                );
+                assert!(
+                    t.minor.iter().all(|v| v.is_finite()),
+                    "domain_min={domain_min}, domain_max={domain_max}: minor contains non-finite value: {:?}",
                     t.minor
                 );
             }

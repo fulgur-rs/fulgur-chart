@@ -375,7 +375,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
     let is_log = spec.x_axis.scale_kind == ScaleKind::Logarithmic;
     let (ticks, minor_ticks) = if is_log {
-        let log = crate::scale::log_ticks(dmin, dmax);
+        let log = crate::scale::log_ticks_within(dmin, dmax);
         (
             NiceTicks {
                 min: log.min,
@@ -465,8 +465,10 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
 
     // 値→X(非反転)。対数軸は log10 空間の LinearScale を内側に持つ ValueScale::Log。
-    // ticks.min/max は log_ticks が返す 10^n の decade 境界(常に正)なので、
-    // その log10() は有限かつ ticks.min < ticks.max(log_ticks は hi_exp > lo_exp を保証)。
+    // ticks.min/max は log_ticks_within(dmin, dmax) の戻り値で、渡した tight
+    // ドメイン(常に正、dmin < dmax)をそのまま折り返す(decade 境界には丸めない)。
+    // chart.js 実機は log 軸のピクセル写像を tight データドメインでそのまま行う
+    // (scale.min/max がそれ)ため、これに合わせる(PR #144 の自動レビュー P1 指摘)。
     let xs = if is_log {
         ValueScale::Log {
             inner: LinearScale::new(ticks.min.log10(), ticks.max.log10(), plot_left, plot_right),
@@ -1678,8 +1680,12 @@ mod horizontal_log_scale_tests {
             })
             .collect();
         labels.sort();
-        // データ 5..50000 → decade 境界は 1..100000(6 major tick)。
-        let expected: Vec<String> = ["1", "10", "100", "1000", "10000", "100000"]
+        // データ 5..50000、横棒 x軸は begin_at_zero:true が既定。min_positive=5 は
+        // decade 境界ではないため decade floor(10^floor(log10(5))=1)へ切り下げ、
+        // domain_max は tight(50000 のまま、100000 へは外側丸めしない — P1 修正)。
+        // よって major は domain [1, 50000] に収まる 1..10000 の5本
+        // (100000 は domain_max=50000 を超えるので出ない)。
+        let expected: Vec<String> = ["1", "10", "100", "1000", "10000"]
             .iter()
             .map(|s| s.to_string())
             .collect();
@@ -1790,9 +1796,9 @@ mod horizontal_log_scale_tests {
     #[test]
     fn bars_grow_from_axis_floor_not_zero() {
         // base_v = 0.0.clamp(ticks.min, ticks.max) は対数軸でも ticks.min(常に正の
-        // decade 境界)に評価される(0.0 は決して正のドメインに含まれないため)。
+        // tight ドメイン下端)に評価される(0.0 は決して正のドメインに含まれないため)。
         // よって全ての bar は左端(plot_left = xs.map(ticks.min))から生える。
-        // Task 11 Step 3: この行は変更していないので、その挙動を実測で確認する。
+        // この行は変更していないので、その挙動を実測で確認する。
         //
         // 実装内部の ValueScale を直接使わず、描画済みの major ラベル("1"/"10")の
         // x 座標だけから期待値を導出する(log10 補間)。これにより「対数写像そのもの」を

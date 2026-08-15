@@ -373,18 +373,6 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 /// バーがプロット領域からはみ出しうる(fulgur-chart-bap)。対数スケール上での
 /// スタック合成の意味論(chart.js 実機がどう扱うか)は未調査のため、ここで
 /// 独自に決め打ちしない。
-///
-/// `v` が(丸め誤差を許容して)ちょうど 10 の整数乗かどうかを判定する。
-/// `log_value_domain` の beginAtZero 特例(このコメントの直上、関数doc参照)でのみ
-/// 使う。
-fn is_exact_decade_boundary(v: f64) -> bool {
-    if !v.is_finite() || v <= 0.0 {
-        return false;
-    }
-    let exp = v.log10().round();
-    (10f64.powf(exp) - v).abs() < v * 1e-9
-}
-
 fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut min_positive = f64::INFINITY;
     let mut max_positive = f64::NEG_INFINITY;
@@ -458,18 +446,40 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
             // (chart.js 実測で確認済み: beginAtZero:false でも 0 混在データの min は
             // 変わらない)。
             decade_below()
-        } else if axis.begin_at_zero && is_exact_decade_boundary(min_positive) {
-            // beginAtZero:true かつ最小正値がちょうど 10^n(decade境界そのもの)の
-            // ときだけ、さらに1桁下げる。理由: 現行の目盛生成(log_ticks)は decade
-            // 境界丸めを domain_min にも適用するため、min_positive 自体が 10^n だと
-            // ドメイン下端(=軸の描画上の床)と最小値が完全一致し、そのバー/点の高さが
+        } else if axis.begin_at_zero {
+            // chart.js 実測(tools/ で node chart.js 実行し、40/80/11/5/2/10/100/999/12/99
+            // 等の多数の値で確認): beginAtZero:true の対数軸は、min_positive の
+            // "decade floor"(10^floor(log10(min_positive)))に常にドメイン下端を
+            // 切り下げる。ちょうど decade 境界(min_positive 自身が 10^n)のときは
+            // その切り下げが no-op になってしまう(床が自分自身と一致する)ため、
+            // さらにもう1 decade 下げる。
+            //
+            // ピクセル写像は `log_ticks_within(domain_min, domain_max)` が返す
+            // tight ドメインをそのまま使う(P1 修正済み、common.rs::compute() の
+            // ValueScale::Log 構築部参照)ため、ここで求めた domain_min の値が
+            // そのまま軸の描画上の床になる。この関数がまだ log_ticks の decade
+            // 外側丸めに依存していた頃は、非境界値(例: 40)を切り下げなくても
+            // log_ticks 自身が同じ丸めを暗黙に行っていたため見た目に差が出ず、
+            // 一時的にこの一般規則を「境界のときだけ」に縮小していたが、tight
+            // ドメイン化により log_ticks 側の暗黙の丸めが無くなったため、
+            // この一般規則を明示的に適用しないと非境界の最小値バーの高さが
             // 0 になって消えてしまう(実機で再現・確認済み)。
-            // min_positive が decade 境界ちょうどでなければ(例: 5, 11, 40)、
-            // ピクセル写像は現状ドメインの丸め自体をまだ tight にしていない
-            // (P1: ticks.min/max 経由、common.rs 内 ValueScale::Log 参照)ため、
-            // ここで先回りして切り下げても実際の描画には反映されない。tight domain
-            // 化(P1 修正)とセットで再検討が必要 — 詳細は該当 PR コメントスレッド。
-            decade_below()
+            let exp = min_positive.log10().floor();
+            let decade_floor = 10f64.powf(exp);
+            if crate::scale::is_exact_decade_boundary(min_positive) {
+                let one_more = decade_floor / 10.0;
+                if one_more.is_finite() && one_more > 0.0 {
+                    one_more
+                } else {
+                    decade_floor
+                }
+            } else if decade_floor.is_finite() && decade_floor > 0.0 && decade_floor < min_positive
+            {
+                decade_floor
+            } else {
+                // decade_floor の計算が破綻した極端な入力(非正規化数近傍等)への防御。
+                min_positive
+            }
         } else {
             min_positive
         };
@@ -500,8 +510,8 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         // `f64::MAX + 1.0 == f64::MAX`(丸めで無変化)という同じ性質を持つため、
         // これは対数専用の後退ではない。この関数(`value_domain` 経由含む)は pub であり、
         // 戻り値 (f64, f64) は「常に有限」という契約を将来のどんな呼び出し元に対しても
-        // 維持すべきなので、今日の唯一の呼び出し元 log_ticks が非有限入力を許容する
-        // (scale.rs のコメント参照)ことに頼らず、ここで有限性を保証しておく。
+        // 維持すべきなので、今日の唯一の呼び出し元 log_ticks_within が非有限入力を
+        // 許容する(scale.rs のコメント参照)ことに頼らず、ここで有限性を保証しておく。
         let expanded = domain_min * 10.0;
         domain_max = if expanded.is_finite() {
             expanded
@@ -534,7 +544,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     let (domain_min, domain_max) = value_domain(spec, &spec.y_axis);
     let is_log = spec.y_axis.scale_kind == ScaleKind::Logarithmic;
     let (ticks, minor_ticks) = if is_log {
-        let log = crate::scale::log_ticks(domain_min, domain_max);
+        let log = crate::scale::log_ticks_within(domain_min, domain_max);
         (
             NiceTicks {
                 min: log.min,
@@ -791,9 +801,11 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     };
 
     // y スケール（上下反転）。対数軸は log10 空間の LinearScale を内側に持つ
-    // ValueScale::Log。ticks.min/max は log_ticks が返す 10^n の decade 境界
-    // (常に正)なので、その log10() は有限かつ ticks.min < ticks.max
-    // (log_ticks は hi_exp > lo_exp を保証する)。floor は ValueScale::Log::map が
+    // ValueScale::Log。ticks.min/max は log_ticks_within(domain_min, domain_max) の
+    // 戻り値で、渡した tight ドメイン(常に正、domain_min < domain_max)をそのまま
+    // 折り返す(decade 境界には丸めない)。chart.js 実機は log 軸のピクセル写像を
+    // tight データドメインでそのまま行う(scale.min/max がそれ)ため、これに合わせる
+    // (PR #144 の自動レビュー P1 指摘)。floor は ValueScale::Log::map が
     // 0/負値/丸め誤差を log10 前にクランプする下限として使う。
     let ys = if is_log {
         ValueScale::Log {
@@ -1955,17 +1967,63 @@ mod tests {
     }
 
     #[test]
-    fn log_value_domain_ignores_begin_at_zero_when_min_is_not_a_decade_boundary() {
+    fn log_value_domain_begin_at_zero_rounds_non_boundary_min_down_to_decade_floor() {
         // begin_at_zero=true でも 0 は含めない(対数軸に存在しえないため)。
-        // さらに、最小正値(40.0)がちょうど 10^n(decade境界)でない場合は、
-        // beginAtZero によるドメイン下端の追加の1桁下げも起きない
-        // (is_exact_decade_boundary 特例、chart.js 実測: [5,100]/[11,100] 等)。
+        //
+        // 実機バグ回帰テスト: chart.js 実測(tools/ で 40/80/11/5/2/10/100/999/12/99
+        // 等、多数の値で確認)により、beginAtZero:true は min_positive がちょうど
+        // decade 境界か否かによらず常に "decade floor"
+        // (10^floor(log10(min_positive)))へドメイン下端を切り下げることが
+        // 判明した。40 は decade 境界ではないが、床は 10 になる。
         let mut spec = make_bar_spec(1, 600.0);
         spec.y_axis.scale_kind = ScaleKind::Logarithmic;
         spec.y_axis.begin_at_zero = true;
         spec.series[0].values = vec![40.0, 80.0];
         let (min, _max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!(min, 10.0);
+    }
+
+    #[test]
+    fn log_value_domain_begin_at_zero_false_leaves_non_boundary_min_untouched() {
+        // beginAtZero:false では decade floor への切り下げは起きず、min_positive を
+        // そのまま使う(上のテストとの対比、線形パスとの一貫性確認)。
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = false;
+        spec.series[0].values = vec![40.0, 80.0];
+        let (min, _max) = value_domain(&spec, &spec.y_axis);
         assert_eq!(min, 40.0);
+    }
+
+    /// chart.js 実測(tools/ で node chart.js を実行し、複数の min_positive 値について
+    /// beginAtZero:true の scale.min を直接比較して確認)を網羅的に固定する。
+    /// 規則: 常に decade floor(10^floor(log10(min_positive)))へ切り下げ、
+    /// その床がちょうど min_positive 自身と一致する場合のみさらに1桁下げる。
+    #[test]
+    fn log_value_domain_begin_at_zero_decade_floor_rule_matches_chartjs_measurements() {
+        let cases: &[(f64, f64)] = &[
+            (40.0, 10.0),
+            (80.0, 10.0),
+            (11.0, 10.0),
+            (5.0, 1.0),
+            (2.0, 1.0),
+            (10.0, 1.0),
+            (100.0, 10.0),
+            (999.0, 100.0),
+            (12.0, 10.0),
+            (99.0, 10.0),
+        ];
+        for &(min_positive, expected_min) in cases {
+            let mut spec = make_bar_spec(1, 600.0);
+            spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+            spec.y_axis.begin_at_zero = true;
+            spec.series[0].values = vec![min_positive, min_positive * 10.0];
+            let (min, _max) = value_domain(&spec, &spec.y_axis);
+            assert_eq!(
+                min, expected_min,
+                "min_positive={min_positive}: expected beginAtZero min={expected_min}, got {min}"
+            );
+        }
     }
 
     /// 実機バグ回帰テスト: beginAtZero:true(縦棒の既定)かつ最小正値がちょうど
