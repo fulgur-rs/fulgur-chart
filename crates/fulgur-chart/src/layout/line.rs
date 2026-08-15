@@ -119,11 +119,13 @@ fn append_area_points(d: &mut String, points: impl IntoIterator<Item = (f64, f64
 /// レンダリング経路の `build()` は点を独立に計算しデシメーションするため、巨大データでは
 /// この全点列と実際の描画点は乖離する（モデルは chart.js 数値照合用＝間引きなしが正しい）。
 /// 欠損値 (get() None) と非有限値 (NaN / ±∞) は skip し point は emit しない
-/// (bar の `vertical_bar_boxes` と同じ null 挙動)。
+/// (bar の `vertical_bar_boxes` と同じ null 挙動)。対数y軸では値0も `build()` と同じく
+/// skip する(chart.js は log 軸上の値0を欠損として扱うため。この乖離は自動レビュー指摘で発見・修正した)。
 pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
 ) -> Vec<crate::layout::scatter::PointBox> {
+    let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let mut pts = Vec::new();
     for (sidx, ser) in spec.series.iter().enumerate() {
         if ser.point_radius.is_some_and(|radius| radius <= 0.0) {
@@ -134,6 +136,9 @@ pub fn line_points(
                 continue;
             };
             if !v.is_finite() {
+                continue;
+            }
+            if is_log && v == 0.0 {
                 continue;
             }
             let x = common::line_x(spec, frame, i);
@@ -467,6 +472,21 @@ mod tests {
         for p in &ps {
             assert_eq!(p.kind, "line");
         }
+    }
+
+    /// 実機バグ回帰テスト: `build()` は対数y軸で値0を欠損(gap)として扱いマーカー・
+    /// 線分を描かないが、model 幾何用の `line_points()` はこの skip をミラーしておらず
+    /// 値0の点も emit していた。model の geometry.elements が実際の描画シーンと
+    /// 食い違う(自動レビュー指摘)。
+    #[test]
+    fn line_points_skips_zero_on_logarithmic_y_axis() {
+        let ps = pts_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[0,10,20]}]},
+               "options":{"scales":{"y":{"type":"logarithmic"}}}}"#,
+        );
+        assert_eq!(ps.len(), 2, "値0の点は欠損として skip されるべき");
+        assert!(ps.iter().all(|p| p.index != 0));
     }
 
     #[test]

@@ -417,15 +417,29 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         // あればそれを初期シードにする(どちらか一方だけでも可)。begin_at_zero は
         // 対数軸では無関係(0 はドメインに含められない)。下の suggested 適用ブロックを
         // 素通りしないよう、ここで早期 return せず通常経路に合流させる。
-        let lo = axis
-            .suggested_min
-            .filter(|s| s.is_finite() && *s > 0.0)
-            .unwrap_or(1.0);
-        let hi = axis
-            .suggested_max
-            .filter(|s| s.is_finite() && *s > 0.0)
-            .unwrap_or(10.0);
-        (lo, if hi > lo { hi } else { lo * 10.0 })
+        //
+        // 実機バグ回帰テスト: 以前は片方だけ指定された場合の既定値が固定 1.0/10.0
+        // だったため、suggested_max だけがサブユニット(例: 0.01)で指定されても
+        // 固定の lo=1.0 と比較され「hi <= lo」に落ちて lo*10.0=10.0 に潰れ、
+        // 明示的に設定した軸オプションが完全に無視されていた(PR #144 の自動
+        // レビューで指摘)。suggested_min のみ指定時は hi=lo*10、suggested_max
+        // のみ指定時は lo=hi/10 と、常に「指定された側」を基準に対辺を導出する。
+        let lo = axis.suggested_min.filter(|s| s.is_finite() && *s > 0.0);
+        let hi = axis.suggested_max.filter(|s| s.is_finite() && *s > 0.0);
+        match (lo, hi) {
+            (Some(lo), Some(hi)) if hi > lo => (lo, hi),
+            // 両方指定されているが hi <= lo(不正な指定)の場合は lo を基準にする。
+            (Some(lo), _) => (lo, lo * 10.0),
+            (None, Some(hi)) => {
+                let below = hi / 10.0;
+                if below.is_finite() && below > 0.0 {
+                    (below, hi)
+                } else {
+                    (hi, hi * 10.0)
+                }
+            }
+            (None, None) => (1.0, 10.0),
+        }
     } else {
         // min_positive を1桁下げる(min_positive/10)、ただし非正規化数(subnormal)
         // 近傍で 0.0 へアンダーフローする場合は下げず min_positive のまま使う
@@ -446,13 +460,15 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
             decade_below()
         } else if axis.begin_at_zero && is_exact_decade_boundary(min_positive) {
             // beginAtZero:true かつ最小正値がちょうど 10^n(decade境界そのもの)の
-            // ときだけ、さらに1桁下げる。理由: log_ticks の decade 丸めは通常
-            // min_positive を上回らない直近の 10^n に丸めるため、min_positive 自体が
-            // 10^n ならドメイン下端(=軸の描画上の床)と最小値が完全一致し、その
-            // バー/点の高さが 0 になって消えてしまう(実機で再現・確認済み)。
-            // min_positive が decade 境界ちょうどでなければ(例: 5, 11)、通常の
-            // decade 丸めで既に隙間ができるため何もしない(これも実測で確認済み:
-            // [5,100]/[11,100] は beginAtZero の有無で結果が変わらない)。
+            // ときだけ、さらに1桁下げる。理由: 現行の目盛生成(log_ticks)は decade
+            // 境界丸めを domain_min にも適用するため、min_positive 自体が 10^n だと
+            // ドメイン下端(=軸の描画上の床)と最小値が完全一致し、そのバー/点の高さが
+            // 0 になって消えてしまう(実機で再現・確認済み)。
+            // min_positive が decade 境界ちょうどでなければ(例: 5, 11, 40)、
+            // ピクセル写像は現状ドメインの丸め自体をまだ tight にしていない
+            // (P1: ticks.min/max 経由、common.rs 内 ValueScale::Log 参照)ため、
+            // ここで先回りして切り下げても実際の描画には反映されない。tight domain
+            // 化(P1 修正)とセットで再検討が必要 — 詳細は該当 PR コメントスレッド。
             decade_below()
         } else {
             min_positive
@@ -1918,6 +1934,10 @@ mod tests {
     fn log_value_domain_uses_min_positive_and_max() {
         let mut spec = make_bar_spec(1, 600.0);
         spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        // beginAtZero:false を明示: このテストの主眼は「素の min_positive/max を
+        // そのまま使う」ことの検証であり、beginAtZero の decade floor 丸めは
+        // 別テストで個別に検証している。
+        spec.y_axis.begin_at_zero = false;
         spec.series[0].values = vec![5.0, 50.0, 500.0];
         let (min, max) = value_domain(&spec, &spec.y_axis);
         assert_eq!(min, 5.0);
@@ -2034,18 +2054,34 @@ mod tests {
         let (min, max) = value_domain(&spec, &spec.y_axis);
         assert_eq!(
             (min, max),
-            (1.0, 500.0),
-            "suggested_min 未指定時は既定の1.0を使う"
+            (50.0, 500.0),
+            "suggested_min 未指定時は suggested_max の1桁下を使う"
         );
+    }
+
+    /// 実機バグ回帰テスト: suggested_max のみがサブユニット(1.0未満)で指定された
+    /// 場合、以前は固定の lo=1.0 と比較されて hi<=lo に落ち、lo*10.0=10.0 に潰れて
+    /// suggested_max=0.01 の指定が完全に無視されていた。lo は常に hi の1桁下から
+    /// 導出すべき(PR #144 の自動レビューで指摘)。
+    #[test]
+    fn log_value_domain_honors_sub_unit_suggested_max_when_no_positive_data() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.series[0].values = vec![0.0];
+        spec.y_axis.suggested_max = Some(0.01);
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+        assert_eq!((min, max), (0.001, 0.01));
     }
 
     #[test]
     fn log_value_domain_degenerate_domain_near_f64_max_stays_finite() {
         // domain_min == domain_max == 5e307 (> f64::MAX/10) だと、線形版の
         // `+1.0` に相当する縮退補正が単純な ×10 だと +inf にオーバーフローする。
-        // 有限のまま広がることを固定する回帰テスト。
+        // 有限のまま広がることを固定する回帰テスト(beginAtZero の decade floor
+        // 丸めはこのテストの主眼と無関係なので false にして分離する)。
         let mut spec = make_bar_spec(1, 600.0);
         spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = false;
         spec.series[0].values = vec![5e307, 5e307];
         let (min, max) = value_domain(&spec, &spec.y_axis);
         assert_eq!(min, 5e307);
