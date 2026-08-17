@@ -315,6 +315,18 @@ pub fn log_ticks(data_min: f64, data_max: f64) -> LogTicks {
 /// `nice_ticks` による線形の等間隔目盛にフォールバックし、`major` に詰めて返す
 /// (`minor` は空のまま)。
 ///
+/// # 目盛数のガード(MAX_TICK_INTERVALS)
+///
+/// `log_ticks` と同じ理由(fulgur-chart-8so): `domain_min`/`domain_max` が
+/// (フォールバック経由も含め)数百 decade に及ぶと、フル展開時の目盛数が
+/// `9 * decades` 程度まで膨れ、かつ tight ドメインフィルタ自体はこの爆発を
+/// 抑止しない(ドメインが広い=フィルタがほぼ何も落とさないため)。
+/// `log_ticks` と同じく、フル展開時の本数が `MAX_TICK_INTERVALS` を超える場合は
+/// minor(mantissa 2..9)の生成を省略し major(decade境界、ドメイン内のみ)だけを
+/// 返す。`MAX_LOG_DECADES` により `lo_exp`/`hi_exp` は各々 `[-308, 308]` に
+/// クランプされるため decade 数は最大616、major だけなら617本で必ず
+/// `MAX_TICK_INTERVALS` 未満に収まる。
+///
 /// # 非目標
 ///
 /// `log_ticks` の非目標(このモジュール上部の `LogTicks` doc 参照)と同じく、
@@ -356,11 +368,20 @@ pub fn log_ticks_within(domain_min: f64, domain_max: f64) -> LogTicks {
 
     let hi_exp = exp_of(domain_max).max(lo_exp);
 
+    // フル展開(mantissa 1..=9 × 各decade)時の目盛総数が MAX_TICK_INTERVALS を
+    // 超えうる場合は、log_ticks と同じく minor の生成を省略する。decades は
+    // MAX_LOG_DECADES のクランプにより最大616(major最大617本)に収まるため、
+    // minor を省略すれば必ず MAX_TICK_INTERVALS 未満になる。
+    let decades = (hi_exp - lo_exp) as i64;
+    let full_tick_count = 9 * (decades + 1);
+    let include_minor = full_tick_count <= MAX_TICK_INTERVALS as i64;
+
     let mut major = Vec::new();
     let mut minor = Vec::new();
     for exp in lo_exp..=hi_exp {
         let decade = 10f64.powi(exp);
-        for mantissa in 1..=9 {
+        let top_mantissa = if include_minor { 9 } else { 1 };
+        for mantissa in 1..=top_mantissa {
             let v = mantissa as f64 * decade;
             if v < domain_min || v > domain_max {
                 continue;
@@ -1376,7 +1397,85 @@ mod tests {
                     "domain_min={domain_min}, domain_max={domain_max}: minor contains non-finite value: {:?}",
                     t.minor
                 );
+                assert!(
+                    t.major.len() + t.minor.len() <= MAX_TICK_INTERVALS,
+                    "domain_min={domain_min}, domain_max={domain_max}: tick count {} exceeds MAX_TICK_INTERVALS ({MAX_TICK_INTERVALS}): {t:?}",
+                    t.major.len() + t.minor.len()
+                );
             }
+        }
+    }
+
+    #[test]
+    fn log_ticks_within_caps_count_for_degenerate_near_zero_domain() {
+        // fulgur-chart-8so の再現ケース: domain_min<=0 は f64::MIN_POSITIVE に
+        // フォールバックし、decade 範囲が -308..=2 まで広がる。tight ドメイン
+        // フィルタはこの爆発を抑止しない(ほぼ全ての mantissa 値が
+        // [domain_min, domain_max] に収まってしまうため)。MAX_TICK_INTERVALS
+        // ガードにより minor は省略され major のみになるはず。
+        let t = log_ticks_within(0.0, 100.0);
+        assert!(
+            t.major.len() + t.minor.len() <= MAX_TICK_INTERVALS,
+            "tick count {} exceeds MAX_TICK_INTERVALS: major={}, minor={}",
+            t.major.len() + t.minor.len(),
+            t.major.len(),
+            t.minor.len()
+        );
+        assert!(
+            t.minor.is_empty(),
+            "expected minor ticks to be dropped: {t:?}"
+        );
+        // tight ドメイン契約(min/max はそのまま渡した値を返す)はガードが
+        // 効いても変わらない。
+        assert_eq!(t.max, 100.0, "{t:?}");
+    }
+
+    #[test]
+    fn log_ticks_within_caps_count_for_wide_domain() {
+        let t = log_ticks_within(1e-300, 1e300);
+        assert!(
+            t.major.len() + t.minor.len() <= MAX_TICK_INTERVALS,
+            "tick count {} exceeds MAX_TICK_INTERVALS: {t:?}",
+            t.major.len() + t.minor.len()
+        );
+    }
+
+    #[test]
+    fn log_ticks_within_tick_count_never_exceeds_max_tick_intervals_across_decade_spans() {
+        for decades in [1, 5, 20, 50, 100, 111, 112, 200, 308] {
+            let domain_max = 10f64.powi(decades);
+            let t = log_ticks_within(1.0, domain_max);
+            let total = t.major.len() + t.minor.len();
+            assert!(
+                total <= MAX_TICK_INTERVALS,
+                "decades={decades}: total {total} exceeds MAX_TICK_INTERVALS"
+            );
+        }
+    }
+
+    #[test]
+    fn log_ticks_within_minor_guard_never_triggers_the_empty_major_fallback() {
+        // exp_of は lo_exp/hi_exp を互いに独立に MAX_LOG_DECADES へクランプするため
+        // (log_ticks の `lo_exp.max(hi_exp - MAX_LOG_DECADES)` のような結合がない)、
+        // domain_min が subnormal に近い極小値だと lo_exp のクランプにより
+        // decades(=hi_exp-lo_exp)が大きく見積もられる一方で、実際のドメインは
+        // 偏っている可能性がある。この場合に minor 省略ガードが「major が
+        // ドメイン内に1つもない」フォールバック条件と誤って重ならないことを
+        // 確認する: ガードが働く(decadesが大きい)なら、その広さ自体が
+        // decade境界を内包することを保証するため、フォールバックへは
+        // 絶対に落ちないはず。
+        for &(domain_min, domain_max) in &[
+            (5e-324, 3.0),
+            (f64::MIN_POSITIVE, 7.0),
+            (f64::MIN_POSITIVE, 1.0),
+            (f64::EPSILON, 100.0),
+        ] {
+            let t = log_ticks_within(domain_min, domain_max);
+            assert!(
+                !t.major.is_empty(),
+                "domain_min={domain_min}, domain_max={domain_max}: major unexpectedly empty \
+                 (would indicate the guard collided with the nice_ticks fallback): {t:?}"
+            );
         }
     }
 }
