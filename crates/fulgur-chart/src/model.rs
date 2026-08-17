@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 
-use crate::ir::{ChartKind, ChartSpec, Color, SizeMode, XPositions};
+use crate::ir::{ChartKind, ChartSpec, Color, ScaleKind, SizeMode, XPositions};
 use crate::temporal::TemporalTick;
 use crate::text::TextMeasurer;
 
@@ -51,7 +51,7 @@ pub struct Axes {
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct AxisModel {
-    pub kind: String, // "linear" | "category"
+    pub kind: String, // "linear" | "logarithmic" | "category" | "temporal"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -363,6 +363,20 @@ fn linear_axis(t: &crate::scale::NiceTicks) -> AxisModel {
     }
 }
 
+/// LogTicks 由来の major ticks(NiceTicks 形状で受け取る)を対数軸モデルへ変換する。
+/// step は decade 間隔が一定でない(1,10,100,...)ため意味を持たず、常に None にする
+/// (`t.step` は layout 側が内部的に使う 0.0 番兵であり、ここで漏らさない)。
+fn logarithmic_axis(t: &crate::scale::NiceTicks) -> AxisModel {
+    AxisModel {
+        kind: "logarithmic".to_string(),
+        labels: None,
+        min: Some(t.min),
+        max: Some(t.max),
+        step: None,
+        ticks: Some(t.ticks.clone()),
+    }
+}
+
 /// カテゴリ軸モデル(ラベルのみ)。
 fn category_axis(labels: &[String]) -> AxisModel {
     AxisModel {
@@ -405,39 +419,59 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
     if let (ChartKind::Line, XPositions::Temporal { unix_millis }) = (&spec.kind, &spec.x_positions)
     {
         let frame = crate::layout::common::compute(spec, m);
+        let y_model = if spec.y_axis.scale_kind == ScaleKind::Logarithmic {
+            logarithmic_axis(&frame.ticks)
+        } else {
+            linear_axis(&frame.ticks)
+        };
         return Some((
             temporal_axis(unix_millis, &frame.temporal_ticks),
-            linear_axis(&frame.ticks),
+            y_model,
             frame.ticks.ticks.len(),
         ));
     }
 
     match &spec.kind {
         // 縦棒・線・mixed: 値軸=y(layout::common::compute と共有)、カテゴリ=x。
+        // Mixed は frontend 側で対数軸をスコープ外にしているため scale_kind は
+        // 常に Linear だが、念のため他アームと同じ分岐を通す。
         ChartKind::Bar {
             horizontal: false, ..
         }
         | ChartKind::Line
         | ChartKind::Mixed => {
             let t = crate::layout::common::compute(spec, m).ticks;
-            Some((
-                category_axis(&spec.categories),
-                linear_axis(&t),
-                t.ticks.len(),
-            ))
+            let y_model = if spec.y_axis.scale_kind == ScaleKind::Logarithmic {
+                logarithmic_axis(&t)
+            } else {
+                linear_axis(&t)
+            };
+            Some((category_axis(&spec.categories), y_model, t.ticks.len()))
         }
         // 横棒: 値軸は描画上 x だが照合のため y に載せる。値域は build_horizontal と
-        // 同じく x_axis から読む。カテゴリ=x。
+        // 同じく x_axis から読む。カテゴリ=x。対数軸の場合も build_horizontal と同じ
+        // log_ticks_within 経路(tight ドメイン、P1 修正済み)を使い、step=0.0 番兵は
+        // そのまま logarithmic_axis で None に潰す。
         ChartKind::Bar {
             horizontal: true, ..
         } => {
             let (lo, hi) = crate::layout::common::value_domain(spec, &spec.x_axis);
-            let t = nice_ticks(lo, hi, 10);
-            Some((
-                category_axis(&spec.categories),
-                linear_axis(&t),
-                t.ticks.len(),
-            ))
+            let (t, x_model) = if spec.x_axis.scale_kind == ScaleKind::Logarithmic {
+                let log = crate::scale::log_ticks_within(lo, hi);
+                let nt = crate::scale::NiceTicks {
+                    min: log.min,
+                    max: log.max,
+                    step: 0.0,
+                    ticks: log.major,
+                };
+                let model = logarithmic_axis(&nt);
+                (nt, model)
+            } else {
+                let nt = nice_ticks(lo, hi, 10);
+                let model = linear_axis(&nt);
+                (nt, model)
+            };
+            Some((category_axis(&spec.categories), x_model, t.ticks.len()))
         }
         // scatter/bubble: x・y とも線形。renderer (scatter::build) と同じ axis_domain を共有。
         ChartKind::Scatter | ChartKind::Bubble => {
@@ -654,6 +688,120 @@ mod tests {
         assert_eq!(axes.x.kind, "category");
         assert!(model.counts.y_ticks > 0);
         assert_eq!(model.counts.y_ticks, axes.y.ticks.unwrap().len());
+    }
+
+    #[test]
+    fn vertical_bar_reports_logarithmic_y_axis_without_leaking_step_sentinel() {
+        // beginAtZero:false を明示: 最小値 1 はちょうど decade 境界(10^0)なので、
+        // 既定の beginAtZero:true のままだとドメインが1桁広がり(0.1 まで)、
+        // このテストの主眼(introspection API の kind/step)から逸れてしまう。
+        let json = r#"{"type":"bar","data":{"labels":["a","b","c"],
+          "datasets":[{"data":[1,10,100]}]},
+          "options":{"scales":{"y":{"type":"logarithmic","beginAtZero":false}}}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+
+        // JSON シリアライズも通り、step キーは省略され kind は正しい文字列。
+        let s = serde_json::to_string(&model).unwrap();
+        assert!(s.contains("\"kind\":\"logarithmic\""), "s={s}");
+        let axes_json = serde_json::to_value(&model.axes).unwrap();
+        assert!(
+            axes_json["y"].get("step").is_none(),
+            "step is None なので skip_serializing_if で省略されるべき: {axes_json}"
+        );
+
+        let axes = model.axes.expect("bar には軸があるべき");
+        assert_eq!(axes.y.kind, "logarithmic");
+        assert_eq!(
+            axes.y.step, None,
+            "対数軸は内部 0.0 番兵を漏らさず None にする"
+        );
+        assert_eq!(axes.y.min, Some(1.0));
+        assert!(axes.y.max.unwrap() >= 100.0);
+        let ticks = axes
+            .y
+            .ticks
+            .as_ref()
+            .expect("対数軸にも major ticks はある");
+        assert!(!ticks.is_empty());
+        assert_eq!(axes.x.kind, "category");
+        assert_eq!(model.counts.y_ticks, ticks.len());
+    }
+
+    #[test]
+    fn line_reports_logarithmic_y_axis() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+          "datasets":[{"data":[1,10,100]}]},
+          "options":{"scales":{"y":{"type":"logarithmic"}}}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        let axes = model.axes.expect("line には軸があるべき");
+        assert_eq!(axes.y.kind, "logarithmic");
+        assert_eq!(axes.y.step, None);
+    }
+
+    #[test]
+    fn horizontal_bar_reports_logarithmic_value_axis_on_y() {
+        // 横棒の値軸は x_axis.scale_kind から読むが、出力上は y に載る規約は
+        // 線形時と同じ(horizontal_bar_puts_value_axis_on_y 参照)。
+        let json = r#"{"type":"bar","data":{"labels":["a","b"],
+          "datasets":[{"data":[1,1000]}]},
+          "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic"}}}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+
+        let s = serde_json::to_string(&model).unwrap();
+        assert!(s.contains("\"kind\":\"logarithmic\""), "s={s}");
+
+        let axes = model.axes.expect("横棒には軸があるべき");
+        assert_eq!(axes.y.kind, "logarithmic");
+        assert_eq!(axes.y.step, None);
+        assert_eq!(axes.x.kind, "category");
+        assert!(model.counts.y_ticks > 0);
+        assert_eq!(model.counts.y_ticks, axes.y.ticks.as_ref().unwrap().len());
+    }
+
+    #[test]
+    fn scatter_bubble_boxplot_never_report_logarithmic_axes() {
+        // frontend の v1 スコープでは scatter/bubble/boxplot に scale_kind::Logarithmic は
+        // 決して付与されない(chartjs.rs の x_axis_is_log/y_axis_is_log は
+        // Bar{horizontal:false}|Line|Bar{horizontal:true} にしかマッチしない)。
+        // type:"logarithmic" を指定しても無視されて linear のままであることを確認する。
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let scatter_json = r#"{"type":"scatter","data":{"datasets":[{"data":[
+          {"x":1,"y":2},{"x":3,"y":8}]}]},
+          "options":{"scales":{"x":{"type":"logarithmic"},"y":{"type":"logarithmic"}}}}"#;
+        let spec = chartjs::parse(scatter_json, false).unwrap();
+        assert_eq!(spec.x_axis.scale_kind, crate::ir::ScaleKind::Linear);
+        assert_eq!(spec.y_axis.scale_kind, crate::ir::ScaleKind::Linear);
+        let model = build_model(&spec, &m);
+        let axes = model.axes.expect("scatter には軸があるべき");
+        assert_eq!(axes.x.kind, "linear");
+        assert_eq!(axes.y.kind, "linear");
+
+        let bubble_json = r#"{"type":"bubble","data":{"datasets":[
+          {"data":[{"x":1,"y":2,"r":10}]}]},
+          "options":{"scales":{"x":{"type":"logarithmic"},"y":{"type":"logarithmic"}}}}"#;
+        let spec = chartjs::parse(bubble_json, false).unwrap();
+        assert_eq!(spec.x_axis.scale_kind, crate::ir::ScaleKind::Linear);
+        assert_eq!(spec.y_axis.scale_kind, crate::ir::ScaleKind::Linear);
+        let model = build_model(&spec, &m);
+        let axes = model.axes.expect("bubble には軸があるべき");
+        assert_eq!(axes.x.kind, "linear");
+        assert_eq!(axes.y.kind, "linear");
+
+        let boxplot_json = r#"{"type":"boxplot","data":{"labels":["a"],
+          "datasets":[{"data":[[1,2,3,4,5]]}]},
+          "options":{"scales":{"y":{"type":"logarithmic"}}}}"#;
+        let spec = chartjs::parse(boxplot_json, false).unwrap();
+        assert_eq!(spec.y_axis.scale_kind, crate::ir::ScaleKind::Linear);
+        let model = build_model(&spec, &m);
+        let axes = model.axes.expect("boxplot には軸があるべき");
+        assert_eq!(axes.y.kind, "linear");
     }
 
     #[test]

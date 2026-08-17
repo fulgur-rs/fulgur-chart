@@ -90,6 +90,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                         Anchor::Middle,
                         ink,
                         v,
+                        false, // Mixed は対数軸をとりえない(frontend でスコープ外)
                     ));
                 }
                 bar_slot += 1;
@@ -219,6 +220,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     Anchor::Middle,
                     spec.theme.text_color,
                     ser.values[cat],
+                    false, // Mixed は対数軸をとりえない(frontend でスコープ外)
                 ));
             }
         }

@@ -196,7 +196,7 @@ pub struct AxisBorderOptions {
 /// Axis options for options.scales.x / options.scales.y.
 ///
 /// `deny_unknown_fields` is intentionally NOT set here. Chart.js のスケールには
-/// v1 で未モデル化のフィールド(`ticks`/`type`/`time`/`position`/`reverse`/`grid.z`
+/// v1 で未モデル化のフィールド(`ticks`/`time`/`position`/`reverse`/`grid.z`
 /// など)が多数あり、これらを deserialize 段でハードエラーにすると non-strict
 /// モードでの Chart.js JSON 互換が壊れる。strict モードのタイポ検出は
 /// `frontend/chartjs.rs::check_unknown_keys` の allow-list が担い、
@@ -211,6 +211,14 @@ pub struct AxisOptions {
     pub min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max: Option<f64>,
+    /// Chart.js scale type. `"logarithmic"` のみが振る舞いを変える。他の値
+    /// (`"category"`/`"time"`/`"linear"` やタイポ)は frontend 側で黙って
+    /// 既定(Linear)として扱う。`Option<String>` にして厳格な enum にしない
+    /// のは、既存の Chart.js JSON が(デフォルト値と同じでも)`"type":"category"`
+    /// のように明示することが非常に多く、closed enum だと deserialize
+    /// エラーで既存互換を壊すため。
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub r#type: Option<String>,
     /// Axis title configuration (parsed but not yet mapped to IR).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<AxisTitleOptions>,
