@@ -490,7 +490,7 @@ fn all_pixels_opaque(scene: &Scene, pixmap: &Pixmap, scale: f32) -> bool {
 fn demultiply_in_place(pixmap: &mut Pixmap) {
     // 部分α画素(AA縁)のみ raw バイトから premultiplied 値を復元して demultiply し、
     // 同じ 4 バイトへ書き戻す。α==255/α==0 はそのままで straight に一致するため触れない。
-    for chunk in pixmap.data_mut().chunks_exact_mut(4) {
+    for chunk in pixmap.data_mut().as_chunks_mut::<4>().0 {
         let a = chunk[3];
         if a != 0 && a != 255 {
             // pixmap data は常に有効な premultiplied(各チャンネル ≤ α)。万一不正
