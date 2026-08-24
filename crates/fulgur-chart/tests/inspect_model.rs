@@ -90,6 +90,23 @@ fn categorical_canvas_unsupported_title_does_not_change_model_counts() {
 }
 
 #[test]
+fn logarithmic_model_preserves_non_positive_series_values() {
+    let json = r#"{
+        "type":"bar",
+        "data":{"labels":["negative","zero","positive"],"datasets":[{"data":[-5,0,10]}]},
+        "options":{"scales":{"y":{"type":"logarithmic"}}}
+    }"#;
+    let spec = chartjs::parse(json, false).unwrap();
+    let model = build_model_core(&spec);
+
+    assert_eq!(
+        model.series[0].values,
+        vec![Some(-5.0), Some(0.0), Some(10.0)],
+        "introspection must preserve input values even when log rendering skips them"
+    );
+}
+
+#[test]
 fn temporal_line_model_uses_scene_dimensions_and_temporal_axis() {
     let json = include_str!("fixtures/vegalite-temporal-line.json");
     let spec = vegalite::parse(json, true).unwrap();

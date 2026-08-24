@@ -14,6 +14,11 @@ const BAR_FILL_RATIO: f64 = 0.9;
 /// 極端に長い目盛ラベルでも LinearScale のプロット幅を 0 にしない下限。
 const MIN_HORIZONTAL_PLOT_WIDTH: f64 = 1.0;
 
+/// 対数値軸では非正値を描画せず、線形軸では有限値をそのまま描画する。
+fn is_renderable_value(value: f64, is_log: bool) -> bool {
+    value.is_finite() && (!is_log || value > 0.0)
+}
+
 /// 縦棒1本のデータ矩形(ピクセル空間)。`series`=dataset index, `index`=category index。
 /// `value` はラベル描画用に元値を保持する(geometry には出力しない)。
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +39,7 @@ pub struct BarBox {
 /// 積み上げ: category 外側 × series 内側で有限値のみ値空間に積む。
 pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec<BarBox> {
     let n = spec.categories.len().max(1);
+    let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let band_w = super::common::band_width(frame, n);
     let s = spec.series.len().max(1);
     let group_w = band_w * GROUP_RATIO;
@@ -68,7 +74,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
-                if !v.is_finite() {
+                if !is_renderable_value(v, is_log) {
                     continue;
                 }
                 let (v0, v1) = if v >= 0.0 {
@@ -106,7 +112,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
-                if !v.is_finite() {
+                if !is_renderable_value(v, is_log) {
                     continue;
                 }
                 let vy = frame.ys.map(v);
@@ -134,7 +140,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
-                if !v.is_finite() {
+                if !is_renderable_value(v, is_log) {
                     continue;
                 }
                 let vy = frame.ys.map(v);
@@ -652,7 +658,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
-                if !v.is_finite() {
+                if !is_renderable_value(v, is_log) {
                     continue;
                 }
                 let (v0, v1) = if v >= 0.0 {
@@ -701,7 +707,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
-                if !v.is_finite() {
+                if !is_renderable_value(v, is_log) {
                     continue;
                 }
                 let vx = xs.map(v);
@@ -732,7 +738,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
-                if !v.is_finite() {
+                if !is_renderable_value(v, is_log) {
                     continue;
                 }
                 let vx = xs.map(v);
@@ -970,6 +976,17 @@ mod geom_tests {
     }
 
     #[test]
+    fn vertical_log_dodge_skips_non_positive_values() {
+        let boxes = boxes_for(
+            r#"{"type":"bar","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[-5,0,10]}]},
+               "options":{"scales":{"y":{"type":"logarithmic"}}}}"#,
+        );
+        assert_eq!(boxes.len(), 1, "対数軸の非正値は BarBox を生成しない");
+        assert_eq!(boxes[0].index, 2);
+    }
+
+    #[test]
     fn horizontal_dodge_skips_nan_value() {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let spec = chartjs::parse(
@@ -1003,6 +1020,25 @@ mod geom_tests {
             1,
             "NaN カテゴリで rect が 1 個減るはず"
         );
+    }
+
+    #[test]
+    fn horizontal_log_dodge_skips_non_positive_values() {
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[-5,0,10]}]},
+               "options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic"}}}}"#,
+            false,
+        )
+        .unwrap();
+        let scene = super::build(&spec, &m);
+        let rects: Vec<_> = scene
+            .items
+            .iter()
+            .filter(|p| matches!(p, crate::scene::Prim::Rect { .. }))
+            .collect();
+        assert_eq!(rects.len(), 1, "対数軸の非正値は横棒を生成しない");
     }
 }
 
