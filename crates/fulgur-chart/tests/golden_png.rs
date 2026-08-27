@@ -110,8 +110,10 @@ fn golden_png_matches() {
         // ピクセルを数える。u8 同士の減算は debug でアンダーフロー panic するため i16 にキャスト。
         let diff_pixels = golden_pix
             .data()
-            .chunks_exact(4)
-            .zip(actual_pix.data().chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(actual_pix.data().as_chunks::<4>().0)
             .filter(|(g, a)| {
                 g.iter()
                     .zip(a.iter())

@@ -490,7 +490,7 @@ fn all_pixels_opaque(scene: &Scene, pixmap: &Pixmap, scale: f32) -> bool {
 fn demultiply_in_place(pixmap: &mut Pixmap) {
     // 部分α画素(AA縁)のみ raw バイトから premultiplied 値を復元して demultiply し、
     // 同じ 4 バイトへ書き戻す。α==255/α==0 はそのままで straight に一致するため触れない。
-    for chunk in pixmap.data_mut().chunks_exact_mut(4) {
+    for chunk in pixmap.data_mut().as_chunks_mut::<4>().0 {
         let a = chunk[3];
         if a != 0 && a != 255 {
             // pixmap data は常に有効な premultiplied(各チャンネル ≤ α)。万一不正
@@ -1360,7 +1360,7 @@ mod tests {
 
     fn non_transparent_bounds(pixmap: &Pixmap) -> PixelBounds {
         let mut bounds = None;
-        for (index, pixel) in pixmap.data().chunks_exact(4).enumerate() {
+        for (index, pixel) in pixmap.data().as_chunks::<4>().0.iter().enumerate() {
             if pixel[3] == 0 {
                 continue;
             }
@@ -2134,7 +2134,12 @@ mod tests {
 
     /// 非透明(alpha>0)画素数を数える。RGBA8 の 4 バイト目が alpha。
     fn nonzero_alpha_count(pm: &Pixmap) -> usize {
-        pm.data().chunks_exact(4).filter(|px| px[3] > 0).count()
+        pm.data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[3] > 0)
+            .count()
     }
 
     fn stamp_key(r: f64, stroke_width: f64) -> MarkerKey {
@@ -2461,8 +2466,10 @@ mod tests {
     fn diff_fraction(a: &Pixmap, b: &Pixmap) -> f64 {
         let diff = a
             .data()
-            .chunks_exact(4)
-            .zip(b.data().chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.data().as_chunks::<4>().0)
             .filter(|(x, y)| {
                 x.iter()
                     .zip(y.iter())
