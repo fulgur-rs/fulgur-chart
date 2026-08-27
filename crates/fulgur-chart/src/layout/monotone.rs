@@ -166,7 +166,7 @@ mod tests {
             let path = monotone_path(&points);
             let tokens: Vec<&str> = path.split_ascii_whitespace().collect();
             let mut start_y: f64 = tokens[2].parse().unwrap();
-            for cubic in tokens[3..].chunks_exact(7) {
+            for cubic in tokens[3..].as_chunks::<7>().0 {
                 assert_eq!(cubic[0], "C");
                 let cp1_y: f64 = cubic[2].parse().unwrap();
                 let cp2_y: f64 = cubic[4].parse().unwrap();
