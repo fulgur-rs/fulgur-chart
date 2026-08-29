@@ -35,7 +35,9 @@ features.
   - Jsonnet input (`.jsonnet` files are evaluated before parsing):
     - `bar.jsonnet` … bar chart using `local` variables and comments
     - `line-generated.jsonnet` … sine wave generated with `std.range` / `std.map`
-- `out/` … the SVGs rendered from those specs by the CLI (committed)
+- `out/` … the SVGs rendered from most of those specs by the CLI (committed); a couple of
+  the newer Vega-Lite specs (`vegalite-temporal-line.json`, `vegalite-rect-heatmap.json`)
+  don't have a corresponding `out/` file yet
 - `report.html` … a minimal gallery embedding the generated SVGs with `<img>`
 
 ## Regenerating the SVGs
