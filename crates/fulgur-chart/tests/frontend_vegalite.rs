@@ -2815,3 +2815,67 @@ fn temporal_area_with_color_defaults_to_stacked() {
         "strict parser must accept the same dense temporal area spec"
     );
 }
+
+/// Code-review followup (Task 5 review, issue 2): strict mode's area channel
+/// allowlist was gated only on mark name, not on temporal vs categorical, so it
+/// rejected `encoding.{x,y}.title` / `encoding.color.{title,scale}` on temporal area
+/// even though the typed schema (`VlTemporalXChannel` / `VlTemporalAreaYChannel` /
+/// `VlTemporalColorChannel`) accepts them and non-strict parsing already honors them
+/// (axis/legend titles get set). Fixed by widening the allowlist only when
+/// `channel_type(encoding, "x") == Some("temporal")`.
+#[test]
+fn strict_temporal_area_accepts_axis_and_color_titles_and_color_scale() {
+    let json = r#"{
+        "mark": "area",
+        "data": {"values": [
+            {"t": "2020-01-01T00:00:00Z", "v": 1, "g": "A"},
+            {"t": "2020-01-01T00:00:00Z", "v": 2, "g": "B"},
+            {"t": "2020-01-02T00:00:00Z", "v": 3, "g": "A"},
+            {"t": "2020-01-02T00:00:00Z", "v": 4, "g": "B"}
+        ]},
+        "encoding": {
+            "x": {"field": "t", "type": "temporal", "title": "Date"},
+            "y": {"field": "v", "type": "quantitative", "title": "Value"},
+            "color": {"field": "g", "type": "nominal", "title": "Group",
+                      "scale": {"scheme": "tableau10"}}
+        }
+    }"#;
+    let spec =
+        vegalite::parse(json, true).unwrap_or_else(|err| panic!("strict must accept: {err}"));
+    assert_eq!(
+        spec.x_axis.title.as_ref().map(|t| t.text.as_str()),
+        Some("Date"),
+        "encoding.x.title must actually be honored, not just tolerated"
+    );
+    assert_eq!(
+        spec.y_axis.title.as_ref().map(|t| t.text.as_str()),
+        Some("Value")
+    );
+    assert_eq!(spec.legend_title.as_deref(), Some("Group"));
+    assert!(
+        matches!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(json),
+            Ok(fulgur_chart::schema::VegaLiteSpec::TemporalArea(_))
+        ),
+        "typed schema must also accept this as TemporalArea"
+    );
+}
+
+/// Companion to the fix above: the widening must be gated on temporal, not applied
+/// unconditionally. Categorical area's typed schema (`VlCategoricalXChannel`, shared
+/// with line) has no `title` field, and `build_categorical` never reads it, so
+/// accepting it under `--strict` would silently drop user intent. Confirms the fix
+/// didn't overshoot onto the categorical path.
+#[test]
+fn strict_categorical_area_still_rejects_x_title() {
+    let json = CATEGORICAL_AREA_STACKED.replace(
+        r#""x": {"field": "month", "type": "ordinal"}"#,
+        r#""x": {"field": "month", "type": "ordinal", "title": "Month"}"#,
+    );
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(err.contains("encoding.x.title"), "unexpected error: {err}");
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_err(),
+        "typed schema must also reject title on categorical area's x channel"
+    );
+}

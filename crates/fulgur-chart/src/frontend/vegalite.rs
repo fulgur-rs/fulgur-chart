@@ -1478,6 +1478,17 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
             _ => return Ok(()),
         };
         check_object(encoding, allowed, "encoding")?;
+        // temporal area(x.type: "temporal")は typed schema(VlTemporalXChannel /
+        // VlTemporalAreaYChannel / VlTemporalColorChannel)が x/y.title と
+        // color.{title,scale} を受理する。categorical area の型
+        // (VlCategoricalXChannel 等、line と共有)にはこれらのフィールドが無いため、
+        // build_categorical もこれらを読まない=黙って捨てる。ここを temporal 判定な
+        // しに一律で緩めると categorical 側で「typed schema は拒否・strict は受理して
+        // 黙殺」という逆向きの食い違いを生むため、temporal のときだけ広げる
+        // (line の check_line_keys が同じ理由で temporal/categorical を分けている
+        // のと同じ考え方だが、ここでは channel allow-list の拡張だけに留める)。
+        let temporal_area = matches!(read_mark_name(top), Some("area"))
+            && channel_type(encoding, "x") == Some("temporal");
         for channel in allowed {
             if let Some(ch) = encoding.get(*channel).and_then(Value::as_object) {
                 // aggregate は原則未実装(本体は単純合計しかしない)。strict では
@@ -1489,7 +1500,15 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                     if matches!(read_mark_name(top), Some("rect")) && *channel == "color" {
                         &["field", "type", "aggregate"]
                     } else if matches!(read_mark_name(top), Some("area")) && *channel == "y" {
-                        &["field", "type", "stack"]
+                        if temporal_area {
+                            &["field", "type", "stack", "title"]
+                        } else {
+                            &["field", "type", "stack"]
+                        }
+                    } else if temporal_area && *channel == "x" {
+                        &["field", "type", "title"]
+                    } else if temporal_area && *channel == "color" {
+                        &["field", "type", "title", "scale"]
                     } else {
                         &["field", "type"]
                     };
