@@ -382,7 +382,16 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
         }
 
-        // データラベル(点の上、マーカー半径ぶん+余白だけ上)。
+        // データラベル。非積み上げ: 点の上、マーカー半径ぶん+余白だけ上。
+        // 積み上げ: 自帯のピクセル空間中点(bar.rs の
+        // stacked_data_label_midpoint_uses_pixel_space_not_value_space_under_log_scale /
+        // stacked_data_label_midpoint_unaffected_by_fix_under_linear_scale と同じ規約)。
+        // `y - marker - gap`(非積み上げと同じ式)だと、最上位以外の系列のラベルは
+        // 自分の far(=真上の帯の near)のすぐ上に来るため、真上の帯へ食い込む
+        // (Task 3 の2回目コードレビューで指摘)。near/far をそれぞれ map してから
+        // ピクセル空間で平均する(値空間で先に平均して map すると log 軸で非アフィンに
+        // ズレる。bar.rs 同様の理由で、この差は VL 側で log y 軸が未到達なため現状は
+        // 観測できないが、layout/line.rs は log 軸対応呼び出し元と将来共有されうる)。
         // 元カテゴリインデックスで ser.values を引くことで filter 後のずれを防ぐ。
         if spec.data_labels {
             // marker 無効(0 以下)や間引きで省略された既定 marker は、従来どおり
@@ -392,9 +401,15 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 .filter(|radius| *radius > 0.0)
                 .unwrap_or(MARKER_R);
             for &(x, y, cat) in &valid {
+                let label_y = if let Some(offsets) = &offsets {
+                    let (near, far) = offsets[si][cat];
+                    (frame.ys.map(near) + frame.ys.map(far)) / 2.0
+                } else {
+                    y - label_marker_r - common::LABEL_GAP
+                };
                 items.push(common::value_label(
                     x,
-                    y - label_marker_r - common::LABEL_GAP,
+                    label_y,
                     spec.theme.font_size,
                     Anchor::Middle,
                     spec.theme.text_color,
@@ -1473,6 +1488,85 @@ mod tests {
             "line_points must plot the far (cumulative) offset when stacked: got {}, expected {}",
             s1_b.cy,
             expected_far
+        );
+    }
+
+    /// 実機バグ回帰テスト: 積み上げ area のデータラベルは(修正前)各系列自身の far
+    /// オフセットのすぐ上(`y - marker_r - LABEL_GAP`)に置かれており、最上位以外の
+    /// 系列では真上に積まれた帯の内部(または境界)に描かれてしまっていた
+    /// (bar.rs の stacked_data_label_midpoint_* と同じ規約を line.rs にも適用する、
+    /// Task 3 の2回目コードレビュー指摘の carry-forward)。修正後は各系列が自帯の
+    /// ピクセル空間中点にラベルを置くため、下位系列のラベルは上位系列の帯
+    /// (near..far のピクセル範囲)に収まらないはず。
+    #[test]
+    fn stacked_data_label_sits_at_band_midpoint_not_inside_the_series_above() {
+        let mut spec = stacked_area_spec(vec!["a"], vec![("s0", vec![10.0]), ("s1", vec![20.0])]);
+        spec.data_labels = true;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let scene = build(&spec, &m);
+
+        let labels: Vec<(f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Text {
+                    anchor: Anchor::Middle,
+                    x,
+                    y,
+                    content,
+                    ..
+                } if content.parse::<f64>().is_ok() => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels.len(), 2, "1 label per series");
+
+        // s0 (bottom band): near=0, far=10 -> pixel-space midpoint of map(0)/map(10).
+        let s0_expected_y = (frame.ys.map(0.0) + frame.ys.map(10.0)) / 2.0;
+        // s1 (top band, stacked on s0): near=10, far=30 -> pixel-space midpoint of
+        // map(10)/map(30).
+        let s1_expected_y = (frame.ys.map(10.0) + frame.ys.map(30.0)) / 2.0;
+
+        let s0_label_y = labels
+            .iter()
+            .map(|&(_, y)| y)
+            .find(|&y| (y - s0_expected_y).abs() < 1e-6)
+            .unwrap_or_else(|| {
+                panic!("no label at s0's expected band midpoint {s0_expected_y}: got {labels:?}")
+            });
+        let s1_label_y = labels
+            .iter()
+            .map(|&(_, y)| y)
+            .find(|&y| (y - s1_expected_y).abs() < 1e-6)
+            .unwrap_or_else(|| {
+                panic!("no label at s1's expected band midpoint {s1_expected_y}: got {labels:?}")
+            });
+
+        // s1's band spans the pixel range [map(30), map(10)] (larger value -> smaller y).
+        let s1_band_top = frame.ys.map(30.0).min(frame.ys.map(10.0));
+        let s1_band_bottom = frame.ys.map(30.0).max(frame.ys.map(10.0));
+        assert!(
+            s0_label_y < s1_band_top || s0_label_y > s1_band_bottom,
+            "s0's label (y={s0_label_y}) must not collide with s1's band \
+             [{s1_band_top}, {s1_band_bottom}] stacked directly above it"
+        );
+        // Sanity: s1's own label must sit within its own band (it should, by construction,
+        // since it's the pixel-space midpoint of that band's near/far).
+        assert!(
+            s1_label_y >= s1_band_top - 1e-6 && s1_label_y <= s1_band_bottom + 1e-6,
+            "s1's label (y={s1_label_y}) should sit within its own band \
+             [{s1_band_top}, {s1_band_bottom}]"
+        );
+
+        // Old buggy behavior for s0: y=map(10) (s0's far) minus marker radius/gap, which
+        // sits inside s1's band (s1's near == s0's far == map(10)). Assert we did not
+        // regress to that.
+        let s0_buggy_y = frame.ys.map(10.0) - MARKER_R - common::LABEL_GAP;
+        assert!(
+            (s0_label_y - s0_buggy_y).abs() > 1.0,
+            "s0's label must not sit at the old far-edge-minus-gap position: \
+             s0_label_y={s0_label_y}, s0_buggy_y={s0_buggy_y}"
         );
     }
 
