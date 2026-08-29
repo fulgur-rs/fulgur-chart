@@ -165,8 +165,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     for ser in &spec.series {
         // 有効点列: (x, y, 元カテゴリインデックス)。欠損・非有限値を除外。
         // 対数y軸では非正値も欠損(gap)として扱う: chart.js は log 軸上の非正値を
-        // "skip" 点として扱い(ドメイン計算にだけ使い、マーカー・線分は描かない)、
-        // その実測(tools/ で node chart.js 実行して確認)に合わせている。
+        // "skip" 点として扱い、マーカー・線分の描画と log_value_domain によるドメイン
+        // 計算の双方から除外する(値自体は IR には保持する)。この挙動は実測
+        // (tools/ で node chart.js 実行して確認)に合わせている。
         // 元インデックスはラベル lookup と gap 検出に使う。
         let valid: Vec<(f64, f64, usize)> = (0..spec.categories.len())
             .filter_map(|i| {
