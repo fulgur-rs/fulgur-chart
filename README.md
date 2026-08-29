@@ -185,11 +185,12 @@ fulgur-chart render chart.vl.json -o chart.svg --dsl vegalite
 fulgur-chart render chart.vl.json -o chart.svg
 ```
 
-Supported subset: `mark` (`bar` / `line` / `point` → scatter / `arc` → pie), inline
-`data.values`, and `encoding` fields `x` / `y` / `color` / `theta`. The Tableau10 color
-palette is applied automatically to Vega-Lite specs. Input is converted to a shared
-intermediate representation, so output determinism and Fulgur integration are identical
-to chart.js input.
+Supported subset: `mark` (`bar` / `line` / `area` / `point` → scatter / `circle` → scatter /
+`arc` → pie / `rect` → heatmap), inline `data.values`, and `encoding` fields `x` / `y` /
+`color` / `theta`. `area` stacks by default when `color` is present (`encoding.y.stack: null`
+to disable), matching Vega-Lite. The Tableau10 color palette is applied automatically to
+Vega-Lite specs. Input is converted to a shared intermediate representation, so output
+determinism and Fulgur integration are identical to chart.js input.
 
 ## Ruby binding
 

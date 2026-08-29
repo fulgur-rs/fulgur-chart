@@ -1,0 +1,22 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "mark": "area",
+  "data": {
+    "values": [
+      { "month": "Jan", "kind": "Organic", "visits": 120 },
+      { "month": "Jan", "kind": "Paid", "visits": 60 },
+      { "month": "Feb", "kind": "Organic", "visits": 150 },
+      { "month": "Feb", "kind": "Paid", "visits": 90 },
+      { "month": "Mar", "kind": "Organic", "visits": 170 },
+      { "month": "Mar", "kind": "Paid", "visits": 80 },
+      { "month": "Apr", "kind": "Organic", "visits": 200 },
+      { "month": "Apr", "kind": "Paid", "visits": 110 }
+    ]
+  },
+  "encoding": {
+    "x": { "field": "month", "type": "ordinal" },
+    "y": { "field": "visits", "type": "quantitative" },
+    "color": { "field": "kind", "type": "nominal" }
+  },
+  "title": "Monthly Visits (stacked)"
+}
