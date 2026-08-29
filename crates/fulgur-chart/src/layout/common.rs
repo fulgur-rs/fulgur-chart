@@ -251,12 +251,15 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     }
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
+    // Line の stacked area は Bar の value_stacked と同じ「カテゴリごと正負サム独立集計」
+    // ロジックを共有する。ここでの積み上げは常に線形軸前提(VL は log y 軸を公開しておらず、
+    // chart.js は stacked を常に false にするため、対数軸との組み合わせは到達不能)。
     if matches!(
         spec.kind,
         crate::ir::ChartKind::Bar {
             value_stacked: true,
             ..
-        }
+        } | crate::ir::ChartKind::Line { stacked: true }
     ) {
         // 積み上げ: カテゴリごとに正値の和(上限)・負値の和(下限)をとる。
         // chart.js 互換: beginAtZero=false のとき 0 ではなく実データの個別値を境界にする。
@@ -1915,6 +1918,71 @@ mod tests {
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
+    }
+
+    #[test]
+    fn value_domain_sums_stacked_line_series_independently_by_sign() {
+        let mut spec = make_bar_spec(2, 720.0);
+        spec.kind = ChartKind::Line { stacked: true };
+        spec.series = vec![
+            Series {
+                name: "a".to_string(),
+                values: vec![10.0, 20.0],
+                points: Vec::<Point>::new(),
+                fill: vec![crate::palette::PALETTE[0]],
+                stroke: vec![crate::palette::PALETTE[0]],
+                stroke_width: 2.0,
+                area: true,
+                interpolation: LineInterpolation::Linear,
+                span_gaps: false,
+                step_mode: None,
+                series_type: SeriesType::Line,
+                point_radius: None,
+                box_points: vec![],
+                tree: vec![],
+                links: vec![],
+            },
+            Series {
+                name: "b".to_string(),
+                values: vec![5.0, -8.0],
+                points: Vec::<Point>::new(),
+                fill: vec![crate::palette::PALETTE[1]],
+                stroke: vec![crate::palette::PALETTE[1]],
+                stroke_width: 2.0,
+                area: true,
+                interpolation: LineInterpolation::Linear,
+                span_gaps: false,
+                step_mode: None,
+                series_type: SeriesType::Line,
+                point_radius: None,
+                box_points: vec![],
+                tree: vec![],
+                links: vec![],
+            },
+            Series {
+                name: "c".to_string(),
+                values: vec![8.0, -3.0],
+                points: Vec::<Point>::new(),
+                fill: vec![crate::palette::PALETTE[2]],
+                stroke: vec![crate::palette::PALETTE[2]],
+                stroke_width: 2.0,
+                area: true,
+                interpolation: LineInterpolation::Linear,
+                span_gaps: false,
+                step_mode: None,
+                series_type: SeriesType::Line,
+                point_radius: None,
+                box_points: vec![],
+                tree: vec![],
+                links: vec![],
+            },
+        ];
+        let (lo, hi) = value_domain(&spec, &spec.y_axis);
+        // cat0: 10+5+8=23(正のみ)。個別値の最大 20 ではなく積み上げ和が上限になる
+        // ことを検証(非 stacked パスならここが 20 になってしまう)。
+        // cat1: 20 が正、-8 と -3 が負 -> 負側も個別和ではなくサム(-11)になる
+        // ことを検証(個別値の最小は -8 だが、負サムの合計 -11 が下限になるべき)。
+        assert_eq!((lo, hi), (-11.0, 23.0));
     }
 
     #[test]
