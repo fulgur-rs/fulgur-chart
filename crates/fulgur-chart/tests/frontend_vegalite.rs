@@ -685,6 +685,79 @@ fn typed_categorical_line_schema_excludes_temporal_only_options() {
 }
 
 #[test]
+fn typed_area_schema_accepts_stack_null_and_zero_and_absent() {
+    let base = |stack: &str| {
+        format!(
+            r#"{{"mark":"area","data":{{"values":[{{"x":"a","y":1,"g":"p"}}]}},
+               "encoding":{{"x":{{"field":"x","type":"nominal"}},
+               "y":{{"field":"y","type":"quantitative"{stack}}},
+               "color":{{"field":"g","type":"nominal"}}}}}}"#
+        )
+    };
+    for stack in ["", r#","stack":null"#, r#","stack":"zero""#] {
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&base(stack)).is_ok(),
+            "stack variant {stack:?} should be accepted"
+        );
+    }
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&base(r#","stack":"center""#))
+            .is_err(),
+        "unsupported stack mode must be rejected"
+    );
+}
+
+#[test]
+fn typed_area_schema_object_mark_accepts_interpolate_rejects_point() {
+    let obj_form = r#"{"mark":{"type":"area","interpolate":"monotone"},
+        "data":{"values":[{"x":"a","y":1}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"#;
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(obj_form).is_ok(),
+        "object-form area mark with interpolate should be accepted"
+    );
+
+    let with_point = obj_form.replace(r#""type":"area""#, r#""type":"area","point":true"#);
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&with_point).is_err(),
+        "area mark must not accept point (out of scope, deny_unknown_fields)"
+    );
+}
+
+#[test]
+fn typed_area_schema_matches_expected_untagged_variant() {
+    let cat_area = r#"{"mark":"area","data":{"values":[{"x":"a","y":1}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative","stack":"zero"}}}"#;
+    assert!(
+        matches!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(cat_area),
+            Ok(fulgur_chart::schema::VegaLiteSpec::CategoricalArea(_))
+        ),
+        "mark:\"area\" with nominal x should match CategoricalArea, not another variant"
+    );
+
+    let temp_area = r#"{"mark":"area","data":{"values":[{"x":"2020-01-01","y":1}]},
+        "encoding":{"x":{"field":"x","type":"temporal"},"y":{"field":"y","type":"quantitative","stack":"zero"}}}"#;
+    assert!(
+        matches!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(temp_area),
+            Ok(fulgur_chart::schema::VegaLiteSpec::TemporalArea(_))
+        ),
+        "mark:\"area\" with temporal x should match TemporalArea, not another variant"
+    );
+
+    let cat_line = r#"{"mark":"line","data":{"values":[{"x":"a","y":1}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"#;
+    assert!(
+        matches!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(cat_line),
+            Ok(fulgur_chart::schema::VegaLiteSpec::CategoricalLine(_))
+        ),
+        "mark:\"line\" must still match CategoricalLine, unaffected by new Area variants"
+    );
+}
+
+#[test]
 fn strict_temporal_line_rejects_interpolatee_with_full_key_path() {
     let json = DOGFOOD_SHAPE.replace("\"interpolate\"", "\"interpolatee\"");
     let err = vegalite::parse(&json, true).unwrap_err();
