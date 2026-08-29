@@ -119,8 +119,8 @@ fn append_area_points(d: &mut String, points: impl IntoIterator<Item = (f64, f64
 /// レンダリング経路の `build()` は点を独立に計算しデシメーションするため、巨大データでは
 /// この全点列と実際の描画点は乖離する（モデルは chart.js 数値照合用＝間引きなしが正しい）。
 /// 欠損値 (get() None) と非有限値 (NaN / ±∞) は skip し point は emit しない
-/// (bar の `vertical_bar_boxes` と同じ null 挙動)。対数y軸では値0も `build()` と同じく
-/// skip する(chart.js は log 軸上の値0を欠損として扱うため。この乖離は自動レビュー指摘で発見・修正した)。
+/// (bar の `vertical_bar_boxes` と同じ null 挙動)。対数y軸では非正値も `build()` と同じく
+/// skip する(chart.js は log 軸上の非正値を欠損として扱うため)。
 pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
@@ -138,7 +138,7 @@ pub fn line_points(
             if !v.is_finite() {
                 continue;
             }
-            if is_log && v == 0.0 {
+            if is_log && v <= 0.0 {
                 continue;
             }
             let x = common::line_x(spec, frame, i);
@@ -164,9 +164,10 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     for ser in &spec.series {
         // 有効点列: (x, y, 元カテゴリインデックス)。欠損・非有限値を除外。
-        // 対数y軸では 0 も欠損(gap)として扱う: chart.js は log 軸上の値0を
-        // "skip" 点として扱い(ドメイン計算にだけ使い、マーカー・線分は描かない)、
-        // その実測(tools/ で node chart.js 実行して確認)に合わせている。
+        // 対数y軸では非正値も欠損(gap)として扱う: chart.js は log 軸上の非正値を
+        // "skip" 点として扱い、マーカー・線分の描画と log_value_domain によるドメイン
+        // 計算の双方から除外する(値自体は IR には保持する)。この挙動は実測
+        // (tools/ で node chart.js 実行して確認)に合わせている。
         // 元インデックスはラベル lookup と gap 検出に使う。
         let valid: Vec<(f64, f64, usize)> = (0..spec.categories.len())
             .filter_map(|i| {
@@ -174,7 +175,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if !v.is_finite() {
                     return None;
                 }
-                if is_log && v == 0.0 {
+                if is_log && v <= 0.0 {
                     return None;
                 }
                 let x = common::line_x(spec, &frame, i);
@@ -479,14 +480,14 @@ mod tests {
     /// 値0の点も emit していた。model の geometry.elements が実際の描画シーンと
     /// 食い違う(自動レビュー指摘)。
     #[test]
-    fn line_points_skips_zero_on_logarithmic_y_axis() {
+    fn line_points_skips_non_positive_values_on_logarithmic_y_axis() {
         let ps = pts_for(
-            r#"{"type":"line","data":{"labels":["a","b","c"],
-               "datasets":[{"data":[0,10,20]}]},
+            r#"{"type":"line","data":{"labels":["a","b","c","d"],
+               "datasets":[{"data":[-5,0,10,20]}]},
                "options":{"scales":{"y":{"type":"logarithmic"}}}}"#,
         );
-        assert_eq!(ps.len(), 2, "値0の点は欠損として skip されるべき");
-        assert!(ps.iter().all(|p| p.index != 0));
+        assert_eq!(ps.len(), 2, "非正値は欠損として skip されるべき");
+        assert!(ps.iter().all(|p| p.index >= 2));
     }
 
     #[test]
@@ -733,6 +734,21 @@ mod tests {
             marker_count, 2,
             "値0の点にはマーカーを描かない(gapとしてskip)"
         );
+    }
+
+    #[test]
+    fn logarithmic_line_treats_negative_values_as_gaps() {
+        let scene = scene_for(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[-5,1,10]}]},
+               "options":{"scales":{"y":{"type":"logarithmic"}}}}"#,
+        );
+        let marker_count = scene
+            .items
+            .iter()
+            .filter(|item| matches!(item, Prim::Circle { .. }))
+            .count();
+        assert_eq!(marker_count, 2, "負値にはマーカーを描かない(gapとしてskip)");
     }
 
     #[test]
