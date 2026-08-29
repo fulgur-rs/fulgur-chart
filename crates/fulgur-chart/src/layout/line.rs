@@ -1,7 +1,7 @@
 //! line / area チャート。共有フレーム(common)の上に折れ線・面・マーカーを重ねる。
 
 use super::{common, monotone::monotone_path};
-use crate::ir::{ChartSpec, StepMode};
+use crate::ir::{ChartKind, ChartSpec, StepMode};
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
@@ -126,6 +126,8 @@ pub fn line_points(
     frame: &common::Frame,
 ) -> Vec<crate::layout::scatter::PointBox> {
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
+    let stacked = matches!(spec.kind, ChartKind::Line { stacked: true });
+    let offsets = stacked.then(|| stack_offsets(spec));
     let mut pts = Vec::new();
     for (sidx, ser) in spec.series.iter().enumerate() {
         if ser.point_radius.is_some_and(|radius| radius <= 0.0) {
@@ -141,13 +143,18 @@ pub fn line_points(
             if is_log && v == 0.0 {
                 continue;
             }
+            let plot_y = if let Some(offsets) = &offsets {
+                offsets[sidx][i].1 // far
+            } else {
+                v
+            };
             let x = common::line_x(spec, frame, i);
             pts.push(crate::layout::scatter::PointBox {
                 series: sidx,
                 index: i,
                 kind: "line",
                 cx: x,
-                cy: frame.ys.map(v),
+                cy: frame.ys.map(plot_y),
                 r: MARKER_R,
             });
         }
@@ -155,14 +162,54 @@ pub fn line_points(
     pts
 }
 
+/// 積み上げ area のカテゴリ・系列ごとの (near, far) オフセットを計算する。
+/// 正値は正側の running total、負値は負側の running total に独立で積む
+/// (Vega-Lite の stack:"zero" と同じ; `value_domain` の正負サム分離と対応する)。
+/// near = この系列を足す前の running total(baseline 側/隣接帯との共有辺)、
+/// far = 足した後の running total(stroke/marker を置く辺)。非有限値は 0 として扱う
+/// (積み上げ上の欠損補完; Vega-Lite の stack transform と同じ)。
+fn stack_offsets(spec: &ChartSpec) -> Vec<Vec<(f64, f64)>> {
+    let n = spec.categories.len();
+    let mut pos_running = vec![0.0_f64; n];
+    let mut neg_running = vec![0.0_f64; n];
+    spec.series
+        .iter()
+        .map(|ser| {
+            (0..n)
+                .map(|i| {
+                    let v = ser
+                        .values
+                        .get(i)
+                        .copied()
+                        .filter(|v| v.is_finite())
+                        .unwrap_or(0.0);
+                    let running = if v >= 0.0 {
+                        &mut pos_running[i]
+                    } else {
+                        &mut neg_running[i]
+                    };
+                    let near = *running;
+                    *running += v;
+                    (near, *running)
+                })
+                .collect()
+        })
+        .collect()
+}
+
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let frame = common::compute(spec, m);
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
+    let stacked = matches!(spec.kind, ChartKind::Line { stacked: true });
+    // 積み上げは常に密なデータ前提(色分け系列は必ず全カテゴリで値を持つ; VL フロントエンドが
+    // build_categorical/build_temporal_line で保証する)なので gap 分割・間引きを行わない。
+    // 複数系列を独立に間引くと x 位置がずれてスタックが破綻するため意図的にスキップする。
+    let offsets = stacked.then(|| stack_offsets(spec));
 
     let mut items: Vec<Prim> = Vec::new();
     common::draw_frame(&mut items, spec, &frame, m);
 
-    for ser in &spec.series {
+    for (si, ser) in spec.series.iter().enumerate() {
         // 有効点列: (x, y, 元カテゴリインデックス)。欠損・非有限値を除外。
         // 対数y軸では 0 も欠損(gap)として扱う: chart.js は log 軸上の値0を
         // "skip" 点として扱い(ドメイン計算にだけ使い、マーカー・線分は描かない)、
@@ -170,15 +217,19 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // 元インデックスはラベル lookup と gap 検出に使う。
         let valid: Vec<(f64, f64, usize)> = (0..spec.categories.len())
             .filter_map(|i| {
-                let v = ser.values.get(i).copied()?;
-                if !v.is_finite() {
-                    return None;
-                }
-                if is_log && v == 0.0 {
-                    return None;
-                }
                 let x = common::line_x(spec, &frame, i);
-                Some((x, frame.ys.map(v), i))
+                if let Some(offsets) = &offsets {
+                    Some((x, frame.ys.map(offsets[si][i].1), i))
+                } else {
+                    let v = ser.values.get(i).copied()?;
+                    if !v.is_finite() {
+                        return None;
+                    }
+                    if is_log && v == 0.0 {
+                        return None;
+                    }
+                    Some((x, frame.ys.map(v), i))
+                }
             })
             .collect();
 
@@ -190,8 +241,14 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
         // デシメーション判定は系列全体の点数で（gap 分割の前後で一貫）。
         // 各セグメントを個別に間引き、line はその結果から直接描く（再分割しない）。
+        // 積み上げ area は必ずスキップする: 系列ごとに独立に間引くと生存する x 位置が
+        // 系列間でずれ、帯(near/far)が食い違って壊れるため(このコメント直上の comment 参照)。
         let plot_width = frame.plot_right - frame.plot_left;
-        let dec = crate::layout::decimate::resolve(&spec.decimation, plot_width, valid.len());
+        let dec = if stacked {
+            None
+        } else {
+            crate::layout::decimate::resolve(&spec.decimation, plot_width, valid.len())
+        };
         let decimated = dec.is_some();
         let segments: Vec<Vec<(f64, f64, usize)>> = if let Some((algo, samples)) = dec {
             // samples はセグメント長で按分される（decimate_segments）。これにより gap で
@@ -224,15 +281,24 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     }
                     AreaPoints::Stepped(points) => append_area_points(&mut d, points),
                 };
-                write!(
-                    d,
-                    "L {} {} L {} {} Z",
-                    fmt_num(last_x),
-                    fmt_num(baseline_y),
-                    fmt_num(first_x),
-                    fmt_num(baseline_y)
-                )
-                .unwrap();
+                if let Some(offsets) = &offsets {
+                    for &(_, _, cat) in seg.iter().rev() {
+                        let near_x = common::line_x(spec, &frame, cat);
+                        let near_y = frame.ys.map(offsets[si][cat].0);
+                        write!(d, "L {} {} ", fmt_num(near_x), fmt_num(near_y)).unwrap();
+                    }
+                    write!(d, "Z").unwrap();
+                } else {
+                    write!(
+                        d,
+                        "L {} {} L {} {} Z",
+                        fmt_num(last_x),
+                        fmt_num(baseline_y),
+                        fmt_num(first_x),
+                        fmt_num(baseline_y)
+                    )
+                    .unwrap();
+                }
                 items.push(Prim::Path {
                     d,
                     fill: Some(ser.fill_at(0)),
@@ -1017,6 +1083,174 @@ mod tests {
             area_points(&segment, Some(StepMode::Middle)),
             AreaPoints::Stepped(_)
         ));
+    }
+
+    fn stacked_area_spec(categories: Vec<&str>, series: Vec<(&str, Vec<f64>)>) -> ChartSpec {
+        use crate::ir::{
+            AxisBorder, AxisGrid, AxisSpec, ChartKind, Decimation, LegendPos, Point, ScaleKind,
+            SizeMode, Theme, XPositions,
+        };
+        let palette = crate::palette::PALETTE.to_vec();
+        let axis = AxisSpec {
+            title: None,
+            min: None,
+            max: None,
+            suggested_min: None,
+            suggested_max: None,
+            begin_at_zero: true,
+            offset: false,
+            grid: AxisGrid::default(),
+            border: AxisBorder::default(),
+            scale_kind: ScaleKind::Linear,
+        };
+        ChartSpec {
+            kind: ChartKind::Line { stacked: true },
+            categories: categories.into_iter().map(str::to_string).collect(),
+            x_positions: XPositions::Category,
+            series: series
+                .into_iter()
+                .enumerate()
+                .map(|(i, (name, values))| {
+                    let color = palette[i % palette.len()];
+                    crate::ir::Series {
+                        name: name.to_string(),
+                        values,
+                        points: Vec::<Point>::new(),
+                        fill: vec![color],
+                        stroke: vec![color],
+                        stroke_width: 2.0,
+                        area: true,
+                        interpolation: crate::ir::LineInterpolation::Linear,
+                        span_gaps: false,
+                        step_mode: None,
+                        series_type: crate::ir::SeriesType::Line,
+                        point_radius: None,
+                        box_points: vec![],
+                        tree: vec![],
+                        links: vec![],
+                    }
+                })
+                .collect(),
+            x_axis: axis.clone(),
+            y_axis: axis,
+            legend: LegendPos::None,
+            legend_title: None,
+            title: None,
+            width: 720.0,
+            height: 400.0,
+            size_mode: SizeMode::Canvas,
+            data_labels: false,
+            theme: Theme::default(),
+            decimation: Decimation::default(),
+            radial_axis: None,
+        }
+    }
+
+    #[test]
+    fn stacked_area_bands_are_contiguous() {
+        let spec = stacked_area_spec(
+            vec!["a", "b"],
+            vec![("s0", vec![10.0, 20.0]), ("s1", vec![5.0, 15.0])],
+        );
+        let frame = common::compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let markers: Vec<(f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Circle { cx, cy, .. } => Some((*cx, *cy)),
+                _ => None,
+            })
+            .collect();
+        // s0 at cat "a": far = 10 (bottom band). s1 at cat "a": near = 10, far = 15 (top band).
+        let s0_a_y = frame.ys.map(10.0);
+        let s1_a_y = frame.ys.map(15.0);
+        assert!(
+            markers.iter().any(|&(_, y)| (y - s0_a_y).abs() < 1e-6),
+            "series 0 marker must sit at its cumulative top (10)"
+        );
+        assert!(
+            markers.iter().any(|&(_, y)| (y - s1_a_y).abs() < 1e-6),
+            "series 1 marker must sit at its cumulative top (10+5=15)"
+        );
+    }
+
+    #[test]
+    fn stacked_area_top_band_stays_within_plot_bounds() {
+        let spec = stacked_area_spec(
+            vec!["a", "b", "c"],
+            vec![
+                ("s0", vec![10.0, 20.0, 30.0]),
+                ("s1", vec![5.0, 15.0, 25.0]),
+            ],
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let scene = build(&spec, &m);
+        let top_ys: Vec<f64> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Circle { cy, .. } => Some(*cy),
+                _ => None,
+            })
+            .collect();
+        for y in top_ys {
+            assert!(
+                y >= frame.plot_top - 1e-6 && y <= frame.plot_bottom + 1e-6,
+                "marker y={y} escaped plot bounds [{}, {}]",
+                frame.plot_top,
+                frame.plot_bottom
+            );
+        }
+    }
+
+    #[test]
+    fn stacked_area_skips_decimation_above_threshold() {
+        // plot_width for an 800px-wide chart is well under 800, so the default decimation
+        // threshold (plot_width_px * 4.0) is comfortably under 3200. Use 4000 categories,
+        // two series, to force src/layout/decimate.rs::resolve to trigger for a *naive*
+        // per-series-independent decimation path, then assert the stack stays aligned
+        // everywhere (not just at a hand-picked few indices).
+        let n = 4000;
+        let categories: Vec<String> = (0..n).map(|i| format!("c{i}")).collect();
+        let s0_values: Vec<f64> = (0..n).map(|i| (i % 7) as f64 + 1.0).collect();
+        let s1_values: Vec<f64> = (0..n).map(|i| (i % 5) as f64 + 1.0).collect();
+        let categories_ref: Vec<&str> = categories.iter().map(String::as_str).collect();
+        let spec = stacked_area_spec(
+            categories_ref,
+            vec![("s0", s0_values.clone()), ("s1", s1_values.clone())],
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let scene = build(&spec, &m);
+        let mut markers: Vec<(f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Circle { cx, cy, .. } => Some((*cx, *cy)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            markers.len(),
+            n * 2,
+            "stacked area must not decimate away any marker (would desync the bands)"
+        );
+        markers.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        for i in 0..n {
+            let expected_s0_far = frame.ys.map(s0_values[i]);
+            let expected_s1_far = frame.ys.map(s0_values[i] + s1_values[i]);
+            let got: Vec<f64> = markers[i * 2..i * 2 + 2].iter().map(|&(_, y)| y).collect();
+            assert!(
+                got.iter().any(|&y| (y - expected_s0_far).abs() < 1e-6),
+                "category {i}: s0 far offset missing (decimation likely desynced the stack)"
+            );
+            assert!(
+                got.iter().any(|&y| (y - expected_s1_far).abs() < 1e-6),
+                "category {i}: s1 far offset missing"
+            );
+        }
     }
 
     #[test]
