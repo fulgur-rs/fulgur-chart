@@ -379,6 +379,11 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 /// バーがプロット領域からはみ出しうる(fulgur-chart-bap)。対数スケール上での
 /// スタック合成の意味論(chart.js 実機がどう扱うか)は未調査のため、ここで
 /// 独自に決め打ちしない。
+///
+/// 同じギャップは `ChartKind::Line { stacked: true }` にも存在する(fulgur-chart-boo.8)。
+/// 現状は到達不能: Vega-Lite フロントエンドは y 軸の log scale 入力サーフェスを持たず
+/// (scale_kind は常に Linear 固定)、chart.js フロントエンドも Line の stacked を常に
+/// false にする(fulgur-chart-9lug)。どちらかが解消された時点でこちらも対応が必要。
 fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut min_positive = f64::INFINITY;
     let mut max_positive = f64::NEG_INFINITY;
