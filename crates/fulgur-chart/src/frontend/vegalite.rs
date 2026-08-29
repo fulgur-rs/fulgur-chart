@@ -50,7 +50,7 @@ pub fn parse_with_limits(
         .get("encoding")
         .and_then(Value::as_object)
         .ok_or_else(|| "encoding がありません".to_string())?;
-    if matches!(kind, ChartKind::Line) {
+    if matches!(kind, ChartKind::Line { .. }) {
         validate_line_channel_types(encoding)?;
     }
 
@@ -59,12 +59,12 @@ pub fn parse_with_limits(
     let color_field = channel_field(encoding, "color");
     let theta_field = channel_field(encoding, "theta");
     let temporal_line =
-        matches!(kind, ChartKind::Line) && channel_type(encoding, "x") == Some("temporal");
+        matches!(kind, ChartKind::Line { .. }) && channel_type(encoding, "x") == Some("temporal");
 
     // 必須 encoding field の指定・存在・型を検証する。これを通せば field_f64/
     // field_category が 0/空へ黙って丸めることはなくなる(typo・欠損・型違いを明示エラーに)。
     match &kind {
-        ChartKind::Bar { .. } | ChartKind::Line => {
+        ChartKind::Bar { .. } | ChartKind::Line { .. } => {
             let xf = require_field(&x_field, "x")?;
             let yf = require_field(&y_field, "y")?;
             if !temporal_line {
@@ -131,7 +131,7 @@ pub fn parse_with_limits(
 
     // 色分け line で疎なカテゴリ(一部 (category,color) 組が欠落)は、欠損を 0 埋めすると
     // 実在しないゼロ点へ折れ線が接続され誤りになる。IR は欠損表現を持たないため拒否する。
-    if matches!(kind, ChartKind::Line) && color_field.is_some() && !temporal_line {
+    if matches!(kind, ChartKind::Line { .. }) && color_field.is_some() && !temporal_line {
         let cats = distinct_categories(&records, x_field.as_deref());
         let groups = distinct_categories(&records, color_field.as_deref());
         for group in &groups {
@@ -409,7 +409,7 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
             placement_stacked: false,
             value_stacked: false,
         }),
-        "line" => Ok(ChartKind::Line),
+        "line" => Ok(ChartKind::Line { stacked: false }),
         "point" => Ok(ChartKind::Scatter),
         "circle" => Ok(ChartKind::Scatter),
         "rect" => Ok(ChartKind::VegaRect {
@@ -575,7 +575,7 @@ fn build_categorical(
 ) -> Vec<Series> {
     let categories = distinct_categories(records, x_field.as_deref());
     let series_type = match kind {
-        ChartKind::Line => SeriesType::Line,
+        ChartKind::Line { .. } => SeriesType::Line,
         _ => SeriesType::Bar,
     };
     let stroke_width = match series_type {

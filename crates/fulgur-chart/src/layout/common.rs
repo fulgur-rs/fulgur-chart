@@ -563,7 +563,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             log.minor,
         )
     } else if matches!(spec.size_mode, SizeMode::PlotArea)
-        && matches!(spec.kind, ChartKind::Line)
+        && matches!(spec.kind, ChartKind::Line { .. })
         && matches!(spec.x_positions, XPositions::Temporal { .. })
     {
         (
@@ -719,25 +719,26 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // 末尾は常に内側化し、先頭は y 軸ラベル幅で足りなければ拡張する。
     // offset:true の line は bar 同様 band 中心配置でラベルがプロット内に収まるため、
     // 端余白は取らない(bar と同じ chartArea を使う)。
-    let (edge_pad_left, edge_pad_right) =
-        if matches!(spec.kind, ChartKind::Line) && spec.categories.len() > 1 && !spec.x_axis.offset
-        {
-            let lf = spec.theme.font_size as f32;
-            let half = |c: &String| (m.width(c, lf) as f64) / 2.0;
-            let first = spec
-                .categories
-                .first()
-                .filter(|c| !c.is_empty())
-                .map_or(0.0, half);
-            let last = spec
-                .categories
-                .last()
-                .filter(|c| !c.is_empty())
-                .map_or(0.0, half);
-            (first, last)
-        } else {
-            (0.0, 0.0)
-        };
+    let (edge_pad_left, edge_pad_right) = if matches!(spec.kind, ChartKind::Line { .. })
+        && spec.categories.len() > 1
+        && !spec.x_axis.offset
+    {
+        let lf = spec.theme.font_size as f32;
+        let half = |c: &String| (m.width(c, lf) as f64) / 2.0;
+        let first = spec
+            .categories
+            .first()
+            .filter(|c| !c.is_empty())
+            .map_or(0.0, half);
+        let last = spec
+            .categories
+            .last()
+            .filter(|c| !c.is_empty())
+            .map_or(0.0, half);
+        (first, last)
+    } else {
+        (0.0, 0.0)
+    };
     // 狭い幅 + 長い端ラベルで edge 余白が利用可能幅を超えると plot_right <= plot_left に
     // 反転し line_x が壊れる。余白合計を利用可能幅で比例縮小し、最後に plot_right >= plot_left
     // を保証する。
@@ -1017,7 +1018,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         let step = categorical_tick_step(&spec.categories, slot_w, m, label_font);
         let mut grid_path = String::new();
         for i in (0..spec.categories.len()).step_by(step) {
-            let x = if matches!(spec.kind, ChartKind::Line) {
+            let x = if matches!(spec.kind, ChartKind::Line { .. }) {
                 line_x(spec, frame, i)
             } else {
                 category_center(frame, i, n)
@@ -1098,7 +1099,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                 }
                 // line は点と同じ配置(offset:false=edge-to-edge / offset:true=band 中心)で
                 // grid/ラベルを点の真下に置く。bar/その他はバンド中心。mixed は band 中心。
-                let x = if matches!(spec.kind, ChartKind::Line) {
+                let x = if matches!(spec.kind, ChartKind::Line { .. }) {
                     line_x(spec, frame, i)
                 } else {
                     category_center(frame, i, n)
@@ -1469,7 +1470,7 @@ mod tests {
 
     fn temporal_spec(unix_millis: Vec<i64>) -> ChartSpec {
         let mut spec = make_bar_spec(unix_millis.len(), 720.0);
-        spec.kind = ChartKind::Line;
+        spec.kind = ChartKind::Line { stacked: false };
         spec.categories = unix_millis
             .iter()
             .map(|millis| format!("source-{millis}"))
@@ -2621,7 +2622,7 @@ mod tests {
     #[test]
     fn categorical_x_grid_line_offset_false_uses_plot_edges() {
         let mut spec = make_bar_spec(3, 400.0);
-        spec.kind = ChartKind::Line;
+        spec.kind = ChartKind::Line { stacked: false };
         spec.series[0].series_type = SeriesType::Line;
         spec.x_axis.offset = false;
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();

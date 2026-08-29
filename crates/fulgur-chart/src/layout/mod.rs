@@ -28,7 +28,7 @@ use crate::text::TextMeasurer;
 pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let mut scene = match spec.kind {
         ChartKind::Bar { .. } => bar::build(spec, m),
-        ChartKind::Line => line::build(spec, m),
+        ChartKind::Line { .. } => line::build(spec, m),
         ChartKind::Pie { .. } => pie::build(spec, m),
         ChartKind::PolarArea => polar_area::build(spec, m),
         // bubble は scatter と同じレイアウト。半径だけ point.r を使う(scatter.rs 内で分岐)。

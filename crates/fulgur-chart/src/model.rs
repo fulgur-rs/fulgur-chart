@@ -114,7 +114,7 @@ pub struct Geometry {
 }
 
 fn model_dimensions(spec: &ChartSpec, m: &TextMeasurer) -> (f64, f64) {
-    if matches!(spec.size_mode, SizeMode::PlotArea) && matches!(spec.kind, ChartKind::Line) {
+    if matches!(spec.size_mode, SizeMode::PlotArea) && matches!(spec.kind, ChartKind::Line { .. }) {
         let frame = crate::layout::common::compute(spec, m);
         (frame.scene_width, frame.scene_height)
     } else {
@@ -189,7 +189,7 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
                 elements,
             })
         }
-        ChartKind::Line => {
+        ChartKind::Line { .. } => {
             let frame = crate::layout::common::compute(spec, m);
             let pw = frame.plot_right - frame.plot_left;
             let ph = frame.plot_bottom - frame.plot_top;
@@ -259,7 +259,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
             horizontal: true, ..
         } => "bar-horizontal",
         ChartKind::Bar { .. } => "bar",
-        ChartKind::Line => "line",
+        ChartKind::Line { .. } => "line",
         ChartKind::Pie { donut_ratio } if *donut_ratio > 0.0 => "doughnut",
         ChartKind::Pie { .. } => "pie",
         ChartKind::Scatter => "scatter",
@@ -416,7 +416,8 @@ fn temporal_axis(unix_millis: &[i64], ticks: &[TemporalTick]) -> AxisModel {
 /// 軸を持たないチャート(pie/radar/matrix/progress)は None を返す。
 fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisModel, usize)> {
     use crate::scale::nice_ticks;
-    if let (ChartKind::Line, XPositions::Temporal { unix_millis }) = (&spec.kind, &spec.x_positions)
+    if let (ChartKind::Line { .. }, XPositions::Temporal { unix_millis }) =
+        (&spec.kind, &spec.x_positions)
     {
         let frame = crate::layout::common::compute(spec, m);
         let y_model = if spec.y_axis.scale_kind == ScaleKind::Logarithmic {
@@ -438,7 +439,7 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
         ChartKind::Bar {
             horizontal: false, ..
         }
-        | ChartKind::Line
+        | ChartKind::Line { .. }
         | ChartKind::Mixed => {
             let t = crate::layout::common::compute(spec, m).ticks;
             let y_model = if spec.y_axis.scale_kind == ScaleKind::Logarithmic {
@@ -502,7 +503,7 @@ pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
     if let Some((x, y, y_ticks)) = compute_axes(spec, m) {
         if matches!(
             (&spec.kind, &spec.x_positions),
-            (ChartKind::Line, XPositions::Temporal { .. })
+            (ChartKind::Line { .. }, XPositions::Temporal { .. })
         ) {
             model.counts.x_ticks = x.ticks.as_ref().map_or(0, Vec::len);
         }

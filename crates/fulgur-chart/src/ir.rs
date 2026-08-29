@@ -342,14 +342,19 @@ pub enum ChartKind {
         /// 値軸 stacked: 値累積・値域計算
         value_stacked: bool,
     },
-    Line, // area/tension は Series 側
+    Line {
+        /// 積み上げ area。Vega-Lite の mark:"area" + color channel で既定 true
+        /// (encoding.y.stack: null で false)。chart.js フロントエンドは常に false を
+        /// 設定する(bar と異なり chart.js 側の line/area stacked は未対応、fulgur-chart-nhb)。
+        stacked: bool,
+    }, // area/tension は Series 側
     Pie {
         donut_ratio: f64,
     }, // 0.0 = pie, >0 = doughnut
     Scatter, // 線形 x × 線形 y。点データ(Series.points)を使う
-    Bubble, // scatter と同じ枠組み。半径は point.r(第3次元)を使う
-    Radar, // 極座標。カテゴリ=スポーク、系列ごとに多角形を重ねる
-    Mixed, // 共有カテゴリ x・線形 y に bar+line を重ねる。種別は Series.series_type
+    Bubble,  // scatter と同じ枠組み。半径は point.r(第3次元)を使う
+    Radar,   // 極座標。カテゴリ=スポーク、系列ごとに多角形を重ねる
+    Mixed,   // 共有カテゴリ x・線形 y に bar+line を重ねる。種別は Series.series_type
     Matrix {
         color_lo: Color, // min 値のセル色（白固定）
         color_hi: Color, // max 値のセル色（backgroundColor 由来）
@@ -706,7 +711,7 @@ mod radial_axis_tests {
     /// を明示せずに初期化パスをすべて通ることを確認する。
     fn minimal_spec() -> ChartSpec {
         ChartSpec {
-            kind: ChartKind::Line,
+            kind: ChartKind::Line { stacked: false },
             series: vec![],
             categories: vec![],
             x_positions: XPositions::default(),
