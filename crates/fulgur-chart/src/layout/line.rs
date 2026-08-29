@@ -1253,6 +1253,70 @@ mod tests {
         }
     }
 
+    /// 帯マーカー(far)だけを見るテストは近接辺(near)の閉じ方を検証しない。
+    /// (near, far) の設計で load-bearing なのはこの近接辺 close の方(area polygon が
+    /// 固定 baseline ではなく下の帯の far offset に閉じること)なので、path data 自体を
+    /// 直接検査する。これを外して baseline close に戻しても上のマーカー系テストは
+    /// 全て通ってしまう(レビューで指摘・追加)。
+    #[test]
+    fn stacked_area_polygon_closes_against_near_offset_not_baseline() {
+        let spec = stacked_area_spec(
+            vec!["a", "b"],
+            vec![("s0", vec![10.0, 20.0]), ("s1", vec![5.0, 15.0])],
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let scene = build(&spec, &m);
+        let area_paths: Vec<&String> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: Some(_),
+                    stroke: None,
+                    ..
+                } => Some(d),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(area_paths.len(), 2, "one area polygon per series");
+
+        let x0 = common::line_x(&spec, &frame, 0);
+        let x1 = common::line_x(&spec, &frame, 1);
+
+        // series 0 (bottom band): near is always 0 (nothing stacked beneath it).
+        let s0_near_edge = format!(
+            "L {} {} L {} {} Z",
+            fmt_num(x1),
+            fmt_num(frame.ys.map(0.0)),
+            fmt_num(x0),
+            fmt_num(frame.ys.map(0.0)),
+        );
+        assert!(
+            area_paths[0].ends_with(&s0_near_edge),
+            "series 0 near edge must sit at 0: got {}",
+            area_paths[0]
+        );
+
+        // series 1 (top band): near must equal series 0's far offset per category
+        // (10 at "a", 20 at "b") -- NOT the fixed y=0 baseline. Reverting the near-edge
+        // close to `baseline_y` would still satisfy every marker-only assertion above,
+        // so this is the one check that actually pins the polygon-close behavior.
+        let s1_near_edge = format!(
+            "L {} {} L {} {} Z",
+            fmt_num(x1),
+            fmt_num(frame.ys.map(20.0)), // series 0's far at cat "b"
+            fmt_num(x0),
+            fmt_num(frame.ys.map(10.0)), // series 0's far at cat "a"
+        );
+        assert!(
+            area_paths[1].ends_with(&s1_near_edge),
+            "series 1 near edge must equal series 0's far offset per category: got {}",
+            area_paths[1]
+        );
+    }
+
     #[test]
     fn offset_line_labels_align_to_band_centers() {
         // draw_frame の x ラベルも offset:true では band 中心(line_x ではなく category_center)。
