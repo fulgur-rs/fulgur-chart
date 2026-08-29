@@ -210,6 +210,10 @@ pub enum MarkAreaName {
     Area,
 }
 
+// `point`(area+point 重ね描き)は意図的に未対応(design doc 参照)。MarkLineObject と
+// 異なり temporal/categorical で型を分けていないのは、Task 5 が categorical area の
+// mark.interpolate を strict モードで拒否しない(=行値は解釈に影響しない)方針を明示的に
+// 採ったため。分けると typed schema と strict parser の合意が崩れるので単一型のままにする。
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MarkAreaObject {
