@@ -59,6 +59,9 @@ pub fn parse_with_limits(
     let color_field = channel_field(encoding, "color");
     // Vega-Lite の実際のデフォルト: mark:"area" は color channel があり、かつ
     // encoding.y.stack が明示的に null でない限り積み上げになる。
+    // 下の temporal_line 計算より前に置く必要はない(parse_mark が area も
+    // ChartKind::Line{..} を返すため matches! は既に真)が、以降の全ロジックが
+    // kind.stacked の最終値に依存するので、encoding が読める最初の地点で確定させる。
     let is_area = read_mark_name(top) == Some("area");
     if is_area {
         let stacked = color_field.is_some() && !y_stack_disabled(encoding);
