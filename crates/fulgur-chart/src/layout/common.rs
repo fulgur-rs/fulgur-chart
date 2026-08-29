@@ -252,8 +252,9 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
     // Line の stacked area は Bar の value_stacked と同じ「カテゴリごと正負サム独立集計」
-    // ロジックを共有する。ここでの積み上げは常に線形軸前提(VL は log y 軸を公開しておらず、
-    // chart.js は stacked を常に false にするため、対数軸との組み合わせは到達不能)。
+    // ロジックを共有する。対数軸との組み合わせは関数冒頭の early return
+    // (axis.scale_kind == Logarithmic は log_value_domain へ委譲)がこの分岐の手前で
+    // 弾くため、Bar/Line を問わずここには到達しない。
     if matches!(
         spec.kind,
         crate::ir::ChartKind::Bar {
