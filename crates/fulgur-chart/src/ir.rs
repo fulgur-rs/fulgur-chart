@@ -345,7 +345,8 @@ pub enum ChartKind {
     Line {
         /// 積み上げ area。Vega-Lite の mark:"area" + color channel で既定 true
         /// (encoding.y.stack: null で false)。chart.js フロントエンドは常に false を
-        /// 設定する(bar と異なり chart.js 側の line/area stacked は未対応、fulgur-chart-nhb)。
+        /// 設定する(scales.<axis>.stacked を計算はするが line 構築サイトで捨てている
+        /// 既知のギャップ、fulgur-chart-9lug)。
         stacked: bool,
     }, // area/tension は Series 側
     Pie {

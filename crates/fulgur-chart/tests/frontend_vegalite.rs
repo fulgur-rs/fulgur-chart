@@ -1333,7 +1333,7 @@ fn line_mark_maps_to_line() {
         "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}}
     }"#;
     let spec = vegalite::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line { .. }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: false }));
 }
 
 #[test]

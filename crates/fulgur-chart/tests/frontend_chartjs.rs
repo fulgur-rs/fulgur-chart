@@ -406,7 +406,7 @@ fn single_dataset_type_override_changes_kind() {
     let json = r#"{"type":"bar","data":{"labels":["a","b"],
       "datasets":[{"type":"line","data":[1,2]}]}}"#;
     let spec = chartjs::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line { .. }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: false }));
     assert_eq!(spec.series[0].series_type, SeriesType::Line);
 }
 
