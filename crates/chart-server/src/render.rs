@@ -216,7 +216,7 @@ fn webp_output_area(spec: &ChartSpec, scale: f32) -> u64 {
     // Vega-Lite temporal line の PlotArea 寸法は、軸・ラベル・凡例を含む外側の
     // scene へ展開される。renderer が確保する pixmap と同じ scene 寸法で予算判定する。
     let (width, height) = if matches!(spec.size_mode, SizeMode::PlotArea)
-        && matches!(spec.kind, ChartKind::Line)
+        && matches!(spec.kind, ChartKind::Line { .. })
     {
         let measurer = TextMeasurer::new(DEFAULT_FONT).expect("bundled default font must be valid");
         let frame = layout::common::compute(spec, &measurer);

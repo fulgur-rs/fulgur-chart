@@ -179,7 +179,7 @@ fn validate_tree(
 /// 超過した場合は `Err(説明メッセージ)` を返す。
 pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     validate_spec_base(spec, limits)?;
-    if !matches!(spec.kind, ChartKind::Line)
+    if !matches!(spec.kind, ChartKind::Line { .. })
         || !matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
     {
         return Ok(());
@@ -257,7 +257,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         if unix_millis.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err("temporal x positions must be strictly increasing".to_string());
         }
-        if !matches!(spec.kind, ChartKind::Line) {
+        if !matches!(spec.kind, ChartKind::Line { .. }) {
             return Err("temporal x positions are only supported for line charts".to_string());
         }
     }
@@ -645,7 +645,7 @@ pub(crate) fn validate_marker_radii(spec: &ChartSpec) -> Result<(), String> {
     let point_r_error = || Err("point.r must be finite and no greater than 32768".to_string());
 
     match &spec.kind {
-        ChartKind::Line => {
+        ChartKind::Line { .. } => {
             for series in &spec.series {
                 let reaches_marker = series
                     .values
@@ -695,7 +695,7 @@ pub(crate) fn validate_plot_area_scene_with_measurer(
     limits: &InputLimits,
     measurer: &crate::text::TextMeasurer<'_>,
 ) -> Result<(), String> {
-    if matches!(spec.kind, ChartKind::Line)
+    if matches!(spec.kind, ChartKind::Line { .. })
         && matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
     {
         let frame = crate::layout::common::compute(spec, measurer);

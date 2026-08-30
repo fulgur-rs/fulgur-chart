@@ -50,21 +50,31 @@ pub fn parse_with_limits(
         .get("encoding")
         .and_then(Value::as_object)
         .ok_or_else(|| "encoding がありません".to_string())?;
-    if matches!(kind, ChartKind::Line) {
+    if matches!(kind, ChartKind::Line { .. }) {
         validate_line_channel_types(encoding)?;
     }
 
     let x_field = channel_field(encoding, "x");
     let y_field = channel_field(encoding, "y");
     let color_field = channel_field(encoding, "color");
+    // Vega-Lite の実際のデフォルト: mark:"area" は color channel があり、かつ
+    // encoding.y.stack が明示的に null でない限り積み上げになる。
+    // 下の temporal_line 計算より前に置く必要はない(parse_mark が area も
+    // ChartKind::Line{..} を返すため matches! は既に真)が、以降の全ロジックが
+    // kind.stacked の最終値に依存するので、encoding が読める最初の地点で確定させる。
+    let is_area = read_mark_name(top) == Some("area");
+    if is_area {
+        let stacked = color_field.is_some() && !y_stack_disabled(encoding);
+        kind = ChartKind::Line { stacked };
+    }
     let theta_field = channel_field(encoding, "theta");
     let temporal_line =
-        matches!(kind, ChartKind::Line) && channel_type(encoding, "x") == Some("temporal");
+        matches!(kind, ChartKind::Line { .. }) && channel_type(encoding, "x") == Some("temporal");
 
     // 必須 encoding field の指定・存在・型を検証する。これを通せば field_f64/
     // field_category が 0/空へ黙って丸めることはなくなる(typo・欠損・型違いを明示エラーに)。
     match &kind {
-        ChartKind::Bar { .. } | ChartKind::Line => {
+        ChartKind::Bar { .. } | ChartKind::Line { .. } => {
             let xf = require_field(&x_field, "x")?;
             let yf = require_field(&y_field, "y")?;
             if !temporal_line {
@@ -131,7 +141,7 @@ pub fn parse_with_limits(
 
     // 色分け line で疎なカテゴリ(一部 (category,color) 組が欠落)は、欠損を 0 埋めすると
     // 実在しないゼロ点へ折れ線が接続され誤りになる。IR は欠損表現を持たないため拒否する。
-    if matches!(kind, ChartKind::Line) && color_field.is_some() && !temporal_line {
+    if matches!(kind, ChartKind::Line { .. }) && color_field.is_some() && !temporal_line {
         let cats = distinct_categories(&records, x_field.as_deref());
         let groups = distinct_categories(&records, color_field.as_deref());
         for group in &groups {
@@ -240,7 +250,7 @@ pub fn parse_with_limits(
     } else {
         None
     };
-    let (series, categories, temporal_x_domain) = if let Some(data) = temporal_data {
+    let (mut series, categories, temporal_x_domain) = if let Some(data) = temporal_data {
         let unix_millis = data.domain.iter().map(|(millis, _)| *millis).collect();
         let categories = data.domain.into_iter().map(|(_, label)| label).collect();
         (data.series, categories, Some(unix_millis))
@@ -275,6 +285,11 @@ pub fn parse_with_limits(
             ),
         }
     };
+    if is_area {
+        for s in &mut series {
+            s.area = true;
+        }
+    }
 
     // scatter/rect は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点（chartjs と一致）。
     let y_begin_at_zero = !matches!(kind, ChartKind::Scatter | ChartKind::VegaRect { .. });
@@ -409,7 +424,8 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
             placement_stacked: false,
             value_stacked: false,
         }),
-        "line" => Ok(ChartKind::Line),
+        "line" => Ok(ChartKind::Line { stacked: false }),
+        "area" => Ok(ChartKind::Line { stacked: false }),
         "point" => Ok(ChartKind::Scatter),
         "circle" => Ok(ChartKind::Scatter),
         "rect" => Ok(ChartKind::VegaRect {
@@ -461,6 +477,16 @@ fn channel_type<'a>(encoding: &'a Map<String, Value>, name: &str) -> Option<&'a 
         .and_then(Value::as_object)
         .and_then(|channel| channel.get("type"))
         .and_then(Value::as_str)
+}
+
+/// encoding.y.stack が JSON null か(= 明示的に積み上げ解除)。省略/"zero" は false
+/// (積み上げ既定を維持)。
+fn y_stack_disabled(encoding: &Map<String, Value>) -> bool {
+    encoding
+        .get("y")
+        .and_then(Value::as_object)
+        .and_then(|y| y.get("stack"))
+        .is_some_and(Value::is_null)
 }
 
 /// encoding チャネルの `title`、または field 名を返す。
@@ -575,7 +601,7 @@ fn build_categorical(
 ) -> Vec<Series> {
     let categories = distinct_categories(records, x_field.as_deref());
     let series_type = match kind {
-        ChartKind::Line => SeriesType::Line,
+        ChartKind::Line { .. } => SeriesType::Line,
         _ => SeriesType::Bar,
     };
     let stroke_width = match series_type {
@@ -1434,6 +1460,27 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
             "background",
             "config",
         ],
+        // temporal area (VlTemporalAreaSpec) has background/config; categorical area
+        // (VlCategoricalAreaSpec) does not, so only widen the allowlist when x is temporal.
+        Some("area")
+            if top
+                .get("encoding")
+                .and_then(Value::as_object)
+                .and_then(|encoding| channel_type(encoding, "x"))
+                == Some("temporal") =>
+        {
+            &[
+                "mark",
+                "data",
+                "encoding",
+                "$schema",
+                "width",
+                "height",
+                "title",
+                "background",
+                "config",
+            ]
+        }
         _ => &[
             "mark", "data", "encoding", "$schema", "width", "height", "title",
         ],
@@ -1449,21 +1496,43 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         // mark 別 encoding allow-list を選ぶ。mark 名が読めない/未対応なら
         // 現状挙動(全キー拒否せずスルー)を保つ = 後段パースに委ねる。
         let allowed: &[&str] = match read_mark_name(top) {
-            Some("bar" | "line" | "point" | "circle") => &["x", "y", "color"],
+            Some("bar" | "line" | "point" | "circle" | "area") => &["x", "y", "color"],
             Some("arc") => &["theta", "color", "x", "y"],
             Some("rect") => &["x", "y", "color"],
             _ => return Ok(()),
         };
         check_object(encoding, allowed, "encoding")?;
+        // temporal area(x.type: "temporal")は typed schema(VlTemporalXChannel /
+        // VlTemporalAreaYChannel / VlTemporalColorChannel)が x/y.title と
+        // color.{title,scale} を受理する。categorical area の型
+        // (VlCategoricalXChannel 等、line と共有)にはこれらのフィールドが無いため、
+        // build_categorical もこれらを読まない=黙って捨てる。ここを temporal 判定な
+        // しに一律で緩めると categorical 側で「typed schema は拒否・strict は受理して
+        // 黙殺」という逆向きの食い違いを生むため、temporal のときだけ広げる
+        // (line の check_line_keys が同じ理由で temporal/categorical を分けている
+        // のと同じ考え方だが、ここでは channel allow-list の拡張だけに留める)。
+        let temporal_area = matches!(read_mark_name(top), Some("area"))
+            && channel_type(encoding, "x") == Some("temporal");
         for channel in allowed {
             if let Some(ch) = encoding.get(*channel).and_then(Value::as_object) {
                 // aggregate は原則未実装(本体は単純合計しかしない)。strict では
                 // 誤った集計結果を黙って返さないよう、未対応キーとして拒否する。
                 // ただし rect の color チャネルに限り、mean/sum のみ受理する
                 // (aggregate の値のバリデーションは下の rect 固有ブロックで行う)。
+                // area の y チャネルに限り、stack(積み上げ制御)を受理する。
                 let channel_allowed: &[&str] =
                     if matches!(read_mark_name(top), Some("rect")) && *channel == "color" {
                         &["field", "type", "aggregate"]
+                    } else if matches!(read_mark_name(top), Some("area")) && *channel == "y" {
+                        if temporal_area {
+                            &["field", "type", "stack", "title"]
+                        } else {
+                            &["field", "type", "stack"]
+                        }
+                    } else if temporal_area && *channel == "x" {
+                        &["field", "type", "title"]
+                    } else if temporal_area && *channel == "color" {
+                        &["field", "type", "title", "scale"]
                     } else {
                         &["field", "type"]
                     };
@@ -1540,6 +1609,44 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                     return Err(format!(
                         "rect の encoding.color.type: \"{ct}\" に aggregate: \"{a}\" は指定できません(集計対象がカテゴリ)"
                     ));
+                }
+            }
+        }
+
+        // area 固有の strict チェック:
+        // - mark object の内部キーは type/interpolate のみ(point は area では意図的に
+        //   未対応。MarkAreaObject の deny_unknown_fields と揃える)。
+        // - encoding.y.stack は null または "zero" のみ受理(他の値は VL の
+        //   stack:"normalize"/"center" 等、本実装が対応しない集計方式)。
+        //
+        // line の check_line_keys が行う categorical-only 拒否
+        // (mark.interpolate / encoding.{x,y}.title / encoding.color.{title,scale} /
+        // background・config)はここでは意図的に再現しない: build_categorical が
+        // area・line の両方でこれらのオプションを黙って無視する既存挙動と揃えるため
+        // (typed schema の MarkAreaObject も interpolate を temporal/categorical
+        // 両方で許容しており、ここで categorical だけ拒否すると typed schema と
+        // strict parser が食い違う)。
+        if matches!(read_mark_name(top), Some("area")) {
+            if let Some(mark) = top.get("mark").and_then(Value::as_object) {
+                check_line_object(mark, &["type", "interpolate"], "mark")?;
+            }
+            if let Some(stack) = encoding
+                .get("y")
+                .and_then(Value::as_object)
+                .and_then(|y| y.get("stack"))
+            {
+                match stack {
+                    Value::Null => {}
+                    Value::String(s) if s == "zero" => {}
+                    Value::String(_) => {
+                        return Err("encoding.y.stack must be \"zero\" or null".to_string());
+                    }
+                    other => {
+                        return Err(format!(
+                            "encoding.y.stack must be a string or null, got {}",
+                            json_value_type(other)
+                        ));
+                    }
                 }
             }
         }

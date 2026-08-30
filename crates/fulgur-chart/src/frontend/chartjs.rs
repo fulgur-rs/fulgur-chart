@@ -628,14 +628,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let kind = if is_mixable_base && has_bar && has_line {
         ChartKind::Mixed
     } else if is_mixable_base && has_line && !has_bar {
-        ChartKind::Line
+        ChartKind::Line { stacked: false }
     } else if is_mixable_base && has_bar && !has_line {
         bar_kind()
     } else {
         // dataset 空(種別未確定)、または mixable でない型。基本 type で決める。
         match raw.chart_type.as_str() {
             "bar" => bar_kind(),
-            "line" => ChartKind::Line,
+            "line" => ChartKind::Line { stacked: false },
             "pie" => ChartKind::Pie { donut_ratio: 0.0 },
             "doughnut" => ChartKind::Pie { donut_ratio: 0.5 },
             "scatter" => ChartKind::Scatter,
@@ -733,7 +733,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // 拒否する。将来対応した種別を追加した段階で allowlist を広げる。
     let supports_null_data = matches!(
         kind,
-        crate::ir::ChartKind::Line
+        crate::ir::ChartKind::Line { .. }
             | crate::ir::ChartKind::Bar { .. }
             | crate::ir::ChartKind::Mixed
             | crate::ir::ChartKind::BoxPlot
@@ -764,7 +764,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .datasets
         .iter()
         .any(|ds| ds.span_gaps.is_some() || ds.stepped.is_some());
-    if raw.chart_type == "line" && !matches!(kind, ChartKind::Line) && has_line_dataset_options {
+    if raw.chart_type == "line"
+        && !matches!(kind, ChartKind::Line { .. })
+        && has_line_dataset_options
+    {
         return Err("spanGaps and stepped are only supported for line charts".to_string());
     }
 
@@ -798,7 +801,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         ChartKind::Bar {
             horizontal: false,
             ..
-        } | ChartKind::Line
+        } | ChartKind::Line { .. }
     ) && is_logarithmic(y_opts);
     let value_axis_is_log = x_axis_is_log || y_axis_is_log;
 
@@ -929,7 +932,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             ..
         }
     );
-    let is_line = matches!(kind, ChartKind::Line);
+    let is_line = matches!(kind, ChartKind::Line { .. });
     let value_begin_at_zero = !is_point_based && !is_sparkline && !is_line;
 
     // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する

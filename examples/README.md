@@ -6,7 +6,8 @@ features.
 
 ## Directory
 
-- `specs/` … input specs (JSON). chart.js v4-compatible by default; only `vegalite.json` is Vega-Lite.
+- `specs/` … input specs (JSON). chart.js v4-compatible by default; the `vegalite*.json`
+  files are Vega-Lite (`--dsl vegalite`).
   - Chart types:
     - `bar.json` … bar chart (vertical, monthly revenue)
     - `bar-horizontal.json` … horizontal bar (`indexAxis: "y"`)
@@ -23,11 +24,20 @@ features.
   - Features:
     - `datalabels.json` … data labels (`plugins.datalabels.display`)
     - `theme.json` … theme override (`options.theme`, dark palette)
-    - `vegalite.json` … Vega-Lite subset input (`--dsl vegalite`)
+  - Vega-Lite subset input (`--dsl vegalite`):
+    - `vegalite.json` … `mark: "bar"`, grouped by `color`
+    - `vegalite-line.json` … `mark: "line"`, multi-series by `color`
+    - `vegalite-temporal-line.json` … `mark: "line"` with `x.type: "temporal"`
+    - `vegalite-area-stacked.json` … `mark: "area"`, stacked by `color`
+    - `vegalite-scatter.json` … `mark: "point"` → scatter, grouped by `color`
+    - `vegalite-arc.json` … `mark: "arc"` → pie, via `theta`/`color`
+    - `vegalite-rect-heatmap.json` … `mark: "rect"` → heatmap, via `x`/`y`/`color`
   - Jsonnet input (`.jsonnet` files are evaluated before parsing):
     - `bar.jsonnet` … bar chart using `local` variables and comments
     - `line-generated.jsonnet` … sine wave generated with `std.range` / `std.map`
-- `out/` … the SVGs rendered from those specs by the CLI (committed)
+- `out/` … the SVGs rendered from most of those specs by the CLI (committed); a couple of
+  the newer Vega-Lite specs (`vegalite-temporal-line.json`, `vegalite-rect-heatmap.json`)
+  don't have a corresponding `out/` file yet
 - `report.html` … a minimal gallery embedding the generated SVGs with `<img>`
 
 ## Regenerating the SVGs
@@ -55,6 +65,7 @@ Vega-Lite input needs `--dsl vegalite`:
 
 ```sh
 cargo run -q -p fulgur-chart-cli -- render examples/specs/vegalite.json -o examples/out/vegalite.svg --dsl vegalite
+cargo run -q -p fulgur-chart-cli -- render examples/specs/vegalite-area-stacked.json -o examples/out/vegalite-area-stacked.svg --dsl vegalite
 ```
 
 For PNG, add `--format png` (optionally `--scale 2` for a resolution multiplier):

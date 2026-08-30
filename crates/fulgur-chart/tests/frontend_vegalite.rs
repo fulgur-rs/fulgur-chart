@@ -685,6 +685,79 @@ fn typed_categorical_line_schema_excludes_temporal_only_options() {
 }
 
 #[test]
+fn typed_area_schema_accepts_stack_null_and_zero_and_absent() {
+    let base = |stack: &str| {
+        format!(
+            r#"{{"mark":"area","data":{{"values":[{{"x":"a","y":1,"g":"p"}}]}},
+               "encoding":{{"x":{{"field":"x","type":"nominal"}},
+               "y":{{"field":"y","type":"quantitative"{stack}}},
+               "color":{{"field":"g","type":"nominal"}}}}}}"#
+        )
+    };
+    for stack in ["", r#","stack":null"#, r#","stack":"zero""#] {
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&base(stack)).is_ok(),
+            "stack variant {stack:?} should be accepted"
+        );
+    }
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&base(r#","stack":"center""#))
+            .is_err(),
+        "unsupported stack mode must be rejected"
+    );
+}
+
+#[test]
+fn typed_area_schema_object_mark_accepts_interpolate_rejects_point() {
+    let obj_form = r#"{"mark":{"type":"area","interpolate":"monotone"},
+        "data":{"values":[{"x":"a","y":1}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"#;
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(obj_form).is_ok(),
+        "object-form area mark with interpolate should be accepted"
+    );
+
+    let with_point = obj_form.replace(r#""type":"area""#, r#""type":"area","point":true"#);
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&with_point).is_err(),
+        "area mark must not accept point (out of scope, deny_unknown_fields)"
+    );
+}
+
+#[test]
+fn typed_area_schema_matches_expected_untagged_variant() {
+    let cat_area = r#"{"mark":"area","data":{"values":[{"x":"a","y":1}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative","stack":"zero"}}}"#;
+    assert!(
+        matches!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(cat_area),
+            Ok(fulgur_chart::schema::VegaLiteSpec::CategoricalArea(_))
+        ),
+        "mark:\"area\" with nominal x should match CategoricalArea, not another variant"
+    );
+
+    let temp_area = r#"{"mark":"area","data":{"values":[{"x":"2020-01-01","y":1}]},
+        "encoding":{"x":{"field":"x","type":"temporal"},"y":{"field":"y","type":"quantitative","stack":"zero"}}}"#;
+    assert!(
+        matches!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(temp_area),
+            Ok(fulgur_chart::schema::VegaLiteSpec::TemporalArea(_))
+        ),
+        "mark:\"area\" with temporal x should match TemporalArea, not another variant"
+    );
+
+    let cat_line = r#"{"mark":"line","data":{"values":[{"x":"a","y":1}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"#;
+    assert!(
+        matches!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(cat_line),
+            Ok(fulgur_chart::schema::VegaLiteSpec::CategoricalLine(_))
+        ),
+        "mark:\"line\" must still match CategoricalLine, unaffected by new Area variants"
+    );
+}
+
+#[test]
 fn strict_temporal_line_rejects_interpolatee_with_full_key_path() {
     let json = DOGFOOD_SHAPE.replace("\"interpolate\"", "\"interpolatee\"");
     let err = vegalite::parse(&json, true).unwrap_err();
@@ -1333,7 +1406,136 @@ fn line_mark_maps_to_line() {
         "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}}
     }"#;
     let spec = vegalite::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: false }));
+}
+
+const CATEGORICAL_AREA_STACKED: &str = r#"{
+    "mark": "area",
+    "data": {"values": [
+        {"month": "Jan", "kind": "A", "sales": 10},
+        {"month": "Jan", "kind": "B", "sales": 5},
+        {"month": "Feb", "kind": "A", "sales": 20},
+        {"month": "Feb", "kind": "B", "sales": 15}
+    ]},
+    "encoding": {
+        "x": {"field": "month", "type": "ordinal"},
+        "y": {"field": "sales", "type": "quantitative"},
+        "color": {"field": "kind", "type": "nominal"}
+    }
+}"#;
+
+#[test]
+fn area_with_color_defaults_to_stacked() {
+    let spec = vegalite::parse(CATEGORICAL_AREA_STACKED, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+    assert!(spec.series.iter().all(|s| s.area));
+}
+
+#[test]
+fn area_stack_null_disables_stacking() {
+    let json = CATEGORICAL_AREA_STACKED.replace(
+        r#""y": {"field": "sales", "type": "quantitative"}"#,
+        r#""y": {"field": "sales", "type": "quantitative", "stack": null}"#,
+    );
+    let spec = vegalite::parse(&json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: false }));
+}
+
+#[test]
+fn area_without_color_is_never_stacked() {
+    let json = r#"{
+        "mark": "area",
+        "data": {"values": [{"x":"a","y":1},{"x":"b","y":2}]},
+        "encoding": {
+            "x": {"field": "x", "type": "nominal"},
+            "y": {"field": "y", "type": "quantitative"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: false }));
+    assert_eq!(spec.series.len(), 1);
+    assert!(spec.series[0].area);
+}
+
+#[test]
+fn area_stack_zero_is_explicit_stacked() {
+    let json = CATEGORICAL_AREA_STACKED.replace(
+        r#""y": {"field": "sales", "type": "quantitative"}"#,
+        r#""y": {"field": "sales", "type": "quantitative", "stack": "zero"}"#,
+    );
+    let spec = vegalite::parse(&json, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+}
+
+#[test]
+fn single_series_area_matches_line_geometry_besides_fill() {
+    // area (no color) must produce the same series shape as an equivalent line mark,
+    // differing only in Series.area.
+    let area_json = r#"{"mark":"area","data":{"values":[{"x":"a","y":3},{"x":"b","y":7}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"#;
+    let line_json = area_json.replace(r#""mark":"area""#, r#""mark":"line""#);
+    let area_spec = vegalite::parse(area_json, false).unwrap();
+    let line_spec = vegalite::parse(line_json.as_str(), false).unwrap();
+    assert!(area_spec.series[0].area);
+    assert!(!line_spec.series[0].area);
+    assert_eq!(area_spec.series[0].values, line_spec.series[0].values);
+}
+
+#[test]
+fn strict_area_rejects_invalid_stack_value() {
+    let json = CATEGORICAL_AREA_STACKED.replace(
+        r#""y": {"field": "sales", "type": "quantitative"}"#,
+        r#""y": {"field": "sales", "type": "quantitative", "stack": "center"}"#,
+    );
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(err.contains("encoding.y.stack"), "unexpected error: {err}");
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_err(),
+        "typed schema must also reject stack: \"center\""
+    );
+}
+
+#[test]
+fn dogfood_categorical_area_is_accepted_by_typed_schema_and_strict_parser() {
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(CATEGORICAL_AREA_STACKED)
+            .is_ok()
+    );
+    assert!(vegalite::parse(CATEGORICAL_AREA_STACKED, true).is_ok());
+}
+
+#[test]
+fn strict_area_rejects_point_on_mark_object() {
+    let json = CATEGORICAL_AREA_STACKED.replace(
+        r#""mark": "area""#,
+        r#""mark": {"type": "area", "point": true}"#,
+    );
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(
+        err.contains("point") || err.contains("mark"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_err(),
+        "typed schema must also reject mark.point on area"
+    );
+}
+
+#[test]
+fn strict_categorical_area_rejects_background_and_config() {
+    for key in ["background", "config"] {
+        let json = CATEGORICAL_AREA_STACKED.replacen(
+            r#""mark": "area""#,
+            &format!(r#""mark": "area", "{key}": null"#),
+            1,
+        );
+        let err = vegalite::parse(&json, true).unwrap_err();
+        assert!(err.contains(key), "unexpected error for {key}: {err}");
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_err(),
+            "typed schema must also reject top-level {key} on categorical area"
+        );
+    }
 }
 
 #[test]
@@ -2590,4 +2792,107 @@ fn rect_mark_parse_with_limits_respects_relaxed_max_categorical_primitives() {
         }
         _ => panic!("expected VegaRect"),
     }
+}
+
+/// `is_area` は x の temporal/categorical を問わず一律で発火するため、mark:"area" は
+/// temporal x(build_temporal_line 経由)でも到達可能。Step 1-6 のテストは categorical
+/// のみを対象にしていたため、この temporal 経路は base task の新規コードでありながら
+/// 無テストだった(コミット前レビューで指摘、ここでカバーする)。
+const TEMPORAL_AREA_STACKED: &str = r#"{
+    "mark": "area",
+    "data": {"values": [
+        {"t": "2020-01-01T00:00:00Z", "v": 1, "g": "A"},
+        {"t": "2020-01-01T00:00:00Z", "v": 2, "g": "B"},
+        {"t": "2020-01-02T00:00:00Z", "v": 3, "g": "A"},
+        {"t": "2020-01-02T00:00:00Z", "v": 4, "g": "B"}
+    ]},
+    "encoding": {
+        "x": {"field": "t", "type": "temporal"},
+        "y": {"field": "v", "type": "quantitative"},
+        "color": {"field": "g", "type": "nominal"}
+    }
+}"#;
+
+#[test]
+fn temporal_area_with_color_defaults_to_stacked() {
+    let spec = vegalite::parse(TEMPORAL_AREA_STACKED, false).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+    assert!(spec.series.iter().all(|s| s.area));
+    assert!(matches!(spec.x_positions, XPositions::Temporal { .. }));
+
+    assert!(
+        matches!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(TEMPORAL_AREA_STACKED),
+            Ok(fulgur_chart::schema::VegaLiteSpec::TemporalArea(_))
+        ),
+        "typed schema must match the TemporalArea variant"
+    );
+    assert!(
+        vegalite::parse(TEMPORAL_AREA_STACKED, true).is_ok(),
+        "strict parser must accept the same dense temporal area spec"
+    );
+}
+
+/// Code-review followup (Task 5 review, issue 2): strict mode's area channel
+/// allowlist was gated only on mark name, not on temporal vs categorical, so it
+/// rejected `encoding.{x,y}.title` / `encoding.color.{title,scale}` on temporal area
+/// even though the typed schema (`VlTemporalXChannel` / `VlTemporalAreaYChannel` /
+/// `VlTemporalColorChannel`) accepts them and non-strict parsing already honors them
+/// (axis/legend titles get set). Fixed by widening the allowlist only when
+/// `channel_type(encoding, "x") == Some("temporal")`.
+#[test]
+fn strict_temporal_area_accepts_axis_and_color_titles_and_color_scale() {
+    let json = r#"{
+        "mark": "area",
+        "data": {"values": [
+            {"t": "2020-01-01T00:00:00Z", "v": 1, "g": "A"},
+            {"t": "2020-01-01T00:00:00Z", "v": 2, "g": "B"},
+            {"t": "2020-01-02T00:00:00Z", "v": 3, "g": "A"},
+            {"t": "2020-01-02T00:00:00Z", "v": 4, "g": "B"}
+        ]},
+        "encoding": {
+            "x": {"field": "t", "type": "temporal", "title": "Date"},
+            "y": {"field": "v", "type": "quantitative", "title": "Value"},
+            "color": {"field": "g", "type": "nominal", "title": "Group",
+                      "scale": {"scheme": "tableau10"}}
+        }
+    }"#;
+    let spec =
+        vegalite::parse(json, true).unwrap_or_else(|err| panic!("strict must accept: {err}"));
+    assert_eq!(
+        spec.x_axis.title.as_ref().map(|t| t.text.as_str()),
+        Some("Date"),
+        "encoding.x.title must actually be honored, not just tolerated"
+    );
+    assert_eq!(
+        spec.y_axis.title.as_ref().map(|t| t.text.as_str()),
+        Some("Value")
+    );
+    assert_eq!(spec.legend_title.as_deref(), Some("Group"));
+    assert!(
+        matches!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(json),
+            Ok(fulgur_chart::schema::VegaLiteSpec::TemporalArea(_))
+        ),
+        "typed schema must also accept this as TemporalArea"
+    );
+}
+
+/// Companion to the fix above: the widening must be gated on temporal, not applied
+/// unconditionally. Categorical area's typed schema (`VlCategoricalXChannel`, shared
+/// with line) has no `title` field, and `build_categorical` never reads it, so
+/// accepting it under `--strict` would silently drop user intent. Confirms the fix
+/// didn't overshoot onto the categorical path.
+#[test]
+fn strict_categorical_area_still_rejects_x_title() {
+    let json = CATEGORICAL_AREA_STACKED.replace(
+        r#""x": {"field": "month", "type": "ordinal"}"#,
+        r#""x": {"field": "month", "type": "ordinal", "title": "Month"}"#,
+    );
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(err.contains("encoding.x.title"), "unexpected error: {err}");
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_err(),
+        "typed schema must also reject title on categorical area's x channel"
+    );
 }

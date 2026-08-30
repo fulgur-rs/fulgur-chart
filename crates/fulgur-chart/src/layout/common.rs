@@ -251,12 +251,16 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     }
     let mut data_min = f64::INFINITY;
     let mut data_max = f64::NEG_INFINITY;
+    // Line の stacked area は Bar の value_stacked と同じ「カテゴリごと正負サム独立集計」
+    // ロジックを共有する。対数軸との組み合わせは関数冒頭の early return
+    // (axis.scale_kind == Logarithmic は log_value_domain へ委譲)がこの分岐の手前で
+    // 弾くため、Bar/Line を問わずここには到達しない。
     if matches!(
         spec.kind,
         crate::ir::ChartKind::Bar {
             value_stacked: true,
             ..
-        }
+        } | crate::ir::ChartKind::Line { stacked: true }
     ) {
         // 積み上げ: カテゴリごとに正値の和(上限)・負値の和(下限)をとる。
         // chart.js 互換: beginAtZero=false のとき 0 ではなく実データの個別値を境界にする。
@@ -375,6 +379,11 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 /// バーがプロット領域からはみ出しうる(fulgur-chart-bap)。対数スケール上での
 /// スタック合成の意味論(chart.js 実機がどう扱うか)は未調査のため、ここで
 /// 独自に決め打ちしない。
+///
+/// 同じギャップは `ChartKind::Line { stacked: true }` にも存在する(fulgur-chart-boo.8)。
+/// 現状は到達不能: Vega-Lite フロントエンドは y 軸の log scale 入力サーフェスを持たず
+/// (scale_kind は常に Linear 固定)、chart.js フロントエンドも Line の stacked を常に
+/// false にする(fulgur-chart-9lug)。どちらかが解消された時点でこちらも対応が必要。
 fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut min_positive = f64::INFINITY;
     let mut max_positive = f64::NEG_INFINITY;
@@ -563,7 +572,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             log.minor,
         )
     } else if matches!(spec.size_mode, SizeMode::PlotArea)
-        && matches!(spec.kind, ChartKind::Line)
+        && matches!(spec.kind, ChartKind::Line { .. })
         && matches!(spec.x_positions, XPositions::Temporal { .. })
     {
         (
@@ -719,25 +728,26 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // 末尾は常に内側化し、先頭は y 軸ラベル幅で足りなければ拡張する。
     // offset:true の line は bar 同様 band 中心配置でラベルがプロット内に収まるため、
     // 端余白は取らない(bar と同じ chartArea を使う)。
-    let (edge_pad_left, edge_pad_right) =
-        if matches!(spec.kind, ChartKind::Line) && spec.categories.len() > 1 && !spec.x_axis.offset
-        {
-            let lf = spec.theme.font_size as f32;
-            let half = |c: &String| (m.width(c, lf) as f64) / 2.0;
-            let first = spec
-                .categories
-                .first()
-                .filter(|c| !c.is_empty())
-                .map_or(0.0, half);
-            let last = spec
-                .categories
-                .last()
-                .filter(|c| !c.is_empty())
-                .map_or(0.0, half);
-            (first, last)
-        } else {
-            (0.0, 0.0)
-        };
+    let (edge_pad_left, edge_pad_right) = if matches!(spec.kind, ChartKind::Line { .. })
+        && spec.categories.len() > 1
+        && !spec.x_axis.offset
+    {
+        let lf = spec.theme.font_size as f32;
+        let half = |c: &String| (m.width(c, lf) as f64) / 2.0;
+        let first = spec
+            .categories
+            .first()
+            .filter(|c| !c.is_empty())
+            .map_or(0.0, half);
+        let last = spec
+            .categories
+            .last()
+            .filter(|c| !c.is_empty())
+            .map_or(0.0, half);
+        (first, last)
+    } else {
+        (0.0, 0.0)
+    };
     // 狭い幅 + 長い端ラベルで edge 余白が利用可能幅を超えると plot_right <= plot_left に
     // 反転し line_x が壊れる。余白合計を利用可能幅で比例縮小し、最後に plot_right >= plot_left
     // を保証する。
@@ -1017,7 +1027,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         let step = categorical_tick_step(&spec.categories, slot_w, m, label_font);
         let mut grid_path = String::new();
         for i in (0..spec.categories.len()).step_by(step) {
-            let x = if matches!(spec.kind, ChartKind::Line) {
+            let x = if matches!(spec.kind, ChartKind::Line { .. }) {
                 line_x(spec, frame, i)
             } else {
                 category_center(frame, i, n)
@@ -1098,7 +1108,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                 }
                 // line は点と同じ配置(offset:false=edge-to-edge / offset:true=band 中心)で
                 // grid/ラベルを点の真下に置く。bar/その他はバンド中心。mixed は band 中心。
-                let x = if matches!(spec.kind, ChartKind::Line) {
+                let x = if matches!(spec.kind, ChartKind::Line { .. }) {
                     line_x(spec, frame, i)
                 } else {
                     category_center(frame, i, n)
@@ -1469,7 +1479,7 @@ mod tests {
 
     fn temporal_spec(unix_millis: Vec<i64>) -> ChartSpec {
         let mut spec = make_bar_spec(unix_millis.len(), 720.0);
-        spec.kind = ChartKind::Line;
+        spec.kind = ChartKind::Line { stacked: false };
         spec.categories = unix_millis
             .iter()
             .map(|millis| format!("source-{millis}"))
@@ -1914,6 +1924,71 @@ mod tests {
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
+    }
+
+    #[test]
+    fn value_domain_sums_stacked_line_series_independently_by_sign() {
+        let mut spec = make_bar_spec(2, 720.0);
+        spec.kind = ChartKind::Line { stacked: true };
+        spec.series = vec![
+            Series {
+                name: "a".to_string(),
+                values: vec![10.0, 20.0],
+                points: Vec::<Point>::new(),
+                fill: vec![crate::palette::PALETTE[0]],
+                stroke: vec![crate::palette::PALETTE[0]],
+                stroke_width: 2.0,
+                area: true,
+                interpolation: LineInterpolation::Linear,
+                span_gaps: false,
+                step_mode: None,
+                series_type: SeriesType::Line,
+                point_radius: None,
+                box_points: vec![],
+                tree: vec![],
+                links: vec![],
+            },
+            Series {
+                name: "b".to_string(),
+                values: vec![5.0, -8.0],
+                points: Vec::<Point>::new(),
+                fill: vec![crate::palette::PALETTE[1]],
+                stroke: vec![crate::palette::PALETTE[1]],
+                stroke_width: 2.0,
+                area: true,
+                interpolation: LineInterpolation::Linear,
+                span_gaps: false,
+                step_mode: None,
+                series_type: SeriesType::Line,
+                point_radius: None,
+                box_points: vec![],
+                tree: vec![],
+                links: vec![],
+            },
+            Series {
+                name: "c".to_string(),
+                values: vec![8.0, -3.0],
+                points: Vec::<Point>::new(),
+                fill: vec![crate::palette::PALETTE[2]],
+                stroke: vec![crate::palette::PALETTE[2]],
+                stroke_width: 2.0,
+                area: true,
+                interpolation: LineInterpolation::Linear,
+                span_gaps: false,
+                step_mode: None,
+                series_type: SeriesType::Line,
+                point_radius: None,
+                box_points: vec![],
+                tree: vec![],
+                links: vec![],
+            },
+        ];
+        let (lo, hi) = value_domain(&spec, &spec.y_axis);
+        // cat0: 10+5+8=23(正のみ)。個別値の最大 20 ではなく積み上げ和が上限になる
+        // ことを検証(非 stacked パスならここが 20 になってしまう)。
+        // cat1: 20 が正、-8 と -3 が負 -> 負側も個別和ではなくサム(-11)になる
+        // ことを検証(個別値の最小は -8 だが、負サムの合計 -11 が下限になるべき)。
+        assert_eq!((lo, hi), (-11.0, 23.0));
     }
 
     #[test]
@@ -2621,7 +2696,7 @@ mod tests {
     #[test]
     fn categorical_x_grid_line_offset_false_uses_plot_edges() {
         let mut spec = make_bar_spec(3, 400.0);
-        spec.kind = ChartKind::Line;
+        spec.kind = ChartKind::Line { stacked: false };
         spec.series[0].series_type = SeriesType::Line;
         spec.x_axis.offset = false;
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
