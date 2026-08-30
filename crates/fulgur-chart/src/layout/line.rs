@@ -1290,7 +1290,9 @@ mod tests {
             .items
             .iter()
             .filter_map(|item| match item {
-                Prim::Path { d, stroke: None, .. } => Some(d),
+                Prim::Path {
+                    d, stroke: None, ..
+                } => Some(d),
                 _ => None,
             })
             .collect();
