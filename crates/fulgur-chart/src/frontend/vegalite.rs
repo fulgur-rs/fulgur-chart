@@ -1449,7 +1449,7 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
     };
 
     let top_allowed: &[&str] = match read_mark_name(top) {
-        Some("line" | "area") => &[
+        Some("line") => &[
             "mark",
             "data",
             "encoding",
@@ -1460,6 +1460,27 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
             "background",
             "config",
         ],
+        // temporal area (VlTemporalAreaSpec) has background/config; categorical area
+        // (VlCategoricalAreaSpec) does not, so only widen the allowlist when x is temporal.
+        Some("area")
+            if top
+                .get("encoding")
+                .and_then(Value::as_object)
+                .and_then(|encoding| channel_type(encoding, "x"))
+                == Some("temporal") =>
+        {
+            &[
+                "mark",
+                "data",
+                "encoding",
+                "$schema",
+                "width",
+                "height",
+                "title",
+                "background",
+                "config",
+            ]
+        }
         _ => &[
             "mark", "data", "encoding", "$schema", "width", "height", "title",
         ],

@@ -1522,6 +1522,23 @@ fn strict_area_rejects_point_on_mark_object() {
 }
 
 #[test]
+fn strict_categorical_area_rejects_background_and_config() {
+    for key in ["background", "config"] {
+        let json = CATEGORICAL_AREA_STACKED.replacen(
+            r#""mark": "area""#,
+            &format!(r#""mark": "area", "{key}": null"#),
+            1,
+        );
+        let err = vegalite::parse(&json, true).unwrap_err();
+        assert!(err.contains(key), "unexpected error for {key}: {err}");
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_err(),
+            "typed schema must also reject top-level {key} on categorical area"
+        );
+    }
+}
+
+#[test]
 fn point_mark_maps_to_scatter_with_points() {
     let json = r#"{
         "mark": "point",
