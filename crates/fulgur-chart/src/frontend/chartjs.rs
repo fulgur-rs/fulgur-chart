@@ -783,8 +783,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
 
     // typed `AxisOptions` 経由で読むことで、`beginAtZero` 等の camelCase タイポは
     // schema deserialize 時に拒否される(silent 素通り防止)。series 構築より前に
-    // hoist するのは、対数軸の負値マスキング(下記 value_axis_is_log)が series 構築中に
-    // これらを参照する必要があるため。
+    // hoist するのは、対数軸と値軸の積み上げ可否を series 構築前に判定するため。
     let x_opts = raw.options.scales.as_ref().and_then(|s| s.x.as_ref());
     let y_opts = raw.options.scales.as_ref().and_then(|s| s.y.as_ref());
 
@@ -828,19 +827,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             } else if is_boxplot {
                 (vec![], vec![], ds.data.into_box_points())
             } else {
-                let mut values = ds.data.into_values();
-                if value_axis_is_log {
-                    // 対数軸では負値は描画不能(chart.js 互換)。既存の null→NaN センチネル経路に
-                    // 乗せることで、bar.rs/line.rs の既存の `!v.is_finite() { continue }` が
-                    // そのままギャップとして扱ってくれる(新しいスキップ機構を作らない)。
-                    // 0 はここでは変えない(0 → decade 下限への置換は value_domain 側の責務、後続タスク)。
-                    for v in &mut values {
-                        if v.is_finite() && *v < 0.0 {
-                            *v = f64::NAN;
-                        }
-                    }
-                }
-                (values, vec![], vec![])
+                // 対数軸で描画できない値のスキップは layout 層で行う。IR の values は
+                // introspection API が入力値をそのまま報告できるよう保持する。
+                (ds.data.into_values(), vec![], vec![])
             };
             let n = if is_point_based {
                 points.len()
@@ -3906,8 +3895,8 @@ mod tests {
     }
 
     #[test]
-    fn logarithmic_y_axis_masks_negative_values_to_nan_but_keeps_zero() {
-        // 負値は NaN 化(既存の null→NaN スキップ経路に乗せる)、0 はそのまま。
+    fn logarithmic_y_axis_preserves_negative_values_and_zero() {
+        // 描画時のスキップ判定と入力値の保持を分離する。負値も 0 も IR では元の値を保つ。
         let json = r##"{
           "type":"bar",
           "data":{"labels":["a","b","c"],"datasets":[{"data":[-5, 0, 10]}]},
@@ -3915,14 +3904,14 @@ mod tests {
         }"##;
         let spec = parse(json, false).expect("parse ok");
         let values = &spec.series[0].values;
-        assert!(values[0].is_nan(), "negative value should become NaN");
+        assert_eq!(values[0], -5.0, "negative value should remain in the IR");
         assert_eq!(values[1], 0.0, "zero should stay 0.0");
         assert_eq!(values[2], 10.0);
     }
 
     #[test]
     fn linear_y_axis_does_not_mask_negative_values() {
-        // 対数軸でない場合は負値マスキングを一切行わない(既存挙動を保つ)。
+        // 対数軸でない場合は負値を一切変更しない(既存挙動を保つ)。
         let json = r##"{
           "type":"bar",
           "data":{"labels":["a","b"],"datasets":[{"data":[-5, 10]}]}

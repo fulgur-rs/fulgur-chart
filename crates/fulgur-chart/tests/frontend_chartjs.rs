@@ -1632,10 +1632,10 @@ fn strict_end_to_end_bar_chart_with_logarithmic_y_axis_and_axis_options() {
 }
 
 #[test]
-fn horizontal_bar_logarithmic_x_axis_masks_negative_values() {
-    // 縦棒(y が値軸)の負値マスキングは white-box テストで既に確認済み。
+fn horizontal_bar_logarithmic_x_axis_preserves_negative_values() {
+    // 縦棒(y が値軸)の負値保持は white-box テストで既に確認済み。
     // ここでは横棒(indexAxis:"y" → x が値軸)側の分岐、つまり x_axis_is_log の
-    // OR 経路がマスキングを正しく駆動することを公開 API から確認する。
+    // OR 経路でも入力値をそのまま IR に保持することを公開 API から確認する。
     let json = r##"{
       "type":"bar",
       "data":{"labels":["a","b","c"],"datasets":[{"data":[1,-5,10]}]},
@@ -1644,7 +1644,7 @@ fn horizontal_bar_logarithmic_x_axis_masks_negative_values() {
     let spec = chartjs::parse(json, false).expect("parse ok");
     assert_eq!(spec.x_axis.scale_kind, ScaleKind::Logarithmic);
     let values = &spec.series[0].values;
-    assert!(values[1].is_nan(), "negative value should become NaN");
+    assert_eq!(values[1], -5.0, "negative value should remain in the IR");
     assert_eq!(values[0], 1.0);
     assert_eq!(values[2], 10.0);
 }

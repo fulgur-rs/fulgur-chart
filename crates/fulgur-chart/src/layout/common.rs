@@ -365,8 +365,8 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 /// 持つ(`crate::scale::is_exact_decade_boundary` 参照。床がちょうど min_positive
 /// 自身と一致する — 例えば min_positive がすでに 10^n の — 場合は、その値の
 /// バー/点が軸の床と重なって高さ0になるのを避けるため、さらにもう1桁下げる)。
-/// 0 は最小正値の1桁下に置換してドメインへ含め、負値(`frontend/chartjs.rs` で
-/// 既に NaN 化済みのはず)は通常の有限値フィルタで自然に除外される。
+/// 0 は最小正値の1桁下に置換してドメインへ含め、負値は通常の有限値フィルタで
+/// 自然に除外される。
 /// `suggested_min`/`suggested_max` は正の値のみ尊重する。
 ///
 /// 未対応(スコープ外、Task 11 実装者向けメモ): `value_domain` 本体は
@@ -405,7 +405,7 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
                     max_positive = v;
                 }
             }
-            // v < 0.0 はここに来ないはず(parse 時に NaN 化済み)が、念のため無視する。
+            // v < 0.0 は対数軸に写像できないため、ドメインから除外する。
         }
     }
 
@@ -2160,7 +2160,7 @@ mod tests {
     fn log_value_domain_falls_back_when_all_non_positive() {
         let mut spec = make_bar_spec(1, 600.0);
         spec.y_axis.scale_kind = ScaleKind::Logarithmic;
-        spec.series[0].values = vec![0.0, f64::NAN]; // NaN は既にネガティブマスク済み想定
+        spec.series[0].values = vec![0.0, -5.0]; // 非正値はドメインから除外される
         let (min, max) = value_domain(&spec, &spec.y_axis);
         assert_eq!((min, max), (1.0, 10.0));
     }
