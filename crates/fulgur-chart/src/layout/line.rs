@@ -287,9 +287,24 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     AreaPoints::Stepped(points) => append_area_points(&mut d, points),
                 };
                 if let Some(offsets) = &offsets {
-                    for &(_, _, cat) in seg.iter().rev() {
-                        let near_x = common::line_x(spec, &frame, cat);
-                        let near_y = frame.ys.map(offsets[si][cat].0);
+                    // far 辺(area_points 経由)と同じ step_mode を near 辺にも適用する。
+                    // 揃えないと Before/After/Middle で上下辺の形状が食い違う
+                    // (現行 parser は stacked area に step_mode を設定しないため到達不能だが、
+                    // 公開 IR は Line{stacked:true} と Series::step_mode を併用できる)。
+                    let near_points: Vec<(f64, f64)> = seg
+                        .iter()
+                        .map(|&(_, _, cat)| {
+                            (
+                                common::line_x(spec, &frame, cat),
+                                frame.ys.map(offsets[si][cat].0),
+                            )
+                        })
+                        .collect();
+                    let near_points = match ser.step_mode {
+                        Some(step_mode) => step_points(near_points.into_iter(), step_mode),
+                        None => near_points,
+                    };
+                    for &(near_x, near_y) in near_points.iter().rev() {
                         write!(d, "L {} {} ", fmt_num(near_x), fmt_num(near_y)).unwrap();
                     }
                     write!(d, "Z").unwrap();
@@ -1241,6 +1256,50 @@ mod tests {
                 "marker y={y} escaped plot bounds [{}, {}]",
                 frame.plot_top,
                 frame.plot_bottom
+            );
+        }
+    }
+
+    #[test]
+    fn stacked_area_near_edge_applies_series_step_mode() {
+        // public IR only: no parser currently emits stacked:true + step_mode together.
+        let mut spec = stacked_area_spec(
+            vec!["a", "b", "c"],
+            vec![("s0", vec![10.0, 20.0, 10.0]), ("s1", vec![5.0, 5.0, 5.0])],
+        );
+        for ser in &mut spec.series {
+            ser.step_mode = Some(StepMode::Before);
+        }
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let scene = build(&spec, &m);
+
+        // s1 (top band) near edge sits on s0's cumulative far values (10, 20, 10);
+        // its far edge is already stepped, so the near edge must match.
+        let expected_near = step_points(
+            vec![
+                (common::line_x(&spec, &frame, 0), frame.ys.map(10.0)),
+                (common::line_x(&spec, &frame, 1), frame.ys.map(20.0)),
+                (common::line_x(&spec, &frame, 2), frame.ys.map(10.0)),
+            ]
+            .into_iter(),
+            StepMode::Before,
+        );
+
+        let area_paths: Vec<&String> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Path { d, stroke: None, .. } => Some(d),
+                _ => None,
+            })
+            .collect();
+        let s1_path = area_paths[1];
+        for &(x, y) in &expected_near {
+            let needle = format!("L {} {} ", fmt_num(x), fmt_num(y));
+            assert!(
+                s1_path.contains(&needle),
+                "missing stepped near-edge vertex {needle:?} in {s1_path}"
             );
         }
     }
