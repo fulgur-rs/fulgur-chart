@@ -6,6 +6,219 @@
 
 ## [Unreleased]
 
+## [0.1.21](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.20...fulgur-chart-cli-v0.1.21) - 2026-08-30
+
+### Other
+
+- *(vegalite)* end-to-end stacked area coverage + example
+
+## [0.13.2](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.13.1...fulgur-chart-v0.13.2) - 2026-08-30
+
+### Added
+
+- *(vegalite)* parse mark:"area", wire stacked + Series.area
+- *(schema)* Vega-Lite area mark types (temporal + categorical)
+- *(layout)* stacked area geometry (line.rs)
+- *(layout)* stacked y-domain for ChartKind::Line
+- *(layout)* render logarithmic x-axis for horizontal bar
+- *(layout)* render logarithmic y-axis (major/minor grid, log-aware labels)
+- *(num)* add fmt_num_log for wide-magnitude logarithmic tick labels
+- *(layout)* compute logarithmic axis domain (zero substitution, negative exclusion)
+- *(scale)* add log_ticks (major/minor decade tick generation)
+- *(frontend)* parse scales.{x,y}.type=logarithmic into ScaleKind, mask negatives
+- *(schema)* accept options.scales.{x,y}.type as an opaque string
+- *(ir)* add ScaleKind::{Linear,Logarithmic} to AxisSpec (no behavior change)
+- *(chart)* render gapped and stepped line series
+- *(chartjs)* parse line gap and step options
+- *(chartjs)* draw categorical x-axis grids
+- *(line)* add monotone interpolation
+- *(layout)* render temporal Vega-Lite axes
+- *(vegalite)* convert temporal lines to positioned IR
+- *(schema)* type Vega-Lite temporal line options
+- *(vegalite)* add deterministic temporal scales
+- *(ir)* add positioned line contracts
+- *(schema)* accept documented Chart.js v1-noop axis fields
+- *(layout)* apply axis styling to scatter/bar-horizontal/boxplot
+- *(layout)* render x-axis title and expand plot bottom
+- *(layout)* render y-axis title (rotated) and expand plot_left
+- *(layout)* honor AxisBorder and grid.draw_ticks in draw_frame
+- *(layout)* honor AxisGrid display/color/line_width in draw_frame
+- *(chartjs)* wire scales.{x,y}.{title,grid,border} into IR
+- *(chartjs)* add axis_title_from/axis_grid_from/axis_border_from helpers
+- *(scene)* add dash pattern support to Prim::Line
+- *(ir)* add AxisTitle/AxisGrid/AxisBorder sub-structs
+- *(schema)* swap AxisOptions title/grid to typed structs, add border
+- *(schema)* add typed AxisTitle/GridLine/AxisBorder options
+
+### Fixed
+
+- *(line)* apply series step_mode to stacked area's near edge too
+- *(vegalite)* strict mode must reject background/config on categorical area
+- *(vegalite)* note is_area/temporal_line ordering is not load-bearing
+- *(vegalite)* temporal area strict mode must accept title/scale
+- *(layout)* document log-scale + stacked Line/Area gap, file tracker
+- *(schema)* document why MarkAreaObject stays a single type
+- *(layout)* stacked data-label OOB panic and line_points/build parity
+- *(layout)* correct value_domain stacked-branch comment
+- *(ir)* correct stacked doc-comment citation, tighten two assertions
+- *(clippy)* replace chunks_exact(4) with as_chunks for clippy 1.98
+- *(ci)* satisfy Rust 1.98 Clippy
+- *(scale)* cap log_ticks_within tick count with MAX_TICK_INTERVALS
+- *(scale)* cap log_ticks tick count with MAX_TICK_INTERVALS
+- *(chartjs)* map logarithmic axes against the tight data domain, not decade-rounded ticks (P1)
+- *(chartjs)* address 3 log-scale review findings on PR #144
+- *(layout)* treat zero as a gap (not a floor-clamped point) on logarithmic lines
+- *(layout)* apply beginAtZero to logarithmic axes when min sits on a decade boundary
+- *(layout)* make data-label formatting scale-aware for logarithmic axes
+- *(layout)* honor suggested_min/suggested_max when a log axis has no positive data
+- *(num)* switch fmt_num_log to scientific notation beyond a magnitude threshold
+- *(layout)* dim minor gridlines on logarithmic axes for readability
+- *(frontend)* reject logarithmic value axis combined with stacked bars
+- *(model)* report logarithmic axes correctly in ChartModel introspection
+- *(layout)* compute stacked horizontal data-label midpoint in pixel space
+- *(layout)* correct false invariant in log_value_domain overflow comment
+- *(scale)* correct misleading overflow comment on log_ticks exponent clamp, document invariants
+- *(chartjs)* keep narrow horizontal plots inside canvas
+- *(chartjs)* preserve horizontal plot width for narrow layouts
+- *(chartjs)* handle horizontal tick edge padding
+- *(chartjs)* keep horizontal tick labels inside canvas
+- *(chart)* align stepped geometry and allocation
+- *(chart)* correct stepped line corners
+- *(chartjs)* reject ignored line options
+- *(chartjs)* reject line options for mixed charts
+- *(chart)* omit duplicate stepped vertices
+- *(chartjs)* scope line options to line roots
+- *(vegalite)* retain scatter x grids
+- *(chartjs)* address categorical grid reviews
+- *(chartjs)* retain grid for empty category tick
+- *(chartjs)* draw horizontal bar x-axis border
+- *(temporal)* select millisecond ticks by target
+- *(scale)* align deduplicated tick steps
+- *(model)* align supported legend counts
+- *(layout)* contain aligned plot titles
+- *(scale)* expand extreme singletons inward
+- *(temporal)* bound generated ticks
+- *(guard)* validate effective marker radii
+- *(layout)* scope legend title activation
+- *(vegalite)* require temporal color fields
+- *(vegalite)* validate line types in both modes
+- *(raster)* bound marker geometry safely
+- *(guard)* validate per-point radii
+- *(guard)* bound explicit point radii
+- *(raster)* normalize text rotation angles
+- *(raster)* render rotated text
+- *(scale)* interpolate extreme pixel ranges safely
+- *(scale)* map extreme mixed domains safely
+- *(vegalite)* validate temporal config container
+- *(layout)* match D3 monotone tangents
+- *(vegalite)* guard group labels before cloning
+- *(vegalite)* validate temporal axis config
+- *(scale)* bound Vega tick fallbacks
+- *(scale)* preserve tiny Vega domains
+- *(model)* omit irregular temporal step
+- *(render)* preserve caller input limits
+- *(layout)* contain PlotArea chart titles
+- *(layout)* contain centered PlotArea x titles
+- *(vegalite)* validate temporal view config
+- *(vegalite)* validate temporal channel titles
+- *(vegalite)* preserve temporal axis semantics
+- *(vegalite)* validate non-strict grid option
+- *(layout)* contain first temporal tick label
+- *(line)* offset labels by marker radius
+- *(vegalite)* format numeric groups like ECMAScript
+- *(vegalite)* canonicalize numeric color groups
+- *(vegalite)* break numeric color order ties
+- *(vegalite)* preserve typed color groups
+- *(vegalite)* sort numeric color domains
+- *(vegalite)* reject non-finite temporal aggregates
+- *(vegalite)* accept nullable temporal options
+- *(layout)* contain tall PlotArea legends
+- *(layout)* avoid temporal coordinate overflow
+- *(vegalite)* require strict line color fields
+- *(schema)* split temporal and categorical lines
+- *(vegalite)* close scene boundary gaps
+- *(vegalite)* address second review round
+- *(vegalite)* address temporal line review gaps
+- *(model)* scope plot area expansion to lines
+- *(vegalite)* close temporal review gaps
+- *(model)* preserve categorical line dimensions
+- *(layout)* scope temporal legend titles
+- *(vegalite)* bound strict validation errors
+- *(layout)* 逆転ドメインは hard bound を基準に展開する
+- *(layout)* データ欠如時の片側 suggestion と f64::MAX 近傍の縮退を扱う
+- *(layout)* 動径比率をオーバーフロー安全にし hard max の境界リングを補う
+- *(chartjs)* 非 radial チャートの scales.r を kind 確定まで生値で保持する
+- *(layout)* 動径ドメイン解決を共通化し hard bound と縮退の扱いを chart.js に揃える
+- *(layout)* 動径ドメインを「側ごと」に解決し hard bound を優先する
+- *(raster)* fall back to solid when dash pattern exceeds tiny-skia limit
+- *(raster)* double odd-length stroke dash to match SVG semantics
+- *(layout)* align Y-title Start/End to Chart.js semantics (bottom-to-top read)
+- *(chartjs)* allow non-x/y scale axes in non-strict mode
+- *(schema)* allow unmodeled Chart.js scale fields in non-strict mode
+- *(chartjs)* allow border under strict mode + strengthen axis options test
+
+### Other
+
+- cargo fmt
+- Merge remote-tracking branch 'origin/main' into feat/vegalite-stacked-area
+- *(vegalite)* end-to-end stacked area coverage + example
+- *(layout)* cover the stacked area near-edge polygon close
+- *(ir)* add stacked field to ChartKind::Line
+- *(scale)* satisfy cargo fmt for log_ticks guard test
+- *(chartjs)* update log_value_domain's begin_at_zero doc for the general decade-floor rule
+- *(scale)* rename log_ticks test to match what it actually verifies
+- *(golden)* add bar_logarithmic golden PNG regression case
+- *(frontend)* pin scatter log-scope exclusion, tighten radial type-key error assertion
+- *(frontend)* integration-level coverage for logarithmic scale parsing
+- *(layout)* update stale Task-12-pending comment now that model.rs handles the sentinel
+- *(scale)* update ValueScale::Log doc now that Task 9 makes it reachable
+- *(num)* strengthen fmt_num_log tests per code review
+- *(layout)* fix value_domain doc contract, cite fulgur-chart-bap, add widen test
+- *(scale)* pin log_ticks structural invariants (bracketing, ascending order, exact powers of ten)
+- *(scale)* fix MAX_LOG_DECADES value in log_ticks clamp comment (308, not 309)
+- *(frontend)* cover logarithmic scale scoping for Line and Mixed chart kinds
+- *(scale)* remove internal plan task-number reference from ValueScale doc comment
+- *(scale)* wrap LinearScale in ValueScale (no-op for linear path)
+- *(ir)* note which chart kinds consume AxisSpec.scale_kind
+- *(chart)* distinguish cubic paths from grids
+- *(chart)* avoid copying unstepped area points
+- *(chart)* cover stepped line edge cases
+- *(chartjs)* verify line option schema parity
+- *(chart)* restore pie golden scope
+- *(chartjs)* batch categorical x grids
+- *(chartjs)* strengthen horizontal border assertions
+- *(chartjs)* update horizontal bar border snapshots
+- cover final patch boundaries
+- strengthen final review boundaries
+- *(guard)* restore marker radius boundaries
+- *(layout)* cover complete legend activation frame
+- *(vegalite)* cover temporal color field types
+- *(raster)* cover invalid circle bounds
+- *(ir)* update radial fixture after rebase
+- *(vegalite)* update D3 monotone snapshot
+- *(layout)* pin equal-spacing monotone path
+- *(vegalite)* cover defensive scale fallbacks
+- *(render)* clarify limits validation scope
+- *(layout)* assert PlotArea legend text anchors
+- *(vegalite)* cover typed color ordering
+- *(vegalite)* cover nullable x channel type
+- *(vegalite)* close review patch coverage
+- *(vegalite)* cover temporal review boundaries
+- *(legend)* assert right legend entries
+- *(vegalite)* close dogfood patch coverage
+- *(vegalite)* satisfy final clippy gate
+- *(vegalite)* cover temporal dogfood parity
+- *(bench)* gate PNG memory allocations
+- *(bench)* define PNG memory targets
+- *(radial)* 両側 hard で矛盾するドメイン指定をカバー
+- Merge branch 'main' into feat/6z6-radial-scale
+- Merge pull request #136 from fulgur-rs/feat/s7o-axis-styling
+- final polish
+- *(chartjs)* axis title/grid/border integration fixtures
+- *(raster)* assert dashed line rasterizes different pixels from solid
+- *(ir)* swap AxisSpec title/grid to typed sub-structs, add border
+- *(schema)* cover camelCase deserialization for GridLineOptions
+
 ## [0.1.20](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.19...fulgur-chart-cli-v0.1.20) - 2026-07-14
 
 ### Other
