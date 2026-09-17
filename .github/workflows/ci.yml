@@ -65,7 +65,7 @@ jobs:
         with:
           key: coverage
 
-      - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
           tool: cargo-llvm-cov
 
@@ -79,7 +79,7 @@ jobs:
       # fail_ci_if_error stays false so a Codecov rate-limit/upload hiccup doesn't
       # fail the build.
       - name: Upload to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
         with:
           use_oidc: true
           files: lcov.info
@@ -116,7 +116,7 @@ jobs:
 
       - name: Install cross
         if: matrix.use_cross == true
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
           tool: cross
 
@@ -150,7 +150,7 @@ jobs:
 
       # wasm32 でビルドが通るだけでなく、実際に SVG/PNG を生成して native と
       # byte 一致する(決定論が cross-platform で保たれる)ことを node 上で検証する。
-      - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
           tool: wasm-pack
 
@@ -195,7 +195,7 @@ jobs:
           workspaces: crates/bindings/ruby
           key: ruby-binding
 
-      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+      - uses: ruby/setup-ruby@bec3f19a76460dbe12f60def7d1a77585f07516c # v1.322.0
         with:
           ruby-version: "3.3"
           working-directory: crates/bindings/ruby
@@ -381,7 +381,7 @@ jobs:
         with:
           node-version: "20"
 
-      - uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+      - uses: taiki-e/install-action@3f74d7c16a4242f1c95561e98edc25d36adb4375 # v2.87.12
         with:
           tool: wasm-pack
 
