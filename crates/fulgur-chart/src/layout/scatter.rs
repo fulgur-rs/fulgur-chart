@@ -121,7 +121,8 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
 }
 
 /// scatter/bubble の全点を返す（renderer とモデルの単一の真実源）。
-/// 非有限座標はスキップ。bubble は `PointBox.r` に実ピクセル半径を格納。
+/// 非有限座標と hard axis domain の範囲外の点はスキップする。bubble は `PointBox.r` に
+/// 実ピクセル半径を格納。
 pub fn scatter_points(spec: &ChartSpec, layout: &ScatterLayout) -> Vec<PointBox> {
     let kind = match &spec.kind {
         ChartKind::Bubble => "bubble",
@@ -131,6 +132,11 @@ pub fn scatter_points(spec: &ChartSpec, layout: &ScatterLayout) -> Vec<PointBox>
     for (sidx, ser) in spec.series.iter().enumerate() {
         for (i, p) in ser.points.iter().enumerate() {
             if !p.x.is_finite() || !p.y.is_finite() {
+                continue;
+            }
+            if !super::common::axis_value_in_bounds(p.x, &layout.x_ticks)
+                || !super::common::axis_value_in_bounds(p.y, &layout.y_ticks)
+            {
                 continue;
             }
             pts.push(PointBox {
@@ -653,6 +659,35 @@ mod tests {
             assert_eq!(p.index, i);
             assert_eq!(p.kind, "scatter");
         }
+    }
+
+    #[test]
+    fn scatter_points_excludes_values_outside_hard_bounds() {
+        let mut spec = make_scatter_spec(&[
+            (1.0, 50.0),
+            (50.0, 10.0),
+            (50.0, 50.0),
+            (50.0, 90.0),
+            (100.0, 50.0),
+        ]);
+        spec.x_axis.min = Some(13.0);
+        spec.x_axis.max = Some(87.0);
+        spec.y_axis.min = Some(13.0);
+        spec.y_axis.max = Some(87.0);
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let layout = compute_scatter_layout(&spec, &measurer);
+
+        let points = scatter_points(&spec, &layout);
+
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].index, 2);
+        assert_eq!(
+            (points[0].cx, points[0].cy),
+            (
+                (layout.plot_left + layout.plot_right) / 2.0,
+                (layout.plot_top + layout.plot_bottom) / 2.0,
+            )
+        );
     }
 
     #[test]

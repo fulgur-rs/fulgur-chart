@@ -95,14 +95,27 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             let cx = band_cx + (group_offset + sidx as f64) * box_w;
             let left = cx - box_w / 2.0;
 
-            let y_q1 = frame.ys.map(bp.q1);
-            let y_q3 = frame.ys.map(bp.q3);
-            let y_median = frame.ys.map(bp.median);
-            let y_min = frame.ys.map(bp.min);
-            let y_max = frame.ys.map(bp.max);
+            let y_q1 = frame
+                .ys
+                .map(super::common::clip_axis_value(bp.q1, &frame.ticks));
+            let y_q3 = frame
+                .ys
+                .map(super::common::clip_axis_value(bp.q3, &frame.ticks));
+            let y_median = frame
+                .ys
+                .map(super::common::clip_axis_value(bp.median, &frame.ticks));
+            let y_min = frame
+                .ys
+                .map(super::common::clip_axis_value(bp.min, &frame.ticks));
+            let y_max = frame
+                .ys
+                .map(super::common::clip_axis_value(bp.max, &frame.ticks));
 
             let box_top = y_q3.min(y_q1);
             let box_bottom = y_q3.max(y_q1);
+            let box_height = (box_bottom - box_top)
+                .max(1.0)
+                .min((frame.plot_bottom - box_top).max(0.0));
             let fill = ser.fill_at(i);
             let stroke = ser.stroke_at(i);
 
@@ -110,7 +123,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 x: left,
                 y: box_top,
                 w: box_w,
-                h: (box_bottom - box_top).max(1.0),
+                h: box_height,
                 fill,
             });
 
@@ -263,5 +276,36 @@ mod tests {
         let (box_top, h) = rect;
         assert!(h > 0.0, "box height must be positive (Q1 != Q3)");
         assert!(box_top > 0.0, "box_top should be within the plot area");
+    }
+
+    #[test]
+    fn boxplot_geometry_stays_inside_hard_y_bounds() {
+        let spec = chartjs::parse(
+            r#"{"type":"boxplot","data":{"labels":["A"],"datasets":[{"data":[[1,20,50,90,100]]}]},
+               "options":{"scales":{"y":{"min":13,"max":87}}}}"#,
+            false,
+        )
+        .unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute_frame(&spec, &measurer);
+
+        let scene = build(&spec, &measurer);
+
+        for item in &scene.items {
+            match item {
+                Prim::Rect { y, h, .. } => {
+                    assert!(*y >= frame.plot_top, "box top escaped plot: y={y}");
+                    assert!(
+                        *y + *h <= frame.plot_bottom,
+                        "box bottom escaped plot: y={y}, h={h}"
+                    );
+                }
+                Prim::Line { y1, y2, .. } => {
+                    assert!(*y1 >= frame.plot_top && *y1 <= frame.plot_bottom);
+                    assert!(*y2 >= frame.plot_top && *y2 <= frame.plot_bottom);
+                }
+                _ => {}
+            }
+        }
     }
 }

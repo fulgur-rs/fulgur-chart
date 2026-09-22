@@ -559,6 +559,56 @@ mod tests {
     }
 
     #[test]
+    fn hard_bounds_keep_vertical_bar_geometry_inside_plot_area() {
+        let json = r#"{"type":"bar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,50,100]}]},
+            "options":{"scales":{"y":{"min":13,"max":87}}}}"#;
+        let spec = chartjs::parse(json, true).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let geometry = build_model(&spec, &measurer)
+            .geometry
+            .expect("bar geometry");
+
+        for bar in geometry.elements {
+            assert!(bar.ny >= 0.0, "bar top escaped plot: {bar:?}");
+            assert!(bar.ny + bar.nh <= 1.0, "bar bottom escaped plot: {bar:?}");
+        }
+    }
+
+    #[test]
+    fn hard_bounds_exclude_out_of_range_scatter_geometry() {
+        let json = r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":50},{"x":50,"y":50},{"x":100,"y":50}]}]},
+            "options":{"scales":{"x":{"min":13,"max":87},"y":{"min":13,"max":87}}}}"#;
+        let spec = chartjs::parse(json, true).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let geometry = build_model(&spec, &measurer)
+            .geometry
+            .expect("scatter geometry");
+
+        assert_eq!(geometry.elements.len(), 1);
+        assert_eq!(geometry.elements[0].index, 1);
+        assert!((0.0..=1.0).contains(&geometry.elements[0].nx));
+        assert!((0.0..=1.0).contains(&geometry.elements[0].ny));
+    }
+
+    #[test]
+    fn hard_bounds_exclude_out_of_range_line_geometry() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],"datasets":[{"data":[1,50,100]}]},
+            "options":{"scales":{"y":{"min":13,"max":87}}}}"#;
+        let spec = chartjs::parse(json, true).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let geometry = build_model(&spec, &measurer)
+            .geometry
+            .expect("line geometry");
+
+        assert_eq!(geometry.elements.len(), 1);
+        assert_eq!(geometry.elements[0].index, 1);
+        assert!((0.0..=1.0).contains(&geometry.elements[0].ny));
+    }
+
+    #[test]
     fn temporal_axis_reports_only_uniform_step() {
         const DAY: i64 = 86_400_000;
 

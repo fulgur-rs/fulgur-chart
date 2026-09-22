@@ -66,7 +66,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     bar_slot += 1;
                     continue;
                 }
-                let vy = frame.ys.map(v);
+                let vy = frame.ys.map(common::clip_axis_value(v, &frame.ticks));
                 let y_top = vy.min(baseline_y);
                 let h = (vy - baseline_y).abs();
                 items.push(Prim::Rect {
@@ -76,7 +76,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     h,
                     fill: ser.fill_at(i),
                 });
-                if spec.data_labels {
+                if spec.data_labels && h > 0.0 && common::axis_value_in_bounds(v, &frame.ticks) {
                     let cx = bx + (bar_w * BAR_FILL_RATIO) / 2.0;
                     let label_y = if v >= base_v {
                         y_top - common::LABEL_GAP
@@ -112,7 +112,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     return None;
                 }
                 let x = common::category_center(&frame, i, n);
-                Some((x, frame.ys.map(v), i))
+                Some((x, frame.ys.map(common::clip_axis_value(v, &frame.ticks)), i))
             })
             .collect();
 
@@ -186,7 +186,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     });
                 }
                 crate::ir::LineInterpolation::CatmullRom { tension } => {
-                    let d = catmull_rom_path(&xy, tension);
+                    let d = catmull_rom_path(&xy, tension, frame.plot_top, frame.plot_bottom);
                     items.push(Prim::Path {
                         d,
                         fill: None,
@@ -198,7 +198,10 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
 
         // マーカー: 有効点のみ。
-        for &(cx, cy, _) in &valid {
+        for &(cx, cy, cat) in &valid {
+            if !common::axis_value_in_bounds(ser.values[cat], &frame.ticks) {
+                continue;
+            }
             items.push(Prim::Circle {
                 cx,
                 cy,
@@ -213,6 +216,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // 元カテゴリインデックスで ser.values を引くことで filter 後のずれを防ぐ。
         if spec.data_labels {
             for &(x, y, cat) in &valid {
+                if !common::axis_value_in_bounds(ser.values[cat], &frame.ticks) {
+                    continue;
+                }
                 items.push(common::value_label(
                     x,
                     y - MARKER_R - common::LABEL_GAP,
@@ -235,7 +241,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
 /// Catmull-Rom スプラインを 3 次ベジエの SVG path data へ変換する(line.rs から複製)。
 /// 端点は自身を複製して扱う。`pts.len() >= 2` を前提とする。
-fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
+fn catmull_rom_path(pts: &[(f64, f64)], tension: f64, min_y: f64, max_y: f64) -> String {
     let k = pts.len();
     let mut d = String::new();
     write!(d, "M {} {} ", fmt_num(pts[0].0), fmt_num(pts[0].1)).unwrap();
@@ -246,11 +252,11 @@ fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
         let p3 = pts[(i + 2).min(k - 1)];
         let cp1 = (
             p1.0 + (p2.0 - p0.0) / 6.0 * tension,
-            p1.1 + (p2.1 - p0.1) / 6.0 * tension,
+            (p1.1 + (p2.1 - p0.1) / 6.0 * tension).clamp(min_y, max_y),
         );
         let cp2 = (
             p2.0 - (p3.0 - p1.0) / 6.0 * tension,
-            p2.1 - (p3.1 - p1.1) / 6.0 * tension,
+            (p2.1 - (p3.1 - p1.1) / 6.0 * tension).clamp(min_y, max_y),
         );
         write!(
             d,
@@ -346,6 +352,48 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    #[test]
+    fn mixed_bar_and_line_stay_inside_hard_y_bounds() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a","b","c"],"datasets":[
+                {"type":"bar","data":[1,50,100]}, {"type":"line","data":[1,50,100]}]},
+                "options":{"scales":{"y":{"min":13,"max":87}}}}"#,
+            false,
+        )
+        .unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &measurer);
+
+        let scene = build(&spec, &measurer);
+
+        for item in &scene.items {
+            match item {
+                Prim::Rect { y, h, .. } => {
+                    assert!(*y >= frame.plot_top, "bar top escaped plot: y={y}");
+                    assert!(
+                        *y + *h <= frame.plot_bottom,
+                        "bar bottom escaped plot: y={y}, h={h}"
+                    );
+                }
+                Prim::Polyline { points, .. } => assert!(
+                    points
+                        .iter()
+                        .all(|(_, y)| *y >= frame.plot_top && *y <= frame.plot_bottom)
+                ),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            scene
+                .items
+                .iter()
+                .filter(|item| matches!(item, Prim::Circle { .. }))
+                .count(),
+            1,
+            "only the in-range line value should have a marker"
+        );
     }
 
     #[test]

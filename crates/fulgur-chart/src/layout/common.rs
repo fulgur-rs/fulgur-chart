@@ -432,6 +432,16 @@ pub(crate) fn apply_hard_axis_bounds(mut ticks: NiceTicks, axis: &AxisSpec) -> N
     ticks
 }
 
+/// 値が線形/対数軸の可視 domain 内にあるかを返す。
+pub(crate) fn axis_value_in_bounds(value: f64, ticks: &NiceTicks) -> bool {
+    value.is_finite() && value >= ticks.min && value <= ticks.max
+}
+
+/// 範囲外の値を軸端へ制限し、描画座標がプロット領域から出ないようにする。
+pub(crate) fn clip_axis_value(value: f64, ticks: &NiceTicks) -> f64 {
+    value.clamp(ticks.min, ticks.max)
+}
+
 /// 対数軸専用のドメイン計算。線形版(上の `value_domain` 本体)と異なる点:
 /// `begin_at_zero` は「0 をドメインに含める」という線形の意味では効かない(0 は
 /// 対数軸に存在しえない)が、chart.js 実機で確認した通り、代わりに domain_min を
