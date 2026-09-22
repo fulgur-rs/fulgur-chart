@@ -979,6 +979,32 @@ mod geom_tests {
     }
 
     #[test]
+    fn vertical_stacked_log_bars_fit_the_sum_domain() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[10]},{"data":[10]}]},
+               "options":{"scales":{"x":{"stacked":true},"y":{"stacked":true,"type":"logarithmic"}}}}"#,
+            false,
+        )
+        .unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &measurer);
+
+        assert_eq!(
+            frame.ticks.max, 20.0,
+            "domain must include the 10 + 10 stack"
+        );
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        assert_eq!(boxes.len(), 2);
+        for bar in boxes {
+            assert!(bar.y >= frame.plot_top, "bar top escaped plot: {bar:?}");
+            assert!(
+                bar.y + bar.h <= frame.plot_bottom,
+                "bar bottom escaped plot: {bar:?}"
+            );
+        }
+    }
+
+    #[test]
     fn stacked_collapses_to_one_column_per_category() {
         // 積み上げ: 2 カテゴリ × 2 系列、各カテゴリの 2 矩形は同じ x・同じ幅(縦に積む)。
         let bs = boxes_for(
@@ -2066,23 +2092,21 @@ mod horizontal_log_scale_tests {
         // 「値空間の中点 (10+100)/2=55 を map したピクセル位置」(旧実装のバグ)と
         // 「セグメント両端を先に map してからピクセル空間で平均する中点」(正しい)は
         // 一致しない。コードレビューで実測: 800px canvas 上で ~184px の誤差。
-        //
-        // 「対数軸の値軸 × value_stacked」の組み合わせは frontend::chartjs::parse が
-        // 現在は明示エラーで拒否する(log_value_domain がスタック合計を計算しないため
-        // ドメインが過小になる別バグ、fulgur-chart-bap 参照)。この layout レベルの
-        // テストが検証したいのは build_horizontal 自体のピクセル空間中点計算の正しさ
-        // であり、frontend の禁止とは独立した性質(bindings 等で ChartSpec を直接
-        // 組み立てた場合にも成り立つべき)なので、まず対数軸なしで parse させてから
-        // scale_kind だけを直接差し替えて対数軸 + stacked の ChartSpec を作る。
         let json = r#"{"type":"bar","data":{"labels":["A"],
             "datasets":[{"data":[10]},{"data":[90]}]},
             "options":{"indexAxis":"y",
-                "scales":{"x":{"stacked":true},"y":{"stacked":true}},
+                "scales":{"x":{"stacked":true,"type":"logarithmic"},"y":{"stacked":true}},
                 "plugins":{"datalabels":{"display":true}}}}"#;
-        let mut spec = parse(json);
-        spec.x_axis.scale_kind = ScaleKind::Logarithmic;
+        let spec = parse(json);
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = build(&spec, &m);
+
+        assert!(
+            scene.items.iter().any(|item| matches!(item,
+                Prim::Text { content, .. } if content == "100"
+            )),
+            "the horizontal log domain should include the stacked total"
+        );
 
         // 2 系列 × 1 カテゴリ → Rect は 2 本。x 昇順に並べると
         // [0]=系列1(値空間 [0,10])、[1]=系列2(値空間 [10,100])。
