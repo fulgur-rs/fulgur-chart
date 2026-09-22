@@ -696,7 +696,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     h: stack_h,
                     fill: ser.fill_at(i),
                 });
-                if spec.data_labels && w > 0.0 {
+                if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
                     // セグメント中央(box 中心)に値ラベルを置く。x0/x1 は既に xs で
                     // 写像済みのピクセル空間なので、ここで平均する(ピクセル空間の中点)。
                     // 値空間で (v0+v1)/2.0 を先に計算してから map すると、対数軸では
@@ -1803,6 +1803,22 @@ mod horizontal_log_scale_tests {
                 Prim::Text { content, .. } if content == "1" || content == "100"
             )),
             "out-of-range values should not get labels"
+        );
+    }
+
+    #[test]
+    fn horizontal_stacked_bars_skip_labels_for_out_of_range_segments() {
+        let scene = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[100]}]},
+               "options":{"indexAxis":"y","scales":{"x":{"stacked":true,"min":13,"max":87},
+               "y":{"stacked":true}},"plugins":{"datalabels":{"display":true}}}}"#,
+        );
+
+        assert!(
+            !scene.items.iter().any(|item| matches!(item,
+                Prim::Text { content, .. } if content == "100"
+            )),
+            "a clipped stacked segment outside the hard x-axis bounds should not get a data label"
         );
     }
 
