@@ -36,7 +36,8 @@ pub struct BarBox {
 /// レンダラ(`build_vertical`)とモデル(`model::Geometry`)の両方がこれを呼ぶ。
 /// 非積み上げ (dodge): category 外側 × series 内側で有限値のみ box を生成する。
 ///   欠損値 (get() None) と非有限値 (NaN / ±∞) は skip され、box は emit されない。
-/// 積み上げ: category 外側 × series 内側で有限値のみ値空間に積む。
+/// 非積み上げ・積み上げともに hard y bound で各端点を clip し、描画と geometry の範囲を
+/// 揃える。
 pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec<BarBox> {
     let n = spec.categories.len().max(1);
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
@@ -86,8 +87,12 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     neg_acc += v;
                     (neg_acc, hi)
                 };
-                let y0 = frame.ys.map(v0);
-                let y1 = frame.ys.map(v1);
+                let y0 = frame
+                    .ys
+                    .map(super::common::clip_axis_value(v0, &frame.ticks));
+                let y1 = frame
+                    .ys
+                    .map(super::common::clip_axis_value(v1, &frame.ticks));
                 let y_top = y0.min(y1);
                 let h = (y1 - y0).abs();
                 boxes.push(BarBox {
@@ -115,7 +120,9 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                 if !is_renderable_value(v, is_log) {
                     continue;
                 }
-                let vy = frame.ys.map(v);
+                let vy = frame
+                    .ys
+                    .map(super::common::clip_axis_value(v, &frame.ticks));
                 let y_top = vy.min(baseline_y);
                 let h = (vy - baseline_y).abs();
                 boxes.push(BarBox {
@@ -143,7 +150,9 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                 if !is_renderable_value(v, is_log) {
                     continue;
                 }
-                let vy = frame.ys.map(v);
+                let vy = frame
+                    .ys
+                    .map(super::common::clip_axis_value(v, &frame.ticks));
                 let y_top = vy.min(baseline_y);
                 let h = (vy - baseline_y).abs();
                 boxes.push(BarBox {
@@ -317,7 +326,10 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             h: b.h,
             fill: ser.fill_at(b.index),
         });
-        if !spec.data_labels {
+        if !spec.data_labels
+            || b.h <= 0.0
+            || !super::common::axis_value_in_bounds(b.value, &frame.ticks)
+        {
             continue;
         }
         let cx = b.x + b.w / 2.0;
@@ -380,7 +392,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 横棒は値軸が x のため x_axis を渡す（begin_at_zero/suggested も x_axis から読む）。
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
     let is_log = spec.x_axis.scale_kind == ScaleKind::Logarithmic;
-    let (ticks, minor_ticks) = if is_log {
+    let (mut ticks, minor_ticks) = if is_log {
         let log = crate::scale::log_ticks_within(dmin, dmax);
         (
             NiceTicks {
@@ -397,6 +409,9 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     } else {
         (nice_ticks(dmin, dmax, 10), Vec::new())
     };
+    if !is_log {
+        ticks = apply_hard_axis_bounds(ticks, &spec.x_axis);
+    }
 
     // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。
     let mut max_cat_w = 0.0_f64;
@@ -670,8 +685,8 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     neg_acc += v;
                     (neg_acc, hi)
                 };
-                let x0 = xs.map(v0);
-                let x1 = xs.map(v1);
+                let x0 = xs.map(super::common::clip_axis_value(v0, &ticks));
+                let x1 = xs.map(super::common::clip_axis_value(v1, &ticks));
                 let x = x0.min(x1);
                 let w = (x1 - x0).abs();
                 items.push(Prim::Rect {
@@ -681,7 +696,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     h: stack_h,
                     fill: ser.fill_at(i),
                 });
-                if spec.data_labels {
+                if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
                     // セグメント中央(box 中心)に値ラベルを置く。x0/x1 は既に xs で
                     // 写像済みのピクセル空間なので、ここで平均する(ピクセル空間の中点)。
                     // 値空間で (v0+v1)/2.0 を先に計算してから map すると、対数軸では
@@ -710,7 +725,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if !is_renderable_value(v, is_log) {
                     continue;
                 }
-                let vx = xs.map(v);
+                let vx = xs.map(super::common::clip_axis_value(v, &ticks));
                 let x = vx.min(baseline_x);
                 let w = (vx - baseline_x).abs();
                 items.push(Prim::Rect {
@@ -720,7 +735,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     h: stack_h,
                     fill: ser.fill_at(i),
                 });
-                if spec.data_labels {
+                if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
                     let cy = by + stack_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
                     let (cx, anchor) = if v >= base_v {
                         (vx + LABEL_GAP, Anchor::Start)
@@ -741,7 +756,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if !is_renderable_value(v, is_log) {
                     continue;
                 }
-                let vx = xs.map(v);
+                let vx = xs.map(super::common::clip_axis_value(v, &ticks));
                 let x = vx.min(baseline_x);
                 let w = (vx - baseline_x).abs();
                 items.push(Prim::Rect {
@@ -751,7 +766,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     h: (bar_h * BAR_FILL_RATIO).max(0.0),
                     fill: ser.fill_at(i),
                 });
-                if spec.data_labels {
+                if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) {
                     let cy = by + (bar_h * BAR_FILL_RATIO) / 2.0 + label_font * TEXT_BASELINE_RATIO;
                     // 正は棒右端の右(Start)、負は左端の左(End)に LABEL_GAP 分離す。
                     let (lx, anchor) = if v >= base_v {
@@ -938,6 +953,29 @@ mod geom_tests {
             r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,100]}]}}"#,
         );
         assert!(bs[1].h > bs[0].h);
+    }
+
+    #[test]
+    fn vertical_bar_boxes_clip_out_of_range_values_to_hard_bounds() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[{"data":[1,50,100]}]},
+               "options":{"scales":{"y":{"min":13,"max":87}}}}"#,
+            false,
+        )
+        .unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &measurer);
+
+        let boxes = vertical_bar_boxes(&spec, &frame);
+
+        assert_eq!(boxes.len(), 3);
+        for bar in boxes {
+            assert!(bar.y >= frame.plot_top, "bar top escaped plot: {bar:?}");
+            assert!(
+                bar.y + bar.h <= frame.plot_bottom,
+                "bar bottom escaped plot: {bar:?}"
+            );
+        }
     }
 
     #[test]
@@ -1696,6 +1734,92 @@ mod horizontal_log_scale_tests {
         // カテゴリ軸(=Y)は値軸ではないので Linear のまま(scale_kind に意味を持たないが、
         // 誤って y_axis 側を対数化していないことを確認する)。
         assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Linear));
+    }
+
+    #[test]
+    fn horizontal_linear_axis_renders_hard_min_max_ticks() {
+        let scene = scene_for(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[20,80]}]},
+               "options":{"indexAxis":"y","scales":{"x":{"min":13,"max":87}}}}"#,
+        );
+        let labels: Vec<&str> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Text { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            labels.contains(&"13"),
+            "hard x-axis min should be labeled: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"87"),
+            "hard x-axis max should be labeled: {labels:?}"
+        );
+        assert!(!labels.contains(&"10") && !labels.contains(&"90"));
+    }
+
+    #[test]
+    fn horizontal_bars_stay_within_hard_bounds_and_skip_out_of_range_labels() {
+        let scene = scene_for(
+            r#"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[{"data":[1,50,100]}]},
+               "options":{"indexAxis":"y","scales":{"x":{"min":13,"max":87}},
+               "plugins":{"datalabels":{"display":true}}}}"#,
+        );
+        let tick_x = |label: &str| {
+            scene
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Text { content, x, .. } if content == label => Some(*x),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing hard-bound tick label {label}"))
+        };
+        let left = tick_x("13");
+        let right = tick_x("87");
+        let bars: Vec<(f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { x, w, .. } => Some((*x, *w)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(bars.len(), 3);
+        for (x, width) in bars {
+            assert!(x >= left, "bar left escaped plot: x={x}, left={left}");
+            assert!(
+                x + width <= right,
+                "bar right escaped plot: x={x}, width={width}, right={right}"
+            );
+        }
+        assert!(
+            !scene.items.iter().any(|item| matches!(item,
+                Prim::Text { content, .. } if content == "1" || content == "100"
+            )),
+            "out-of-range values should not get labels"
+        );
+    }
+
+    #[test]
+    fn horizontal_stacked_bars_skip_labels_for_out_of_range_segments() {
+        let scene = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[100]}]},
+               "options":{"indexAxis":"y","scales":{"x":{"stacked":true,"min":13,"max":87},
+               "y":{"stacked":true}},"plugins":{"datalabels":{"display":true}}}}"#,
+        );
+
+        assert!(
+            !scene.items.iter().any(|item| matches!(item,
+                Prim::Text { content, .. } if content == "100"
+            )),
+            "a clipped stacked segment outside the hard x-axis bounds should not get a data label"
+        );
     }
 
     #[test]

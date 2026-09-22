@@ -468,7 +468,10 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
                 let model = logarithmic_axis(&nt);
                 (nt, model)
             } else {
-                let nt = nice_ticks(lo, hi, 10);
+                let nt = crate::layout::common::apply_hard_axis_bounds(
+                    nice_ticks(lo, hi, 10),
+                    &spec.x_axis,
+                );
                 let model = linear_axis(&nt);
                 (nt, model)
             };
@@ -478,8 +481,14 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
         ChartKind::Scatter | ChartKind::Bubble => {
             let (xlo, xhi) = crate::layout::scatter::axis_domain(spec, &spec.x_axis, |p| p.x);
             let (ylo, yhi) = crate::layout::scatter::axis_domain(spec, &spec.y_axis, |p| p.y);
-            let xt = nice_ticks(xlo, xhi, 10);
-            let yt = nice_ticks(ylo, yhi, 10);
+            let xt = crate::layout::common::apply_hard_axis_bounds(
+                nice_ticks(xlo, xhi, 10),
+                &spec.x_axis,
+            );
+            let yt = crate::layout::common::apply_hard_axis_bounds(
+                nice_ticks(ylo, yhi, 10),
+                &spec.y_axis,
+            );
             Some((linear_axis(&xt), linear_axis(&yt), yt.ticks.len()))
         }
         // boxplot: カテゴリ x、線形 y。ドメインは layout::boxplot と共有。
@@ -521,6 +530,83 @@ mod tests {
     use crate::frontend::chartjs;
     use crate::ir::Color;
     use crate::text::TextMeasurer;
+
+    #[test]
+    fn horizontal_model_axis_preserves_hard_min_max_after_nice_ticks() {
+        let json = r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[20,80]}]},
+            "options":{"indexAxis":"y","scales":{"x":{"min":13,"max":87}}}}"#;
+        let spec = chartjs::parse(json, true).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let model = build_model(&spec, &measurer);
+        let axes = model.axes.expect("horizontal bar exposes normalized axes");
+
+        assert_eq!((axes.y.min, axes.y.max), (Some(13.0), Some(87.0)));
+    }
+
+    #[test]
+    fn scatter_model_axes_preserve_hard_min_max_after_nice_ticks() {
+        let json = r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2},{"x":100,"y":200}]}]},
+            "options":{"scales":{"x":{"min":13,"max":87},"y":{"min":25,"max":175}}}}"#;
+        let spec = chartjs::parse(json, true).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let model = build_model(&spec, &measurer);
+        let axes = model.axes.expect("scatter exposes x/y axes");
+
+        assert_eq!((axes.x.min, axes.x.max), (Some(13.0), Some(87.0)));
+        assert_eq!((axes.y.min, axes.y.max), (Some(25.0), Some(175.0)));
+    }
+
+    #[test]
+    fn hard_bounds_keep_vertical_bar_geometry_inside_plot_area() {
+        let json = r#"{"type":"bar","data":{"labels":["a","b","c"],"datasets":[{"data":[1,50,100]}]},
+            "options":{"scales":{"y":{"min":13,"max":87}}}}"#;
+        let spec = chartjs::parse(json, true).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let geometry = build_model(&spec, &measurer)
+            .geometry
+            .expect("bar geometry");
+
+        for bar in geometry.elements {
+            assert!(bar.ny >= 0.0, "bar top escaped plot: {bar:?}");
+            assert!(bar.ny + bar.nh <= 1.0, "bar bottom escaped plot: {bar:?}");
+        }
+    }
+
+    #[test]
+    fn hard_bounds_exclude_out_of_range_scatter_geometry() {
+        let json = r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":50},{"x":50,"y":50},{"x":100,"y":50}]}]},
+            "options":{"scales":{"x":{"min":13,"max":87},"y":{"min":13,"max":87}}}}"#;
+        let spec = chartjs::parse(json, true).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let geometry = build_model(&spec, &measurer)
+            .geometry
+            .expect("scatter geometry");
+
+        assert_eq!(geometry.elements.len(), 1);
+        assert_eq!(geometry.elements[0].index, 1);
+        assert!((0.0..=1.0).contains(&geometry.elements[0].nx));
+        assert!((0.0..=1.0).contains(&geometry.elements[0].ny));
+    }
+
+    #[test]
+    fn hard_bounds_exclude_out_of_range_line_geometry() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],"datasets":[{"data":[1,50,100]}]},
+            "options":{"scales":{"y":{"min":13,"max":87}}}}"#;
+        let spec = chartjs::parse(json, true).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let geometry = build_model(&spec, &measurer)
+            .geometry
+            .expect("line geometry");
+
+        assert_eq!(geometry.elements.len(), 1);
+        assert_eq!(geometry.elements[0].index, 1);
+        assert!((0.0..=1.0).contains(&geometry.elements[0].ny));
+    }
 
     #[test]
     fn temporal_axis_reports_only_uniform_step() {

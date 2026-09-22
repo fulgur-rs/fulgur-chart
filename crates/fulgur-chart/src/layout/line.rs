@@ -120,11 +120,13 @@ fn append_area_points(d: &mut String, points: impl IntoIterator<Item = (f64, f64
 /// この全点列と実際の描画点は乖離する（モデルは chart.js 数値照合用＝間引きなしが正しい）。
 /// 非stacked: 欠損値 (get() None) と非有限値 (NaN / ±∞) は skip し point は emit しない
 /// (bar の `vertical_bar_boxes` と同じ null 挙動)。対数y軸では非正値も `build()` と同じく
-/// skip する(chart.js は log 軸上の非正値を欠損として扱うため)。
-/// stacked: `build()` の `valid` 構築と同じくガードを一切適用せず、全カテゴリで point を
-/// emit する(欠損/非有限は `stack_offsets` が 0 として補完済み; 対数軸との組み合わせは
-/// `value_domain` 側で未対応・到達不能。1系列だけ欠損があっても隣接系列の帯は一貫している
-/// 必要があるため、非stacked と違い skip しない — これも自動レビュー指摘で発見・修正した)。
+/// skip する(chart.js は log 軸上の非正値を欠損として扱うため)。hard y bound の範囲外も
+/// marker geometry から除外する(描画用の線分は axis edge で clamp する)。
+/// stacked: `build()` の `valid` 構築と同じく全カテゴリを検討する(欠損/非有限は
+/// `stack_offsets` が 0 として補完済み)。ただし hard y bound 外は描画されないため除く。
+/// 対数軸との組み合わせは `value_domain` 側で未対応・到達不能。1系列だけ欠損があっても
+/// 隣接系列の帯は一貫している必要があるため、非stacked と違い欠損点は skip しない
+/// (これも自動レビュー指摘で発見・修正した)。
 pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
@@ -153,6 +155,9 @@ pub fn line_points(
                 }
                 v
             };
+            if !common::axis_value_in_bounds(plot_y, &frame.ticks) {
+                continue;
+            }
             pts.push(crate::layout::scatter::PointBox {
                 series: sidx,
                 index: i,
@@ -224,7 +229,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             .filter_map(|i| {
                 let x = common::line_x(spec, &frame, i);
                 if let Some(offsets) = &offsets {
-                    Some((x, frame.ys.map(offsets[si][i].1), i))
+                    Some((
+                        x,
+                        frame
+                            .ys
+                            .map(common::clip_axis_value(offsets[si][i].1, &frame.ticks)),
+                        i,
+                    ))
                 } else {
                     let v = ser.values.get(i).copied()?;
                     if !v.is_finite() {
@@ -233,7 +244,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     if is_log && v <= 0.0 {
                         return None;
                     }
-                    Some((x, frame.ys.map(v), i))
+                    Some((x, frame.ys.map(common::clip_axis_value(v, &frame.ticks)), i))
                 }
             })
             .collect();
@@ -296,7 +307,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                         .map(|&(_, _, cat)| {
                             (
                                 common::line_x(spec, &frame, cat),
-                                frame.ys.map(offsets[si][cat].0),
+                                frame
+                                    .ys
+                                    .map(common::clip_axis_value(offsets[si][cat].0, &frame.ticks)),
                             )
                         })
                         .collect();
@@ -351,7 +364,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     });
                 }
                 crate::ir::LineInterpolation::CatmullRom { tension } => {
-                    let d = catmull_rom_path(&xy, tension);
+                    let d = catmull_rom_path(&xy, tension, frame.plot_top, frame.plot_bottom);
                     items.push(Prim::Path {
                         d,
                         fill: None,
@@ -385,7 +398,16 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 (true, None) => None,
             };
             if let Some(r) = r {
-                for &(cx, cy, _) in seg {
+                for &(cx, cy, cat) in seg {
+                    let plot_y = offsets
+                        .as_ref()
+                        .map(|offsets| offsets[si][cat].1)
+                        .or_else(|| ser.values.get(cat).copied());
+                    if !plot_y
+                        .is_some_and(|value| common::axis_value_in_bounds(value, &frame.ticks))
+                    {
+                        continue;
+                    }
                     items.push(Prim::Circle {
                         cx,
                         cy,
@@ -417,9 +439,18 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 .filter(|radius| *radius > 0.0)
                 .unwrap_or(MARKER_R);
             for &(x, y, cat) in &valid {
+                let plot_y = offsets
+                    .as_ref()
+                    .map(|offsets| offsets[si][cat].1)
+                    .or_else(|| ser.values.get(cat).copied());
+                if !plot_y.is_some_and(|value| common::axis_value_in_bounds(value, &frame.ticks)) {
+                    continue;
+                }
                 let label_y = if let Some(offsets) = &offsets {
                     let (near, far) = offsets[si][cat];
-                    (frame.ys.map(near) + frame.ys.map(far)) / 2.0
+                    (frame.ys.map(common::clip_axis_value(near, &frame.ticks))
+                        + frame.ys.map(common::clip_axis_value(far, &frame.ticks)))
+                        / 2.0
                 } else {
                     y - label_marker_r - common::LABEL_GAP
                 };
@@ -445,7 +476,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
 /// Catmull-Rom スプラインを 3 次ベジエの SVG path data へ変換する。
 /// 端点は自身を複製して扱う。`pts.len() >= 2` を前提とする。
-fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
+fn catmull_rom_path(pts: &[(f64, f64)], tension: f64, min_y: f64, max_y: f64) -> String {
     let k = pts.len();
     let mut d = String::new();
     write!(d, "M {} {} ", fmt_num(pts[0].0), fmt_num(pts[0].1)).unwrap();
@@ -456,11 +487,11 @@ fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
         let p3 = pts[(i + 2).min(k - 1)];
         let cp1 = (
             p1.0 + (p2.0 - p0.0) / 6.0 * tension,
-            p1.1 + (p2.1 - p0.1) / 6.0 * tension,
+            (p1.1 + (p2.1 - p0.1) / 6.0 * tension).clamp(min_y, max_y),
         );
         let cp2 = (
             p2.0 - (p3.0 - p1.0) / 6.0 * tension,
-            p2.1 - (p3.1 - p1.1) / 6.0 * tension,
+            (p2.1 - (p3.1 - p1.1) / 6.0 * tension).clamp(min_y, max_y),
         );
         write!(
             d,
@@ -864,6 +895,42 @@ mod tests {
             .filter(|item| matches!(item, Prim::Circle { .. }))
             .count();
         assert_eq!(marker_count, 3, "線形軸では値0も通常の点として描く");
+    }
+
+    #[test]
+    fn line_geometry_stays_inside_hard_y_bounds() {
+        let json = r#"{"type":"line","data":{"labels":["a","b","c"],
+            "datasets":[{"data":[1,50,100]}]},
+            "options":{"scales":{"y":{"min":13,"max":87}}}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &measurer);
+        let scene = build(&spec, &measurer);
+
+        let points = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Polyline { points, .. } => Some(points),
+                _ => None,
+            })
+            .expect("line should still connect all three data points");
+        assert_eq!(points.len(), 3);
+        assert!(
+            points
+                .iter()
+                .all(|(_, y)| { *y >= frame.plot_top && *y <= frame.plot_bottom })
+        );
+        let marker_ys: Vec<f64> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Circle { cy, .. } => Some(*cy),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marker_ys.len(), 1, "only the in-range datum gets a marker");
+        assert!(marker_ys[0] >= frame.plot_top && marker_ys[0] <= frame.plot_bottom);
     }
 
     #[test]

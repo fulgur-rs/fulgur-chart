@@ -1604,6 +1604,25 @@ fn strict_mode_rejects_wrong_typed_scales_r_field() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn cartesian_axis_min_max_populate_ir_for_x_and_y() {
+    let spec = chartjs::parse(
+        r##"{
+          "type":"bar",
+          "data":{"labels":["a","b"],"datasets":[{"data":[10,20]}]},
+          "options":{"scales":{
+            "x":{"min":-5,"max":5},
+            "y":{"min":10,"max":90}
+          }}
+        }"##,
+        true,
+    )
+    .expect("strict mode accepts numeric cartesian min/max");
+
+    assert_eq!((spec.x_axis.min, spec.x_axis.max), (Some(-5.0), Some(5.0)));
+    assert_eq!((spec.y_axis.min, spec.y_axis.max), (Some(10.0), Some(90.0)));
+}
+
+#[test]
 fn strict_end_to_end_bar_chart_with_logarithmic_y_axis_and_axis_options() {
     // 実運用に近い chart.js JSON: 対数 y 軸に title/grid/suggestedMin/suggestedMax
     // を同居させ、strict でも通ること・IR 側で両方がちゃんと共存することを検証する。
