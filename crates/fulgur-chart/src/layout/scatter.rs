@@ -50,8 +50,8 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     let label_font = spec.theme.font_size;
     let (xmin, xmax) = axis_domain(spec, &spec.x_axis, |p| p.x);
     let (ymin, ymax) = axis_domain(spec, &spec.y_axis, |p| p.y);
-    let x_ticks = nice_ticks(xmin, xmax, 10);
-    let y_ticks = nice_ticks(ymin, ymax, 10);
+    let x_ticks = super::common::apply_hard_axis_bounds(nice_ticks(xmin, xmax, 10), &spec.x_axis);
+    let y_ticks = super::common::apply_hard_axis_bounds(nice_ticks(ymin, ymax, 10), &spec.y_axis);
     let mut max_y_w = 0.0_f32;
     for &t in &y_ticks.ticks {
         let w = m.width(&crate::num::fmt_num(t), label_font as f32);
@@ -199,42 +199,7 @@ pub(crate) fn axis_domain(
             }
         }
     }
-    // データなし: suggested を初期シードとして使う(chart.js 互換)。suggested もなければ 0..1。
-    if !lo.is_finite() || !hi.is_finite() {
-        lo = axis_spec
-            .suggested_min
-            .filter(|s| s.is_finite())
-            .unwrap_or(0.0);
-        hi = axis_spec
-            .suggested_max
-            .filter(|s| s.is_finite())
-            .unwrap_or(if lo == 0.0 { 1.0 } else { lo + 1.0 });
-        if axis_spec.begin_at_zero {
-            lo = lo.min(0.0);
-            hi = hi.max(0.0);
-        }
-        return (lo, if hi > lo { hi } else { lo + 1.0 });
-    }
-    // begin_at_zero でドメインに 0 を含める。
-    if axis_spec.begin_at_zero {
-        lo = lo.min(0.0);
-        hi = hi.max(0.0);
-    }
-    // suggestedMin/suggestedMax: データが優先、suggested はドメインを広げるだけ。
-    // 非有限値（Infinity/NaN）は nice_ticks で無限 range を生じさせるため無視する。
-    if let Some(s) = axis_spec.suggested_min
-        && s.is_finite()
-        && s < lo
-    {
-        lo = s;
-    }
-    if let Some(s) = axis_spec.suggested_max
-        && s.is_finite()
-        && s > hi
-    {
-        hi = s;
-    }
-    (lo, hi)
+    super::common::resolve_axis_domain(axis_spec, lo, hi)
 }
 
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
@@ -600,6 +565,32 @@ mod tests {
             decimation: crate::ir::Decimation::default(),
             radial_axis: None,
         }
+    }
+
+    #[test]
+    fn axis_domain_hard_min_max_override_data_and_suggestions() {
+        let mut spec = make_scatter_spec(&[(1.0, 10.0), (100.0, 1000.0)]);
+        spec.x_axis.min = Some(10.0);
+        spec.x_axis.max = Some(90.0);
+        spec.x_axis.suggested_min = Some(-100.0);
+        spec.x_axis.suggested_max = Some(1000.0);
+
+        assert_eq!(axis_domain(&spec, &spec.x_axis, |p| p.x), (10.0, 90.0));
+    }
+
+    #[test]
+    fn scatter_layout_preserves_hard_bounds_after_nice_tick_rounding() {
+        let mut spec = make_scatter_spec(&[(1.0, 2.0), (100.0, 200.0)]);
+        spec.x_axis.min = Some(13.0);
+        spec.x_axis.max = Some(87.0);
+        spec.y_axis.min = Some(25.0);
+        spec.y_axis.max = Some(175.0);
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let layout = compute_scatter_layout(&spec, &measurer);
+
+        assert_eq!((layout.x_ticks.min, layout.x_ticks.max), (13.0, 87.0));
+        assert_eq!((layout.y_ticks.min, layout.y_ticks.max), (25.0, 175.0));
     }
 
     #[test]

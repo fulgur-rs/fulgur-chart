@@ -1003,8 +1003,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         x_positions: XPositions::Category,
         x_axis: AxisSpec {
             title: axis_title_from(x_opts.and_then(|a| a.title.as_ref())),
-            min: None,
-            max: None,
+            min: x_opts.and_then(|a| a.min),
+            max: x_opts.and_then(|a| a.max),
             suggested_min: suggested_min_x,
             suggested_max: suggested_max_x,
             begin_at_zero: x_begin_at_zero,
@@ -1019,8 +1019,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         },
         y_axis: AxisSpec {
             title: axis_title_from(y_opts.and_then(|a| a.title.as_ref())),
-            min: None,
-            max: None,
+            min: y_opts.and_then(|a| a.min),
+            max: y_opts.and_then(|a| a.max),
             suggested_min: suggested_min_y,
             suggested_max: suggested_max_y,
             begin_at_zero: y_begin_at_zero,

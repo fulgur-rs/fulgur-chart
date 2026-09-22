@@ -319,43 +319,117 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
             }
         }
     }
-    // データなし: suggested を初期シードとして使う(chart.js 互換)。suggested もなければ 0..1。
-    if !data_min.is_finite() || !data_max.is_finite() {
-        let lo = axis.suggested_min.filter(|s| s.is_finite()).unwrap_or(0.0);
-        let hi = axis
-            .suggested_max
-            .filter(|s| s.is_finite())
-            .unwrap_or(if lo == 0.0 { 1.0 } else { lo + 1.0 });
-        let lo = if axis.begin_at_zero { lo.min(0.0) } else { lo };
-        let hi = if axis.begin_at_zero { hi.max(0.0) } else { hi };
-        return (lo, if hi > lo { hi } else { lo + 1.0 });
+    resolve_axis_domain(axis, data_min, data_max)
+}
+
+/// Cartesian 線形軸の自動 domain に hard min/max、suggested、beginAtZero を適用する。
+/// 明示 min/max はその側の自動調整より優先し、反対側はデータから引き続き決める。
+pub(crate) fn resolve_axis_domain(axis: &AxisSpec, data_min: f64, data_max: f64) -> (f64, f64) {
+    let hard_min = axis.min.filter(|v| v.is_finite());
+    let hard_max = axis.max.filter(|v| v.is_finite());
+    let min_is_hard = hard_min.is_some();
+    let max_is_hard = hard_max.is_some();
+
+    // データなしでは suggested を初期値にする。hard 側が指定されていればそちらを使う。
+    let mut lo = hard_min.unwrap_or_else(|| {
+        if data_min.is_finite() {
+            data_min
+        } else {
+            axis.suggested_min.filter(|v| v.is_finite()).unwrap_or(0.0)
+        }
+    });
+    let mut hi = hard_max.unwrap_or_else(|| {
+        if data_max.is_finite() {
+            data_max
+        } else {
+            axis.suggested_max
+                .filter(|v| v.is_finite())
+                .unwrap_or(if lo == 0.0 { 1.0 } else { lo + 1.0 })
+        }
+    });
+
+    // suggested と beginAtZero は hard 指定の無い側だけを動かす。
+    if !min_is_hard {
+        if let Some(s) = axis.suggested_min
+            && s.is_finite()
+            && s < lo
+        {
+            lo = s;
+        }
+        if axis.begin_at_zero {
+            lo = lo.min(0.0);
+        }
     }
-    let (mut domain_min, mut domain_max) = if axis.begin_at_zero {
-        (data_min.min(0.0), data_max.max(0.0))
-    } else {
-        (data_min, data_max)
-    };
-    // suggestedMin/suggestedMax: データが優先、suggested はドメインを広げるだけ。
-    // 非有限値（Infinity/NaN）は nice_ticks で無限 range を生じさせるため無視する。
-    if let Some(s) = axis.suggested_min
-        && s.is_finite()
-        && s < domain_min
+    if !max_is_hard {
+        if let Some(s) = axis.suggested_max
+            && s.is_finite()
+            && s > hi
+        {
+            hi = s;
+        }
+        if axis.begin_at_zero {
+            hi = hi.max(0.0);
+        }
+    }
+
+    if hi <= lo {
+        if min_is_hard || max_is_hard {
+            // hard と自動側が交差したら hard 端を維持して自動端を 5% 開く。
+            // 両側 hard が矛盾する場合も決定的に min を優先し、描画 domain を有効にする。
+            let anchor = hard_min.or(hard_max).unwrap_or(lo);
+            let step = if anchor == 0.0 {
+                1.0
+            } else {
+                (anchor.abs() * 0.05).max(anchor.abs().max(1.0) * f64::EPSILON * 4.0)
+            };
+            if min_is_hard {
+                let upper = anchor + step;
+                if upper.is_finite() && upper > anchor {
+                    hi = upper;
+                }
+            } else {
+                let lower = anchor - step;
+                if lower.is_finite() && lower < anchor {
+                    lo = lower;
+                }
+            }
+        } else {
+            // hard 制約のない縮退 domain は既存の挙動を保つ。
+            hi = lo + 1.0;
+        }
+    }
+    (lo, hi)
+}
+
+/// nice tick の外側丸めを、Chart.js の明示 `min` / `max` で固定する。
+/// hard endpoint は目盛列にも含め、固定 domain と軸ラベルの範囲を一致させる。
+pub(crate) fn apply_hard_axis_bounds(mut ticks: NiceTicks, axis: &AxisSpec) -> NiceTicks {
+    let hard_min = axis.min.filter(|v| v.is_finite());
+    let hard_max = axis
+        .max
+        .filter(|v| v.is_finite() && hard_min.is_none_or(|min| *v > min));
+    if let Some(min) = hard_min {
+        ticks.min = min;
+    }
+    if let Some(max) = hard_max {
+        ticks.max = max;
+    }
+    ticks
+        .ticks
+        .retain(|&tick| tick >= ticks.min && tick <= ticks.max);
+    if let Some(min) = hard_min
+        && !ticks.ticks.contains(&min)
     {
-        domain_min = s;
+        ticks.ticks.push(min);
     }
-    if let Some(s) = axis.suggested_max
-        && s.is_finite()
-        && s > domain_max
+    if let Some(max) = hard_max
+        && !ticks.ticks.contains(&max)
     {
-        domain_max = s;
+        ticks.ticks.push(max);
     }
-    // ハード制約の y_axis.min / y_axis.max は現状 wire されていない（未実装）。
-    // 実装する際は: hard min/max が suggested より優先、かつドメインを縮小できる点に注意。
-    // 上限>下限を保証（縮退時の保険）。
-    if domain_max <= domain_min {
-        domain_max = domain_min + 1.0;
-    }
-    (domain_min, domain_max)
+    ticks.ticks.sort_by(f64::total_cmp);
+    ticks.ticks.dedup_by(|left, right| *left == *right);
+    ticks
 }
 
 /// 対数軸専用のドメイン計算。線形版(上の `value_domain` 本体)と異なる点:
@@ -368,6 +442,8 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 /// 0 は最小正値の1桁下に置換してドメインへ含め、負値は通常の有限値フィルタで
 /// 自然に除外される。
 /// `suggested_min`/`suggested_max` は正の値のみ尊重する。
+/// 正の `min`/`max` は hard bound として指定側を固定し、suggested やデータによる
+/// 拡張より優先する。非正の hard bound は対数軸で使えないため無視する。
 ///
 /// 未対応(スコープ外、Task 11 実装者向けメモ): `value_domain` 本体は
 /// `ChartKind::Bar { value_stacked: true, .. }` をカテゴリごとの正負サム(スタック高さ)
@@ -385,6 +461,8 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 /// (scale_kind は常に Linear 固定)、chart.js フロントエンドも Line の stacked を常に
 /// false にする(fulgur-chart-9lug)。どちらかが解消された時点でこちらも対応が必要。
 fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
+    let hard_min = axis.min.filter(|s| s.is_finite() && *s > 0.0);
+    let hard_max = axis.max.filter(|s| s.is_finite() && *s > 0.0);
     let mut min_positive = f64::INFINITY;
     let mut max_positive = f64::NEG_INFINITY;
     let mut has_zero = false;
@@ -411,24 +489,36 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
 
     let (mut domain_min, mut domain_max) = if !min_positive.is_finite() || !max_positive.is_finite()
     {
-        // 正データが1つもない(空 / 0 のみ / 負のみ)。線形版(データなし → suggested を
-        // 初期シードにする、chart.js 互換)に倣い、正の suggested_min/suggested_max が
-        // あればそれを初期シードにする(どちらか一方だけでも可)。begin_at_zero は
-        // 対数軸では無関係(0 はドメインに含められない)。下の suggested 適用ブロックを
-        // 素通りしないよう、ここで早期 return せず通常経路に合流させる。
+        // 正データが1つもない(空 / 0 のみ / 負のみ)。正の hard min/max があれば
+        // suggested より優先し、なければ正の suggested を初期シードにする。
+        // begin_at_zero は対数軸では無関係(0 はドメインに含められない)。下の suggested
+        // 適用ブロックを素通りしないよう、ここで早期 return せず通常経路に合流させる。
         //
         // 実機バグ回帰テスト: 以前は片方だけ指定された場合の既定値が固定 1.0/10.0
         // だったため、suggested_max だけがサブユニット(例: 0.01)で指定されても
         // 固定の lo=1.0 と比較され「hi <= lo」に落ちて lo*10.0=10.0 に潰れ、
         // 明示的に設定した軸オプションが完全に無視されていた(PR #144 の自動
-        // レビューで指摘)。suggested_min のみ指定時は hi=lo*10、suggested_max
+        // レビューで指摘)。min/suggested_min のみ指定時は hi=lo*10、max/suggested_max
         // のみ指定時は lo=hi/10 と、常に「指定された側」を基準に対辺を導出する。
-        let lo = axis.suggested_min.filter(|s| s.is_finite() && *s > 0.0);
-        let hi = axis.suggested_max.filter(|s| s.is_finite() && *s > 0.0);
+        let lo = hard_min.or_else(|| axis.suggested_min.filter(|s| s.is_finite() && *s > 0.0));
+        let hi = hard_max.or_else(|| axis.suggested_max.filter(|s| s.is_finite() && *s > 0.0));
         match (lo, hi) {
             (Some(lo), Some(hi)) if hi > lo => (lo, hi),
+            (Some(lo), Some(_)) if hard_min.is_some() => {
+                // hard min は維持し、矛盾する hard max / suggestion より上へ開く。
+                (lo, (lo * 10.0).min(f64::MAX))
+            }
+            (Some(_), Some(hi)) if hard_max.is_some() => {
+                // hard max は維持し、矛盾する suggestion より下へ開く。
+                let below = hi / 10.0;
+                if below.is_finite() && below > 0.0 {
+                    (below, hi)
+                } else {
+                    (hi, (hi * 10.0).min(f64::MAX))
+                }
+            }
             // 両方指定されているが hi <= lo(不正な指定)の場合は lo を基準にする。
-            (Some(lo), _) => (lo, lo * 10.0),
+            (Some(lo), _) => (lo, (lo * 10.0).min(f64::MAX)),
             (None, Some(hi)) => {
                 let below = hi / 10.0;
                 if below.is_finite() && below > 0.0 {
@@ -452,7 +542,7 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
                 min_positive
             }
         };
-        let domain_min = if has_zero {
+        let automatic_min = if has_zero {
             // データに 0 が含まれる場合は begin_at_zero の値によらず常に1桁下げる
             // (chart.js 実測で確認済み: beginAtZero:false でも 0 混在データの min は
             // 変わらない)。
@@ -494,17 +584,22 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         } else {
             min_positive
         };
-        (domain_min, max_positive)
+        (
+            hard_min.unwrap_or(automatic_min),
+            hard_max.unwrap_or(max_positive),
+        )
     };
 
-    if let Some(s) = axis.suggested_min
+    if hard_min.is_none()
+        && let Some(s) = axis.suggested_min
         && s.is_finite()
         && s > 0.0
         && s < domain_min
     {
         domain_min = s;
     }
-    if let Some(s) = axis.suggested_max
+    if hard_max.is_none()
+        && let Some(s) = axis.suggested_max
         && s.is_finite()
         && s > 0.0
         && s > domain_max
@@ -512,23 +607,39 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         domain_max = s;
     }
     if domain_max <= domain_min {
-        // domain_min が f64::MAX 近傍(> f64::MAX/10)だと ×10 が +inf へオーバーフロー
-        // しうる。線形版の `domain_min + 1.0` と違い ×10 は極端な入力で非有限に
-        // なりうるため、その場合は f64::MAX(有限の中で広げられる最大値)へ丸める。
-        // これは domain_min < f64::MAX を保証しない: domain_min 自身が f64::MAX の
-        // とき(例: 単一の f64::MAX 値のみのデータ)は f64::MAX == domain_min のままで
-        // 縮退が解消されない。ただし線形版も同じ入力極限で
-        // `f64::MAX + 1.0 == f64::MAX`(丸めで無変化)という同じ性質を持つため、
-        // これは対数専用の後退ではない。この関数(`value_domain` 経由含む)は pub であり、
-        // 戻り値 (f64, f64) は「常に有限」という契約を将来のどんな呼び出し元に対しても
-        // 維持すべきなので、今日の唯一の呼び出し元 log_ticks_within が非有限入力を
-        // 許容する(scale.rs のコメント参照)ことに頼らず、ここで有限性を保証しておく。
-        let expanded = domain_min * 10.0;
-        domain_max = if expanded.is_finite() {
-            expanded
+        if hard_min.is_some() {
+            // hard min は維持し、交差した自動側または矛盾した hard max を上へ開く。
+            let expanded = domain_min * 10.0;
+            domain_max = if expanded.is_finite() && expanded > domain_min {
+                expanded
+            } else {
+                f64::MAX
+            };
+        } else if hard_max.is_some() {
+            // hard max は維持し、交差した自動 min を1 decade 下へ開く。
+            let lower = domain_max / 10.0;
+            if lower.is_finite() && lower > 0.0 && lower < domain_max {
+                domain_min = lower;
+            }
         } else {
-            f64::MAX
-        };
+            // domain_min が f64::MAX 近傍(> f64::MAX/10)だと ×10 が +inf へオーバーフロー
+            // しうる。線形版の `domain_min + 1.0` と違い ×10 は極端な入力で非有限に
+            // なりうるため、その場合は f64::MAX(有限の中で広げられる最大値)へ丸める。
+            // これは domain_min < f64::MAX を保証しない: domain_min 自身が f64::MAX の
+            // とき(例: 単一の f64::MAX 値のみのデータ)は f64::MAX == domain_min のままで
+            // 縮退が解消されない。ただし線形版も同じ入力極限で
+            // `f64::MAX + 1.0 == f64::MAX`(丸めで無変化)という同じ性質を持つため、
+            // これは対数専用の後退ではない。この関数(`value_domain` 経由含む)は pub であり、
+            // 戻り値 (f64, f64) は「常に有限」という契約を将来のどんな呼び出し元に対しても
+            // 維持すべきなので、今日の唯一の呼び出し元 log_ticks_within が非有限入力を
+            // 許容する(scale.rs のコメント参照)ことに頼らず、ここで有限性を保証しておく。
+            let expanded = domain_min * 10.0;
+            domain_max = if expanded.is_finite() {
+                expanded
+            } else {
+                f64::MAX
+            };
+        }
     }
     (domain_min, domain_max)
 }
@@ -554,7 +665,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y ドメイン。
     let (domain_min, domain_max) = value_domain(spec, &spec.y_axis);
     let is_log = spec.y_axis.scale_kind == ScaleKind::Logarithmic;
-    let (ticks, minor_ticks) = if is_log {
+    let (mut ticks, minor_ticks) = if is_log {
         let log = crate::scale::log_ticks_within(domain_min, domain_max);
         (
             NiceTicks {
@@ -582,6 +693,9 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     } else {
         (nice_ticks(domain_min, domain_max, 10), Vec::new())
     };
+    if !is_log {
+        ticks = apply_hard_axis_bounds(ticks, &spec.y_axis);
+    }
 
     // y 軸ラベル幅。対数軸は fmt_num_log を使う(幅の広いラベルでクリップさせない)。
     let mut max_w = 0.0_f32;
@@ -2017,6 +2131,64 @@ mod tests {
             min <= 0.0,
             "suggested_min=50 はデータの下端(0.0)を縮小してはいけない: 実際 min={min}"
         );
+    }
+
+    #[test]
+    fn value_domain_hard_min_max_override_data_suggestions_and_begin_at_zero() {
+        let mut spec = make_bar_spec(2, 600.0);
+        spec.series[0].values = vec![10.0, 90.0];
+        spec.y_axis.min = Some(20.0);
+        spec.y_axis.max = Some(80.0);
+        spec.y_axis.suggested_min = Some(-50.0);
+        spec.y_axis.suggested_max = Some(150.0);
+        // make_bar_spec の既定 begin_at_zero=true も hard bound に負ける。
+
+        assert_eq!(value_domain(&spec, &spec.y_axis), (20.0, 80.0));
+    }
+
+    #[test]
+    fn compute_preserves_hard_min_max_after_nice_tick_rounding() {
+        let mut spec = make_bar_spec(2, 600.0);
+        spec.series[0].values = vec![20.0, 80.0];
+        spec.y_axis.begin_at_zero = false;
+        spec.y_axis.min = Some(13.0);
+        spec.y_axis.max = Some(87.0);
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let frame = compute(&spec, &measurer);
+
+        assert_eq!((frame.ticks.min, frame.ticks.max), (13.0, 87.0));
+    }
+
+    #[test]
+    fn log_value_domain_hard_min_max_override_data_and_suggestions() {
+        let mut spec = make_bar_spec(2, 600.0);
+        spec.series[0].values = vec![10.0, 1000.0];
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = false;
+        spec.y_axis.min = Some(20.0);
+        spec.y_axis.max = Some(800.0);
+        spec.y_axis.suggested_min = Some(1.0);
+        spec.y_axis.suggested_max = Some(10_000.0);
+
+        assert_eq!(value_domain(&spec, &spec.y_axis), (20.0, 800.0));
+
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &measurer);
+        assert_eq!((frame.ticks.min, frame.ticks.max), (20.0, 800.0));
+        assert_eq!(frame.ys.map(20.0), frame.plot_bottom);
+        assert_eq!(frame.ys.map(800.0), frame.plot_top);
+    }
+
+    #[test]
+    fn log_value_domain_hard_max_wins_over_conflicting_suggestion_without_positive_data() {
+        let mut spec = make_bar_spec(2, 600.0);
+        spec.series[0].values = vec![0.0, -5.0];
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.max = Some(10.0);
+        spec.y_axis.suggested_min = Some(20.0);
+
+        assert_eq!(value_domain(&spec, &spec.y_axis), (1.0, 10.0));
     }
 
     #[test]

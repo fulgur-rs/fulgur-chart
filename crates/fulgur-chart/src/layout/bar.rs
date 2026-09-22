@@ -380,7 +380,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 横棒は値軸が x のため x_axis を渡す（begin_at_zero/suggested も x_axis から読む）。
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
     let is_log = spec.x_axis.scale_kind == ScaleKind::Logarithmic;
-    let (ticks, minor_ticks) = if is_log {
+    let (mut ticks, minor_ticks) = if is_log {
         let log = crate::scale::log_ticks_within(dmin, dmax);
         (
             NiceTicks {
@@ -397,6 +397,9 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     } else {
         (nice_ticks(dmin, dmax, 10), Vec::new())
     };
+    if !is_log {
+        ticks = apply_hard_axis_bounds(ticks, &spec.x_axis);
+    }
 
     // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。
     let mut max_cat_w = 0.0_f64;
@@ -1696,6 +1699,32 @@ mod horizontal_log_scale_tests {
         // カテゴリ軸(=Y)は値軸ではないので Linear のまま(scale_kind に意味を持たないが、
         // 誤って y_axis 側を対数化していないことを確認する)。
         assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Linear));
+    }
+
+    #[test]
+    fn horizontal_linear_axis_renders_hard_min_max_ticks() {
+        let scene = scene_for(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[20,80]}]},
+               "options":{"indexAxis":"y","scales":{"x":{"min":13,"max":87}}}}"#,
+        );
+        let labels: Vec<&str> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Text { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            labels.contains(&"13"),
+            "hard x-axis min should be labeled: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"87"),
+            "hard x-axis max should be labeled: {labels:?}"
+        );
+        assert!(!labels.contains(&"10") && !labels.contains(&"90"));
     }
 
     #[test]
