@@ -455,29 +455,30 @@ pub(crate) fn clip_axis_value(value: f64, ticks: &NiceTicks) -> f64 {
 /// 正の `min`/`max` は hard bound として指定側を固定し、suggested やデータによる
 /// 拡張より優先する。非正の hard bound は対数軸で使えないため無視する。
 ///
-/// 未対応(スコープ外、Task 11 実装者向けメモ): `value_domain` 本体は
-/// `ChartKind::Bar { value_stacked: true, .. }` をカテゴリごとの正負サム(スタック高さ)
-/// として特別扱いするが、この対数版はそれを行わず、全系列の値をフラットに
-/// min/max するだけ。積み上げ棒 + 対数軸の組み合わせは現状 `frontend/chartjs.rs`
-/// 側でも弾かれておらず(`ChartKind::Bar { horizontal: false, .. }` は
-/// `value_stacked` の真偽を問わず対数軸を許可する)、そのまま Task 11 のピクセル
-/// マッピングまで届くとスタック高さではなく個々の値でドメインが決まり、
-/// バーがプロット領域からはみ出しうる(fulgur-chart-bap)。対数スケール上での
-/// スタック合成の意味論(chart.js 実機がどう扱うか)は未調査のため、ここで
-/// 独自に決め打ちしない。
-///
-/// 同じギャップは `ChartKind::Line { stacked: true }` にも存在する(fulgur-chart-boo.8)。
-/// 現状は到達不能: Vega-Lite フロントエンドは y 軸の log scale 入力サーフェスを持たず
-/// (scale_kind は常に Linear 固定)、chart.js フロントエンドも Line の stacked を常に
-/// false にする(fulgur-chart-9lug)。どちらかが解消された時点でこちらも対応が必要。
+/// `ChartKind::Bar { value_stacked: true, .. }` はカテゴリごとに正の値を合算して
+/// domain 上限へ含める。対数軸では非正値を写像できないため積み上げの合計にも含めない。
+/// `ChartKind::Line { stacked: true }` は別 issue の対象で、現状の各フロントエンドからは
+/// 到達しない(Vega-Lite の scale_kind は Linear 固定、Chart.js は stacked を false にする)。
 fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let hard_min = axis.min.filter(|s| s.is_finite() && *s > 0.0);
     let hard_max = axis.max.filter(|s| s.is_finite() && *s > 0.0);
     let mut min_positive = f64::INFINITY;
     let mut max_positive = f64::NEG_INFINITY;
     let mut has_zero = false;
+    let is_stacked_bar = matches!(
+        spec.kind,
+        crate::ir::ChartKind::Bar {
+            value_stacked: true,
+            ..
+        }
+    );
+    let mut positive_stack_sums = if is_stacked_bar {
+        vec![0.0_f64; spec.categories.len()]
+    } else {
+        Vec::new()
+    };
     for s in &spec.series {
-        for &v in &s.values {
+        for (index, &v) in s.values.iter().enumerate() {
             if !v.is_finite() {
                 continue;
             }
@@ -492,8 +493,24 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
                 if v > max_positive {
                     max_positive = v;
                 }
+                if let Some(sum) = positive_stack_sums.get_mut(index) {
+                    // 正のスタック合計を有限に保つ。極端な IR 入力で加算が overflow
+                    // した場合は、有限 f64 の最大値で飽和させる。
+                    *sum = if *sum > f64::MAX - v {
+                        f64::MAX
+                    } else {
+                        *sum + v
+                    };
+                }
             }
             // v < 0.0 は対数軸に写像できないため、ドメインから除外する。
+        }
+    }
+    if is_stacked_bar {
+        for sum in positive_stack_sums {
+            if sum > max_positive {
+                max_positive = sum;
+            }
         }
     }
 
@@ -2213,6 +2230,46 @@ mod tests {
         let (min, max) = value_domain(&spec, &spec.y_axis);
         assert_eq!(min, 5.0);
         assert_eq!(max, 500.0);
+    }
+
+    #[test]
+    fn log_value_domain_includes_positive_stacked_bar_totals() {
+        let mut spec = make_bar_spec(2, 600.0);
+        spec.kind = ChartKind::Bar {
+            horizontal: false,
+            placement_stacked: true,
+            value_stacked: true,
+        };
+        spec.series[0].values = vec![10.0, 20.0];
+        let mut second = spec.series[0].clone();
+        second.values = vec![30.0, -7.0];
+        spec.series.push(second);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = false;
+
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+
+        assert_eq!((min, max), (10.0, 40.0));
+    }
+
+    #[test]
+    fn log_value_domain_stacked_bar_preserves_hard_max() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.kind = ChartKind::Bar {
+            horizontal: false,
+            placement_stacked: true,
+            value_stacked: true,
+        };
+        spec.series[0].values = vec![10.0];
+        let mut second = spec.series[0].clone();
+        second.values = vec![30.0];
+        spec.series.push(second);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = false;
+        spec.y_axis.min = Some(8.0);
+        spec.y_axis.max = Some(35.0);
+
+        assert_eq!(value_domain(&spec, &spec.y_axis), (8.0, 35.0));
     }
 
     #[test]
