@@ -460,8 +460,6 @@ pub(crate) fn clip_axis_value(value: f64, ticks: &NiceTicks) -> f64 {
 /// `ChartKind::Line { stacked: true }` は別 issue の対象で、現状の各フロントエンドからは
 /// 到達しない(Vega-Lite の scale_kind は Linear 固定、Chart.js は stacked を false にする)。
 fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
-    let hard_min = axis.min.filter(|s| s.is_finite() && *s > 0.0);
-    let hard_max = axis.max.filter(|s| s.is_finite() && *s > 0.0);
     let mut min_positive = f64::INFINITY;
     let mut max_positive = f64::NEG_INFINITY;
     let mut has_zero = false;
@@ -514,6 +512,19 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         }
     }
 
+    log_axis_domain_from_extrema(axis, min_positive, max_positive, has_zero)
+}
+
+/// 対数軸のデータ極値と `AxisSpec` から domain を解決する。
+/// `min_positive` / `max_positive` が有限でない場合は正のデータが無いものとして扱う。
+pub(crate) fn log_axis_domain_from_extrema(
+    axis: &AxisSpec,
+    min_positive: f64,
+    max_positive: f64,
+    has_zero: bool,
+) -> (f64, f64) {
+    let hard_min = axis.min.filter(|s| s.is_finite() && *s > 0.0);
+    let hard_max = axis.max.filter(|s| s.is_finite() && *s > 0.0);
     let (mut domain_min, mut domain_max) = if !min_positive.is_finite() || !max_positive.is_finite()
     {
         // 正データが1つもない(空 / 0 のみ / 負のみ)。正の hard min/max があれば

@@ -786,14 +786,15 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let x_opts = raw.options.scales.as_ref().and_then(|s| s.x.as_ref());
     let y_opts = raw.options.scales.as_ref().and_then(|s| s.y.as_ref());
 
-    // v1 スコープ: 縦棒・横棒・折れ線の「値軸」のみ log を許可する。
-    // カテゴリ軸や他 kind への type:"logarithmic" 指定は黙って無視(Linear のまま)。
+    // bar/line の値軸と scatter/bubble の数値 x/y 軸で log を許可する。
+    // カテゴリ軸や未対応 kind への type:"logarithmic" 指定は黙って無視(Linear のまま)。
     let x_axis_is_log = matches!(
         kind,
         ChartKind::Bar {
             horizontal: true,
             ..
-        }
+        } | ChartKind::Scatter
+            | ChartKind::Bubble
     ) && is_logarithmic(x_opts);
     let y_axis_is_log = matches!(
         kind,
@@ -801,6 +802,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             horizontal: false,
             ..
         } | ChartKind::Line { .. }
+            | ChartKind::Scatter
+            | ChartKind::Bubble
     ) && is_logarithmic(y_opts);
     let series: Vec<Series> = raw
         .data
@@ -3920,6 +3923,27 @@ mod tests {
             parse(json, true).is_ok(),
             "strict mode should accept scales.y.type"
         );
+    }
+
+    #[test]
+    fn strict_mode_accepts_logarithmic_axes_for_scatter_and_bubble() {
+        let scatter = r##"{
+          "type":"scatter",
+          "data":{"datasets":[{"data":[{"x":1,"y":2},{"x":10,"y":20}]}]},
+          "options":{"scales":{"x":{"type":"logarithmic"},"y":{"type":"logarithmic"}}}
+        }"##;
+        let scatter_spec = parse(scatter, true).expect("strict scatter with log axes should parse");
+        assert_eq!(scatter_spec.x_axis.scale_kind, ScaleKind::Logarithmic);
+        assert_eq!(scatter_spec.y_axis.scale_kind, ScaleKind::Logarithmic);
+
+        let bubble = r##"{
+          "type":"bubble",
+          "data":{"datasets":[{"data":[{"x":1,"y":2,"r":5},{"x":10,"y":20,"r":10}]}]},
+          "options":{"scales":{"x":{"type":"logarithmic"},"y":{"type":"logarithmic"}}}
+        }"##;
+        let bubble_spec = parse(bubble, true).expect("strict bubble with log axes should parse");
+        assert_eq!(bubble_spec.x_axis.scale_kind, ScaleKind::Logarithmic);
+        assert_eq!(bubble_spec.y_axis.scale_kind, ScaleKind::Logarithmic);
     }
 
     #[test]

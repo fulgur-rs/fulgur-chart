@@ -1,15 +1,17 @@
-//! scatter チャート: 線形 x × 線形 y 軸に点(円)を描く。
+//! scatter チャート: 数値 x/y 軸に点(円)を描く。
 //! カテゴリ系の `common::compute` は x をカテゴリ前提にするため、ここでは
-//! 線形フレームを自前で組む。共有できる凡例/定数/テーマは `common` を再利用する。
+//! scatter 固有のフレームを自前で組む。共有できる凡例/定数/テーマは `common` を再利用する。
 
 use super::common::{
     AXIS_TITLE_BAND, LEGEND_BAND, OUTER_PAD, TEXT_BASELINE_RATIO, TITLE_BAND, TITLE_FONT,
     X_LABEL_BAND, X_LABEL_CENTER_RATIO, draw_vertical_legend, legend_band_width_vertical,
     legend_entry_width,
 };
-use crate::ir::{AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, Point};
-use crate::num::fmt_num;
-use crate::scale::{LinearScale, NiceTicks, nice_ticks};
+use crate::ir::{
+    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, Point, ScaleKind,
+};
+use crate::num::{fmt_num, fmt_num_log};
+use crate::scale::{LinearScale, NiceTicks, ValueScale, log_ticks_within, nice_ticks};
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 
@@ -31,13 +33,16 @@ pub struct PointBox {
     pub r: f64,
 }
 
-/// scatter/bubble の自前フレーム（`common::compute` を使わない線形軸系）。
+/// scatter/bubble の自前フレーム（`common::compute` はカテゴリ軸前提のため使わない）。
 #[derive(Debug, Clone)]
 pub struct ScatterLayout {
-    pub xs: LinearScale,
-    pub ys: LinearScale,
+    pub xs: ValueScale,
+    pub ys: ValueScale,
     pub x_ticks: NiceTicks,
     pub y_ticks: NiceTicks,
+    /// 対数軸のラベルなし minor 目盛。線形軸では空。
+    pub x_minor_ticks: Vec<f64>,
+    pub y_minor_ticks: Vec<f64>,
     pub plot_left: f64,
     pub plot_right: f64,
     pub plot_top: f64,
@@ -50,11 +55,11 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     let label_font = spec.theme.font_size;
     let (xmin, xmax) = axis_domain(spec, &spec.x_axis, |p| p.x);
     let (ymin, ymax) = axis_domain(spec, &spec.y_axis, |p| p.y);
-    let x_ticks = super::common::apply_hard_axis_bounds(nice_ticks(xmin, xmax, 10), &spec.x_axis);
-    let y_ticks = super::common::apply_hard_axis_bounds(nice_ticks(ymin, ymax, 10), &spec.y_axis);
+    let (x_ticks, x_minor_ticks) = axis_ticks(&spec.x_axis, xmin, xmax);
+    let (y_ticks, y_minor_ticks) = axis_ticks(&spec.y_axis, ymin, ymax);
     let mut max_y_w = 0.0_f32;
     for &t in &y_ticks.ticks {
-        let w = m.width(&crate::num::fmt_num(t), label_font as f32);
+        let w = m.width(&format_axis_tick(&spec.y_axis, t), label_font as f32);
         if w > max_y_w {
             max_y_w = w;
         }
@@ -109,14 +114,55 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
     ScatterLayout {
-        xs: LinearScale::new(x_ticks.min, x_ticks.max, plot_left, plot_right),
-        ys: LinearScale::new(y_ticks.min, y_ticks.max, plot_bottom, plot_top),
+        xs: axis_scale(&spec.x_axis, &x_ticks, plot_left, plot_right),
+        ys: axis_scale(&spec.y_axis, &y_ticks, plot_bottom, plot_top),
         x_ticks,
         y_ticks,
+        x_minor_ticks,
+        y_minor_ticks,
         plot_left,
         plot_right,
         plot_top,
         plot_bottom,
+    }
+}
+
+fn axis_ticks(axis: &AxisSpec, data_min: f64, data_max: f64) -> (NiceTicks, Vec<f64>) {
+    if axis.scale_kind == ScaleKind::Logarithmic {
+        let log = log_ticks_within(data_min, data_max);
+        (
+            NiceTicks {
+                min: log.min,
+                max: log.max,
+                step: 0.0,
+                ticks: log.major,
+            },
+            log.minor,
+        )
+    } else {
+        (
+            super::common::apply_hard_axis_bounds(nice_ticks(data_min, data_max, 10), axis),
+            Vec::new(),
+        )
+    }
+}
+
+fn axis_scale(axis: &AxisSpec, ticks: &NiceTicks, pixel_min: f64, pixel_max: f64) -> ValueScale {
+    if axis.scale_kind == ScaleKind::Logarithmic {
+        ValueScale::Log {
+            inner: LinearScale::new(ticks.min.log10(), ticks.max.log10(), pixel_min, pixel_max),
+            floor: ticks.min,
+        }
+    } else {
+        ValueScale::Linear(LinearScale::new(ticks.min, ticks.max, pixel_min, pixel_max))
+    }
+}
+
+fn format_axis_tick(axis: &AxisSpec, tick: f64) -> String {
+    if axis.scale_kind == ScaleKind::Logarithmic {
+        fmt_num_log(tick)
+    } else {
+        fmt_num(tick)
     }
 }
 
@@ -182,14 +228,40 @@ fn has_legend(spec: &ChartSpec) -> bool {
 }
 
 /// 全系列の全点から 1 軸ぶんのドメインを求める。`select` で x/y を選ぶ。
-/// 非有限値は無視し、有限値が無ければ 0.0..1.0 にフォールバックする(NaN/panic 回避)。
-/// nice_ticks 側が min==max(縮退)を吸収するため、ここでは追加の拡張はしない。
-/// `axis_spec` の suggested_min/suggested_max はドメインを広げるだけ(データが優先)。
+/// 線形軸では非有限値を無視し、有限値が無ければ 0.0..1.0 にフォールバックする。
+/// 対数軸では正値だけをデータ範囲に使い、ゼロの扱い・bounds・suggestions は
+/// common の log domain 解決を共有する。
 pub(crate) fn axis_domain(
     spec: &ChartSpec,
     axis_spec: &AxisSpec,
     select: impl Fn(&Point) -> f64,
 ) -> (f64, f64) {
+    if axis_spec.scale_kind == ScaleKind::Logarithmic {
+        let mut min_positive = f64::INFINITY;
+        let mut max_positive = f64::NEG_INFINITY;
+        let mut has_zero = false;
+        for s in &spec.series {
+            for p in &s.points {
+                let value = select(p);
+                if !value.is_finite() {
+                    continue;
+                }
+                if value == 0.0 {
+                    has_zero = true;
+                } else if value > 0.0 {
+                    min_positive = min_positive.min(value);
+                    max_positive = max_positive.max(value);
+                }
+            }
+        }
+        return super::common::log_axis_domain_from_extrema(
+            axis_spec,
+            min_positive,
+            max_positive,
+            has_zero,
+        );
+    }
+
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
     for s in &spec.series {
@@ -223,6 +295,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // グリッド描画用 ticks は compute_scatter_layout で計算済み。
     let x_ticks = &layout.x_ticks;
     let y_ticks = &layout.y_ticks;
+    let x_minor_ticks = &layout.x_minor_ticks;
+    let y_minor_ticks = &layout.y_minor_ticks;
 
     // 凡例描画用フラグ(フレーム計算ではなく表示用)。
     let legend = has_legend(spec);
@@ -257,6 +331,24 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // Prim::Line を落とすが、目盛りラベルは常に残す。
     let y_grid_cfg = &spec.y_axis.grid;
     let y_grid_color = y_grid_cfg.color.unwrap_or(spec.theme.grid_color);
+    if y_grid_cfg.display {
+        let minor_color = Color {
+            a: y_grid_color.a * 0.5,
+            ..y_grid_color
+        };
+        for &t in y_minor_ticks {
+            let y = ys.map(t);
+            items.push(Prim::Line {
+                x1: plot_left,
+                y1: y,
+                x2: plot_right,
+                y2: y,
+                stroke: minor_color,
+                stroke_width: y_grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
+    }
     for &t in &y_ticks.ticks {
         let y = ys.map(t);
         if y_grid_cfg.display {
@@ -276,7 +368,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             size: label_font,
             anchor: Anchor::End,
             fill: ink,
-            content: fmt_num(t),
+            content: format_axis_tick(&spec.y_axis, t),
             rotate_deg: None,
         });
     }
@@ -285,6 +377,24 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // Prim::Line を落とすが、目盛りラベルは常に残す。
     let x_grid_cfg = &spec.x_axis.grid;
     let x_grid_color = x_grid_cfg.color.unwrap_or(spec.theme.grid_color);
+    if x_grid_cfg.display {
+        let minor_color = Color {
+            a: x_grid_color.a * 0.5,
+            ..x_grid_color
+        };
+        for &t in x_minor_ticks {
+            let x = xs.map(t);
+            items.push(Prim::Line {
+                x1: x,
+                y1: plot_top,
+                x2: x,
+                y2: plot_bottom,
+                stroke: minor_color,
+                stroke_width: x_grid_cfg.line_width,
+                dash: Vec::new(),
+            });
+        }
+    }
     for &t in &x_ticks.ticks {
         let x = xs.map(t);
         if x_grid_cfg.display {
@@ -304,7 +414,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             size: label_font,
             anchor: Anchor::Middle,
             fill: ink,
-            content: fmt_num(t),
+            content: format_axis_tick(&spec.x_axis, t),
             rotate_deg: None,
         });
     }
@@ -342,7 +452,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     const TICK_LEN: f64 = 4.0;
     if y_grid_cfg.draw_ticks {
         let tick_color = y_grid_cfg.color.unwrap_or(ink);
-        for &t in &y_ticks.ticks {
+        for &t in y_ticks.ticks.iter().chain(y_minor_ticks.iter()) {
             let y = ys.map(t);
             items.push(Prim::Line {
                 x1: plot_left - TICK_LEN,
@@ -357,7 +467,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
     if x_grid_cfg.draw_ticks {
         let tick_color = x_grid_cfg.color.unwrap_or(ink);
-        for &t in &x_ticks.ticks {
+        for &t in x_ticks.ticks.iter().chain(x_minor_ticks.iter()) {
             let x = xs.map(t);
             items.push(Prim::Line {
                 x1: x,
@@ -706,6 +816,109 @@ mod tests {
         let layout = compute_scatter_layout(&spec, &m);
         let pts = scatter_points(&spec, &layout);
         assert_eq!(pts.len(), 2);
+    }
+
+    #[test]
+    fn log_axis_domain_uses_positive_values_and_zero_extends_one_decade() {
+        let mut spec = make_scatter_spec(&[(0.0, 1.0), (-100.0, 2.0), (0.01, 3.0), (100.0, 4.0)]);
+        spec.x_axis.scale_kind = ScaleKind::Logarithmic;
+
+        let (min, max) = axis_domain(&spec, &spec.x_axis, |p| p.x);
+
+        assert_eq!((min, max), (0.001, 100.0));
+    }
+
+    #[test]
+    fn log_x_scale_places_each_decade_at_equal_pixel_intervals() {
+        let mut spec = make_scatter_spec(&[(1.0, 1.0), (10.0, 2.0), (100.0, 3.0)]);
+        spec.x_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.x_axis.min = Some(1.0);
+        spec.x_axis.max = Some(100.0);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let layout = compute_scatter_layout(&spec, &m);
+        let points = scatter_points(&spec, &layout);
+
+        assert_eq!(layout.x_ticks.step, 0.0);
+        assert_eq!(
+            layout.x_ticks.ticks,
+            vec![1.0, 10.0, 100.0],
+            "major ticks should mark each decade"
+        );
+        assert!(!layout.x_minor_ticks.is_empty());
+        assert!((points[0].cx - layout.plot_left).abs() < 1e-9);
+        assert!((points[1].cx - (layout.plot_left + layout.plot_right) / 2.0).abs() < 1e-9);
+        assert!((points[2].cx - layout.plot_right).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scatter_points_skips_non_positive_values_on_log_axes() {
+        let mut spec = make_scatter_spec(&[(-1.0, 5.0), (0.0, 6.0), (1.0, 7.0), (10.0, 8.0)]);
+        spec.x_axis.scale_kind = ScaleKind::Logarithmic;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let layout = compute_scatter_layout(&spec, &m);
+
+        let points = scatter_points(&spec, &layout);
+
+        assert_eq!(
+            points.iter().map(|point| point.index).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+    }
+
+    #[test]
+    fn log_axis_tick_labels_keep_small_values_full_precision() {
+        let mut spec = make_scatter_spec(&[(0.0001, 0.001), (1.0, 1000.0)]);
+        spec.x_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let layout = compute_scatter_layout(&spec, &m);
+        let scene = build(&spec, &m);
+
+        assert!(
+            scene.items.iter().any(|item| matches!(
+                item,
+                Prim::Text { content, anchor: Anchor::Middle, .. } if content == "0.0001"
+            )),
+            "logarithmic x-axis labels should preserve small values"
+        );
+        assert!(
+            scene.items.iter().any(|item| matches!(
+                item,
+                Prim::Text { content, anchor: Anchor::End, .. } if content == "0.001"
+            )),
+            "logarithmic y-axis labels should preserve small values"
+        );
+        let x_minor_lines = scene
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(item,
+                    Prim::Line { x1, x2, y1, y2, stroke, .. }
+                        if (x1 - x2).abs() < 1e-9
+                            && (*y1 - layout.plot_top).abs() < 1e-9
+                            && (*y2 - layout.plot_bottom).abs() < 1e-9
+                            && (stroke.a - spec.theme.grid_color.a * 0.5).abs() < 1e-6
+                )
+            })
+            .count();
+        assert_eq!(x_minor_lines, layout.x_minor_ticks.len());
+
+        let y_minor_lines = scene
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(item,
+                    Prim::Line { x1, x2, y1, y2, stroke, .. }
+                        if (y1 - y2).abs() < 1e-9
+                            && (*x1 - layout.plot_left).abs() < 1e-9
+                            && (*x2 - layout.plot_right).abs() < 1e-9
+                            && (stroke.a - spec.theme.grid_color.a * 0.5).abs() < 1e-6
+                )
+            })
+            .count();
+        assert_eq!(y_minor_lines, layout.y_minor_ticks.len());
     }
 
     #[test]

@@ -477,19 +477,20 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
             };
             Some((category_axis(&spec.categories), x_model, t.ticks.len()))
         }
-        // scatter/bubble: x・y とも線形。renderer (scatter::build) と同じ axis_domain を共有。
+        // scatter/bubble: x・y とも数値軸。renderer と同じ layout/ticks を共有する。
         ChartKind::Scatter | ChartKind::Bubble => {
-            let (xlo, xhi) = crate::layout::scatter::axis_domain(spec, &spec.x_axis, |p| p.x);
-            let (ylo, yhi) = crate::layout::scatter::axis_domain(spec, &spec.y_axis, |p| p.y);
-            let xt = crate::layout::common::apply_hard_axis_bounds(
-                nice_ticks(xlo, xhi, 10),
-                &spec.x_axis,
-            );
-            let yt = crate::layout::common::apply_hard_axis_bounds(
-                nice_ticks(ylo, yhi, 10),
-                &spec.y_axis,
-            );
-            Some((linear_axis(&xt), linear_axis(&yt), yt.ticks.len()))
+            let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
+            let x = if spec.x_axis.scale_kind == crate::ir::ScaleKind::Logarithmic {
+                logarithmic_axis(&layout.x_ticks)
+            } else {
+                linear_axis(&layout.x_ticks)
+            };
+            let y = if spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic {
+                logarithmic_axis(&layout.y_ticks)
+            } else {
+                linear_axis(&layout.y_ticks)
+            };
+            Some((x, y, layout.y_ticks.ticks.len()))
         }
         // boxplot: カテゴリ x、線形 y。ドメインは layout::boxplot と共有。
         ChartKind::BoxPlot => {
@@ -852,34 +853,32 @@ mod tests {
     }
 
     #[test]
-    fn scatter_bubble_boxplot_never_report_logarithmic_axes() {
-        // frontend の v1 スコープでは scatter/bubble/boxplot に scale_kind::Logarithmic は
-        // 決して付与されない(chartjs.rs の x_axis_is_log/y_axis_is_log は
-        // Bar{horizontal:false}|Line|Bar{horizontal:true} にしかマッチしない)。
-        // type:"logarithmic" を指定しても無視されて linear のままであることを確認する。
+    fn scatter_and_bubble_report_logarithmic_axes_but_boxplot_does_not() {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
 
         let scatter_json = r#"{"type":"scatter","data":{"datasets":[{"data":[
           {"x":1,"y":2},{"x":3,"y":8}]}]},
           "options":{"scales":{"x":{"type":"logarithmic"},"y":{"type":"logarithmic"}}}}"#;
         let spec = chartjs::parse(scatter_json, false).unwrap();
-        assert_eq!(spec.x_axis.scale_kind, crate::ir::ScaleKind::Linear);
-        assert_eq!(spec.y_axis.scale_kind, crate::ir::ScaleKind::Linear);
+        assert_eq!(spec.x_axis.scale_kind, crate::ir::ScaleKind::Logarithmic);
+        assert_eq!(spec.y_axis.scale_kind, crate::ir::ScaleKind::Logarithmic);
         let model = build_model(&spec, &m);
         let axes = model.axes.expect("scatter には軸があるべき");
-        assert_eq!(axes.x.kind, "linear");
-        assert_eq!(axes.y.kind, "linear");
+        assert_eq!(axes.x.kind, "logarithmic");
+        assert_eq!(axes.y.kind, "logarithmic");
+        assert_eq!(axes.x.step, None);
+        assert_eq!(axes.y.step, None);
 
         let bubble_json = r#"{"type":"bubble","data":{"datasets":[
           {"data":[{"x":1,"y":2,"r":10}]}]},
           "options":{"scales":{"x":{"type":"logarithmic"},"y":{"type":"logarithmic"}}}}"#;
         let spec = chartjs::parse(bubble_json, false).unwrap();
-        assert_eq!(spec.x_axis.scale_kind, crate::ir::ScaleKind::Linear);
-        assert_eq!(spec.y_axis.scale_kind, crate::ir::ScaleKind::Linear);
+        assert_eq!(spec.x_axis.scale_kind, crate::ir::ScaleKind::Logarithmic);
+        assert_eq!(spec.y_axis.scale_kind, crate::ir::ScaleKind::Logarithmic);
         let model = build_model(&spec, &m);
         let axes = model.axes.expect("bubble には軸があるべき");
-        assert_eq!(axes.x.kind, "linear");
-        assert_eq!(axes.y.kind, "linear");
+        assert_eq!(axes.x.kind, "logarithmic");
+        assert_eq!(axes.y.kind, "logarithmic");
 
         let boxplot_json = r#"{"type":"boxplot","data":{"labels":["a"],
           "datasets":[{"data":[[1,2,3,4,5]]}]},

@@ -9,7 +9,8 @@ pub struct Color {
     pub a: f32, // 0.0–1.0
 }
 
-/// 散布図(scatter)/バブル(bubble)の点データ。`x`/`y` は線形座標、`r` は任意の半径。
+/// 散布図(scatter)/バブル(bubble)の点データ。`x`/`y` は各軸の scale で写像される数値、
+/// `r` は任意の半径。
 /// カテゴリ系チャート(bar/line/pie)はこれを使わず `values` を使う。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point {
@@ -251,10 +252,8 @@ pub struct AxisSpec {
     pub grid: AxisGrid,
     pub border: AxisBorder,
     /// 数値軸の目盛スケール種別。カテゴリ軸(XPositions::Category が支配する軸)では
-    /// 意味を持たないが、AxisSpec は x/y 共通型のため常に存在する。現状
-    /// `ChartKind::Bar{..}` / `Line` の値軸のみが Logarithmic を消費する
-    /// (frontend/chartjs.rs でその2 kind の値軸以外は常に Linear に強制される)。
-    /// scatter/bubble 等への対応は別issue(fulgur-chart-rwe)。
+    /// 意味を持たないが、AxisSpec は x/y 共通型のため常に存在する。`Bar{..}` / `Line`
+    /// の値軸と `Scatter` / `Bubble` の数値軸が Logarithmic を消費する。
     pub scale_kind: ScaleKind,
 }
 
