@@ -1,6 +1,11 @@
+use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::chartjs;
+use fulgur_chart::layout::build_scene;
 use fulgur_chart::render::render_chart;
+use fulgur_chart::scene::Prim;
+use fulgur_chart::text::TextMeasurer;
 
+/// Parses and renders one Chart.js-compatible JSON spec as SVG.
 fn render(json: &str) -> String {
     render_chart(&chartjs::parse(json, false).unwrap())
 }
@@ -54,4 +59,59 @@ fn mixed_deterministic() {
 fn mixed_snapshot() {
     let svg = render(MIXED_JSON);
     insta::assert_snapshot!(svg);
+}
+
+/// Higher order datasets paint behind lower order datasets across bar and line layers.
+#[test]
+fn mixed_dataset_order_controls_front_to_back_painting() {
+    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let high_order_line_json = r##"{"type":"bar","data":{"labels":["x"],"datasets":[
+      {"label":"bar","order":1,"data":[1],"backgroundColor":"#ff0000"},
+      {"label":"line","type":"line","order":2.5,"data":[2],"borderColor":"#0000ff"}
+    ]}}"##;
+    let high_order_line = chartjs::parse(high_order_line_json, false).unwrap();
+    let scene = build_scene(&high_order_line, &m);
+    let line_index = scene
+        .items
+        .iter()
+        .position(|prim| {
+            matches!(prim, Prim::Circle { r: 3.0, fill, .. } if fill.r == 0 && fill.g == 0 && fill.b == 255)
+        })
+        .expect("line data marker");
+    let bar_index = scene
+        .items
+        .iter()
+        .position(|prim| {
+            matches!(prim, Prim::Rect { w, h, fill, .. } if *w > 15.0 && *h > 0.0 && fill.r == 255 && fill.g == 0 && fill.b == 0)
+        })
+        .expect("bar data rectangle");
+    assert!(
+        line_index < bar_index,
+        "higher order line should paint behind lower order bar"
+    );
+
+    let high_order_bar_json = r##"{"type":"bar","data":{"labels":["x"],"datasets":[
+      {"label":"bar","order":2.5,"data":[1],"backgroundColor":"#ff0000"},
+      {"label":"line","type":"line","order":1.5,"data":[2],"borderColor":"#0000ff"}
+    ]}}"##;
+    let high_order_bar = chartjs::parse(high_order_bar_json, false).unwrap();
+    let scene = build_scene(&high_order_bar, &m);
+    let line_index = scene
+        .items
+        .iter()
+        .position(|prim| {
+            matches!(prim, Prim::Circle { r: 3.0, fill, .. } if fill.r == 0 && fill.g == 0 && fill.b == 255)
+        })
+        .expect("line data marker");
+    let bar_index = scene
+        .items
+        .iter()
+        .position(|prim| {
+            matches!(prim, Prim::Rect { w, h, fill, .. } if *w > 15.0 && *h > 0.0 && fill.r == 255 && fill.g == 0 && fill.b == 0)
+        })
+        .expect("bar data rectangle");
+    assert!(
+        bar_index < line_index,
+        "higher order bar should paint behind lower order line"
+    );
 }
