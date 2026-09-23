@@ -210,6 +210,8 @@ struct RawData {
 struct RawDataset {
     #[serde(default)]
     label: String,
+    #[serde(default)]
+    order: Option<i32>,
     /// dataset 別の描画種別("bar"/"line")。混合チャートで使う。未指定なら chart 基本型に従う。
     #[serde(rename = "type", default)]
     dataset_type: Option<String>,
@@ -841,12 +843,17 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             | ChartKind::Scatter
             | ChartKind::Bubble
     ) && is_logarithmic(y_opts);
+    let is_mixed = matches!(kind, ChartKind::Mixed);
+    let mut dataset_orders = is_mixed.then(|| Vec::with_capacity(raw.data.datasets.len()));
     let series: Vec<Series> = raw
         .data
         .datasets
         .into_iter()
         .enumerate()
         .map(|(i, ds)| {
+            if let Some(orders) = dataset_orders.as_mut() {
+                orders.push(ds.order.unwrap_or(0));
+            }
             // 点ベースは点データ、boxplot はボックスデータ、それ以外は数値配列を採る。`data` は一度だけ消費する。
             let (values, points, box_points) = if is_point_based {
                 (vec![], ds.data.into_points(), vec![])
@@ -935,6 +942,25 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
         })
         .collect();
+
+    // Chart.js は order 昇順で凡例・tooltip の系列を並べ、同値では宣言順を使う。
+    // 描画側はこの順序を逆にたどり、高い order を先に(背面へ)描く。
+    // 非 mixed chart は追加の order 配列・並べ替え領域を確保しない。
+    let series = if let Some(orders) = dataset_orders {
+        let mut ordered_series: Vec<(i32, usize, Series)> = series
+            .into_iter()
+            .zip(orders)
+            .enumerate()
+            .map(|(index, (series, order))| (order, index, series))
+            .collect();
+        ordered_series.sort_by_key(|(order, index, _)| (*order, *index));
+        ordered_series
+            .into_iter()
+            .map(|(_, _, series)| series)
+            .collect()
+    } else {
+        series
+    };
 
     // レーダーは負値に未対応。半径が負になると頂点が反対スポークへ反転し、
     // 実データと異なる多角形になるため、parse 時に明示的に拒否する。
@@ -1366,7 +1392,9 @@ fn check_unknown_keys(
     };
 
     check_object(top, &["type", "data", "options", "width", "height"], "")?;
-    let line_root = top.get("type").and_then(|value| value.as_str()) == Some("line");
+    let chart_type = top.get("type").and_then(|value| value.as_str());
+    let line_root = chart_type == Some("line");
+    let bar_root = chart_type == Some("bar");
 
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
         check_object(data, &["labels", "datasets"], "data")?;
@@ -1376,6 +1404,7 @@ fn check_unknown_keys(
                     let dataset_keys: &[&str] = if line_root {
                         &[
                             "label",
+                            "order",
                             "type",
                             "data",
                             "backgroundColor",
@@ -1385,6 +1414,19 @@ fn check_unknown_keys(
                             "tension",
                             "spanGaps",
                             "stepped",
+                            "pointRadius",
+                        ]
+                    } else if bar_root {
+                        &[
+                            "label",
+                            "order",
+                            "type",
+                            "data",
+                            "backgroundColor",
+                            "borderColor",
+                            "borderWidth",
+                            "fill",
+                            "tension",
                             "pointRadius",
                         ]
                     } else {

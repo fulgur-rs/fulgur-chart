@@ -29,6 +29,72 @@ fn parses_minimal_bar_spec() {
 }
 
 #[test]
+fn mixed_dataset_order_controls_series_and_model_order() {
+    let json = r#"{
+      "type": "bar",
+      "data": {"labels": ["x"], "datasets": [
+        {"label":"late line", "type":"line", "order":4, "data":[4]},
+        {"label":"early bar", "type":"bar", "order":-1, "data":[1]},
+        {"label":"default line", "type":"line", "data":[2]},
+        {"label":"default bar", "type":"bar", "order":0, "data":[3]}
+      ]}
+    }"#;
+    let spec = chartjs::parse(json, true).unwrap();
+    let labels: Vec<_> = spec
+        .series
+        .iter()
+        .map(|series| series.name.as_str())
+        .collect();
+    assert_eq!(
+        labels,
+        ["early bar", "default line", "default bar", "late line"]
+    );
+    let svg = fulgur_chart::render::render_chart(&spec);
+    let legend_positions: Vec<_> = labels
+        .iter()
+        .map(|label| svg.find(label).expect("legend label in SVG"))
+        .collect();
+    assert!(legend_positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let model = fulgur_chart::model::build_model_core(&spec);
+    let model_labels: Vec<_> = model
+        .series
+        .iter()
+        .map(|series| series.label.as_str())
+        .collect();
+    assert_eq!(model_labels, labels);
+}
+
+#[test]
+fn dataset_order_is_accepted_by_bar_and_line_schemas() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+
+    let bar_json = r#"{"type":"bar","data":{"datasets":[
+      {"type":"bar","order":2,"data":[1]},
+      {"type":"line","order":1,"data":[2]}
+    ]}}"#;
+    let line_json = r#"{"type":"line","data":{"datasets":[
+      {"order":-1,"data":[1]}
+    ]}}"#;
+    let pie_json = r#"{"type":"pie","data":{"datasets":[
+      {"order":1,"data":[1]}
+    ]}}"#;
+
+    assert!(matches!(
+        serde_json::from_str::<ChartJsSpec>(bar_json).unwrap(),
+        ChartJsSpec::Bar(_)
+    ));
+    assert!(matches!(
+        serde_json::from_str::<ChartJsSpec>(line_json).unwrap(),
+        ChartJsSpec::Line(_)
+    ));
+    assert!(chartjs::parse(bar_json, true).is_ok());
+    assert!(chartjs::parse(line_json, true).is_ok());
+    assert!(serde_json::from_str::<ChartJsSpec>(pie_json).is_err());
+    assert!(chartjs::parse(pie_json, true).is_err());
+}
+
+#[test]
 fn horizontal_bar_via_index_axis_y() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"indexAxis":"y"} }"#;
