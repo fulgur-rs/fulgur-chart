@@ -391,6 +391,7 @@ enum RawCubicMode {
     Unspecified,
     Default,
     Monotone,
+    Null,
     Invalid,
 }
 
@@ -398,6 +399,7 @@ enum RawCubicMode {
 #[serde(untagged)]
 enum RawCubicModeValue {
     Mode(CubicMode),
+    Null(()),
     Invalid(serde::de::IgnoredAny),
 }
 
@@ -408,6 +410,7 @@ where
     Ok(match RawCubicModeValue::deserialize(deserializer)? {
         RawCubicModeValue::Mode(CubicMode::Default) => RawCubicMode::Default,
         RawCubicModeValue::Mode(CubicMode::Monotone) => RawCubicMode::Monotone,
+        RawCubicModeValue::Null(()) => RawCubicMode::Null,
         RawCubicModeValue::Invalid(_) => RawCubicMode::Invalid,
     })
 }
@@ -448,7 +451,7 @@ fn parse_cubic_interpolation_mode(ds: &RawDataset) -> Result<Option<CubicMode>, 
         RawCubicMode::Unspecified => Ok(None),
         RawCubicMode::Default => Ok(Some(CubicMode::Default)),
         RawCubicMode::Monotone => Ok(Some(CubicMode::Monotone)),
-        RawCubicMode::Invalid => Err(
+        RawCubicMode::Null | RawCubicMode::Invalid => Err(
             "cubicInterpolationMode の値が不正です: expected \"default\" or \"monotone\""
                 .to_string(),
         ),
@@ -1136,7 +1139,10 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             .iter()
             .zip(&series_types)
             .map(|(ds, series_type)| {
-                if *series_type == SeriesType::Line {
+                if *series_type == SeriesType::Line
+                    || strict
+                    || matches!(ds.cubic_interpolation_mode, RawCubicMode::Null)
+                {
                     parse_cubic_interpolation_mode(ds)
                 } else {
                     Ok(None)
@@ -4157,6 +4163,26 @@ mod tests {
             true,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn strict_bar_parser_rejects_unknown_cubic_mode_even_for_bar_series() {
+        let error = parse(
+            r#"{"type":"bar","data":{"datasets":[{"data":[1,2,3],"cubicInterpolationMode":"smooth"}]}}"#,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("cubicInterpolationMode"));
+    }
+
+    #[test]
+    fn cubic_interpolation_mode_rejects_explicit_null_for_bar_series() {
+        let json = r#"{"type":"bar","data":{"datasets":[{"data":[1,2,3],"cubicInterpolationMode":null}]}}"#;
+        for strict in [false, true] {
+            let error = parse(json, strict).unwrap_err();
+            assert!(error.contains("cubicInterpolationMode"));
+        }
     }
 
     #[test]
