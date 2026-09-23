@@ -148,6 +148,50 @@ pub(crate) fn enforce_min_bar_length(
     (base, head)
 }
 
+struct StackedMinBarLength<'a> {
+    minimum: Option<f64>,
+    positive_direction: f64,
+    zero_direction: f64,
+    pixel_start: f64,
+    pixel_end: f64,
+    scale: &'a crate::scale::ValueScale,
+}
+
+fn enforce_stacked_min_bar_length(
+    base: f64,
+    head: f64,
+    value: f64,
+    context: StackedMinBarLength<'_>,
+) -> (f64, f64, f64) {
+    let minimum = context
+        .minimum
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, (context.pixel_end - context.pixel_start).abs()));
+    let minimum_applied = minimum.is_some_and(|minimum| (head - base).abs() < minimum);
+    let positive_direction = if value == 0.0 {
+        context.zero_direction
+    } else {
+        context.positive_direction
+    };
+    let (base, head) = enforce_min_bar_length(
+        base,
+        head,
+        value,
+        minimum,
+        positive_direction,
+        context.pixel_start,
+        context.pixel_end,
+    );
+    // Chart.js replaces the stack's visual value with the post-minimum pixel span converted
+    // back through the value scale, so following datasets start at the rendered endpoint.
+    let visual_value = if minimum_applied {
+        context.scale.unmap(head) - context.scale.unmap(base)
+    } else {
+        value
+    };
+    (base, head, visual_value)
+}
+
 /// 縦棒の全データ矩形を build_vertical と同一の式で算出する単一の真実源。
 /// レンダラ(`build_vertical`)とモデル(`model::Geometry`)の両方がこれを呼ぶ。
 /// 非積み上げ (dodge): category 外側 × series 内側で有限値のみ box を生成する。
@@ -192,8 +236,12 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
         for i in 0..spec.categories.len() {
             let center = super::common::category_center(frame, i, n);
             let band_left = center - band_w / 2.0;
+            // Raw sums preserve data stacking. Visual offsets separately carry minBarLength
+            // expansion into the starting value of each following segment.
             let mut pos_acc = vec![0.0_f64; stack_group_count];
             let mut neg_acc = vec![0.0_f64; stack_group_count];
+            let mut pos_visual_offsets = vec![0.0_f64; stack_group_count];
+            let mut neg_visual_offsets = vec![0.0_f64; stack_group_count];
             for (sidx, ser) in spec.series.iter().enumerate() {
                 let Some(&v) = ser.values.get(i) else {
                     continue;
@@ -211,33 +259,62 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     ser.bar_geometry,
                     legacy_geometry,
                 );
-                let (v0, v1) = if v >= 0.0 {
+                let (v0, v1) = if v > 0.0 {
                     let lo = pos_acc[stack_group];
                     pos_acc[stack_group] += v;
                     let sum = pos_acc[stack_group];
                     (lo, sum)
-                } else {
+                } else if v < 0.0 {
                     let hi = neg_acc[stack_group];
                     neg_acc[stack_group] += v;
                     (neg_acc[stack_group], hi)
+                } else {
+                    let total = pos_acc[stack_group]
+                        + neg_acc[stack_group]
+                        + pos_visual_offsets[stack_group]
+                        + neg_visual_offsets[stack_group];
+                    (total, total)
                 };
-                let (base_v, head_v) = if v >= 0.0 { (v0, v1) } else { (v1, v0) };
+                let (mut base_v, mut head_v) = if v > 0.0 { (v0, v1) } else { (v1, v0) };
+                let visual_offset = if v > 0.0 {
+                    pos_visual_offsets[stack_group]
+                } else if v < 0.0 {
+                    neg_visual_offsets[stack_group]
+                } else {
+                    0.0
+                };
+                base_v += visual_offset;
+                head_v += visual_offset;
                 let base = frame
                     .ys
                     .map(super::common::clip_axis_value(base_v, &frame.ticks));
                 let head = frame
                     .ys
                     .map(super::common::clip_axis_value(head_v, &frame.ticks));
-                let (base, head) = enforce_min_bar_length(
+                let (base, head, visual_value) = enforce_stacked_min_bar_length(
                     base,
                     head,
                     v,
-                    ser.bar_geometry
-                        .and_then(|geometry| geometry.min_bar_length),
-                    -1.0,
-                    frame.plot_top,
-                    frame.plot_bottom,
+                    StackedMinBarLength {
+                        minimum: ser
+                            .bar_geometry
+                            .and_then(|geometry| geometry.min_bar_length),
+                        positive_direction: -1.0,
+                        zero_direction: if frame.ticks.min >= 0.0 { -1.0 } else { 1.0 },
+                        pixel_start: frame.plot_top,
+                        pixel_end: frame.plot_bottom,
+                        scale: &frame.ys,
+                    },
                 );
+                if v > 0.0 {
+                    pos_visual_offsets[stack_group] += visual_value - v;
+                } else if v < 0.0 {
+                    neg_visual_offsets[stack_group] += visual_value - v;
+                } else if visual_value > 0.0 {
+                    pos_visual_offsets[stack_group] += visual_value;
+                } else if visual_value < 0.0 {
+                    neg_visual_offsets[stack_group] += visual_value;
+                }
                 let y_top = base.min(head);
                 let h = (head - base).abs();
                 boxes.push(BarBox {
@@ -864,8 +941,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
         if placement_stacked && value_stacked {
             // stack ID ごとに平行なレーンを置き、各レーンの中で値を正負別に累積する。
+            // Raw sums preserve data stacking; visual offsets carry minBarLength expansion
+            // into the starting value of each following segment.
             let mut pos_acc = vec![0.0_f64; stack_group_count];
             let mut neg_acc = vec![0.0_f64; stack_group_count];
+            let mut pos_visual_offsets = vec![0.0_f64; stack_group_count];
+            let mut neg_visual_offsets = vec![0.0_f64; stack_group_count];
             for (series_index, ser) in spec.series.iter().enumerate() {
                 let Some(&v) = ser.values.get(i) else {
                     continue;
@@ -884,28 +965,57 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     legacy_geometry,
                 );
                 let cy = by + bar_height / 2.0 + label_font * TEXT_BASELINE_RATIO;
-                let (v0, v1) = if v >= 0.0 {
+                let (v0, v1) = if v > 0.0 {
                     let lo = pos_acc[stack_group];
                     pos_acc[stack_group] += v;
                     (lo, pos_acc[stack_group])
-                } else {
+                } else if v < 0.0 {
                     let hi = neg_acc[stack_group];
                     neg_acc[stack_group] += v;
                     (neg_acc[stack_group], hi)
+                } else {
+                    let total = pos_acc[stack_group]
+                        + neg_acc[stack_group]
+                        + pos_visual_offsets[stack_group]
+                        + neg_visual_offsets[stack_group];
+                    (total, total)
                 };
-                let (base_v, head_v) = if v >= 0.0 { (v0, v1) } else { (v1, v0) };
+                let (mut base_v, mut head_v) = if v > 0.0 { (v0, v1) } else { (v1, v0) };
+                let visual_offset = if v > 0.0 {
+                    pos_visual_offsets[stack_group]
+                } else if v < 0.0 {
+                    neg_visual_offsets[stack_group]
+                } else {
+                    0.0
+                };
+                base_v += visual_offset;
+                head_v += visual_offset;
                 let base = xs.map(super::common::clip_axis_value(base_v, &ticks));
                 let head = xs.map(super::common::clip_axis_value(head_v, &ticks));
-                let (base, head) = enforce_min_bar_length(
+                let (base, head, visual_value) = enforce_stacked_min_bar_length(
                     base,
                     head,
                     v,
-                    ser.bar_geometry
-                        .and_then(|geometry| geometry.min_bar_length),
-                    1.0,
-                    plot_left,
-                    plot_right,
+                    StackedMinBarLength {
+                        minimum: ser
+                            .bar_geometry
+                            .and_then(|geometry| geometry.min_bar_length),
+                        positive_direction: 1.0,
+                        zero_direction: if ticks.min >= 0.0 { 1.0 } else { -1.0 },
+                        pixel_start: plot_left,
+                        pixel_end: plot_right,
+                        scale: &xs,
+                    },
                 );
+                if v > 0.0 {
+                    pos_visual_offsets[stack_group] += visual_value - v;
+                } else if v < 0.0 {
+                    neg_visual_offsets[stack_group] += visual_value - v;
+                } else if visual_value > 0.0 {
+                    pos_visual_offsets[stack_group] += visual_value;
+                } else if visual_value < 0.0 {
+                    neg_visual_offsets[stack_group] += visual_value;
+                }
                 let x = base.min(head);
                 let w = (head - base).abs();
                 items.push(Prim::Rect {
@@ -1286,7 +1396,7 @@ mod geom_tests {
               {"stack":"same","data":[1]},
               {"stack":"same","data":[1],"minBarLength":8}
             ]},"options":{"scales":{"x":{"stacked":true},
-              "y":{"stacked":true,"min":0,"max":100}}}}"#,
+              "y":{"stacked":true,"min":-100,"max":100}}}}"#,
             false,
         )
         .unwrap();
@@ -1414,6 +1524,67 @@ mod geom_tests {
                 "bar bottom escaped plot: {bar:?}"
             );
         }
+    }
+
+    #[test]
+    fn min_bar_length_stacked_vertical_segments_follow_visual_endpoints() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[1],"minBarLength":20},
+              {"data":[1],"minBarLength":20},
+              {"data":[-1],"minBarLength":20},
+              {"data":[-1],"minBarLength":20}
+            ]},"options":{"scales":{"x":{"stacked":true},
+              "y":{"stacked":true,"min":-100,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        let first_positive = boxes.iter().find(|bar| bar.series == 0).unwrap();
+        let second_positive = boxes.iter().find(|bar| bar.series == 1).unwrap();
+        let first_negative = boxes.iter().find(|bar| bar.series == 2).unwrap();
+        let second_negative = boxes.iter().find(|bar| bar.series == 3).unwrap();
+
+        assert!(
+            (second_positive.y + second_positive.h - first_positive.y).abs() < 1e-9,
+            "the upper positive segment should begin where the extended lower segment ends: {boxes:?}"
+        );
+        assert!(
+            (second_negative.y - (first_negative.y + first_negative.h)).abs() < 1e-9,
+            "the lower negative segment should begin where the extended upper segment ends: {boxes:?}"
+        );
+    }
+
+    #[test]
+    fn min_bar_length_stacked_vertical_zero_uses_prior_negative_visual_stack() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[-1],"minBarLength":20},
+              {"data":[0],"minBarLength":20},
+              {"data":[-1],"minBarLength":20}
+            ]},"options":{"scales":{"x":{"stacked":true},
+              "y":{"stacked":true,"min":-100,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        let first_negative = boxes.iter().find(|bar| bar.series == 0).unwrap();
+        let zero = boxes.iter().find(|bar| bar.series == 1).unwrap();
+        let last_negative = boxes.iter().find(|bar| bar.series == 2).unwrap();
+        let zero_center = zero.y + zero.h / 2.0;
+
+        assert!(
+            (zero_center - (first_negative.y + first_negative.h)).abs() < 1e-9,
+            "zero should be centered at the endpoint of the prior negative stack: {boxes:?}"
+        );
+        assert!(
+            (last_negative.y - (zero_center + 20.0)).abs() < 1e-9,
+            "the later negative bar should include zero's negative visual extent: {boxes:?}"
+        );
     }
 
     #[test]
@@ -1729,6 +1900,93 @@ mod geom_tests {
                 "bar right escaped plot: x={x}, width={width}, right={right}"
             );
         }
+    }
+
+    #[test]
+    fn min_bar_length_stacked_horizontal_segments_follow_visual_endpoints() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[1],"minBarLength":20},
+              {"data":[1],"minBarLength":20},
+              {"data":[-1],"minBarLength":20},
+              {"data":[-1],"minBarLength":20}
+            ]},"options":{"indexAxis":"y","scales":{"x":{"stacked":true,"min":-100,"max":100},
+              "y":{"stacked":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rect_for = |series_index: usize| {
+            scene
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Rect { x, w, fill, .. }
+                        if *fill == spec.series[series_index].fill_at(0) =>
+                    {
+                        Some((*x, *w))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let (first_x, first_w) = rect_for(0);
+        let (second_x, _) = rect_for(1);
+        let (first_negative_x, _) = rect_for(2);
+        let (second_negative_x, second_negative_w) = rect_for(3);
+
+        assert!(
+            (second_x - (first_x + first_w)).abs() < 1e-9,
+            "the later segment should begin where the visually extended earlier segment ends"
+        );
+        assert!(
+            (second_negative_x + second_negative_w - first_negative_x).abs() < 1e-9,
+            "the later negative segment should begin where the extended earlier segment ends"
+        );
+    }
+
+    #[test]
+    fn min_bar_length_stacked_horizontal_zero_uses_prior_negative_visual_stack() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[-1],"minBarLength":20},
+              {"data":[0],"minBarLength":20},
+              {"data":[-1],"minBarLength":20}
+            ]},"options":{"indexAxis":"y","scales":{"x":{"stacked":true,"min":-100,"max":100},
+              "y":{"stacked":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rect_for = |series_index: usize| {
+            scene
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Rect { x, w, fill, .. }
+                        if *fill == spec.series[series_index].fill_at(0) =>
+                    {
+                        Some((*x, *w))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let (first_x, _) = rect_for(0);
+        let (zero_x, zero_w) = rect_for(1);
+        let (last_x, last_w) = rect_for(2);
+        let zero_center = zero_x + zero_w / 2.0;
+
+        assert!(
+            (zero_center - first_x).abs() < 1e-9,
+            "zero should be centered at the endpoint of the prior negative stack"
+        );
+        assert!(
+            ((last_x + last_w) - (zero_center - 20.0)).abs() < 1e-9,
+            "the later negative bar should include zero's negative visual extent"
+        );
     }
 
     #[test]
