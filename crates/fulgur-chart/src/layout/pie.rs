@@ -336,10 +336,10 @@ fn make_configured_slice(
     let average_radius = (g.r_outer + g.r_inner) / 2.0;
     let trim_limit = (sweep / 2.0 - 1e-6).max(0.0);
     let spacing_trim = if spacing > 0.0 && average_radius > 0.0 {
-        (spacing / average_radius)
-            .clamp(0.0, 1.0)
-            .asin()
-            .min(trim_limit)
+        if spacing > average_radius {
+            return None;
+        }
+        (spacing / average_radius).asin().min(trim_limit)
     } else {
         0.0
     };
@@ -676,6 +676,26 @@ mod tests {
     }
 
     #[test]
+    fn configured_slice_rejects_spacing_larger_than_radius() {
+        let fill = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        };
+        let geom = Geom {
+            cx: 0.0,
+            cy: 0.0,
+            r_outer: 180.0,
+            r_inner: 0.0,
+        };
+        assert!(
+            make_configured_slice(&geom, 0.0, 4.0, fill, 100.0, ArcBorderRadius::Uniform(0.0),)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn configured_slice_discards_spacing_trimmed_degenerate_arcs() {
         let fill = Color {
             r: 0,
@@ -695,7 +715,7 @@ mod tests {
                 1.0e16,
                 1.0e16 + 4.0,
                 fill,
-                f64::MAX,
+                75.0,
                 ArcBorderRadius::Uniform(0.0),
             )
             .is_none()
