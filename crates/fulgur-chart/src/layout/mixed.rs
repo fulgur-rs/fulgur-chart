@@ -9,14 +9,6 @@ use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 use std::fmt::Write;
 
-// --- bar.rs から複製した縦棒の幾何定数 ---
-/// band 内のグループ幅比。
-const GROUP_RATIO: f64 = 0.8;
-/// band 左右パディング比。
-const BAND_PAD_RATIO: f64 = 0.1;
-/// bar 幅の塗り比。
-const BAR_FILL_RATIO: f64 = 0.9;
-
 // --- line.rs から複製した折れ線の定数 ---
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
@@ -41,12 +33,24 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             bar_count += 1;
         }
     }
+    let legacy_geometry = spec
+        .series
+        .iter()
+        .all(|series| series.bar_geometry.is_none());
 
     for (series_index, ser) in spec.series.iter().enumerate().rev() {
         match ser.series_type {
             SeriesType::Bar => {
                 if let Some(bar_slot) = bar_slots[series_index] {
-                    draw_bar_dataset(&mut items, spec, &frame, n, ser, bar_slot, bar_count);
+                    draw_bar_dataset(
+                        &mut items,
+                        spec,
+                        &frame,
+                        ser,
+                        bar_slot,
+                        bar_count,
+                        legacy_geometry,
+                    );
                 }
             }
             SeriesType::Line => draw_line_dataset(&mut items, spec, &frame, n, series_index, ser),
@@ -65,20 +69,17 @@ fn draw_bar_dataset(
     items: &mut Vec<Prim>,
     spec: &ChartSpec,
     frame: &common::Frame,
-    n: usize,
     ser: &crate::ir::Series,
     bar_slot: usize,
     bar_count: usize,
+    legacy_geometry: bool,
 ) {
+    let n = spec.categories.len().max(1);
     let band_w = common::band_width(frame, n);
-    let group_w = band_w * GROUP_RATIO;
-    let bar_w = group_w / bar_count as f64;
     let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
     let baseline_y = frame.ys.map(base_v);
 
     for i in 0..spec.categories.len() {
-        let band_left = common::category_center(frame, i, n) - band_w / 2.0;
-        let bx = band_left + band_w * BAND_PAD_RATIO + bar_slot as f64 * bar_w;
         // 欠損 / 非有限値はスロットを空けて次系列へ(dodge の色・位置整合を保つ)。
         let Some(&v) = ser.values.get(i) else {
             continue;
@@ -86,19 +87,44 @@ fn draw_bar_dataset(
         if !v.is_finite() {
             continue;
         }
+        let center = common::category_center(frame, i, n);
+        let (bx, bar_w) = super::bar::category_bar_bounds(
+            center,
+            center - band_w / 2.0,
+            band_w,
+            bar_slot,
+            bar_count,
+            ser.bar_geometry,
+            legacy_geometry,
+        );
         let vy = frame.ys.map(common::clip_axis_value(v, &frame.ticks));
-        let y_top = vy.min(baseline_y);
-        let h = (vy - baseline_y).abs();
+        let (base, head) = super::bar::enforce_min_bar_length(
+            baseline_y,
+            vy,
+            v,
+            super::bar::min_bar_length_for_visible_interval(
+                ser.bar_geometry
+                    .and_then(|geometry| geometry.min_bar_length),
+                0.0,
+                v,
+                &frame.ticks,
+            ),
+            -1.0,
+            frame.plot_top,
+            frame.plot_bottom,
+        );
+        let y_top = base.min(head);
+        let h = (head - base).abs();
         items.push(Prim::Rect {
             x: bx,
             y: y_top,
-            w: (bar_w * BAR_FILL_RATIO).max(0.0),
+            w: bar_w,
             h,
             fill: ser.fill_at(i),
         });
         if spec.data_labels && h > 0.0 && common::axis_value_in_bounds(v, &frame.ticks) {
-            let cx = bx + (bar_w * BAR_FILL_RATIO) / 2.0;
-            let label_y = if v >= base_v {
+            let cx = bx + bar_w / 2.0;
+            let label_y = if v >= 0.0 {
                 y_top - common::LABEL_GAP
             } else {
                 y_top + h + spec.theme.font_size
@@ -380,6 +406,111 @@ mod tests {
     }
 
     #[test]
+    fn line_root_bar_override_uses_its_dataset_thickness() {
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b"],"datasets":[
+                {"type":"bar","data":[1,2],"barThickness":12},
+                {"data":[2,1]}
+            ]}}"#,
+            true,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let bars: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { w, fill, .. } if *fill == spec.series[0].fill_at(0) => Some(*w),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bars.len(), 2);
+        assert!(bars.iter().all(|width| (*width - 12.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn mixed_dodge_slots_remain_even_when_only_one_bar_has_geometry_options() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a"],"datasets":[
+                {"type":"bar","data":[1]},
+                {"type":"bar","data":[2],"barPercentage":0.9},
+                {"type":"line","data":[3]}
+            ]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rect_for = |series_index: usize| {
+            scene
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Rect { x, w, fill, .. }
+                        if *fill == spec.series[series_index].fill_at(0) =>
+                    {
+                        Some((*x, *w))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let (first_x, first_w) = rect_for(0);
+        let (second_x, second_w) = rect_for(1);
+        let center_distance = (second_x + second_w / 2.0) - (first_x + first_w / 2.0);
+        let expected_center_distance = first_w / 0.9;
+
+        assert!((first_w - second_w).abs() < 1e-9);
+        assert!(
+            (center_distance - expected_center_distance).abs() < 1e-9,
+            "mixed bar slots should be evenly spaced"
+        );
+    }
+
+    #[test]
+    fn mixed_negative_bar_label_follows_bar_at_axis_edge() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+                {"type":"bar","data":[-1],"minBarLength":15},
+                {"type":"line","data":[2]}
+            ]},"options":{"scales":{"y":{"min":-100,"max":-1}},
+              "plugins":{"datalabels":{"display":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let (bar_x, bar_y, bar_w, bar_h) = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Rect { x, y, w, h, fill } if *fill == spec.series[0].fill_at(0) => {
+                    Some((*x, *y, *w, *h))
+                }
+                _ => None,
+            })
+            .expect("missing bar rectangle");
+        let label_y = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Text {
+                    x,
+                    y,
+                    content,
+                    anchor: Anchor::Middle,
+                    ..
+                } if content == "-1" && (x - (bar_x + bar_w / 2.0)).abs() < 1e-9 => Some(*y),
+                _ => None,
+            })
+            .expect("missing data label for -1");
+
+        let expected_y = bar_y + bar_h + spec.theme.font_size;
+        assert!((label_y - expected_y).abs() < 1e-9);
+    }
+
+    #[test]
     fn mixed_bar_and_line_stay_inside_hard_y_bounds() {
         let spec = chartjs::parse(
             r#"{"type":"bar","data":{"labels":["a","b","c"],"datasets":[
@@ -419,6 +550,31 @@ mod tests {
             1,
             "only the in-range line value should have a marker"
         );
+    }
+
+    #[test]
+    fn mixed_min_bar_length_skips_values_outside_hard_bounds() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["below","inside"],"datasets":[
+                {"type":"bar","data":[5,11],"minBarLength":20},
+                {"type":"line","data":[5,11]}]},
+                "options":{"scales":{"y":{"min":10,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let fills = [spec.series[0].fill_at(0), spec.series[0].fill_at(1)];
+        let scene = build(&spec, &m);
+        let heights: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { h, fill, .. } if fills.contains(fill) => Some(*h),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(heights, [0.0, 20.0]);
     }
 
     #[test]

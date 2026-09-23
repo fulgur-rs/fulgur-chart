@@ -2,6 +2,7 @@
 
 use crate::color::parse_color;
 use crate::ir::*;
+use crate::schema::chartjs::BarThickness as SchemaBarThickness;
 use crate::schema::common::{
     AxisBorderOptions, AxisOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions,
     GridLineOptions,
@@ -217,6 +218,16 @@ struct RawDataset {
     dataset_type: Option<String>,
     #[serde(default)]
     stack: Option<String>,
+    #[serde(rename = "categoryPercentage", default)]
+    category_percentage: Option<f64>,
+    #[serde(rename = "barPercentage", default)]
+    bar_percentage: Option<f64>,
+    #[serde(rename = "barThickness", default)]
+    bar_thickness: Option<SchemaBarThickness>,
+    #[serde(rename = "maxBarThickness", default)]
+    max_bar_thickness: Option<f64>,
+    #[serde(rename = "minBarLength", default)]
+    min_bar_length: Option<f64>,
     data: DataField,
     #[serde(rename = "backgroundColor")]
     background_color: Option<ScalarOrArray<String>>,
@@ -1033,6 +1044,29 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             // 実効描画種別。線の既定線幅(3.0)を chart 基本型でなく系列種別で決めるため、
             // 単一種別(全 Line→3.0 / 全 Bar→1.0)では従来と byte 一致し、混合では line だけ太くなる。
             let series_type = series_types[i];
+            let bar_geometry = if series_type == SeriesType::Bar
+                && matches!(kind, ChartKind::Bar { .. } | ChartKind::Mixed)
+                && (ds.category_percentage.is_some()
+                    || ds.bar_percentage.is_some()
+                    || ds.bar_thickness.is_some()
+                    || ds.max_bar_thickness.is_some()
+                    || ds.min_bar_length.is_some())
+            {
+                Some(BarGeometryOptions {
+                    category_percentage: ds.category_percentage,
+                    bar_percentage: ds.bar_percentage,
+                    bar_thickness: ds.bar_thickness.map(|thickness| match thickness {
+                        SchemaBarThickness::Pixels(value) => BarThickness::Pixels(value),
+                        SchemaBarThickness::Mode(
+                            crate::schema::chartjs::BarThicknessMode::Flex,
+                        ) => BarThickness::Flex,
+                    }),
+                    max_bar_thickness: ds.max_bar_thickness,
+                    min_bar_length: ds.min_bar_length,
+                })
+            } else {
+                None
+            };
             Series {
                 name: ds.label,
                 values,
@@ -1054,6 +1088,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 } else {
                     None
                 },
+                bar_geometry,
                 point_radius: ds.point_radius,
                 box_points,
                 tree: vec![],
@@ -1541,6 +1576,11 @@ fn check_unknown_keys(
                             "order",
                             "type",
                             "stack",
+                            "categoryPercentage",
+                            "barPercentage",
+                            "barThickness",
+                            "maxBarThickness",
+                            "minBarLength",
                             "data",
                             "backgroundColor",
                             "borderColor",
@@ -1557,6 +1597,11 @@ fn check_unknown_keys(
                             "order",
                             "type",
                             "stack",
+                            "categoryPercentage",
+                            "barPercentage",
+                            "barThickness",
+                            "maxBarThickness",
+                            "minBarLength",
                             "data",
                             "backgroundColor",
                             "borderColor",
@@ -2212,6 +2257,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         span_gaps: false,
         step_mode: None,
         stack: None,
+        bar_geometry: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -2560,6 +2606,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             span_gaps: false,
             step_mode: None,
             stack: None,
+            bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -2925,6 +2972,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         span_gaps: false,
         step_mode: None,
         stack: None,
+        bar_geometry: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -3177,6 +3225,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         span_gaps: false,
         step_mode: None,
         stack: None,
+        bar_geometry: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -3898,6 +3947,57 @@ mod tests {
         assert!(serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(invalid).is_err());
         assert!(parse(invalid, false).is_err());
         assert!(parse(invalid, true).is_err());
+    }
+
+    #[test]
+    fn bar_dataset_geometry_options_parse_per_dataset_in_strict_mode() {
+        let json = r#"{
+            "type":"bar",
+            "data":{"labels":["A"],"datasets":[{
+                "data":[1],"categoryPercentage":0.6,"barPercentage":0.5,
+                "barThickness":"flex","maxBarThickness":18,"minBarLength":3
+            }]}
+        }"#;
+        assert!(
+            serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(json).is_ok(),
+            "the public schema should expose bar geometry on datasets"
+        );
+        let spec = parse(json, true).expect("strict parsing should accept bar geometry options");
+        let geometry = spec.series[0]
+            .bar_geometry
+            .expect("bar geometry should be present");
+        assert_eq!(geometry.category_percentage, Some(0.6));
+        assert_eq!(geometry.bar_percentage, Some(0.5));
+        assert_eq!(geometry.bar_thickness, Some(BarThickness::Flex));
+        assert_eq!(geometry.max_bar_thickness, Some(18.0));
+        assert_eq!(geometry.min_bar_length, Some(3.0));
+
+        let mixed_line_root = r#"{
+            "type":"line",
+            "data":{"labels":["A"],"datasets":[
+                {"type":"bar","data":[1],"barThickness":12},
+                {"data":[2]}
+            ]}
+        }"#;
+        assert!(
+            serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(mixed_line_root).is_ok()
+        );
+        let mixed_spec = parse(mixed_line_root, true).expect("mixed chart should parse");
+        let geometry = mixed_spec.series[0]
+            .bar_geometry
+            .expect("bar geometry should be present");
+        assert_eq!(geometry.bar_thickness, Some(BarThickness::Pixels(12.0)));
+        assert_eq!(geometry.category_percentage, None);
+        assert_eq!(geometry.bar_percentage, None);
+        assert_eq!(geometry.max_bar_thickness, None);
+        assert_eq!(geometry.min_bar_length, None);
+
+        let no_geometry = r#"{
+            "type":"bar",
+            "data":{"datasets":[{"data":[1]}]}
+        }"#;
+        let no_geometry_spec = parse(no_geometry, true).expect("bar chart should parse");
+        assert!(no_geometry_spec.series[0].bar_geometry.is_none());
     }
 
     #[test]

@@ -36,6 +36,28 @@ impl LinearScale {
             self.p0 + t * pixel_span
         }
     }
+
+    pub(crate) fn unmap(&self, p: f64) -> f64 {
+        let pixel_span = self.p1 - self.p0;
+        if pixel_span == 0.0 {
+            return self.d0;
+        }
+        let t = (p - self.p0) / pixel_span;
+        let data_span = self.d1 - self.d0;
+        if data_span.is_finite() {
+            self.d0 + t * data_span
+        } else if self.d0.is_finite() && self.d1.is_finite() {
+            let endpoint_scale = self.d0.abs().max(self.d1.abs());
+            if endpoint_scale == 0.0 {
+                self.d0
+            } else {
+                endpoint_scale
+                    * (self.d0 / endpoint_scale * (1.0 - t) + self.d1 / endpoint_scale * t)
+            }
+        } else {
+            self.d0 + t * data_span
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -588,9 +610,8 @@ fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
     }
 }
 
-/// 値→ピクセル写像。線形はそのまま `LinearScale` に委譲し、対数は内部で
-/// `log10` 変換してから同じ `LinearScale` に委譲する。呼び出し側は
-/// `ValueScale::map(v)` だけを見ればよく、線形/対数の分岐を意識しない。
+/// 値とピクセルの写像。線形は `LinearScale` に委譲し、対数は `log10` 空間で写す。
+/// 呼び出し側は `map` / `unmap` を通じて線形・対数の分岐を意識しない。
 #[derive(Debug, Clone)]
 pub enum ValueScale {
     Linear(LinearScale),
@@ -614,11 +635,34 @@ impl ValueScale {
             ValueScale::Log { inner, floor } => inner.map(v.max(*floor).log10()),
         }
     }
+
+    pub(crate) fn unmap(&self, p: f64) -> f64 {
+        match self {
+            ValueScale::Linear(scale) => scale.unmap(p),
+            ValueScale::Log { inner, floor } => 10.0_f64.powf(inner.unmap(p)).max(*floor),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn value_scale_map_and_unmap_round_trip_linear_and_log_values() {
+        let linear = ValueScale::Linear(LinearScale::new(-100.0, 100.0, 400.0, 40.0));
+        for value in [-100.0, -40.0, 0.0, 1.0, 100.0] {
+            assert!((linear.unmap(linear.map(value)) - value).abs() < 1e-9);
+        }
+
+        let logarithmic = ValueScale::Log {
+            inner: LinearScale::new(0.0, 2.0, 400.0, 40.0),
+            floor: 1.0,
+        };
+        for value in [1.0, 10.0, 100.0] {
+            assert!((logarithmic.unmap(logarithmic.map(value)) - value).abs() < 1e-9);
+        }
+    }
 
     fn assert_extreme_singleton_domain(ticks: &NiceTicks, value: f64) {
         assert!(ticks.min.is_finite(), "{ticks:?}");

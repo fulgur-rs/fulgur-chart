@@ -647,6 +647,7 @@ mod tests {
                 span_gaps: false,
                 step_mode: None,
                 stack: None,
+                bar_geometry: None,
                 series_type: SeriesType::Bar,
                 point_radius: None,
                 box_points: vec![],
