@@ -231,7 +231,7 @@ struct RawDataset {
     #[serde(rename = "minBarLength", default)]
     min_bar_length: Option<f64>,
     #[serde(rename = "borderRadius", default)]
-    border_radius: Option<SchemaBorderRadius>,
+    border_radius: Option<serde_json::Value>,
     data: DataField,
     #[serde(rename = "backgroundColor")]
     background_color: Option<ScalarOrArray<String>>,
@@ -942,6 +942,29 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         vec![(false, None); raw.data.datasets.len()]
     };
 
+    // `RawDataset` is shared by every chart type, but object-form borderRadius has
+    // chart-specific meanings. Validate it as a bar option only for rendered bar datasets.
+    let bar_border_radii = raw
+        .data
+        .datasets
+        .iter()
+        .enumerate()
+        .map(|(i, ds)| {
+            if series_types[i] != SeriesType::Bar
+                || !matches!(kind, ChartKind::Bar { .. } | ChartKind::Mixed)
+            {
+                return Ok(None);
+            }
+            ds.border_radius
+                .as_ref()
+                .map(|value| {
+                    serde_json::from_value::<SchemaBorderRadius>(value.clone())
+                        .map_err(|error| format!("datasets[{i}].borderRadius: {error}"))
+                })
+                .transpose()
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
     // typed `AxisOptions` 経由で読むことで、`beginAtZero` 等の camelCase タイポは
     // schema deserialize 時に拒否される(silent 素通り防止)。
     let x_opts = raw.options.scales.as_ref().and_then(|s| s.x.as_ref());
@@ -1055,7 +1078,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                     || ds.bar_thickness.is_some()
                     || ds.max_bar_thickness.is_some()
                     || ds.min_bar_length.is_some()
-                    || ds.border_radius.is_some())
+                    || bar_border_radii[i].is_some())
             {
                 Some(BarGeometryOptions {
                     category_percentage: ds.category_percentage,
@@ -1068,7 +1091,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                     }),
                     max_bar_thickness: ds.max_bar_thickness,
                     min_bar_length: ds.min_bar_length,
-                    border_radius: ds.border_radius.map(|radius| match radius {
+                    border_radius: bar_border_radii[i].map(|radius| match radius {
                         SchemaBorderRadius::Pixels(value) => BarBorderRadius::Uniform(value),
                         SchemaBorderRadius::Corners(corners) => BarBorderRadius::Corners {
                             top_left: corners.top_left,
@@ -4033,6 +4056,22 @@ mod tests {
                 true
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn non_bar_border_radius_is_not_validated_as_a_bar_option() {
+        let doughnut = r#"{"type":"doughnut","data":{"datasets":[{"data":[1,2],"borderRadius":{"outerStart":4}}]}}"#;
+        assert!(
+            parse(doughnut, false).is_ok(),
+            "non-bar borderRadius must retain the chart's existing permissive parsing"
+        );
+
+        let invalid_bar =
+            r#"{"type":"bar","data":{"datasets":[{"data":[1],"borderRadius":{"topCentre":4}}]}}"#;
+        assert!(
+            parse(invalid_bar, false).is_err(),
+            "bar borderRadius must reject unsupported corner keys"
         );
     }
 
