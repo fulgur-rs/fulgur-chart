@@ -818,6 +818,11 @@ mod tests {
         assert_eq!(PieCutout::Percent(25.0).inner_radius(100.0), 25.0);
         assert_eq!(PieCutout::Pixels(-12.0).inner_radius(100.0), 0.0);
         assert_eq!(PieCutout::Pixels(120.0).inner_radius(100.0), 100.0);
+        assert_eq!(PieCutout::Pixels(f64::INFINITY).inner_radius(100.0), 100.0);
+        assert_eq!(
+            PieCutout::Pixels(f64::NEG_INFINITY).inner_radius(100.0),
+            0.0
+        );
         assert_eq!(PieCutout::Percent(50.0).inner_radius(f64::NAN), 0.0);
     }
 

@@ -607,3 +607,116 @@ fn slice_path(g: &Geom, a0: f64, a1: f64) -> String {
     }
     d
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::font::DEFAULT_FONT;
+    use crate::frontend::chartjs;
+
+    #[test]
+    fn non_pie_spec_uses_default_pie_layout_fallback() {
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["A"],"datasets":[{"data":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        assert!(!scene.items.is_empty());
+    }
+
+    #[test]
+    fn non_finite_spacing_falls_back_to_unspaced_arcs() {
+        let mut spec = chartjs::parse(
+            r#"{"type":"pie","data":{"datasets":[{"data":[1,1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        if let ChartKind::Pie {
+            dataset_options, ..
+        } = &mut spec.kind
+        {
+            dataset_options[0].spacing = f64::NAN;
+        }
+
+        let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        assert!(
+            scene
+                .items
+                .iter()
+                .any(|item| matches!(item, Prim::Path { .. }))
+        );
+    }
+
+    #[test]
+    fn configured_slice_rejects_non_finite_sweeps() {
+        let fill = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        };
+        let geom = Geom {
+            cx: 0.0,
+            cy: 0.0,
+            r_outer: 100.0,
+            r_inner: 50.0,
+        };
+        assert!(
+            make_configured_slice(
+                &geom,
+                0.0,
+                f64::INFINITY,
+                fill,
+                1.0,
+                ArcBorderRadius::Uniform(2.0),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn configured_slice_discards_spacing_trimmed_degenerate_arcs() {
+        let fill = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        };
+        let geom = Geom {
+            cx: 0.0,
+            cy: 0.0,
+            r_outer: 100.0,
+            r_inner: 50.0,
+        };
+        assert!(
+            make_configured_slice(
+                &geom,
+                1.0e16,
+                1.0e16 + 4.0,
+                fill,
+                f64::MAX,
+                ArcBorderRadius::Uniform(0.0),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn non_finite_border_radius_is_cleaned_to_zero() {
+        let geom = Geom {
+            cx: 0.0,
+            cy: 0.0,
+            r_outer: 100.0,
+            r_inner: 50.0,
+        };
+        let path = rounded_sector_path(
+            &geom,
+            0.0,
+            PI / 2.0,
+            ArcBorderRadius::Uniform(f64::INFINITY),
+        );
+        assert!(!path.contains("inf"));
+        assert!(!path.contains("NaN"));
+    }
+}

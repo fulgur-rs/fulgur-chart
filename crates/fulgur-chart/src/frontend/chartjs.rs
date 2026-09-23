@@ -3794,6 +3794,16 @@ mod tests {
     }
 
     #[test]
+    fn pie_cutout_and_offsets_reject_wrong_json_types() {
+        for json in [
+            r#"{"type":"pie","data":{"datasets":[{"data":[1]}]},"options":{"cutout":true}}"#,
+            r#"{"type":"pie","data":{"datasets":[{"data":[1],"offset":"7"}]}}"#,
+        ] {
+            assert!(parse(json, false).is_err(), "should reject {json}");
+        }
+    }
+
+    #[test]
     fn pie_dataset_arc_options_parse_in_strict_mode() {
         let spec = parse(
             r#"{"type":"pie","data":{"datasets":[
@@ -3804,42 +3814,42 @@ mod tests {
             true,
         )
         .unwrap();
-        let ChartKind::Pie {
+        assert!(matches!(&spec.kind, ChartKind::Pie { .. }));
+        if let ChartKind::Pie {
             dataset_options, ..
         } = spec.kind
-        else {
-            panic!("expected pie chart");
-        };
-        assert_eq!(dataset_options.len(), 3);
-        assert_eq!(dataset_options[0].spacing, 2.0);
-        assert_eq!(dataset_options[0].offset_at(2), 5.0);
-        assert!(matches!(
-            dataset_options[0].border_radius_at(0),
-            ArcBorderRadius::Uniform(4.0)
-        ));
-        assert_eq!(dataset_options[1].spacing, 3.0);
-        assert_eq!(dataset_options[1].offset_at(0), 1.0);
-        assert_eq!(dataset_options[1].offset_at(1), 2.0);
-        assert_eq!(dataset_options[1].offset_at(2), 1.0);
-        assert!(matches!(
-            dataset_options[1].border_radius_at(0),
-            ArcBorderRadius::Uniform(1.0)
-        ));
-        assert_eq!(
-            dataset_options[1].border_radius_at(1),
-            ArcBorderRadius::Corners {
-                outer_start: 2.0,
-                outer_end: 3.0,
-                inner_start: 4.0,
-                inner_end: 5.0,
-            }
-        );
-        assert_eq!(dataset_options[2].spacing, 0.0);
-        assert_eq!(dataset_options[2].offset_at(1), 0.0);
-        assert_eq!(
-            dataset_options[2].border_radius_at(1),
-            ArcBorderRadius::Uniform(0.0)
-        );
+        {
+            assert_eq!(dataset_options.len(), 3);
+            assert_eq!(dataset_options[0].spacing, 2.0);
+            assert_eq!(dataset_options[0].offset_at(2), 5.0);
+            assert!(matches!(
+                dataset_options[0].border_radius_at(0),
+                ArcBorderRadius::Uniform(4.0)
+            ));
+            assert_eq!(dataset_options[1].spacing, 3.0);
+            assert_eq!(dataset_options[1].offset_at(0), 1.0);
+            assert_eq!(dataset_options[1].offset_at(1), 2.0);
+            assert_eq!(dataset_options[1].offset_at(2), 1.0);
+            assert!(matches!(
+                dataset_options[1].border_radius_at(0),
+                ArcBorderRadius::Uniform(1.0)
+            ));
+            assert_eq!(
+                dataset_options[1].border_radius_at(1),
+                ArcBorderRadius::Corners {
+                    outer_start: 2.0,
+                    outer_end: 3.0,
+                    inner_start: 4.0,
+                    inner_end: 5.0,
+                }
+            );
+            assert_eq!(dataset_options[2].spacing, 0.0);
+            assert_eq!(dataset_options[2].offset_at(1), 0.0);
+            assert_eq!(
+                dataset_options[2].border_radius_at(1),
+                ArcBorderRadius::Uniform(0.0)
+            );
+        }
     }
 
     #[test]
