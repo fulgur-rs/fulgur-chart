@@ -1,9 +1,10 @@
 //! bar チャートのレイアウト: ChartSpec → Scene。
 //! 縦棒・横棒に対応。決定的に組み立て、NaN/Inf/panic を出さない。
 
-use crate::ir::{BarGeometryOptions, BarThickness, ChartSpec};
+use crate::ir::{BarBorderRadius, BarGeometryOptions, BarThickness, ChartSpec};
 use crate::scene::{Prim, Scene};
 use crate::text::TextMeasurer;
+use std::fmt::Write;
 
 const DEFAULT_CATEGORY_PERCENTAGE: f64 = 0.8;
 const DEFAULT_BAR_PERCENTAGE: f64 = 0.9;
@@ -11,6 +12,177 @@ const DEFAULT_CATEGORY_PADDING: f64 = 0.1;
 const MAX_BAR_THICKNESS: f64 = 32768.0;
 /// 極端に長い目盛ラベルでも LinearScale のプロット幅を 0 にしない下限。
 const MIN_HORIZONTAL_PLOT_WIDTH: f64 = 1.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BarSide {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+/// Builds a bar rectangle or a path with Chart.js-style rounded corners.
+/// `base_side` names the edge touching the bar's base; uniform radii only round the opposite edge.
+pub(crate) fn bar_primitive(
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    fill: crate::ir::Color,
+    radius: Option<BarBorderRadius>,
+    base_side: BarSide,
+    uniform_enabled: bool,
+) -> Prim {
+    const KAPPA: f64 = 0.5522847498307936;
+
+    let (top_left, top_right, bottom_left, bottom_right) = match radius {
+        Some(BarBorderRadius::Uniform(value)) if uniform_enabled => match base_side {
+            BarSide::Top => (0.0, 0.0, value, value),
+            BarSide::Right => (value, 0.0, value, 0.0),
+            BarSide::Bottom => (value, value, 0.0, 0.0),
+            BarSide::Left => (0.0, value, 0.0, value),
+        },
+        Some(BarBorderRadius::Uniform(_)) | None => (0.0, 0.0, 0.0, 0.0),
+        Some(BarBorderRadius::Corners {
+            top_left,
+            top_right,
+            bottom_left,
+            bottom_right,
+        }) => (
+            if matches!(base_side, BarSide::Top | BarSide::Left) {
+                0.0
+            } else {
+                top_left.unwrap_or(0.0)
+            },
+            if matches!(base_side, BarSide::Top | BarSide::Right) {
+                0.0
+            } else {
+                top_right.unwrap_or(0.0)
+            },
+            if matches!(base_side, BarSide::Bottom | BarSide::Left) {
+                0.0
+            } else {
+                bottom_left.unwrap_or(0.0)
+            },
+            if matches!(base_side, BarSide::Bottom | BarSide::Right) {
+                0.0
+            } else {
+                bottom_right.unwrap_or(0.0)
+            },
+        ),
+    };
+    let max_radius = w.min(h).max(0.0) / 2.0;
+    let clamp_radius = |value: f64| {
+        if value.is_finite() {
+            value.clamp(0.0, max_radius)
+        } else {
+            0.0
+        }
+    };
+    let [tl, tr, br, bl] = [
+        clamp_radius(top_left),
+        clamp_radius(top_right),
+        clamp_radius(bottom_right),
+        clamp_radius(bottom_left),
+    ];
+    if tl == 0.0 && tr == 0.0 && br == 0.0 && bl == 0.0 {
+        return Prim::Rect { x, y, w, h, fill };
+    }
+
+    let mut d = format!(
+        "M {} {}",
+        crate::num::fmt_num(x + tl),
+        crate::num::fmt_num(y)
+    );
+    write!(
+        d,
+        " L {} {}",
+        crate::num::fmt_num(x + w - tr),
+        crate::num::fmt_num(y)
+    )
+    .unwrap();
+    if tr > 0.0 {
+        write!(
+            d,
+            " C {} {} {} {} {} {}",
+            crate::num::fmt_num(x + w - tr + KAPPA * tr),
+            crate::num::fmt_num(y),
+            crate::num::fmt_num(x + w),
+            crate::num::fmt_num(y + tr - KAPPA * tr),
+            crate::num::fmt_num(x + w),
+            crate::num::fmt_num(y + tr)
+        )
+        .unwrap();
+    }
+    write!(
+        d,
+        " L {} {}",
+        crate::num::fmt_num(x + w),
+        crate::num::fmt_num(y + h - br)
+    )
+    .unwrap();
+    if br > 0.0 {
+        write!(
+            d,
+            " C {} {} {} {} {} {}",
+            crate::num::fmt_num(x + w),
+            crate::num::fmt_num(y + h - br + KAPPA * br),
+            crate::num::fmt_num(x + w - br + KAPPA * br),
+            crate::num::fmt_num(y + h),
+            crate::num::fmt_num(x + w - br),
+            crate::num::fmt_num(y + h)
+        )
+        .unwrap();
+    }
+    write!(
+        d,
+        " L {} {}",
+        crate::num::fmt_num(x + bl),
+        crate::num::fmt_num(y + h)
+    )
+    .unwrap();
+    if bl > 0.0 {
+        write!(
+            d,
+            " C {} {} {} {} {} {}",
+            crate::num::fmt_num(x + bl - KAPPA * bl),
+            crate::num::fmt_num(y + h),
+            crate::num::fmt_num(x),
+            crate::num::fmt_num(y + h - bl + KAPPA * bl),
+            crate::num::fmt_num(x),
+            crate::num::fmt_num(y + h - bl)
+        )
+        .unwrap();
+    }
+    write!(
+        d,
+        " L {} {}",
+        crate::num::fmt_num(x),
+        crate::num::fmt_num(y + tl)
+    )
+    .unwrap();
+    if tl > 0.0 {
+        write!(
+            d,
+            " C {} {} {} {} {} {}",
+            crate::num::fmt_num(x),
+            crate::num::fmt_num(y + tl - KAPPA * tl),
+            crate::num::fmt_num(x + tl - KAPPA * tl),
+            crate::num::fmt_num(y),
+            crate::num::fmt_num(x + tl),
+            crate::num::fmt_num(y)
+        )
+        .unwrap();
+    }
+    d.push_str(" Z");
+
+    Prim::Path {
+        d,
+        fill: Some(fill),
+        stroke: None,
+        stroke_width: 0.0,
+    }
+}
 
 /// 対数値軸では非正値を描画せず、線形軸では有限値をそのまま描画する。
 fn is_renderable_value(value: f64, is_log: bool) -> bool {
@@ -214,10 +386,11 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let band_w = super::common::band_width(frame, n);
     let (stack_groups, stack_group_count) = super::common::stack_group_indices(&spec.series);
-    let legacy_geometry = spec
-        .series
-        .iter()
-        .all(|series| series.bar_geometry.is_none());
+    let legacy_geometry = spec.series.iter().all(|series| {
+        series
+            .bar_geometry
+            .map_or(true, |geometry| !geometry.has_geometry_controls())
+    });
     let s = spec.series.len().max(1);
     let placement_stacked = matches!(
         spec.kind,
@@ -608,15 +781,37 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     );
     let stacked = placement_stacked && value_stacked;
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
+    let (stack_groups, _) = super::common::stack_group_indices(&spec.series);
     for b in vertical_bar_boxes(spec, &frame) {
         let ser = &spec.series[b.series];
-        items.push(Prim::Rect {
-            x: b.x,
-            y: b.y,
-            w: b.w,
-            h: b.h,
-            fill: ser.fill_at(b.index),
-        });
+        let base_value = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
+        let baseline_y = frame.ys.map(base_value);
+        let value_y = frame
+            .ys
+            .map(super::common::clip_axis_value(b.value, &frame.ticks));
+        let base_side = if baseline_y >= value_y {
+            BarSide::Bottom
+        } else {
+            BarSide::Top
+        };
+        let has_later_same_sign = value_stacked
+            && spec.series.iter().enumerate().any(|(next, series)| {
+                next > b.series
+                    && stack_groups[next] == stack_groups[b.series]
+                    && series.values.get(b.index).is_some_and(|value| {
+                        is_renderable_value(*value, is_log) && value.signum() == b.value.signum()
+                    })
+            });
+        items.push(bar_primitive(
+            b.x,
+            b.y,
+            b.w,
+            b.h,
+            ser.fill_at(b.index),
+            ser.bar_geometry.and_then(|geometry| geometry.border_radius),
+            base_side,
+            !has_later_same_sign,
+        ));
         if !spec.data_labels
             || b.h <= 0.0
             || !super::common::axis_value_in_bounds(b.value, &frame.ticks)
@@ -679,10 +874,11 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     let ink = spec.theme.text_color;
     let label_font = spec.theme.font_size;
-    let legacy_geometry = spec
-        .series
-        .iter()
-        .all(|series| series.bar_geometry.is_none());
+    let legacy_geometry = spec.series.iter().all(|series| {
+        series
+            .bar_geometry
+            .map_or(true, |geometry| !geometry.has_geometry_controls())
+    });
 
     // 横棒は値軸が x のため x_axis を渡す（begin_at_zero/suggested も x_axis から読む）。
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
@@ -1059,13 +1255,27 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 }
                 let x = base.min(head);
                 let w = (head - base).abs();
-                items.push(Prim::Rect {
-                    x,
-                    y: by,
-                    w,
-                    h: bar_height,
-                    fill: ser.fill_at(i),
+                let has_later_same_sign = spec.series.iter().enumerate().any(|(next, series)| {
+                    next > series_index
+                        && stack_groups[next] == stack_group
+                        && series.values.get(i).is_some_and(|value| {
+                            is_renderable_value(*value, is_log) && value.signum() == v.signum()
+                        })
                 });
+                items.push(bar_primitive(
+                    x,
+                    by,
+                    w,
+                    bar_height,
+                    ser.fill_at(i),
+                    ser.bar_geometry.and_then(|geometry| geometry.border_radius),
+                    if base <= head {
+                        BarSide::Left
+                    } else {
+                        BarSide::Right
+                    },
+                    !has_later_same_sign,
+                ));
                 if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
                     // セグメント中央(box 中心)に値ラベルを置く。base/head は既に xs で
                     // 写像済みのピクセル空間なので、ここで平均する(ピクセル空間の中点)。
@@ -1122,13 +1332,20 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 );
                 let x = base.min(head);
                 let w = (head - base).abs();
-                items.push(Prim::Rect {
+                items.push(bar_primitive(
                     x,
-                    y: by,
+                    by,
                     w,
-                    h: bar_height,
-                    fill: ser.fill_at(i),
-                });
+                    bar_height,
+                    ser.fill_at(i),
+                    ser.bar_geometry.and_then(|geometry| geometry.border_radius),
+                    if base <= head {
+                        BarSide::Left
+                    } else {
+                        BarSide::Right
+                    },
+                    true,
+                ));
                 if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
                     let (cx, anchor) = if v >= 0.0 {
                         (head + LABEL_GAP, Anchor::Start)
@@ -1175,13 +1392,20 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 );
                 let x = base.min(head);
                 let w = (head - base).abs();
-                items.push(Prim::Rect {
+                items.push(bar_primitive(
                     x,
-                    y: by,
+                    by,
                     w,
-                    h: bar_height,
-                    fill: ser.fill_at(i),
-                });
+                    bar_height,
+                    ser.fill_at(i),
+                    ser.bar_geometry.and_then(|geometry| geometry.border_radius),
+                    if base <= head {
+                        BarSide::Left
+                    } else {
+                        BarSide::Right
+                    },
+                    true,
+                ));
                 if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) {
                     let cy = by + bar_height / 2.0 + label_font * TEXT_BASELINE_RATIO;
                     // 正は棒右端の右(Start)、負は左端の左(End)に LABEL_GAP 分離す。
@@ -1322,6 +1546,194 @@ mod geom_tests {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let frame = super::super::common::compute(&spec, &m);
         vertical_bar_boxes(&spec, &frame)
+    }
+
+    fn scene_for(json: &str) -> (ChartSpec, Scene) {
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = super::build(&spec, &m);
+        (spec, scene)
+    }
+
+    #[test]
+    fn bar_primitive_rounds_only_value_end_corners() {
+        for (value, expected_commands) in [
+            (4, vec!["M", "L", "C", "L", "L", "L", "C", "Z"]),
+            (-4, vec!["M", "L", "L", "C", "L", "C", "L", "Z"]),
+        ] {
+            let json = format!(
+                r#"{{"type":"bar","data":{{"labels":["A"],"datasets":[{{"data":[{value}],"borderRadius":3}}]}}}}"#
+            );
+            let (spec, scene) = scene_for(&json);
+            let fill = spec.series[0].fill_at(0);
+            let path = scene
+                .items
+                .iter()
+                .find_map(|prim| match prim {
+                    Prim::Path {
+                        d,
+                        fill: Some(path_fill),
+                        ..
+                    } if *path_fill == fill => Some(d),
+                    _ => None,
+                })
+                .expect("bar radius should produce a path");
+            let commands: Vec<_> = path
+                .split_ascii_whitespace()
+                .filter(|token| matches!(*token, "M" | "L" | "C" | "Z"))
+                .collect();
+            assert_eq!(commands, expected_commands, "value={value}: {path}");
+        }
+
+        let (spec, scene) = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[4],"borderRadius":{"topLeft":3}}]}}"#,
+        );
+        let fill = spec.series[0].fill_at(0);
+        let path = scene
+            .items
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::Path {
+                    d,
+                    fill: Some(path_fill),
+                    ..
+                } if *path_fill == fill => Some(d),
+                _ => None,
+            })
+            .expect("one rounded corner should produce a path");
+        assert_eq!(
+            path.split_ascii_whitespace()
+                .filter(|token| *token == "C")
+                .count(),
+            1,
+            "only topLeft is rounded: {path}"
+        );
+    }
+
+    #[test]
+    fn bar_primitive_clamps_radii_and_keeps_zero_square() {
+        for radius in ["0", "-5"] {
+            let json = format!(
+                r#"{{"type":"bar","data":{{"labels":["A"],"datasets":[{{"data":[4],"borderRadius":{radius}}}]}}}}"#
+            );
+            let (spec, scene) = scene_for(&json);
+            let fill = spec.series[0].fill_at(0);
+            assert!(scene.items.iter().any(|prim| matches!(
+                prim,
+                Prim::Rect { fill: rect_fill, .. } if *rect_fill == fill
+            )));
+            assert!(!scene.items.iter().any(|prim| matches!(
+                prim,
+                Prim::Path { fill: Some(path_fill), .. } if *path_fill == fill
+            )));
+        }
+
+        let oversized = r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[4],"borderRadius":10000}]}}"#;
+        let (spec, scene) = scene_for(oversized);
+        let fill = spec.series[0].fill_at(0);
+        let path = scene
+            .items
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::Path {
+                    d,
+                    fill: Some(path_fill),
+                    ..
+                } if *path_fill == fill => Some(d),
+                _ => None,
+            })
+            .expect("oversized radius should be clamped into a path");
+        let bar = boxes_for(oversized).pop().unwrap();
+        let coordinates: Vec<_> = path
+            .split_ascii_whitespace()
+            .filter_map(|token| token.parse::<f64>().ok())
+            .collect();
+        assert_eq!(coordinates.len() % 2, 0, "path coordinates must be pairs");
+        for (index, coordinate) in coordinates.into_iter().enumerate() {
+            assert!(coordinate.is_finite(), "{path}");
+            let (min, max) = if index % 2 == 0 {
+                (bar.x, bar.x + bar.w)
+            } else {
+                (bar.y, bar.y + bar.h)
+            };
+            assert!(
+                coordinate >= min - 0.01 && coordinate <= max + 0.01,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn bar_primitive_radius_only_preserves_vertical_bar_geometry() {
+        let square =
+            boxes_for(r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[4]}]}}"#);
+        let rounded = boxes_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[4],"borderRadius":3}]}}"#,
+        );
+        assert_eq!(rounded, square);
+    }
+
+    #[test]
+    fn vertical_bar_border_radius_rounds_stack_ends_and_mixed_bars() {
+        let stack_json = r#"{
+          "type":"bar",
+          "data":{"labels":["A"],"datasets":[
+            {"stack":"s","data":[2],"borderRadius":4},
+            {"stack":"s","data":[3],"borderRadius":4},
+            {"stack":"s","data":[-2],"borderRadius":4},
+            {"stack":"s","data":[-3],"borderRadius":4}
+          ]},
+          "options":{"scales":{"x":{"stacked":true},"y":{"stacked":true}}}
+        }"#;
+        let (spec, scene) = scene_for(stack_json);
+        let has_primitive = |series_index: usize, path: bool| {
+            scene.items.iter().any(|prim| match prim {
+                Prim::Path {
+                    fill: Some(fill), ..
+                } if path => *fill == spec.series[series_index].fill_at(0),
+                Prim::Rect { fill, .. } if !path => *fill == spec.series[series_index].fill_at(0),
+                _ => false,
+            })
+        };
+        assert!(
+            has_primitive(0, false),
+            "first positive segment is the base"
+        );
+        assert!(
+            has_primitive(1, true),
+            "last positive segment is the stack end"
+        );
+        assert!(
+            has_primitive(2, false),
+            "first negative segment is the base"
+        );
+        assert!(
+            has_primitive(3, true),
+            "last negative segment is the stack end"
+        );
+
+        let square_json = stack_json.replace(",\"borderRadius\":4", "");
+        let (square_spec, square_scene) = scene_for(&square_json);
+        for series in &square_spec.series {
+            let fill = series.fill_at(0);
+            assert!(square_scene.items.iter().any(|prim| matches!(
+                prim,
+                Prim::Rect { fill: rect_fill, .. } if *rect_fill == fill
+            )));
+            assert!(!square_scene.items.iter().any(|prim| matches!(
+                prim,
+                Prim::Path { fill: Some(path_fill), .. } if *path_fill == fill
+            )));
+        }
+
+        let (mixed_spec, mixed_scene) = scene_for(
+            r#"{"type":"line","data":{"labels":["A"],"datasets":[{"type":"bar","data":[2],"borderRadius":4},{"data":[3]}]}}"#,
+        );
+        let bar_fill = mixed_spec.series[0].fill_at(0);
+        assert!(mixed_scene.items.iter().any(|prim| matches!(
+            prim,
+            Prim::Path { fill: Some(fill), .. } if *fill == bar_fill
+        )));
     }
 
     #[test]

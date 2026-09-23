@@ -77,6 +77,28 @@ pub struct BarData {
     pub datasets: Vec<BarDataset>,
 }
 
+/// Per-bar corner radii in pixels. An object can override individual corners.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum BorderRadius {
+    Pixels(#[schemars(range(min = 0.0))] f64),
+    Corners(BorderRadiusCorners),
+}
+
+/// Optional radii for individual corners of a bar.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BorderRadiusCorners {
+    #[schemars(range(min = 0.0))]
+    pub top_left: Option<f64>,
+    #[schemars(range(min = 0.0))]
+    pub top_right: Option<f64>,
+    #[schemars(range(min = 0.0))]
+    pub bottom_left: Option<f64>,
+    #[schemars(range(min = 0.0))]
+    pub bottom_right: Option<f64>,
+}
+
 /// Bar dataset. Supports mixed bar+line charts via the per-dataset `type` field.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -112,6 +134,9 @@ pub struct BarDataset {
     #[serde(rename = "minBarLength", skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0.0))]
     pub min_bar_length: Option<f64>,
+    /// Corner radius in pixels. Corner objects override specific corners.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_radius: Option<BorderRadius>,
     pub data: Vec<Option<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,
@@ -249,6 +274,9 @@ pub struct LineDataset {
     #[serde(rename = "minBarLength", skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0.0))]
     pub min_bar_length: Option<f64>,
+    /// Corner radius in pixels for bar datasets in mixed charts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_radius: Option<BorderRadius>,
     pub data: Vec<Option<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,
@@ -1548,6 +1576,24 @@ mod tests {
                 r#"{"data":[1],"categoryPercentage":1.25,"barPercentage":1.5}"#
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn bar_datasets_accept_border_radius() {
+        for json in [
+            r#"{"data":[1],"borderRadius":6}"#,
+            r#"{"data":[1],"borderRadius":{"topLeft":4,"bottomRight":2}}"#,
+        ] {
+            assert!(serde_json::from_str::<BarDataset>(json).is_ok(), "{json}");
+        }
+        assert!(
+            serde_json::from_str::<BarDataset>(r#"{"data":[1],"borderRadius":{"topCentre":4}}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<LineDataset>(r#"{"type":"bar","data":[1],"borderRadius":6}"#)
+                .is_ok()
         );
     }
 

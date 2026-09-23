@@ -2,7 +2,9 @@
 
 use crate::color::parse_color;
 use crate::ir::*;
-use crate::schema::chartjs::BarThickness as SchemaBarThickness;
+use crate::schema::chartjs::{
+    BarThickness as SchemaBarThickness, BorderRadius as SchemaBorderRadius,
+};
 use crate::schema::common::{
     AxisBorderOptions, AxisOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions,
     GridLineOptions,
@@ -228,6 +230,8 @@ struct RawDataset {
     max_bar_thickness: Option<f64>,
     #[serde(rename = "minBarLength", default)]
     min_bar_length: Option<f64>,
+    #[serde(rename = "borderRadius", default)]
+    border_radius: Option<SchemaBorderRadius>,
     data: DataField,
     #[serde(rename = "backgroundColor")]
     background_color: Option<ScalarOrArray<String>>,
@@ -1050,7 +1054,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                     || ds.bar_percentage.is_some()
                     || ds.bar_thickness.is_some()
                     || ds.max_bar_thickness.is_some()
-                    || ds.min_bar_length.is_some())
+                    || ds.min_bar_length.is_some()
+                    || ds.border_radius.is_some())
             {
                 Some(BarGeometryOptions {
                     category_percentage: ds.category_percentage,
@@ -1063,6 +1068,15 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                     }),
                     max_bar_thickness: ds.max_bar_thickness,
                     min_bar_length: ds.min_bar_length,
+                    border_radius: ds.border_radius.map(|radius| match radius {
+                        SchemaBorderRadius::Pixels(value) => BarBorderRadius::Uniform(value),
+                        SchemaBorderRadius::Corners(corners) => BarBorderRadius::Corners {
+                            top_left: corners.top_left,
+                            top_right: corners.top_right,
+                            bottom_left: corners.bottom_left,
+                            bottom_right: corners.bottom_right,
+                        },
+                    }),
                 })
             } else {
                 None
@@ -1581,6 +1595,7 @@ fn check_unknown_keys(
                             "barThickness",
                             "maxBarThickness",
                             "minBarLength",
+                            "borderRadius",
                             "data",
                             "backgroundColor",
                             "borderColor",
@@ -1602,6 +1617,7 @@ fn check_unknown_keys(
                             "barThickness",
                             "maxBarThickness",
                             "minBarLength",
+                            "borderRadius",
                             "data",
                             "backgroundColor",
                             "borderColor",
@@ -3998,6 +4014,26 @@ mod tests {
         }"#;
         let no_geometry_spec = parse(no_geometry, true).expect("bar chart should parse");
         assert!(no_geometry_spec.series[0].bar_geometry.is_none());
+    }
+
+    #[test]
+    fn bar_dataset_border_radius_parses_per_dataset_in_strict_mode() {
+        let cases = [
+            r#"{"type":"bar","data":{"datasets":[{"data":[1],"borderRadius":6}]}}"#,
+            r#"{"type":"line","data":{"datasets":[{"type":"bar","data":[1],"borderRadius":{"topLeft":4}}]}}"#,
+        ];
+        for json in cases {
+            let spec = parse(json, false).unwrap();
+            assert!(spec.series[0].bar_geometry.is_some(), "{json}");
+            assert!(parse(json, true).is_ok(), "strict parse rejected {json}");
+        }
+        assert!(
+            parse(
+                r#"{"type":"bar","data":{"datasets":[{"data":[1],"borderRaduis":6}]}}"#,
+                true
+            )
+            .is_err()
+        );
     }
 
     #[test]
