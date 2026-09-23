@@ -441,11 +441,14 @@ pub fn line_points(
 /// (積み上げ上の欠損補完; Vega-Lite の stack transform と同じ)。
 fn stack_offsets(spec: &ChartSpec) -> Vec<Vec<(f64, f64)>> {
     let n = spec.categories.len();
-    let mut pos_running = vec![0.0_f64; n];
-    let mut neg_running = vec![0.0_f64; n];
+    let (stack_groups, group_count) = common::stack_group_indices(&spec.series);
+    let mut pos_running = vec![vec![0.0_f64; n]; group_count];
+    let mut neg_running = vec![vec![0.0_f64; n]; group_count];
     spec.series
         .iter()
-        .map(|ser| {
+        .enumerate()
+        .map(|(series_index, ser)| {
+            let stack_group = stack_groups[series_index];
             (0..n)
                 .map(|i| {
                     let v = ser
@@ -455,9 +458,9 @@ fn stack_offsets(spec: &ChartSpec) -> Vec<Vec<(f64, f64)>> {
                         .filter(|v| v.is_finite())
                         .unwrap_or(0.0);
                     let running = if v >= 0.0 {
-                        &mut pos_running[i]
+                        &mut pos_running[stack_group][i]
                     } else {
-                        &mut neg_running[i]
+                        &mut neg_running[stack_group][i]
                     };
                     let near = *running;
                     *running += v;
@@ -2384,6 +2387,7 @@ mod tests {
                         interpolation: crate::ir::LineInterpolation::Linear,
                         span_gaps: false,
                         step_mode: None,
+                        stack: None,
                         series_type: crate::ir::SeriesType::Line,
                         point_radius: None,
                         box_points: vec![],
@@ -2440,6 +2444,31 @@ mod tests {
             markers.iter().any(|&(_, y)| (y - s1_a_y).abs() < 1e-6),
             "series 1 marker must sit at its cumulative top (10+5=15)"
         );
+    }
+
+    #[test]
+    fn stacked_line_stack_ids_accumulate_independently_by_sign() {
+        let mut spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["A"],"datasets":[
+              {"data":[2]},
+              {"data":[4],"stack":"line"},
+              {"data":[7],"stack":"cool"},
+              {"data":[-3]},
+              {"data":[-5],"stack":"line"},
+              {"data":[-1],"stack":"cool"}
+            ]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.kind = ChartKind::Line { stacked: true };
+
+        let offsets = stack_offsets(&spec);
+        assert_eq!(offsets[0][0], (0.0, 2.0));
+        assert_eq!(offsets[1][0], (2.0, 6.0));
+        assert_eq!(offsets[2][0], (0.0, 7.0));
+        assert_eq!(offsets[3][0], (0.0, -3.0));
+        assert_eq!(offsets[4][0], (-3.0, -8.0));
+        assert_eq!(offsets[5][0], (0.0, -1.0));
     }
 
     #[test]

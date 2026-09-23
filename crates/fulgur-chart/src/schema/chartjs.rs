@@ -89,6 +89,9 @@ pub struct BarDataset {
     /// Per-dataset chart type for mixed bar+line charts. Only "bar" or "line" are valid.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub dataset_type: Option<BarOrLine>,
+    /// Stack group id. Datasets with the same id share a stack.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack: Option<String>,
     pub data: Vec<Option<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,
@@ -187,6 +190,9 @@ pub struct LineDataset {
     /// Drawing order for mixed bar+line charts. Higher values are painted behind lower values.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub order: Option<f64>,
+    /// Stack group id. Datasets with the same id share a stack.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack: Option<String>,
     pub data: Vec<Option<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,
@@ -1459,6 +1465,12 @@ mod tests {
         let json = r#"{"data":[10,null,30]}"#;
         let d: BarDataset = serde_json::from_str(json).unwrap();
         assert_eq!(d.data, vec![Some(10.0), None, Some(30.0)]);
+    }
+
+    #[test]
+    fn bar_and_line_datasets_accept_stack_group_ids() {
+        assert!(serde_json::from_str::<BarDataset>(r#"{"data":[1],"stack":"sales"}"#).is_ok());
+        assert!(serde_json::from_str::<LineDataset>(r#"{"data":[1],"stack":"sales"}"#).is_ok());
     }
 
     #[test]

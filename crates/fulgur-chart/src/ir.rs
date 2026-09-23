@@ -147,6 +147,9 @@ pub struct Series {
     pub step_mode: Option<StepMode>,
     /// 描画種別。混合チャートでのみ意味を持つ(単一種別では未使用)。
     pub series_type: SeriesType,
+    /// Optional stack group id. Chart.js datasets normalize omitted ids to their type default;
+    /// other frontends leave this unset to retain their historical single-stack behavior.
+    pub stack: Option<String>,
     /// scatter のマーカー半径(chart.js pointRadius)。None なら既定値。
     /// bubble では point.r を優先し、欠落時のフォールバックに使う。
     pub point_radius: Option<f64>,
@@ -650,6 +653,7 @@ mod tests {
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
+            stack: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -674,6 +678,7 @@ mod tests {
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
+            stack: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -699,6 +704,7 @@ mod tests {
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
+            stack: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],

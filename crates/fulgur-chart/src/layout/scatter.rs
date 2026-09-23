@@ -646,6 +646,7 @@ mod tests {
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
+                stack: None,
                 series_type: SeriesType::Bar,
                 point_radius: None,
                 box_points: vec![],

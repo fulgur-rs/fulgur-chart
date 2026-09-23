@@ -215,6 +215,8 @@ struct RawDataset {
     /// dataset 別の描画種別("bar"/"line")。混合チャートで使う。未指定なら chart 基本型に従う。
     #[serde(rename = "type", default)]
     dataset_type: Option<String>,
+    #[serde(default)]
+    stack: Option<String>,
     data: DataField,
     #[serde(rename = "backgroundColor")]
     background_color: Option<ScalarOrArray<String>>,
@@ -679,7 +681,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // 積み上げ判定: chart.js は配置(dodge/同スロット)と値累積を独立した軸で制御する。
     // index 軸の stacked → placement_stacked(棒の配置)
     // 値軸の stacked  → value_stacked(値累積・値域計算)
-    // 既知の制約: per-dataset の stack プロパティによる積み上げは未対応(scales 経由のみ)。
+    // dataset.stack は同じスタック内のグループ化に使う。stacked の有効化自体は軸設定で行う。
     // indexAxis は chart.js では "x"/"y" のみ。想定外の値は orientation 判定と同様に
     // 縦棒(index 軸=x)として扱うため、"y" 以外は "x" に正規化する。
     let index_axis = if raw.options.index_axis.as_deref() == Some("y") {
@@ -1044,6 +1046,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 span_gaps: line_dataset_options[i].0,
                 step_mode: line_dataset_options[i].1,
                 series_type,
+                stack: if is_mixable_base {
+                    Some(ds.stack.unwrap_or_else(|| match series_type {
+                        SeriesType::Bar => "bar".to_string(),
+                        SeriesType::Line => "line".to_string(),
+                    }))
+                } else {
+                    None
+                },
                 point_radius: ds.point_radius,
                 box_points,
                 tree: vec![],
@@ -1530,6 +1540,7 @@ fn check_unknown_keys(
                             "label",
                             "order",
                             "type",
+                            "stack",
                             "data",
                             "backgroundColor",
                             "borderColor",
@@ -1545,6 +1556,7 @@ fn check_unknown_keys(
                             "label",
                             "order",
                             "type",
+                            "stack",
                             "data",
                             "backgroundColor",
                             "borderColor",
@@ -2199,6 +2211,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         interpolation: LineInterpolation::Linear,
         span_gaps: false,
         step_mode: None,
+        stack: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -2546,6 +2559,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
+            stack: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -2910,6 +2924,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         interpolation: LineInterpolation::Linear,
         span_gaps: false,
         step_mode: None,
+        stack: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -3161,6 +3176,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         interpolation: LineInterpolation::Linear,
         span_gaps: false,
         step_mode: None,
+        stack: None,
         series_type: SeriesType::Bar,
         point_radius: None,
         box_points: vec![],
@@ -3387,6 +3403,30 @@ fn check_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stack_group_ids_use_chart_type_defaults_and_are_allowed_in_strict_mode() {
+        let bar = parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[1]},{"data":[2],"stack":"bar"},{"data":[3],"stack":"fruit"}
+            ]}}"#,
+            true,
+        )
+        .expect("strict bar stack parse");
+        assert_eq!(bar.series[0].stack.as_deref(), Some("bar"));
+        assert_eq!(bar.series[1].stack.as_deref(), Some("bar"));
+        assert_eq!(bar.series[2].stack.as_deref(), Some("fruit"));
+
+        let line = parse(
+            r#"{"type":"line","data":{"labels":["A"],"datasets":[
+              {"data":[1]},{"data":[2],"stack":"line"}
+            ]}}"#,
+            true,
+        )
+        .expect("strict line stack parse");
+        assert_eq!(line.series[0].stack.as_deref(), Some("line"));
+        assert_eq!(line.series[1].stack.as_deref(), Some("line"));
+    }
 
     #[test]
     fn parse_boxplot_basic() {

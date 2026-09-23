@@ -45,6 +45,10 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     let s = spec.series.len().max(1);
     let group_w = band_w * GROUP_RATIO;
     let bar_w = group_w / s as f64;
+    let (stack_groups, stack_group_count) = super::common::stack_group_indices(&spec.series);
+    let stack_slot_count = stack_group_count.max(1);
+    let stack_slot_w = group_w / stack_slot_count as f64;
+    let stack_bar_w = (stack_slot_w * BAR_FILL_RATIO).max(0.0);
     let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
     let baseline_y = frame.ys.map(base_v);
     let placement_stacked = matches!(
@@ -64,13 +68,12 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
 
     let mut boxes = Vec::new();
     if placement_stacked && value_stacked {
-        // 同スロット + 値累積(従来の stacked=true の挙動)
-        let stack_w = (group_w * BAR_FILL_RATIO).max(0.0);
+        // stack ID ごとに並列の列を置き、各列の中で値を正負別に累積する。
         for i in 0..spec.categories.len() {
             let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
             let bx = band_left + band_w * BAND_PAD_RATIO;
-            let mut pos_acc = 0.0_f64;
-            let mut neg_acc = 0.0_f64;
+            let mut pos_acc = vec![0.0_f64; stack_group_count];
+            let mut neg_acc = vec![0.0_f64; stack_group_count];
             for (sidx, ser) in spec.series.iter().enumerate() {
                 let Some(&v) = ser.values.get(i) else {
                     continue;
@@ -78,14 +81,16 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                 if !is_renderable_value(v, is_log) {
                     continue;
                 }
+                let stack_group = stack_groups[sidx];
                 let (v0, v1) = if v >= 0.0 {
-                    let lo = pos_acc;
-                    pos_acc += v;
-                    (lo, pos_acc)
+                    let lo = pos_acc[stack_group];
+                    pos_acc[stack_group] += v;
+                    let sum = pos_acc[stack_group];
+                    (lo, sum)
                 } else {
-                    let hi = neg_acc;
-                    neg_acc += v;
-                    (neg_acc, hi)
+                    let hi = neg_acc[stack_group];
+                    neg_acc[stack_group] += v;
+                    (neg_acc[stack_group], hi)
                 };
                 let y0 = frame
                     .ys
@@ -99,21 +104,21 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     series: sidx,
                     index: i,
                     value: v,
-                    x: bx,
+                    x: bx + stack_group as f64 * stack_slot_w,
                     y: y_top,
-                    w: stack_w,
+                    w: stack_bar_w,
                     h,
                 });
             }
         }
     } else if placement_stacked {
-        // 同スロット + 各系列を baseline から描画(chart.js の index-only stacked 挙動)
-        // 系列は重なる。値域は dodge と同じ個別値(value_stacked=false)。
-        let stack_w = (group_w * BAR_FILL_RATIO).max(0.0);
+        // stack ID ごとのスロットに、各系列を baseline から重ねて描く。
+        // 値域は dodge と同じ個別値(value_stacked=false)。
         for i in 0..spec.categories.len() {
             let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
             let bx = band_left + band_w * BAND_PAD_RATIO;
             for (sidx, ser) in spec.series.iter().enumerate() {
+                let stack_group = stack_groups[sidx];
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
@@ -129,9 +134,9 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     series: sidx,
                     index: i,
                     value: v,
-                    x: bx,
+                    x: bx + stack_group as f64 * stack_slot_w,
                     y: y_top,
-                    w: stack_w,
+                    w: stack_bar_w,
                     h,
                 });
             }
@@ -636,6 +641,10 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let s = spec.series.len().max(1);
     let group_h = band_h * GROUP_RATIO;
     let bar_h = group_h / s as f64;
+    let (stack_groups, stack_group_count) = stack_group_indices(&spec.series);
+    let stack_slot_count = stack_group_count.max(1);
+    let stack_slot_h = group_h / stack_slot_count as f64;
+    let stack_bar_h = (stack_slot_h * BAR_FILL_RATIO).max(0.0);
 
     let base_v = 0.0_f64.clamp(ticks.min, ticks.max);
     let baseline_x = xs.map(base_v);
@@ -673,27 +682,28 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
 
         if placement_stacked && value_stacked {
-            // 同スロット + 値累積(従来の横棒 stacked 挙動)
-            let stack_h = (group_h * BAR_FILL_RATIO).max(0.0);
-            let by = band_top + band_h * BAND_PAD_RATIO;
-            let cy = by + stack_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
-            let mut pos_acc = 0.0_f64;
-            let mut neg_acc = 0.0_f64;
-            for ser in &spec.series {
+            // stack ID ごとに平行なレーンを置き、各レーンの中で値を正負別に累積する。
+            let base_y = band_top + band_h * BAND_PAD_RATIO;
+            let mut pos_acc = vec![0.0_f64; stack_group_count];
+            let mut neg_acc = vec![0.0_f64; stack_group_count];
+            for (series_index, ser) in spec.series.iter().enumerate() {
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
                 if !is_renderable_value(v, is_log) {
                     continue;
                 }
+                let stack_group = stack_groups[series_index];
+                let by = base_y + stack_group as f64 * stack_slot_h;
+                let cy = by + stack_bar_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
                 let (v0, v1) = if v >= 0.0 {
-                    let lo = pos_acc;
-                    pos_acc += v;
-                    (lo, pos_acc)
+                    let lo = pos_acc[stack_group];
+                    pos_acc[stack_group] += v;
+                    (lo, pos_acc[stack_group])
                 } else {
-                    let hi = neg_acc;
-                    neg_acc += v;
-                    (neg_acc, hi)
+                    let hi = neg_acc[stack_group];
+                    neg_acc[stack_group] += v;
+                    (neg_acc[stack_group], hi)
                 };
                 let x0 = xs.map(super::common::clip_axis_value(v0, &ticks));
                 let x1 = xs.map(super::common::clip_axis_value(v1, &ticks));
@@ -703,7 +713,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     x,
                     y: by,
                     w,
-                    h: stack_h,
+                    h: stack_bar_h,
                     fill: ser.fill_at(i),
                 });
                 if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
@@ -725,10 +735,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 }
             }
         } else if placement_stacked {
-            // 同スロット + 各 baseline から描画(横棒 index-only stacked)
-            let stack_h = (group_h * BAR_FILL_RATIO).max(0.0);
-            let by = band_top + band_h * BAND_PAD_RATIO;
-            for ser in &spec.series {
+            // stack ID ごとのレーンへ配置し、各系列を baseline から描画する。
+            let base_y = band_top + band_h * BAND_PAD_RATIO;
+            for (series_index, ser) in spec.series.iter().enumerate() {
+                let stack_group = stack_groups[series_index];
+                let by = base_y + stack_group as f64 * stack_slot_h;
+                let cy = by + stack_bar_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
@@ -742,11 +754,10 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     x,
                     y: by,
                     w,
-                    h: stack_h,
+                    h: stack_bar_h,
                     fill: ser.fill_at(i),
                 });
                 if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
-                    let cy = by + stack_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
                     let (cx, anchor) = if v >= base_v {
                         (vx + LABEL_GAP, Anchor::Start)
                     } else {
@@ -1019,6 +1030,54 @@ mod geom_tests {
     }
 
     #[test]
+    fn stacked_bar_stack_ids_create_parallel_columns_and_independent_totals() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[2]},
+              {"data":[3],"stack":"bar"},
+              {"data":[7],"stack":"fruit"}
+            ]},"options":{"scales":{"x":{"stacked":true},"y":{"stacked":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        assert_eq!(boxes.len(), 3);
+        assert_eq!(
+            boxes[0].x, boxes[1].x,
+            "implicit bar and explicit bar share a stack"
+        );
+        assert_ne!(
+            boxes[0].x, boxes[2].x,
+            "a different stack gets a parallel column"
+        );
+        let baseline_y = frame.ys.map(0.0);
+        assert!((boxes[0].y + boxes[0].h - baseline_y).abs() < 1e-9);
+        assert!((boxes[2].y + boxes[2].h - baseline_y).abs() < 1e-9);
+    }
+
+    #[test]
+    fn index_axis_stacking_uses_parallel_slots_without_value_stacking() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[2]},{"data":[2],"stack":"fruit"}
+            ]},"options":{"scales":{"x":{"stacked":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        assert_eq!(boxes.len(), 2);
+        assert_ne!(boxes[0].x, boxes[1].x);
+        assert_eq!(boxes[0].y, boxes[1].y);
+        assert_eq!(boxes[0].h, boxes[1].h);
+    }
+
+    #[test]
     fn vertical_dodge_skips_nan_value() {
         let spec = chartjs::parse(
             r#"{"type":"bar","data":{"labels":["a","b","c"],
@@ -1131,6 +1190,39 @@ mod horizontal_axis_style_tests {
         let spec = parse(json);
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         build(&spec, &m)
+    }
+
+    #[test]
+    fn horizontal_stacked_bar_stack_ids_create_parallel_lanes() {
+        let scene = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[2]},
+              {"data":[3],"stack":"bar"},
+              {"data":[7],"stack":"fruit"}
+            ]},"options":{"indexAxis":"y","scales":{"y":{"stacked":true},"x":{"stacked":true}}}}"#,
+        );
+        let rects: Vec<(f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { x, y, .. } => Some((*x, *y)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(rects.len(), 3);
+        assert_eq!(
+            rects[0].1, rects[1].1,
+            "implicit bar and explicit bar share a lane"
+        );
+        assert_ne!(
+            rects[0].1, rects[2].1,
+            "a different stack gets a parallel lane"
+        );
+        assert_eq!(
+            rects[0].0, rects[2].0,
+            "each stack starts its own accumulation"
+        );
     }
 
     fn horizontal_plot_right(spec: &ChartSpec, m: &TextMeasurer<'_>) -> f64 {
