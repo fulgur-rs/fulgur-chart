@@ -13,6 +13,10 @@ type AreaPoint = (f64, f64);
 type LinePoint = (f64, f64, usize);
 type LineSegments = Vec<Vec<LinePoint>>;
 
+fn source_segments_have_area_edge(segments: &[Vec<LinePoint>]) -> bool {
+    segments.iter().any(|segment| segment.len() >= 2)
+}
+
 #[derive(Clone, Copy)]
 struct AreaInterval {
     source: [AreaPoint; 2],
@@ -478,6 +482,11 @@ pub(crate) fn chartjs_area_fill_primitives(
     let Some(area_fill) = source.area_fill.as_ref() else {
         return Vec::new();
     };
+    if matches!(area_fill.target, AreaFillTarget::Dataset(_))
+        && !source_segments_have_area_edge(source_segments)
+    {
+        return Vec::new();
+    }
     // Dataset target は source の欠損/間引きに依存せず、target 自身の描画点列を使う。
     let dataset_target_segments = match area_fill.target {
         AreaFillTarget::Dataset(target_index) => {
@@ -2325,6 +2334,15 @@ mod tests {
             shape.overlapping_edge_indices(-2.0, -1.0),
             Vec::<usize>::new()
         );
+    }
+
+    #[test]
+    fn area_fill_target_shapes_are_skipped_without_source_edges() {
+        assert!(!source_segments_have_area_edge(&[vec![(1.0, 2.0, 0)]]));
+        assert!(source_segments_have_area_edge(&[vec![
+            (1.0, 2.0, 0),
+            (2.0, 3.0, 1)
+        ]]));
     }
 
     fn stacked_area_spec(categories: Vec<&str>, series: Vec<(&str, Vec<f64>)>) -> ChartSpec {
