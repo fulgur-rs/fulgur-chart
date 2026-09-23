@@ -595,6 +595,25 @@ fn single_dataset_type_override_changes_kind() {
 }
 
 #[test]
+fn scales_y_stacked_true_marks_line_stacked() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],
+      "datasets":[{"data":[10,20]},{"data":[5,15]}]},
+      "options":{"scales":{"y":{"stacked":true}}}}"#;
+    let spec = chartjs::parse(json, true).unwrap();
+
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+}
+
+#[test]
+fn empty_line_preserves_value_axis_stacked_flag() {
+    let json = r#"{"type":"line","data":{"labels":[],"datasets":[]},
+      "options":{"scales":{"y":{"stacked":true}}}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+}
+
+#[test]
 fn unsupported_dataset_type_errors() {
     // bar 基本型に scatter dataset を混ぜるのは未対応。点データが空で「成功扱いの
     // 空チャート」になるのを防ぎ、明示エラーにする。

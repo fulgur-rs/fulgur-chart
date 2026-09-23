@@ -260,6 +260,14 @@ fn rendered_line_segments(
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let valid: Vec<(f64, f64, usize)> = (0..spec.categories.len())
         .filter_map(|category| {
+            if is_log
+                && !series
+                    .values
+                    .get(category)
+                    .is_some_and(|value| value.is_finite() && *value > 0.0)
+            {
+                return None;
+            }
             let x = if matches!(spec.kind, ChartKind::Mixed) {
                 common::category_center(frame, category, spec.categories.len().max(1))
             } else {
@@ -386,9 +394,9 @@ fn append_area_points(d: &mut String, points: impl IntoIterator<Item = (f64, f64
 /// marker geometry から除外する(描画用の線分は axis edge で clamp する)。
 /// stacked: `build()` の `valid` 構築と同じく全カテゴリを検討する(欠損/非有限は
 /// `stack_offsets` が 0 として補完済み)。ただし hard y bound 外は描画されないため除く。
-/// 対数軸との組み合わせは `value_domain` 側で未対応・到達不能。1系列だけ欠損があっても
-/// 隣接系列の帯は一貫している必要があるため、非stacked と違い欠損点は skip しない
-/// (これも自動レビュー指摘で発見・修正した)。
+/// 対数軸ではstackedでも元データが非正値または非有限なら skip する。
+/// 1系列だけ欠損があっても隣接系列の帯は一貫している必要があるため、線形軸のstackedでは
+/// 非stacked と違い欠損点は skip しない(これも自動レビュー指摘で発見・修正した)。
 pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
@@ -403,6 +411,15 @@ pub fn line_points(
         }
         for i in 0..spec.categories.len() {
             let x = common::line_x(spec, frame, i);
+            if offsets.is_some()
+                && is_log
+                && !ser
+                    .values
+                    .get(i)
+                    .is_some_and(|value| value.is_finite() && *value > 0.0)
+            {
+                continue;
+            }
             let plot_y = if let Some(offsets) = &offsets {
                 offsets[sidx][i].1 // far
             } else {
@@ -747,6 +764,14 @@ fn series_y_at(
         return None;
     }
     let value = if let Some(offsets) = offsets {
+        if spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic
+            && !series
+                .values
+                .get(category)
+                .is_some_and(|value| value.is_finite() && *value > 0.0)
+        {
+            return None;
+        }
         offsets.get(series_index)?.get(category)?.1
     } else {
         series.values.get(category).copied()?
@@ -1296,6 +1321,14 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             .filter_map(|i| {
                 let x = common::line_x(spec, &frame, i);
                 if let Some(offsets) = &offsets {
+                    if is_log
+                        && !ser
+                            .values
+                            .get(i)
+                            .is_some_and(|value| value.is_finite() && *value > 0.0)
+                    {
+                        return None;
+                    }
                     Some((
                         x,
                         frame

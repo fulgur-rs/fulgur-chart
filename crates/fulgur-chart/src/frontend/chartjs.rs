@@ -900,14 +900,18 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let kind = if is_mixable_base && has_bar && has_line {
         ChartKind::Mixed
     } else if is_mixable_base && has_line && !has_bar {
-        ChartKind::Line { stacked: false }
+        ChartKind::Line {
+            stacked: value_stacked,
+        }
     } else if is_mixable_base && has_bar && !has_line {
         bar_kind()
     } else {
         // dataset 空(種別未確定)、または mixable でない型。基本 type で決める。
         match raw.chart_type.as_str() {
             "bar" => bar_kind(),
-            "line" => ChartKind::Line { stacked: false },
+            "line" => ChartKind::Line {
+                stacked: value_stacked,
+            },
             "pie" => ChartKind::Pie {
                 cutout: PieCutout::Percent(0.0),
                 dataset_options: vec![],

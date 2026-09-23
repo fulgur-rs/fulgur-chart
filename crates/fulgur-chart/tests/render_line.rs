@@ -79,6 +79,53 @@ fn line_has_polyline_and_markers() {
 }
 
 #[test]
+fn chartjs_value_axis_stacked_accumulates_line_datasets() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[10,20],"borderColor":"#0000ff"},
+      {"data":[5,15],"borderColor":"#ff0000"}
+    ]},"options":{"scales":{"y":{"stacked":true}}}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let frame = fulgur_chart::layout::common::compute(&spec, &measurer);
+    let scene = line::build(&spec, &measurer);
+    let top_line = line_points_by_color(&scene, (255, 0, 0));
+
+    assert_eq!(
+        top_line.iter().map(|(_, y)| *y).collect::<Vec<_>>(),
+        vec![frame.ys.map(15.0), frame.ys.map(35.0)]
+    );
+}
+
+#[test]
+fn stacked_log_line_skips_nonpositive_source_values() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C"],"datasets":[
+      {"data":[10,10,10],"borderColor":"#0000ff"},
+      {"data":[5,0,-5],"borderColor":"#ff0000"}
+    ]},"options":{"scales":{"y":{"stacked":true,"type":"logarithmic","beginAtZero":false}}}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let scene = line::build(&spec, &measurer);
+    let points = line::line_points(
+        &spec,
+        &fulgur_chart::layout::common::compute(&spec, &measurer),
+    );
+
+    let red_markers = scene
+        .items
+        .iter()
+        .filter(|item| matches!(item, Prim::Circle { fill, .. } if (fill.r, fill.g, fill.b) == (255, 0, 0)))
+        .count();
+    let red_hit_categories = points
+        .iter()
+        .filter(|point| point.series == 1)
+        .map(|point| point.index)
+        .collect::<Vec<_>>();
+
+    assert_eq!(red_markers, 1);
+    assert_eq!(red_hit_categories, vec![0]);
+}
+
+#[test]
 fn area_emits_filled_path_with_opacity() {
     let svg = render(
         r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[1,2],"fill":true}]}}"#,

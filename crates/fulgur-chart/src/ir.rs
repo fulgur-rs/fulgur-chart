@@ -541,9 +541,8 @@ pub enum ChartKind {
     },
     Line {
         /// 積み上げ area。Vega-Lite の mark:"area" + color channel で既定 true
-        /// (encoding.y.stack: null で false)。chart.js フロントエンドは常に false を
-        /// 設定する(scales.<axis>.stacked を計算はするが line 構築サイトで捨てている
-        /// 既知のギャップ、fulgur-chart-9lug)。
+        /// (encoding.y.stack: null で false)。Chart.js フロントエンドでは値軸の
+        /// `scales.<axis>.stacked` がこのフラグを制御する。
         stacked: bool,
     }, // area/tension は Series 側
     Pie {

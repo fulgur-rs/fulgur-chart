@@ -2674,19 +2674,16 @@ mod tests {
 
     #[test]
     fn log_value_domain_includes_positive_stacked_line_totals_per_stack_id() {
-        let mut spec = crate::frontend::chartjs::parse(
+        let spec = crate::frontend::chartjs::parse(
             r#"{"type":"line","data":{"labels":["A"],"datasets":[
               {"stack":"small","data":[10]},
               {"stack":"small","data":[20]},
               {"stack":"large","data":[100]},
               {"stack":"large","data":[200]}
-            ]},"options":{"scales":{"y":{"type":"logarithmic","beginAtZero":false}}}}"#,
+            ]},"options":{"scales":{"y":{"stacked":true,"type":"logarithmic","beginAtZero":false}}}}"#,
             false,
         )
         .unwrap();
-        // The Chart.js frontend has not wired line stacking yet. Exercise the shared layout
-        // directly so this log-domain behavior is covered for stacked line specs.
-        spec.kind = ChartKind::Line { stacked: true };
 
         assert_eq!(value_domain(&spec, &spec.y_axis), (10.0, 300.0));
     }
