@@ -1635,16 +1635,18 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         // - encoding.y.stack は null または "zero" のみ受理(他の値は VL の
         //   stack:"normalize"/"center" 等、本実装が対応しない集計方式)。
         //
-        // line の check_line_keys が行う categorical-only 拒否
-        // (mark.interpolate / encoding.{x,y}.title / encoding.color.{title,scale} /
-        // background・config)はここでは意図的に再現しない: build_categorical が
-        // area・line の両方でこれらのオプションを黙って無視する既存挙動と揃えるため
-        // (typed schema の MarkAreaObject も interpolate を temporal/categorical
-        // 両方で許容しており、ここで categorical だけ拒否すると typed schema と
-        // strict parser が食い違う)。
+        // temporal-only の line オプションを categorical area が黙って受け入れない
+        // ようにする。encoding の title/scale は上のチャネル別 allow-list で既に拒否
+        // される。mark.interpolate は temporal/categorical 共通の型なので、categorical
+        // area の builder が Linear 固定であることに合わせてここで明示的に拒否する。
         if matches!(read_mark_name(top), Some("area")) {
             if let Some(mark) = top.get("mark").and_then(Value::as_object) {
                 check_line_object(mark, &["type", "interpolate"], "mark")?;
+                if !temporal_area && mark.contains_key("interpolate") {
+                    return Err(
+                        "mark.interpolate is only supported for temporal area charts".to_string(),
+                    );
+                }
             }
             if let Some(stack) = encoding
                 .get("y")

@@ -1522,6 +1522,38 @@ fn strict_area_rejects_point_on_mark_object() {
 }
 
 #[test]
+fn strict_categorical_area_rejects_temporal_only_options() {
+    let json = CATEGORICAL_AREA_STACKED.replace(
+        r#""mark": "area""#,
+        r#""mark": {"type": "area", "interpolate": "monotone"}"#,
+    );
+    assert!(
+        vegalite::parse(&json, false).is_ok(),
+        "non-strict parsing should preserve its existing permissive behavior"
+    );
+
+    let err = vegalite::parse(&json, true).unwrap_err();
+    assert!(err.contains("mark.interpolate"), "unexpected error: {err}");
+
+    for (replacement, updated, expected) in [
+        (
+            r#""color": {"field": "kind", "type": "nominal"}"#,
+            r#""color": {"field": "kind", "type": "nominal", "title": "Group"}"#,
+            "encoding.color.title",
+        ),
+        (
+            r#""color": {"field": "kind", "type": "nominal"}"#,
+            r#""color": {"field": "kind", "type": "nominal", "scale": {"scheme": "tableau10"}}"#,
+            "encoding.color.scale",
+        ),
+    ] {
+        let json = CATEGORICAL_AREA_STACKED.replace(replacement, updated);
+        let err = vegalite::parse(&json, true).unwrap_err();
+        assert!(err.contains(expected), "{expected}: {err}");
+    }
+}
+
+#[test]
 fn strict_categorical_area_rejects_background_and_config() {
     for key in ["background", "config"] {
         let json = CATEGORICAL_AREA_STACKED.replacen(
@@ -2841,9 +2873,9 @@ fn temporal_area_with_color_defaults_to_stacked() {
 /// (axis/legend titles get set). Fixed by widening the allowlist only when
 /// `channel_type(encoding, "x") == Some("temporal")`.
 #[test]
-fn strict_temporal_area_accepts_axis_and_color_titles_and_color_scale() {
+fn strict_temporal_area_accepts_interpolation_axis_and_color_options() {
     let json = r#"{
-        "mark": "area",
+        "mark": {"type": "area", "interpolate": "monotone"},
         "data": {"values": [
             {"t": "2020-01-01T00:00:00Z", "v": 1, "g": "A"},
             {"t": "2020-01-01T00:00:00Z", "v": 2, "g": "B"},
