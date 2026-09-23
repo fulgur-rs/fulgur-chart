@@ -33,12 +33,24 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             bar_count += 1;
         }
     }
+    let legacy_geometry = spec
+        .series
+        .iter()
+        .all(|series| series.bar_geometry.is_none());
 
     for (series_index, ser) in spec.series.iter().enumerate().rev() {
         match ser.series_type {
             SeriesType::Bar => {
                 if let Some(bar_slot) = bar_slots[series_index] {
-                    draw_bar_dataset(&mut items, spec, &frame, n, ser, bar_slot, bar_count);
+                    draw_bar_dataset(
+                        &mut items,
+                        spec,
+                        &frame,
+                        ser,
+                        bar_slot,
+                        bar_count,
+                        legacy_geometry,
+                    );
                 }
             }
             SeriesType::Line => draw_line_dataset(&mut items, spec, &frame, n, series_index, ser),
@@ -57,11 +69,12 @@ fn draw_bar_dataset(
     items: &mut Vec<Prim>,
     spec: &ChartSpec,
     frame: &common::Frame,
-    n: usize,
     ser: &crate::ir::Series,
     bar_slot: usize,
     bar_count: usize,
+    legacy_geometry: bool,
 ) {
+    let n = spec.categories.len().max(1);
     let band_w = common::band_width(frame, n);
     let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
     let baseline_y = frame.ys.map(base_v);
@@ -82,6 +95,7 @@ fn draw_bar_dataset(
             bar_slot,
             bar_count,
             ser.bar_geometry,
+            legacy_geometry,
         );
         let vy = frame.ys.map(common::clip_axis_value(v, &frame.ticks));
         let (base, head) = super::bar::enforce_min_bar_length(
@@ -408,6 +422,45 @@ mod tests {
             .collect();
         assert_eq!(bars.len(), 2);
         assert!(bars.iter().all(|width| (*width - 12.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn mixed_dodge_slots_remain_even_when_only_one_bar_has_geometry_options() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a"],"datasets":[
+                {"type":"bar","data":[1]},
+                {"type":"bar","data":[2],"barPercentage":0.9},
+                {"type":"line","data":[3]}
+            ]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rect_for = |series_index: usize| {
+            scene
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Rect { x, w, fill, .. }
+                        if *fill == spec.series[series_index].fill_at(0) =>
+                    {
+                        Some((*x, *w))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let (first_x, first_w) = rect_for(0);
+        let (second_x, second_w) = rect_for(1);
+        let center_distance = (second_x + second_w / 2.0) - (first_x + first_w / 2.0);
+        let expected_center_distance = first_w / 0.9;
+
+        assert!((first_w - second_w).abs() < 1e-9);
+        assert!(
+            (center_distance - expected_center_distance).abs() < 1e-9,
+            "mixed bar slots should be evenly spaced"
+        );
     }
 
     #[test]

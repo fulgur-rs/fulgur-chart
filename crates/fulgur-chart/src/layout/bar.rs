@@ -42,6 +42,7 @@ pub(crate) fn category_bar_bounds(
     slot: usize,
     slot_count: usize,
     options: Option<BarGeometryOptions>,
+    legacy_geometry: bool,
 ) -> (f64, f64) {
     let options = options.unwrap_or_default();
     let slot_count = slot_count.max(1) as f64;
@@ -78,11 +79,10 @@ pub(crate) fn category_bar_bounds(
     let slot_center = center - slot_size * slot_count / 2.0 + slot_size * (slot as f64 + 0.5);
     let natural_width = (slot_size * fill_ratio).min(MAX_BAR_THICKNESS);
     let width = natural_width.min(max_bar_thickness).max(0.0);
-    // Keep existing renderer output only when the dataset leaves every geometry option unset.
-    // Explicit settings, including values equal to the defaults, follow Chart.js's centered
-    // placement.
-    let legacy_default =
-        options == BarGeometryOptions::default() && natural_width <= max_bar_thickness;
+    // Keep existing renderer output only when every dataset leaves geometry options unset.
+    // Once any dataset opts in, all bars use Chart.js's centered placement so shared stack and
+    // dodge slots stay aligned.
+    let legacy_default = legacy_geometry && natural_width <= max_bar_thickness;
     let left = if legacy_default {
         category_start + category_size * DEFAULT_CATEGORY_PADDING + slot_size * slot as f64
     } else {
@@ -159,6 +159,10 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let band_w = super::common::band_width(frame, n);
     let (stack_groups, stack_group_count) = super::common::stack_group_indices(&spec.series);
+    let legacy_geometry = spec
+        .series
+        .iter()
+        .all(|series| series.bar_geometry.is_none());
     let s = spec.series.len().max(1);
     let placement_stacked = matches!(
         spec.kind,
@@ -205,6 +209,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     stack_group,
                     slot_count,
                     ser.bar_geometry,
+                    legacy_geometry,
                 );
                 let (v0, v1) = if v >= 0.0 {
                     let lo = pos_acc[stack_group];
@@ -261,6 +266,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     stack_group,
                     slot_count,
                     ser.bar_geometry,
+                    legacy_geometry,
                 );
                 let Some(&v) = ser.values.get(i) else {
                     continue;
@@ -309,6 +315,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     sidx,
                     slot_count,
                     ser.bar_geometry,
+                    legacy_geometry,
                 );
                 let Some(&v) = ser.values.get(i) else {
                     continue;
@@ -565,6 +572,10 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     let ink = spec.theme.text_color;
     let label_font = spec.theme.font_size;
+    let legacy_geometry = spec
+        .series
+        .iter()
+        .all(|series| series.bar_geometry.is_none());
 
     // 横棒は値軸が x のため x_axis を渡す（begin_at_zero/suggested も x_axis から読む）。
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
@@ -871,6 +882,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     stack_group,
                     slot_count,
                     ser.bar_geometry,
+                    legacy_geometry,
                 );
                 let cy = by + bar_height / 2.0 + label_font * TEXT_BASELINE_RATIO;
                 let (v0, v1) = if v >= 0.0 {
@@ -933,6 +945,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     stack_group,
                     slot_count,
                     ser.bar_geometry,
+                    legacy_geometry,
                 );
                 let cy = by + bar_height / 2.0 + label_font * TEXT_BASELINE_RATIO;
                 let Some(&v) = ser.values.get(i) else {
@@ -981,6 +994,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     sidx,
                     slot_count,
                     ser.bar_geometry,
+                    legacy_geometry,
                 );
                 let Some(&v) = ser.values.get(i) else {
                     continue;
@@ -1248,6 +1262,52 @@ mod geom_tests {
     }
 
     #[test]
+    fn legacy_stacked_slot_is_consistent_when_only_one_dataset_has_geometry_options() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"stack":"same","data":[1]},
+              {"stack":"same","data":[1],"minBarLength":8}
+            ]},"options":{"scales":{"x":{"stacked":true},
+              "y":{"stacked":true,"min":0,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+
+        assert_eq!(boxes.len(), 2);
+        assert!(
+            (boxes[0].x - boxes[1].x).abs() < 1e-9,
+            "stacked segments must share one x slot: {boxes:?}"
+        );
+    }
+
+    #[test]
+    fn legacy_dodge_slots_are_consistent_when_only_one_dataset_has_geometry_options() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[1]},
+              {"data":[2],"barPercentage":0.9}
+            ]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        let band = super::super::common::band_width(&frame, 1);
+        let expected_center_distance = band * DEFAULT_CATEGORY_PERCENTAGE / 2.0;
+
+        assert_eq!(boxes.len(), 2);
+        let center_distance = (boxes[1].x + boxes[1].w / 2.0) - (boxes[0].x + boxes[0].w / 2.0);
+        assert!(
+            (center_distance - expected_center_distance).abs() < 1e-9,
+            "dodge slot centers should be evenly spaced: {boxes:?}"
+        );
+    }
+
+    #[test]
     fn flex_thickness_uses_category_intervals_and_dataset_percentages() {
         let spec = chartjs::parse(
             r#"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[
@@ -1364,6 +1424,44 @@ mod geom_tests {
         let baseline = bars[0].0;
         assert!((bars[1].0 + bars[1].1 / 2.0 - baseline).abs() < 1e-9);
         assert!((bars[2].0 + bars[2].1 - baseline).abs() < 1e-9);
+    }
+
+    #[test]
+    fn horizontal_dodge_slots_are_consistent_when_only_one_dataset_has_geometry_options() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[1]},
+              {"data":[2],"barPercentage":0.9}
+            ]},"options":{"indexAxis":"y","scales":{"x":{"min":0,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rect_for = |series_index: usize| {
+            scene
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Rect { y, h, fill, .. }
+                        if *fill == spec.series[series_index].fill_at(0) =>
+                    {
+                        Some((*y, *h))
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let (first_y, first_h) = rect_for(0);
+        let (second_y, second_h) = rect_for(1);
+        let center_distance = (second_y + second_h / 2.0) - (first_y + first_h / 2.0);
+        let expected_center_distance = first_h / DEFAULT_BAR_PERCENTAGE;
+
+        assert!((first_h - second_h).abs() < 1e-9);
+        assert!(
+            (center_distance - expected_center_distance).abs() < 1e-9,
+            "horizontal dodge lane centers should be evenly spaced"
+        );
     }
 
     #[test]
