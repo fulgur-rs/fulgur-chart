@@ -781,25 +781,23 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     );
     let stacked = placement_stacked && value_stacked;
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
+    let positive_moves_up = frame.ys.map(frame.ticks.max) < frame.ys.map(frame.ticks.min);
     let (stack_groups, _) = super::common::stack_group_indices(&spec.series);
     for b in vertical_bar_boxes(spec, &frame) {
         let ser = &spec.series[b.series];
-        let base_value = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
-        let baseline_y = frame.ys.map(base_value);
-        let value_y = frame
-            .ys
-            .map(super::common::clip_axis_value(b.value, &frame.ticks));
-        let base_side = if baseline_y >= value_y {
+        let base_side = if (b.value >= 0.0) == positive_moves_up {
             BarSide::Bottom
         } else {
             BarSide::Top
         };
-        let has_later_same_sign = value_stacked
+        let has_later_same_sign = stacked
             && spec.series.iter().enumerate().any(|(next, series)| {
                 next > b.series
                     && stack_groups[next] == stack_groups[b.series]
                     && series.values.get(b.index).is_some_and(|value| {
-                        is_renderable_value(*value, is_log) && value.signum() == b.value.signum()
+                        *value != 0.0
+                            && is_renderable_value(*value, is_log)
+                            && value.signum() == b.value.signum()
                     })
             });
         items.push(bar_primitive(
@@ -1259,7 +1257,9 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     next > series_index
                         && stack_groups[next] == stack_group
                         && series.values.get(i).is_some_and(|value| {
-                            is_renderable_value(*value, is_log) && value.signum() == v.signum()
+                            *value != 0.0
+                                && is_renderable_value(*value, is_log)
+                                && value.signum() == v.signum()
                         })
                 });
                 items.push(bar_primitive(
@@ -1734,6 +1734,78 @@ mod geom_tests {
             prim,
             Prim::Path { fill: Some(fill), .. } if *fill == bar_fill
         )));
+    }
+
+    #[test]
+    fn vertical_bar_border_radius_value_axis_only_stacked_keeps_independent_bars_rounded() {
+        let (spec, scene) = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[2],"borderRadius":4},{"data":[3],"borderRadius":4}]},"options":{"scales":{"x":{"stacked":false},"y":{"stacked":true}}}}"#,
+        );
+        for series in &spec.series {
+            let fill = series.fill_at(0);
+            assert!(
+                scene.items.iter().any(|prim| matches!(
+                    prim,
+                    Prim::Path { fill: Some(path_fill), .. } if *path_fill == fill
+                )),
+                "value-axis stacking must not suppress rounding for an unstacked bar"
+            );
+        }
+    }
+
+    #[test]
+    fn vertical_zero_stack_value_does_not_hide_rounded_endpoint() {
+        let (spec, scene) = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"stack":"s","data":[5],"borderRadius":4},{"stack":"s","data":[0],"borderRadius":4}]},"options":{"scales":{"x":{"stacked":true},"y":{"stacked":true}}}}"#,
+        );
+        let first_fill = spec.series[0].fill_at(0);
+        assert!(
+            scene.items.iter().any(|prim| matches!(
+                prim,
+                Prim::Path { fill: Some(fill), .. } if *fill == first_fill
+            )),
+            "zero-length later segment must not hide the visible stack endpoint"
+        );
+    }
+
+    #[test]
+    fn horizontal_zero_stack_value_does_not_hide_rounded_endpoint() {
+        let (spec, scene) = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"stack":"s","data":[5],"borderRadius":4},{"stack":"s","data":[0],"borderRadius":4}]},"options":{"indexAxis":"y","scales":{"x":{"stacked":true},"y":{"stacked":true}}}}"#,
+        );
+        let first_fill = spec.series[0].fill_at(0);
+        assert!(
+            scene.items.iter().any(|prim| matches!(
+                prim,
+                Prim::Path { fill: Some(fill), .. } if *fill == first_fill
+            )),
+            "zero-length later segment must not hide the visible stack endpoint"
+        );
+    }
+
+    #[test]
+    fn vertical_clipped_negative_stack_rounds_the_value_end() {
+        let (spec, scene) = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"stack":"s","data":[-3],"borderRadius":4},{"stack":"s","data":[-4],"borderRadius":4}]},"options":{"scales":{"x":{"stacked":true},"y":{"stacked":true,"min":-10,"max":-5}}}}"#,
+        );
+        let second_fill = spec.series[1].fill_at(0);
+        let path = scene
+            .items
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::Path {
+                    d,
+                    fill: Some(fill),
+                    ..
+                } if *fill == second_fill => Some(d),
+                _ => None,
+            })
+            .expect("visible clipped stack segment should be rounded at its value end");
+        let commands: Vec<_> = path
+            .split_ascii_whitespace()
+            .filter(|token| matches!(*token, "M" | "L" | "C" | "Z"))
+            .collect();
+        assert_eq!(commands, ["M", "L", "L", "C", "L", "C", "L", "Z"]);
     }
 
     #[test]
