@@ -379,8 +379,18 @@ fn rounded_sector_path(g: &Geom, start: f64, end: f64, radius: ArcBorderRadius) 
     let sweep = end - start;
     let half_thickness = ((r_outer - r_inner) / 2.0).max(0.0);
     let outer_angle_limit = |value: f64| {
-        let outer_arc_limit = (r_outer - half_thickness.min(value.max(0.0))) * sweep.max(0.0) / 2.0;
-        half_thickness.min(outer_arc_limit).max(0.0)
+        let sweep = sweep.max(0.0);
+        let chartjs_limit = (r_outer - half_thickness.min(value.max(0.0))) * sweep / 2.0;
+        let non_crossing_limit = if sweep < PI {
+            let sin_half_sweep = (sweep / 2.0).sin();
+            r_outer * sin_half_sweep / (1.0 + sin_half_sweep)
+        } else {
+            half_thickness
+        };
+        half_thickness
+            .min(chartjs_limit)
+            .min(non_crossing_limit)
+            .max(0.0)
     };
     let inner_angle_limit = (sweep.max(0.0) * r_inner / 2.0)
         .min(half_thickness)
@@ -762,5 +772,27 @@ mod tests {
         assert!((arc_radii[0] - 7.5).abs() < 1e-9, "path={path}");
         // Inner corners use min(halfThickness, angleDelta * innerRadius / 2).
         assert!((arc_radii[3] - 5.0).abs() < 1e-9, "path={path}");
+    }
+
+    #[test]
+    fn narrow_sweep_outer_corner_arcs_do_not_cross() {
+        let geom = Geom {
+            cx: 0.0,
+            cy: 0.0,
+            r_outer: 100.0,
+            r_inner: 50.0,
+        };
+        let sweep: f64 = 0.5;
+        let path = rounded_sector_path(&geom, 0.0, sweep, ArcBorderRadius::Uniform(20.0));
+        let tokens: Vec<&str> = path.split_whitespace().collect();
+        let first_arc = tokens.iter().position(|token| *token == "A").unwrap();
+        let corner_radius: f64 = tokens[first_arc + 1].parse().unwrap();
+
+        // The SVG outer-circle arc must have nonnegative angular width after both corners.
+        let corner_angle = (corner_radius / (geom.r_outer - corner_radius)).asin();
+        assert!(
+            2.0 * corner_angle <= sweep + 1e-9,
+            "outer corner arcs cross: radius={corner_radius}, sweep={sweep}, path={path}"
+        );
     }
 }
