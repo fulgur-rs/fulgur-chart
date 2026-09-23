@@ -497,23 +497,22 @@ pub(crate) fn clip_axis_value(value: f64, ticks: &NiceTicks) -> f64 {
 /// 正の `min`/`max` は hard bound として指定側を固定し、suggested やデータによる
 /// 拡張より優先する。非正の hard bound は対数軸で使えないため無視する。
 ///
-/// `ChartKind::Bar { value_stacked: true, .. }` はカテゴリ・stack ID ごとに正の値を合算して
-/// domain 上限へ含める。対数軸では非正値を写像できないため積み上げの合計にも含めない。
-/// `ChartKind::Line { stacked: true }` の対数値域は未対応。現状のフロントエンドは
-/// Vega-Lite で線形軸、Chart.js で stacked=false を使う。
+/// `ChartKind::Bar { value_stacked: true, .. }` と `ChartKind::Line { stacked: true }` は
+/// カテゴリ・stack ID ごとに正の値を合算して domain 上限へ含める。対数軸では非正値を
+/// 写像できないため積み上げの合計にも含めない。
 fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut min_positive = f64::INFINITY;
     let mut max_positive = f64::NEG_INFINITY;
     let mut has_zero = false;
-    let is_stacked_bar = matches!(
+    let is_stacked = matches!(
         spec.kind,
         crate::ir::ChartKind::Bar {
             value_stacked: true,
             ..
-        }
+        } | crate::ir::ChartKind::Line { stacked: true }
     );
     let (series_groups, group_count) = stack_group_indices(&spec.series);
-    let mut positive_stack_sums = if is_stacked_bar {
+    let mut positive_stack_sums = if is_stacked {
         vec![vec![0.0_f64; spec.categories.len()]; group_count]
     } else {
         Vec::new()
@@ -550,7 +549,7 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
             // v < 0.0 は対数軸に写像できないため、ドメインから除外する。
         }
     }
-    if is_stacked_bar {
+    if is_stacked {
         for sums in positive_stack_sums {
             for sum in sums {
                 if sum > max_positive {
@@ -2669,6 +2668,25 @@ mod tests {
             false,
         )
         .unwrap();
+
+        assert_eq!(value_domain(&spec, &spec.y_axis), (10.0, 300.0));
+    }
+
+    #[test]
+    fn log_value_domain_includes_positive_stacked_line_totals_per_stack_id() {
+        let mut spec = crate::frontend::chartjs::parse(
+            r#"{"type":"line","data":{"labels":["A"],"datasets":[
+              {"stack":"small","data":[10]},
+              {"stack":"small","data":[20]},
+              {"stack":"large","data":[100]},
+              {"stack":"large","data":[200]}
+            ]},"options":{"scales":{"y":{"type":"logarithmic","beginAtZero":false}}}}"#,
+            false,
+        )
+        .unwrap();
+        // The Chart.js frontend has not wired line stacking yet. Exercise the shared layout
+        // directly so this log-domain behavior is covered for stacked line specs.
+        spec.kind = ChartKind::Line { stacked: true };
 
         assert_eq!(value_domain(&spec, &spec.y_axis), (10.0, 300.0));
     }
