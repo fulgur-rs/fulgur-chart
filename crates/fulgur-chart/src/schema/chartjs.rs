@@ -503,12 +503,15 @@ pub enum SchemaPieCutout {
 }
 
 /// A finite numeric percentage ending in `%`.
+///
+/// The JSON Schema pattern is conservative because JSON Schema cannot check whether a parsed
+/// number is a finite `f64`.
 #[derive(Serialize, JsonSchema)]
 #[serde(transparent)]
 #[schemars(transparent)]
 pub struct SchemaPieCutoutPercent(
     #[schemars(regex(
-        pattern = r"^[+-]?(?:(?:0*[0-9]{1,308}(?:\.[0-9]*)?|\.[0-9]+)|(?:0*[0-9](?:\.[0-9]*)?|\.[0-9]+)[eE](?:-[0-9]+|\+?0*(?:[0-9]{1,2}|[12][0-9]{2}|30[0-7])))%$"
+        pattern = r"^[+-]?(?:(?:0*[0-9]{1,308}(?:\.[0-9]*)?|\.[0-9]+)|(?:0*[0-9](?:\.[0-9]*)?|\.[0-9]+)[eE](?:-[0-9]+|\+?0*(?:[0-9]{1,2}|[12][0-9]{2}|30[0-7]))|(?:0*0(?:\.[0-9]*)?|0*1(?:\.(?:[0-6][0-9]*|7(?:[0-8][0-9]*|9(?:0*)?)?)?)?|\.[0-9]+)[eE]\+?0*308)%$"
     ))]
     String,
 );
@@ -1790,6 +1793,7 @@ mod tests {
         let overflow_values = [
             "1e999%".to_owned(),
             "999e307%".to_owned(),
+            "1.8e308%".to_owned(),
             format!("{}%", "9".repeat(309)),
         ];
 
@@ -1805,8 +1809,14 @@ mod tests {
             assert!(crate::frontend::chartjs::parse(&json, true).is_err());
         }
 
-        assert!(regex.is_match("25%"));
-        assert!(regex.is_match("1e307%"));
+        for percentage in ["25%", "1e307%", "1e308%", "1.79e308%"] {
+            assert!(regex.is_match(percentage), "schema rejected {percentage}");
+            let json = format!(
+                r#"{{"type":"doughnut","data":{{"datasets":[{{"data":[1]}}]}},"options":{{"cutout":"{percentage}"}}}}"#
+            );
+            assert!(serde_json::from_str::<ChartJsSpec>(&json).is_ok());
+            assert!(crate::frontend::chartjs::parse(&json, true).is_ok());
+        }
     }
 
     #[test]
