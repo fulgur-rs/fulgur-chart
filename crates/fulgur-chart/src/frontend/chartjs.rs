@@ -3950,7 +3950,7 @@ mod tests {
     }
 
     #[test]
-    fn bar_dataset_geometry_options_are_accepted_in_strict_mode() {
+    fn bar_dataset_geometry_options_parse_per_dataset_in_strict_mode() {
         let json = r#"{
             "type":"bar",
             "data":{"labels":["A"],"datasets":[{
@@ -3962,10 +3962,15 @@ mod tests {
             serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(json).is_ok(),
             "the public schema should expose bar geometry on datasets"
         );
-        assert!(
-            parse(json, true).is_ok(),
-            "strict parsing should accept known per-dataset bar geometry options"
-        );
+        let spec = parse(json, true).expect("strict parsing should accept bar geometry options");
+        let geometry = spec.series[0]
+            .bar_geometry
+            .expect("bar geometry should be present");
+        assert_eq!(geometry.category_percentage, Some(0.6));
+        assert_eq!(geometry.bar_percentage, Some(0.5));
+        assert_eq!(geometry.bar_thickness, Some(BarThickness::Flex));
+        assert_eq!(geometry.max_bar_thickness, Some(18.0));
+        assert_eq!(geometry.min_bar_length, Some(3.0));
 
         let mixed_line_root = r#"{
             "type":"line",
@@ -3977,7 +3982,22 @@ mod tests {
         assert!(
             serde_json::from_str::<crate::schema::chartjs::ChartJsSpec>(mixed_line_root).is_ok()
         );
-        assert!(parse(mixed_line_root, true).is_ok());
+        let mixed_spec = parse(mixed_line_root, true).expect("mixed chart should parse");
+        let geometry = mixed_spec.series[0]
+            .bar_geometry
+            .expect("bar geometry should be present");
+        assert_eq!(geometry.bar_thickness, Some(BarThickness::Pixels(12.0)));
+        assert_eq!(geometry.category_percentage, None);
+        assert_eq!(geometry.bar_percentage, None);
+        assert_eq!(geometry.max_bar_thickness, None);
+        assert_eq!(geometry.min_bar_length, None);
+
+        let no_geometry = r#"{
+            "type":"bar",
+            "data":{"datasets":[{"data":[1]}]}
+        }"#;
+        let no_geometry_spec = parse(no_geometry, true).expect("bar chart should parse");
+        assert!(no_geometry_spec.series[0].bar_geometry.is_none());
     }
 
     #[test]
