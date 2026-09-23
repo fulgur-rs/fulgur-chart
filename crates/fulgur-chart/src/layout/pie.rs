@@ -378,13 +378,13 @@ fn rounded_sector_path(g: &Geom, start: f64, end: f64, radius: ArcBorderRadius) 
     } = *g;
     let sweep = end - start;
     let half_thickness = ((r_outer - r_inner) / 2.0).max(0.0);
-    let angle_sine = (sweep / 4.0).sin().max(0.0);
-    let outer_angle_limit = r_outer * angle_sine / (1.0 + angle_sine);
-    let inner_angle_limit = if r_inner > 0.0 && angle_sine < 1.0 {
-        r_inner * angle_sine / (1.0 - angle_sine)
-    } else {
-        0.0
+    let outer_angle_limit = |value: f64| {
+        let outer_arc_limit = (r_outer - half_thickness.min(value.max(0.0))) * sweep.max(0.0) / 2.0;
+        half_thickness.min(outer_arc_limit).max(0.0)
     };
+    let inner_angle_limit = (sweep.max(0.0) * r_inner / 2.0)
+        .min(half_thickness)
+        .max(0.0);
     let requested = match radius {
         ArcBorderRadius::Uniform(value) => (value, value, value, value),
         ArcBorderRadius::Corners {
@@ -401,8 +401,8 @@ fn rounded_sector_path(g: &Geom, start: f64, end: f64, radius: ArcBorderRadius) 
             0.0
         }
     };
-    let outer_start = clean(requested.0, outer_angle_limit);
-    let outer_end = clean(requested.1, outer_angle_limit);
+    let outer_start = clean(requested.0, outer_angle_limit(requested.0));
+    let outer_end = clean(requested.1, outer_angle_limit(requested.1));
     let inner_start = clean(requested.2, inner_angle_limit);
     let inner_end = clean(requested.3, inner_angle_limit);
 
@@ -738,5 +738,29 @@ mod tests {
         );
         assert!(!path.contains("inf"));
         assert!(!path.contains("NaN"));
+    }
+
+    #[test]
+    fn narrow_sweep_outer_border_radius_matches_chartjs_limit() {
+        let geom = Geom {
+            cx: 0.0,
+            cy: 0.0,
+            r_outer: 100.0,
+            r_inner: 50.0,
+        };
+        let path = rounded_sector_path(&geom, 0.0, 0.2, ArcBorderRadius::Uniform(50.0));
+        let tokens: Vec<&str> = path.split_whitespace().collect();
+        let arc_radii: Vec<f64> = tokens
+            .iter()
+            .enumerate()
+            .filter(|(_, token)| **token == "A")
+            .map(|(index, _)| tokens[index + 1].parse().unwrap())
+            .collect();
+
+        // Chart.js parseBorderRadius: min(halfThickness,
+        // (outerRadius - min(halfThickness, requested)) * angleDelta / 2).
+        assert!((arc_radii[0] - 7.5).abs() < 1e-9, "path={path}");
+        // Inner corners use min(halfThickness, angleDelta * innerRadius / 2).
+        assert!((arc_radii[3] - 5.0).abs() < 1e-9, "path={path}");
     }
 }

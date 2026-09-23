@@ -507,7 +507,9 @@ pub enum SchemaPieCutout {
 #[serde(transparent)]
 #[schemars(transparent)]
 pub struct SchemaPieCutoutPercent(
-    #[schemars(regex(pattern = r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?%$"))]
+    #[schemars(regex(
+        pattern = r"^[+-]?(?:(?:0*[0-9]{1,308}(?:\.[0-9]*)?|\.[0-9]+)|(?:0*[0-9](?:\.[0-9]*)?|\.[0-9]+)[eE](?:-[0-9]+|\+?0*(?:[0-9]{1,2}|[12][0-9]{2}|30[0-7])))%$"
+    ))]
     String,
 );
 
@@ -1766,6 +1768,45 @@ mod tests {
             has_percentage_pattern(&value),
             "cutout percentage must be constrained to a numeric string ending with '%'"
         );
+    }
+
+    #[test]
+    fn pie_cutout_schema_rejects_percentages_that_overflow_f64() {
+        fn find_percentage_pattern(value: &serde_json::Value) -> Option<&str> {
+            match value {
+                serde_json::Value::Object(object) => object
+                    .get("pattern")
+                    .and_then(serde_json::Value::as_str)
+                    .or_else(|| object.values().find_map(find_percentage_pattern)),
+                serde_json::Value::Array(values) => values.iter().find_map(find_percentage_pattern),
+                _ => None,
+            }
+        }
+
+        let schema = schemars::schema_for!(ChartJsSpec);
+        let value = serde_json::to_value(schema).unwrap();
+        let pattern = find_percentage_pattern(&value).expect("cutout percentage pattern");
+        let regex = regex::Regex::new(pattern).expect("valid cutout percentage pattern");
+        let overflow_values = [
+            "1e999%".to_owned(),
+            "999e307%".to_owned(),
+            format!("{}%", "9".repeat(309)),
+        ];
+
+        for percentage in overflow_values {
+            assert!(
+                !regex.is_match(&percentage),
+                "schema pattern must reject overflow value {percentage}"
+            );
+            let json = format!(
+                r#"{{"type":"doughnut","data":{{"datasets":[{{"data":[1]}}]}},"options":{{"cutout":"{percentage}"}}}}"#
+            );
+            assert!(serde_json::from_str::<ChartJsSpec>(&json).is_err());
+            assert!(crate::frontend::chartjs::parse(&json, true).is_err());
+        }
+
+        assert!(regex.is_match("25%"));
+        assert!(regex.is_match("1e307%"));
     }
 
     #[test]
