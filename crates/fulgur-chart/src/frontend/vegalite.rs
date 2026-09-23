@@ -434,7 +434,10 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
             y_labels: Vec::new(),
             cells: Vec::new(),
         }),
-        "arc" => Ok(ChartKind::Pie { donut_ratio: 0.0 }),
+        "arc" => Ok(ChartKind::Pie {
+            cutout: crate::ir::PieCutout::Percent(0.0),
+            dataset_options: vec![],
+        }),
         other => Err(format!("未対応の mark: {other}")),
     }
 }

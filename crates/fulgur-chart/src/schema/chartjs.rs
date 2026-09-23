@@ -443,11 +443,79 @@ pub struct PieDataset {
     pub border_color: Option<ScalarOrArray<ColorString>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spacing: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<ScalarOrArray<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_radius: Option<ScalarOrArray<SchemaArcBorderRadius>>,
+}
+
+/// Chart.js arc border radius: uniform pixels or independently rounded corners.
+#[derive(Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SchemaArcBorderRadius {
+    Pixels(f64),
+    Corners(SchemaArcBorderRadiusCorners),
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchemaArcBorderRadiusCorners {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outer_start: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outer_end: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inner_start: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inner_end: Option<f64>,
+}
+
+/// Chart.js `options.cutout`: a pixel value or a percentage string.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SchemaPieCutout {
+    Pixels(f64),
+    Percent(SchemaPieCutoutPercent),
+}
+
+/// A finite numeric percentage ending in `%`.
+#[derive(Serialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(transparent)]
+pub struct SchemaPieCutoutPercent(
+    #[schemars(regex(pattern = r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?%$"))]
+    String,
+);
+
+impl<'de> Deserialize<'de> for SchemaPieCutoutPercent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        let value = String::deserialize(deserializer)?;
+        let percent = value
+            .strip_suffix('%')
+            .and_then(|number| number.parse::<f64>().ok())
+            .filter(|number| number.is_finite());
+        if percent.is_some() {
+            Ok(Self(value))
+        } else {
+            Err(D::Error::custom(
+                "cutout percentage must be a finite number followed by '%'",
+            ))
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PieOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cutout: Option<SchemaPieCutout>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins: Option<CommonPlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1651,6 +1719,30 @@ mod tests {
         assert!(
             json.contains("\"maximum\":32768"),
             "sankey の寸法に maximum:32768 が必要"
+        );
+    }
+
+    #[test]
+    fn pie_cutout_percentage_is_constrained_in_schema() {
+        fn has_percentage_pattern(value: &serde_json::Value) -> bool {
+            match value {
+                serde_json::Value::Object(object) => {
+                    object
+                        .get("pattern")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|pattern| pattern.ends_with("%$"))
+                        || object.values().any(has_percentage_pattern)
+                }
+                serde_json::Value::Array(values) => values.iter().any(has_percentage_pattern),
+                _ => false,
+            }
+        }
+
+        let schema = schemars::schema_for!(ChartJsSpec);
+        let value = serde_json::to_value(schema).unwrap();
+        assert!(
+            has_percentage_pattern(&value),
+            "cutout percentage must be constrained to a numeric string ending with '%'"
         );
     }
 

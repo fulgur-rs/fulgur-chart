@@ -167,6 +167,82 @@ pub enum BarThickness {
     Flex,
 }
 
+/// Chart.js pie/doughnut inner-radius setting. Pixel values are absolute;
+/// percentage values are relative to the chart's outer radius.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PieCutout {
+    Pixels(f64),
+    Percent(f64),
+}
+
+impl PieCutout {
+    /// Resolve the inner radius and clamp it to a finite range within the outer radius.
+    pub fn inner_radius(self, outer_radius: f64) -> f64 {
+        let outer_radius = if outer_radius.is_finite() {
+            outer_radius.max(0.0)
+        } else {
+            0.0
+        };
+        let requested = match self {
+            Self::Pixels(pixels) => pixels,
+            Self::Percent(percent) => outer_radius * (percent / 100.0),
+        };
+        if requested.is_finite() {
+            requested.clamp(0.0, outer_radius)
+        } else if requested.is_sign_positive() {
+            outer_radius
+        } else {
+            0.0
+        }
+    }
+
+    pub fn is_doughnut(self) -> bool {
+        match self {
+            Self::Pixels(value) | Self::Percent(value) => value > 0.0,
+        }
+    }
+}
+
+/// Per-dataset Chart.js arc spacing, displacement, and corner radii.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PieGeometryOptions {
+    pub spacing: f64,
+    /// Scalar values are stored as a one-item vector; empty means the default zero offset.
+    pub offsets: Vec<f64>,
+    /// Scalar values are stored as a one-item vector; empty means square corners.
+    pub border_radii: Vec<ArcBorderRadius>,
+}
+
+impl PieGeometryOptions {
+    pub fn offset_at(&self, index: usize) -> f64 {
+        if self.offsets.is_empty() {
+            0.0
+        } else {
+            self.offsets[index % self.offsets.len()]
+        }
+    }
+
+    pub fn border_radius_at(&self, index: usize) -> ArcBorderRadius {
+        if self.border_radii.is_empty() {
+            ArcBorderRadius::Uniform(0.0)
+        } else {
+            self.border_radii[index % self.border_radii.len()]
+        }
+    }
+}
+
+/// Resolved Chart.js arc corner radii in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ArcBorderRadius {
+    Uniform(f64),
+    Corners {
+        outer_start: f64,
+        outer_end: f64,
+        inner_start: f64,
+        inner_end: f64,
+    },
+}
+
 /// 色は**データ点ごと**に持てる（pie のスライス別色が標準形のため）。
 /// 長さ 1 のときは全点へブロードキャストする。`fill_at`/`stroke_at` で安全に参照する。
 #[derive(Clone, Debug, PartialEq)]
@@ -471,8 +547,9 @@ pub enum ChartKind {
         stacked: bool,
     }, // area/tension は Series 側
     Pie {
-        donut_ratio: f64,
-    }, // 0.0 = pie, >0 = doughnut
+        cutout: PieCutout,
+        dataset_options: Vec<PieGeometryOptions>,
+    }, // zero cutout = pie, positive cutout = doughnut
     Scatter, // 線形 x × 線形 y。点データ(Series.points)を使う
     Bubble,  // scatter と同じ枠組み。半径は point.r(第3次元)を使う
     Radar,   // 極座標。カテゴリ=スポーク、系列ごとに多角形を重ねる
@@ -733,6 +810,15 @@ mod tests {
         assert_eq!(s.fill_at(0), c(10, 0, 0));
         assert_eq!(s.fill_at(1), c(0, 20, 0));
         assert_eq!(s.fill_at(2), c(10, 0, 0)); // 巡回
+    }
+
+    #[test]
+    fn pie_cutout_inner_radius_uses_units_and_clamps() {
+        assert_eq!(PieCutout::Pixels(12.0).inner_radius(100.0), 12.0);
+        assert_eq!(PieCutout::Percent(25.0).inner_radius(100.0), 25.0);
+        assert_eq!(PieCutout::Pixels(-12.0).inner_radius(100.0), 0.0);
+        assert_eq!(PieCutout::Pixels(120.0).inner_radius(100.0), 100.0);
+        assert_eq!(PieCutout::Percent(50.0).inner_radius(f64::NAN), 0.0);
     }
 
     #[test]
