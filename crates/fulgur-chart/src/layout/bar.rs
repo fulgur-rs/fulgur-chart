@@ -484,7 +484,6 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     super::common::draw_frame(&mut items, spec, &frame, m);
 
     // bar 本体: 矩形は共有 vertical_bar_boxes(単一真実源)から、値ラベルは box から導出。
-    let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
     let placement_stacked = matches!(
         spec.kind,
         crate::ir::ChartKind::Bar {
@@ -537,7 +536,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             // LABEL_GAP ではなく + label_font(≒1行高)を足すのは、SVG の y が
             // ベースラインで字面が上に伸びるため、僅かな隙間だと棒下端に重なるから。
             // この上下非対称(- LABEL_GAP / + label_font)は意図的。
-            let label_y = if b.value >= base_v {
+            let label_y = if b.value >= 0.0 {
                 b.y - LABEL_GAP
             } else {
                 b.y + b.h + label_font
@@ -975,7 +974,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     fill: ser.fill_at(i),
                 });
                 if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
-                    let (cx, anchor) = if v >= base_v {
+                    let (cx, anchor) = if v >= 0.0 {
                         (head + LABEL_GAP, Anchor::Start)
                     } else {
                         (head - LABEL_GAP, Anchor::End)
@@ -1025,7 +1024,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) {
                     let cy = by + bar_height / 2.0 + label_font * TEXT_BASELINE_RATIO;
                     // 正は棒右端の右(Start)、負は左端の左(End)に LABEL_GAP 分離す。
-                    let (lx, anchor) = if v >= base_v {
+                    let (lx, anchor) = if v >= 0.0 {
                         (head + LABEL_GAP, Anchor::Start)
                     } else {
                         (head - LABEL_GAP, Anchor::End)
@@ -1189,6 +1188,25 @@ mod geom_tests {
         assert!(bs[0].x < bs[1].x && bs[1].x < bs[2].x);
         // 幅は正。
         assert!(bs.iter().all(|b| b.w > 0.0));
+    }
+
+    #[test]
+    fn default_bar_geometry_preserves_legacy_width_and_offset() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A","B","C"],
+              "datasets":[{"data":[10,20,30]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        let band = super::super::common::band_width(&frame, spec.categories.len());
+        let center = super::super::common::category_center(&frame, 0, spec.categories.len());
+        let category_start = center - band / 2.0;
+
+        assert!((boxes[0].w - band * 0.8 * 0.9).abs() < 1e-9);
+        assert!((boxes[0].x - (category_start + band * 0.1)).abs() < 1e-9);
     }
 
     #[test]
@@ -1500,6 +1518,76 @@ mod geom_tests {
         assert_eq!(rects.len(), 2);
         assert!((label_x("0.1") - (rects[0].0 + rects[0].1 + 4.0)).abs() < 1e-9);
         assert!((label_x("-0.1") - (rects[1].0 - 4.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn vertical_min_bar_length_label_follows_negative_bar_at_axis_edge() {
+        let json = r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[-1],"minBarLength":15}
+            ]},"options":{"scales":{"y":{"min":-100,"max":-1}},
+              "plugins":{"datalabels":{"display":true}}}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let bar = &vertical_bar_boxes(&spec, &frame)[0];
+        let scene = build(&spec, &m);
+        let label_y = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Text {
+                    x,
+                    y,
+                    content,
+                    anchor: crate::scene::Anchor::Middle,
+                    ..
+                } if content == "-1" && (x - (bar.x + bar.w / 2.0)).abs() < 1e-9 => Some(*y),
+                _ => None,
+            })
+            .expect("missing data label for -1");
+
+        let expected_y = bar.y + bar.h + spec.theme.font_size;
+        assert!(
+            (label_y - expected_y).abs() < 1e-9,
+            "negative bar label should follow its adjusted lower endpoint: label={label_y}, expected={expected_y}"
+        );
+    }
+
+    #[test]
+    fn horizontal_min_bar_length_label_follows_negative_bar_at_axis_edge() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[-1],"minBarLength":15}
+            ]},"options":{"indexAxis":"y","scales":{"x":{"min":-100,"max":-1}},
+              "plugins":{"datalabels":{"display":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let bar_x = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Rect { x, .. } => Some(*x),
+                _ => None,
+            })
+            .expect("missing bar rectangle");
+        let label_x = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Text {
+                    x,
+                    content,
+                    anchor: crate::scene::Anchor::End,
+                    ..
+                } if content == "-1" => Some(*x),
+                _ => None,
+            })
+            .expect("negative bar label should use the left-side anchor");
+
+        assert!((label_x - (bar_x - 4.0)).abs() < 1e-9);
     }
 
     #[test]

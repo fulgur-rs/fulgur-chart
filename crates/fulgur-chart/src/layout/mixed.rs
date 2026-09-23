@@ -119,7 +119,7 @@ fn draw_bar_dataset(
         });
         if spec.data_labels && h > 0.0 && common::axis_value_in_bounds(v, &frame.ticks) {
             let cx = bx + bar_w / 2.0;
-            let label_y = if v >= base_v {
+            let label_y = if v >= 0.0 {
                 y_top - common::LABEL_GAP
             } else {
                 y_top + h + spec.theme.font_size
@@ -461,6 +461,48 @@ mod tests {
             (center_distance - expected_center_distance).abs() < 1e-9,
             "mixed bar slots should be evenly spaced"
         );
+    }
+
+    #[test]
+    fn mixed_negative_bar_label_follows_bar_at_axis_edge() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+                {"type":"bar","data":[-1],"minBarLength":15},
+                {"type":"line","data":[2]}
+            ]},"options":{"scales":{"y":{"min":-100,"max":-1}},
+              "plugins":{"datalabels":{"display":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let (bar_x, bar_y, bar_w, bar_h) = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Rect { x, y, w, h, fill } if *fill == spec.series[0].fill_at(0) => {
+                    Some((*x, *y, *w, *h))
+                }
+                _ => None,
+            })
+            .expect("missing bar rectangle");
+        let label_y = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Text {
+                    x,
+                    y,
+                    content,
+                    anchor: Anchor::Middle,
+                    ..
+                } if content == "-1" && (x - (bar_x + bar_w / 2.0)).abs() < 1e-9 => Some(*y),
+                _ => None,
+            })
+            .expect("missing data label for -1");
+
+        let expected_y = bar_y + bar_h + spec.theme.font_size;
+        assert!((label_y - expected_y).abs() < 1e-9);
     }
 
     #[test]
