@@ -1906,3 +1906,101 @@ fn scatter_logarithmic_axes_are_accepted() {
     assert_eq!(spec.x_axis.scale_kind, ScaleKind::Logarithmic);
     assert_eq!(spec.y_axis.scale_kind, ScaleKind::Logarithmic);
 }
+
+#[test]
+fn horizontal_bar_border_radius_matches_svg_and_png_corners() {
+    let json = r##"{
+      "type":"bar",
+      "data":{"labels":["positive","negative"],"datasets":[
+        {"data":[10,-10],"backgroundColor":"#ff0000","borderRadius":16}
+      ]},
+      "options":{"indexAxis":"y"},
+      "width":400,
+      "height":240
+    }"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let fill = spec.series[0].fill_at(0);
+    let fill_hex = format!("#{:02x}{:02x}{:02x}", fill.r, fill.g, fill.b);
+    let svg = fulgur_chart::render::render_chart(&spec);
+    let bar_path = svg
+        .split("<path ")
+        .find(|tag| tag.contains(&format!(r#"fill="{fill_hex}""#)))
+        .expect("rounded bar should be an SVG path with the dataset fill");
+    assert!(
+        bar_path.contains(" C "),
+        "bar path should contain cubic corners: {bar_path}"
+    );
+
+    let png = fulgur_chart::raster_direct::render_chart_to_png(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .unwrap();
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("rendered PNG should decode");
+
+    // Use an otherwise identical square chart to obtain the exact bar rectangles, then sample
+    // inside each extreme corner of the rounded render. Radius-only settings preserve geometry.
+    let square_json = json.replace(r#","borderRadius":16"#, "");
+    let square_spec = chartjs::parse(&square_json, false).unwrap();
+    let measurer = fulgur_chart::text::TextMeasurer::new(fulgur_chart::font::DEFAULT_FONT).unwrap();
+    let square_scene = fulgur_chart::layout::bar::build(&square_spec, &measurer);
+    let bars: Vec<_> = square_scene
+        .items
+        .iter()
+        .filter_map(|prim| match prim {
+            fulgur_chart::scene::Prim::Rect {
+                x,
+                y,
+                w,
+                h,
+                fill: rect_fill,
+            } if *rect_fill == fill => Some((*x, *y, *w, *h)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(bars.len(), 2, "expected one positive and one negative bar");
+
+    let is_red = |x: f64, y: f64| {
+        let pixel_x = (x + 0.5).floor() as u32;
+        let pixel_y = (y + 0.5).floor() as u32;
+        let pixel = pixmap.pixel(pixel_x, pixel_y).expect("sample inside PNG");
+        pixel.red() == 255 && pixel.green() == 0 && pixel.blue() == 0 && pixel.alpha() == 255
+    };
+    let margin = 3.0; // inner enough to avoid edge antialiasing, outer to the radius-16 arc
+    let (x, y, w, h) = bars[0];
+    assert!(
+        is_red(x + margin, y + margin),
+        "positive bar base-side top-left corner stays square"
+    );
+    assert!(
+        is_red(x + margin, y + h - margin),
+        "positive bar base-side bottom-left corner stays square"
+    );
+    assert!(
+        !is_red(x + w - margin, y + margin),
+        "positive bar value-side top-right corner is rounded"
+    );
+    assert!(
+        !is_red(x + w - margin, y + h - margin),
+        "positive bar value-side bottom-right corner is rounded"
+    );
+
+    let (x, y, w, h) = bars[1];
+    assert!(
+        !is_red(x + margin, y + margin),
+        "negative bar value-side top-left corner is rounded"
+    );
+    assert!(
+        !is_red(x + margin, y + h - margin),
+        "negative bar value-side bottom-left corner is rounded"
+    );
+    assert!(
+        is_red(x + w - margin, y + margin),
+        "negative bar base-side top-right corner stays square"
+    );
+    assert!(
+        is_red(x + w - margin, y + h - margin),
+        "negative bar base-side bottom-right corner stays square"
+    );
+}

@@ -134,6 +134,31 @@ pub struct BarGeometryOptions {
     pub bar_thickness: Option<BarThickness>,
     pub max_bar_thickness: Option<f64>,
     pub min_bar_length: Option<f64>,
+    pub border_radius: Option<BarBorderRadius>,
+}
+
+impl BarGeometryOptions {
+    /// Whether these options change category placement or bar dimensions.
+    /// Styling-only fields such as `border_radius` must not opt charts out of legacy geometry.
+    pub(crate) fn has_geometry_controls(self) -> bool {
+        self.category_percentage.is_some()
+            || self.bar_percentage.is_some()
+            || self.bar_thickness.is_some()
+            || self.max_bar_thickness.is_some()
+            || self.min_bar_length.is_some()
+    }
+}
+
+/// Chart.js per-dataset bar corner radius in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BarBorderRadius {
+    Uniform(f64),
+    Corners {
+        top_left: Option<f64>,
+        top_right: Option<f64>,
+        bottom_left: Option<f64>,
+        bottom_right: Option<f64>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

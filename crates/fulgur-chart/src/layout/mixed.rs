@@ -2,6 +2,7 @@
 //! frame は common::compute / common::draw_frame を共有する(byte 一致のため bar/line は不変)。
 //! 棒/折れ線の幾何定数とヘルパは bar.rs / line.rs から複製している(意図的な重複)。
 
+use super::bar::{BarBounds, BarSide, bar_primitive};
 use super::common;
 use crate::ir::{ChartSpec, SeriesType};
 use crate::num::fmt_num;
@@ -33,10 +34,11 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             bar_count += 1;
         }
     }
-    let legacy_geometry = spec
-        .series
-        .iter()
-        .all(|series| series.bar_geometry.is_none());
+    let legacy_geometry = spec.series.iter().all(|series| {
+        series
+            .bar_geometry
+            .is_none_or(|geometry| !geometry.has_geometry_controls())
+    });
 
     for (series_index, ser) in spec.series.iter().enumerate().rev() {
         match ser.series_type {
@@ -115,13 +117,22 @@ fn draw_bar_dataset(
         );
         let y_top = base.min(head);
         let h = (head - base).abs();
-        items.push(Prim::Rect {
-            x: bx,
-            y: y_top,
-            w: bar_w,
-            h,
-            fill: ser.fill_at(i),
-        });
+        items.push(bar_primitive(
+            BarBounds {
+                x: bx,
+                y: y_top,
+                w: bar_w,
+                h,
+            },
+            ser.fill_at(i),
+            ser.bar_geometry.and_then(|geometry| geometry.border_radius),
+            if base >= head {
+                BarSide::Bottom
+            } else {
+                BarSide::Top
+            },
+            true,
+        ));
         if spec.data_labels && h > 0.0 && common::axis_value_in_bounds(v, &frame.ticks) {
             let cx = bx + bar_w / 2.0;
             let label_y = if v >= 0.0 {
