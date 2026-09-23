@@ -544,6 +544,9 @@ pub enum ChartKind {
         /// (encoding.y.stack: null で false)。Chart.js フロントエンドでは値軸の
         /// `scales.<axis>.stacked` がこのフラグを制御する。
         stacked: bool,
+        /// 積み上げ時に欠損データをその系列の line geometry で gap として扱う。
+        /// Chart.js は true、欠損を0値として帯を保つ Vega-Lite stacked area は false。
+        stacked_missing_values_are_gaps: bool,
     }, // area/tension は Series 側
     Pie {
         cutout: PieCutout,
@@ -933,7 +936,10 @@ mod radial_axis_tests {
     /// を明示せずに初期化パスをすべて通ることを確認する。
     fn minimal_spec() -> ChartSpec {
         ChartSpec {
-            kind: ChartKind::Line { stacked: false },
+            kind: ChartKind::Line {
+                stacked: false,
+                stacked_missing_values_are_gaps: false,
+            },
             series: vec![],
             categories: vec![],
             x_positions: XPositions::default(),

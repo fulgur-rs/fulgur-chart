@@ -65,7 +65,10 @@ pub fn parse_with_limits(
     let is_area = read_mark_name(top) == Some("area");
     if is_area {
         let stacked = color_field.is_some() && !y_stack_disabled(encoding);
-        kind = ChartKind::Line { stacked };
+        kind = ChartKind::Line {
+            stacked,
+            stacked_missing_values_are_gaps: false,
+        };
     }
     let theta_field = channel_field(encoding, "theta");
     let temporal_line =
@@ -425,8 +428,14 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
             placement_stacked: false,
             value_stacked: false,
         }),
-        "line" => Ok(ChartKind::Line { stacked: false }),
-        "area" => Ok(ChartKind::Line { stacked: false }),
+        "line" => Ok(ChartKind::Line {
+            stacked: false,
+            stacked_missing_values_are_gaps: false,
+        }),
+        "area" => Ok(ChartKind::Line {
+            stacked: false,
+            stacked_missing_values_are_gaps: false,
+        }),
         "point" => Ok(ChartKind::Scatter),
         "circle" => Ok(ChartKind::Scatter),
         "rect" => Ok(ChartKind::VegaRect {

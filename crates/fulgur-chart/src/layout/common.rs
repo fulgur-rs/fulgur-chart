@@ -268,7 +268,7 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         crate::ir::ChartKind::Bar {
             value_stacked: true,
             ..
-        } | crate::ir::ChartKind::Line { stacked: true }
+        } | crate::ir::ChartKind::Line { stacked: true, .. }
     ) {
         // 積み上げ: カテゴリ・stack ID ごとに正値の和(上限)・負値の和(下限)をとる。
         // chart.js 互換: beginAtZero=false のとき 0 ではなく実データの個別値を境界にする。
@@ -509,7 +509,7 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         crate::ir::ChartKind::Bar {
             value_stacked: true,
             ..
-        } | crate::ir::ChartKind::Line { stacked: true }
+        } | crate::ir::ChartKind::Line { stacked: true, .. }
     );
     let (series_groups, group_count) = stack_group_indices(&spec.series);
     let mut positive_stack_sums = if is_stacked {
@@ -2102,7 +2102,10 @@ mod tests {
 
     fn temporal_spec(unix_millis: Vec<i64>) -> ChartSpec {
         let mut spec = make_bar_spec(unix_millis.len(), 720.0);
-        spec.kind = ChartKind::Line { stacked: false };
+        spec.kind = ChartKind::Line {
+            stacked: false,
+            stacked_missing_values_are_gaps: false,
+        };
         spec.categories = unix_millis
             .iter()
             .map(|millis| format!("source-{millis}"))
@@ -2552,7 +2555,10 @@ mod tests {
     #[test]
     fn value_domain_sums_stacked_line_series_independently_by_sign() {
         let mut spec = make_bar_spec(2, 720.0);
-        spec.kind = ChartKind::Line { stacked: true };
+        spec.kind = ChartKind::Line {
+            stacked: true,
+            stacked_missing_values_are_gaps: false,
+        };
         spec.series = vec![
             Series {
                 name: "a".to_string(),
@@ -2635,7 +2641,10 @@ mod tests {
             false,
         )
         .unwrap();
-        spec.kind = ChartKind::Line { stacked: true };
+        spec.kind = ChartKind::Line {
+            stacked: true,
+            stacked_missing_values_are_gaps: false,
+        };
 
         assert_eq!(value_domain(&spec, &spec.y_axis), (-8.0, 30.0));
     }
@@ -3507,7 +3516,10 @@ mod tests {
     #[test]
     fn categorical_x_grid_line_offset_false_uses_plot_edges() {
         let mut spec = make_bar_spec(3, 400.0);
-        spec.kind = ChartKind::Line { stacked: false };
+        spec.kind = ChartKind::Line {
+            stacked: false,
+            stacked_missing_values_are_gaps: false,
+        };
         spec.series[0].series_type = SeriesType::Line;
         spec.x_axis.offset = false;
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();

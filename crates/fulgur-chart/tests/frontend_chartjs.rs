@@ -590,7 +590,7 @@ fn single_dataset_type_override_changes_kind() {
     let json = r#"{"type":"bar","data":{"labels":["a","b"],
       "datasets":[{"type":"line","data":[1,2]}]}}"#;
     let spec = chartjs::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line { stacked: false }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: false, .. }));
     assert_eq!(spec.series[0].series_type, SeriesType::Line);
 }
 
@@ -601,7 +601,13 @@ fn scales_y_stacked_true_marks_line_stacked() {
       "options":{"scales":{"y":{"stacked":true}}}}"#;
     let spec = chartjs::parse(json, true).unwrap();
 
-    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+    assert!(matches!(
+        spec.kind,
+        ChartKind::Line {
+            stacked: true,
+            stacked_missing_values_are_gaps: true
+        }
+    ));
 }
 
 #[test]
@@ -610,7 +616,17 @@ fn empty_line_preserves_value_axis_stacked_flag() {
       "options":{"scales":{"y":{"stacked":true}}}}"#;
     let spec = chartjs::parse(json, false).unwrap();
 
-    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: true, .. }));
+}
+
+#[test]
+fn horizontal_stacked_line_is_rejected_until_supported() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],
+      "datasets":[{"data":[10,20]},{"data":[5,15]}]},
+      "options":{"indexAxis":"y","scales":{"x":{"stacked":true}}}}"#;
+    let error = chartjs::parse(json, false).expect_err("horizontal stacked line is unsupported");
+
+    assert!(error.contains("積み上げ line chart は横向き(indexAxis:y)に未対応です"));
 }
 
 #[test]

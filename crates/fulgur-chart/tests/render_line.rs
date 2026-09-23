@@ -97,6 +97,50 @@ fn chartjs_value_axis_stacked_accumulates_line_datasets() {
 }
 
 #[test]
+fn chartjs_stacked_line_preserves_null_gaps_and_accumulates_later_series() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C"],"datasets":[
+      {"data":[10,null,30],"borderColor":"#0000ff"},
+      {"data":[5,5,5],"borderColor":"#ff0000"}
+    ]},"options":{"scales":{"y":{"stacked":true}}}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let frame = fulgur_chart::layout::common::compute(&spec, &measurer);
+    let scene = line::build(&spec, &measurer);
+    let points = line::line_points(&spec, &frame);
+
+    let blue_hit_categories = points
+        .iter()
+        .filter(|point| point.series == 0)
+        .map(|point| point.index)
+        .collect::<Vec<_>>();
+    let red_hit_categories = points
+        .iter()
+        .filter(|point| point.series == 1)
+        .map(|point| point.index)
+        .collect::<Vec<_>>();
+    let blue_markers = scene
+        .items
+        .iter()
+        .filter(|item| matches!(item, Prim::Circle { fill, .. } if (fill.r, fill.g, fill.b) == (0, 0, 255)))
+        .count();
+    let blue_lines = scene
+        .items
+        .iter()
+        .filter(|item| matches!(item, Prim::Polyline { stroke, .. } if (stroke.r, stroke.g, stroke.b) == (0, 0, 255)))
+        .count();
+    let red_line = line_points_by_color(&scene, (255, 0, 0));
+
+    assert_eq!(blue_hit_categories, vec![0, 2]);
+    assert_eq!(red_hit_categories, vec![0, 1, 2]);
+    assert_eq!(blue_markers, 2);
+    assert_eq!(blue_lines, 0);
+    assert_eq!(
+        red_line.iter().map(|(_, y)| *y).collect::<Vec<_>>(),
+        vec![frame.ys.map(15.0), frame.ys.map(5.0), frame.ys.map(35.0)]
+    );
+}
+
+#[test]
 fn stacked_log_line_skips_nonpositive_source_values() {
     let json = r##"{"type":"line","data":{"labels":["A","B","C"],"datasets":[
       {"data":[10,10,10],"borderColor":"#0000ff"},
