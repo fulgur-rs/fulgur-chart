@@ -286,6 +286,13 @@ pub struct LineDataset {
     pub border_width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tension: Option<f64>,
+    /// Cubic interpolation mode. `monotone` preserves the direction of adjacent segments.
+    #[serde(
+        rename = "cubicInterpolationMode",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cubic_interpolation_mode: Option<CubicMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub span_gaps: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -294,6 +301,14 @@ pub struct LineDataset {
     pub fill: Option<LineFillSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub point_radius: Option<f64>,
+}
+
+/// Cubic line interpolation algorithm from Chart.js.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CubicMode {
+    Default,
+    Monotone,
 }
 
 /// Line stepping setting: a boolean or one of Chart.js's named step modes.
@@ -1586,7 +1601,8 @@ pub enum SankeySizeOption {
 #[cfg(test)]
 mod tests {
     use super::{
-        BarDataset, BoxplotDataset, ChartJsSpec, LineDataset, RadarOptions, Stepped, SteppedMode,
+        BarDataset, BoxplotDataset, ChartJsSpec, CubicMode, LineDataset, RadarOptions, Stepped,
+        SteppedMode,
     };
 
     #[test]
@@ -1594,6 +1610,27 @@ mod tests {
         let json = r#"{"data":[1,null,3]}"#;
         let d: LineDataset = serde_json::from_str(json).unwrap();
         assert_eq!(d.data, vec![Some(1.0), None, Some(3.0)]);
+    }
+
+    #[test]
+    fn line_dataset_accepts_cubic_interpolation_modes() {
+        let default: LineDataset =
+            serde_json::from_str(r#"{"data":[1,2],"cubicInterpolationMode":"default"}"#).unwrap();
+        let monotone: LineDataset =
+            serde_json::from_str(r#"{"data":[1,2],"cubicInterpolationMode":"monotone"}"#).unwrap();
+
+        assert_eq!(default.cubic_interpolation_mode, Some(CubicMode::Default));
+        assert_eq!(monotone.cubic_interpolation_mode, Some(CubicMode::Monotone));
+    }
+
+    #[test]
+    fn line_dataset_rejects_unknown_cubic_interpolation_mode() {
+        assert!(
+            serde_json::from_str::<LineDataset>(
+                r#"{"data":[1,2],"cubicInterpolationMode":"smooth"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

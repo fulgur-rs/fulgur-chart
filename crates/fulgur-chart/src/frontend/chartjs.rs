@@ -3,7 +3,8 @@
 use crate::color::parse_color;
 use crate::ir::*;
 use crate::schema::chartjs::{
-    BarThickness as SchemaBarThickness, BorderRadius as SchemaBorderRadius, SchemaArcBorderRadius,
+    BarThickness as SchemaBarThickness, BorderRadius as SchemaBorderRadius, CubicMode,
+    SchemaArcBorderRadius,
 };
 use crate::schema::common::{
     AxisBorderOptions, AxisOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions,
@@ -353,6 +354,8 @@ struct RawDataset {
     fill: RawFillSpec,
     #[serde(default)]
     tension: f64,
+    #[serde(rename = "cubicInterpolationMode", default)]
+    cubic_interpolation_mode: Option<serde_json::Value>,
     #[serde(rename = "spanGaps", default)]
     span_gaps: Option<serde_json::Value>,
     #[serde(default)]
@@ -389,10 +392,11 @@ impl RawStepped {
     }
 }
 
-/// `spanGaps` / `stepped` are line-root options. Keep their raw JSON on the shared
-/// dataset so non-line roots retain their historical "ignore in non-strict mode"
-/// behavior; validate and map only for root line charts.
-fn parse_line_dataset_options(ds: &RawDataset) -> Result<(bool, Option<StepMode>), String> {
+/// Line-only options stay as raw JSON on the shared dataset so non-line roots retain
+/// their historical "ignore in non-strict mode" behavior; validate them for line roots.
+fn parse_line_dataset_options(
+    ds: &RawDataset,
+) -> Result<(bool, Option<StepMode>, Option<CubicMode>), String> {
     let span_gaps = ds
         .span_gaps
         .as_ref()
@@ -407,7 +411,13 @@ fn parse_line_dataset_options(ds: &RawDataset) -> Result<(bool, Option<StepMode>
         .transpose()
         .map_err(|e| format!("stepped の値が不正です: {e}"))?
         .and_then(RawStepped::into_step_mode);
-    Ok((span_gaps, step_mode))
+    let cubic_interpolation_mode = ds
+        .cubic_interpolation_mode
+        .as_ref()
+        .map(|value| serde_json::from_value::<CubicMode>(value.clone()))
+        .transpose()
+        .map_err(|e| format!("cubicInterpolationMode の値が不正です: {e}"))?;
+    Ok((span_gaps, step_mode, cubic_interpolation_mode))
 }
 
 /// `data`: 数値配列(カテゴリ系)、ネスト配列(boxplot)、または点オブジェクト配列(scatter/bubble)。
@@ -1063,16 +1073,17 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .iter()
         .any(|ds| ds.background_color.is_some() || ds.border_color.is_some());
 
-    let has_line_dataset_options = raw
-        .data
-        .datasets
-        .iter()
-        .any(|ds| ds.span_gaps.is_some() || ds.stepped.is_some());
+    let has_line_dataset_options = raw.data.datasets.iter().any(|ds| {
+        ds.span_gaps.is_some() || ds.stepped.is_some() || ds.cubic_interpolation_mode.is_some()
+    });
     if raw.chart_type == "line"
         && !matches!(kind, ChartKind::Line { .. })
         && has_line_dataset_options
     {
-        return Err("spanGaps and stepped are only supported for line charts".to_string());
+        return Err(
+            "spanGaps, stepped, and cubicInterpolationMode are only supported for line charts"
+                .to_string(),
+        );
     }
 
     let line_dataset_options = if raw.chart_type == "line" {
@@ -1082,7 +1093,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             .map(parse_line_dataset_options)
             .collect::<Result<Vec<_>, _>>()?
     } else {
-        vec![(false, None); raw.data.datasets.len()]
+        vec![(false, None, None); raw.data.datasets.len()]
     };
 
     // `RawDataset` is shared by every chart type, but object-form borderRadius has
@@ -1256,7 +1267,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 stroke_width: ds.border_width.unwrap_or(default_border_width(series_type)),
                 area: area_fill.is_some(),
                 area_fill,
-                interpolation: line_interpolation(normalize_tension(ds.tension)),
+                interpolation: match line_dataset_options[i].2 {
+                    Some(CubicMode::Monotone) => LineInterpolation::Monotone,
+                    Some(CubicMode::Default) | None => {
+                        line_interpolation(normalize_tension(ds.tension))
+                    }
+                },
                 span_gaps: line_dataset_options[i].0,
                 step_mode: line_dataset_options[i].1,
                 series_type,
@@ -1770,6 +1786,7 @@ fn check_unknown_keys(
                             "borderWidth",
                             "fill",
                             "tension",
+                            "cubicInterpolationMode",
                             "spanGaps",
                             "stepped",
                             "pointRadius",
@@ -4032,6 +4049,41 @@ mod tests {
         )
         .unwrap();
         assert_eq!(spec.series[0].interpolation, LineInterpolation::Linear);
+    }
+
+    #[test]
+    fn cubic_interpolation_mode_monotone_overrides_tension() {
+        let spec = parse(
+            r#"{"type":"line","data":{"datasets":[{"data":[1,2,3],"tension":0.8,"cubicInterpolationMode":"monotone"},{"data":[1,2,3],"tension":0.4,"cubicInterpolationMode":"default"}]}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(spec.series[0].interpolation, LineInterpolation::Monotone);
+        assert_eq!(
+            spec.series[1].interpolation,
+            LineInterpolation::CatmullRom { tension: 0.4 }
+        );
+    }
+
+    #[test]
+    fn cubic_interpolation_mode_rejects_unknown_values() {
+        let error = parse(
+            r#"{"type":"line","data":{"datasets":[{"data":[1,2,3],"cubicInterpolationMode":"smooth"}]}}"#,
+            false,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("cubicInterpolationMode"));
+    }
+
+    #[test]
+    fn strict_line_parser_accepts_cubic_interpolation_mode() {
+        parse(
+            r#"{"type":"line","data":{"datasets":[{"data":[1,2,3],"cubicInterpolationMode":"monotone"}]}}"#,
+            true,
+        )
+        .unwrap();
     }
 
     #[test]

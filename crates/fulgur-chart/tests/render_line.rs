@@ -79,6 +79,37 @@ fn line_has_polyline_and_markers() {
 }
 
 #[test]
+fn chartjs_monotone_cubic_mode_uses_monotone_line_geometry() {
+    let monotone_scene = line_scene(
+        r#"{"type":"line","data":{"labels":["A","B","C"],"datasets":[{"data":[0,2,7],"tension":0.8,"cubicInterpolationMode":"monotone"}]}}"#,
+    );
+    let catmull_scene = line_scene(
+        r#"{"type":"line","data":{"labels":["A","B","C"],"datasets":[{"data":[0,2,7],"tension":0.8}]}}"#,
+    );
+    let stroke_path = |scene: &fulgur_chart::scene::Scene| {
+        scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(stroke),
+                    ..
+                } if (stroke.r, stroke.g, stroke.b) == (54, 162, 235) => Some(d),
+                _ => None,
+            })
+            .expect("cubic interpolation must create a stroke path")
+            .clone()
+    };
+
+    let monotone_path = stroke_path(&monotone_scene);
+    let catmull_path = stroke_path(&catmull_scene);
+    assert!(monotone_path.contains(" C "), "{monotone_path}");
+    assert_ne!(monotone_path, catmull_path);
+}
+
+#[test]
 fn chartjs_value_axis_stacked_accumulates_line_datasets() {
     let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
       {"data":[10,20],"borderColor":"#0000ff"},
