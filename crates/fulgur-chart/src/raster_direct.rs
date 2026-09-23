@@ -954,6 +954,25 @@ fn render_prim(
                 *fill,
                 content,
                 *rotate_deg,
+                None,
+                None,
+                face,
+                transform,
+                cache,
+            );
+        }
+        Prim::StyledText(text) => {
+            render_text(
+                pixmap,
+                text.x,
+                text.y,
+                text.size,
+                text.anchor,
+                text.fill,
+                &text.content,
+                text.rotate_deg,
+                text.font_weight.as_deref(),
+                text.font_style.as_deref(),
                 face,
                 transform,
                 cache,
@@ -1017,6 +1036,8 @@ fn render_text(
     fill: Color,
     content: &str,
     rotate_deg: Option<f64>,
+    font_weight: Option<&str>,
+    font_style: Option<&str>,
     face: &ttf_parser::Face<'_>,
     transform: Transform,
     cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
@@ -1044,6 +1065,14 @@ fn render_text(
 
     let baseline_y = y as f32;
     let paint = solid_paint(fill);
+    let bold = font_weight.is_some_and(|weight| {
+        weight.eq_ignore_ascii_case("bold")
+            || weight.eq_ignore_ascii_case("bolder")
+            || weight.parse::<f32>().is_ok_and(|weight| weight >= 600.0)
+    });
+    let italic = font_style.is_some_and(|style| {
+        style.eq_ignore_ascii_case("italic") || style.eq_ignore_ascii_case("oblique")
+    });
     let mut cursor_x = start_x;
     let text_transform = rotate_deg
         .filter(|angle| angle.is_finite())
@@ -1075,11 +1104,24 @@ fn render_text(
             // 正規化パス（origin=0, scale=1, Y 反転済み）を
             // scale(glyph_scale) → translate(cursor_x, baseline_y) →
             // rotate(anchor) → outer_transform の順に合成して描画。
-            let glyph_transform = text_transform.pre_concat(
-                Transform::from_translate(cursor_x, baseline_y)
-                    .pre_concat(Transform::from_scale(glyph_scale, glyph_scale)),
-            );
+            let mut glyph_transform = Transform::from_translate(cursor_x, baseline_y)
+                .pre_concat(Transform::from_scale(glyph_scale, glyph_scale));
+            if italic {
+                glyph_transform = glyph_transform.pre_concat(Transform::from_skew(-0.2, 0.0));
+            }
+            let glyph_transform = text_transform.pre_concat(glyph_transform);
             pixmap.fill_path(path, &paint, FillRule::Winding, glyph_transform, None);
+            if bold {
+                // Raster mode uses the configured font face for every label. A small outline
+                // stroke approximates the requested weight without requiring a second font file.
+                pixmap.stroke_path(
+                    path,
+                    &paint,
+                    &make_stroke(face.units_per_em() as f64 * 0.035),
+                    glyph_transform,
+                    None,
+                );
+            }
         }
         cursor_x += adv;
     }

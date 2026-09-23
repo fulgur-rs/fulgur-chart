@@ -236,6 +236,7 @@ mod tests {
                 scale_kind: crate::ir::ScaleKind::Linear,
             },
             legend: LegendPos::None,
+            legend_options: crate::ir::LegendOptions::default(),
             legend_title: None,
             title: None,
             width: 600.0,

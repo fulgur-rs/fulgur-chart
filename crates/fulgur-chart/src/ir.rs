@@ -266,6 +266,60 @@ pub enum LegendPos {
     None,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LegendAlign {
+    Start,
+    #[default]
+    Center,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LegendPointStyle {
+    Circle,
+    Cross,
+    CrossRot,
+    Dash,
+    Line,
+    Rect,
+    RectRounded,
+    RectRot,
+    Star,
+    Triangle,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LegendTitlePadding {
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
+/// Resolved Chart.js legend styling. `None` values retain the renderer defaults.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LegendOptions {
+    pub align: LegendAlign,
+    pub reverse: bool,
+    pub labels_color: Option<Color>,
+    pub labels_font_size: Option<f64>,
+    pub labels_font_family: Option<String>,
+    pub labels_font_weight: Option<String>,
+    pub labels_font_style: Option<String>,
+    pub labels_padding: Option<f64>,
+    pub labels_box_width: Option<f64>,
+    pub labels_box_height: Option<f64>,
+    pub labels_use_point_style: bool,
+    pub labels_point_style: Option<LegendPointStyle>,
+    pub title_display: bool,
+    pub title_color: Option<Color>,
+    pub title_font_size: Option<f64>,
+    pub title_font_family: Option<String>,
+    pub title_font_weight: Option<String>,
+    pub title_font_style: Option<String>,
+    pub title_padding: LegendTitlePadding,
+}
+
 /// Radar / polarArea の r スケール。既存の `AxisSpec` は cartesian 向けに
 /// title/offset/grid を含むため再利用しない。cartesian の
 /// `suggestedMin/suggestedMax/beginAtZero` と同じセマンティクス:
@@ -529,6 +583,7 @@ pub struct ChartSpec {
     pub x_axis: AxisSpec,
     pub y_axis: AxisSpec,
     pub legend: LegendPos,
+    pub legend_options: LegendOptions,
     pub legend_title: Option<String>,
     pub title: Option<String>,
     pub width: f64,
@@ -740,6 +795,7 @@ mod radial_axis_tests {
                 scale_kind: ScaleKind::Linear,
             },
             legend: LegendPos::None,
+            legend_options: LegendOptions::default(),
             legend_title: None,
             title: None,
             width: 600.0,

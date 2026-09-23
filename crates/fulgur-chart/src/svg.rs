@@ -255,6 +255,39 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str, grad_idx: &mut usi
             )
             .unwrap();
         }
+        Prim::StyledText(text) => {
+            let xv = fmt_num(text.x);
+            let yv = fmt_num(text.y);
+            let size = fmt_num(text.size);
+            let anchor = match text.anchor {
+                Anchor::Start => "start",
+                Anchor::Middle => "middle",
+                Anchor::End => "end",
+            };
+            let hex = color_hex(&text.fill);
+            let op = opacity_attr("fill-opacity", text.fill.a);
+            let escaped = xml_escape(&text.content);
+            let fam = xml_escape_attr(text.font_family.as_deref().unwrap_or(font_family));
+            let weight = text
+                .font_weight
+                .as_deref()
+                .map(|weight| format!(" font-weight=\"{}\"", xml_escape_attr(weight)))
+                .unwrap_or_default();
+            let style = text
+                .font_style
+                .as_deref()
+                .map(|style| format!(" font-style=\"{}\"", xml_escape_attr(style)))
+                .unwrap_or_default();
+            let transform = text
+                .rotate_deg
+                .map(|d| format!(" transform=\"rotate({},{},{})\"", fmt_num(d), xv, yv))
+                .unwrap_or_default();
+            write!(
+                s,
+                r#"<text x="{xv}" y="{yv}"{transform} font-family="{fam}" font-size="{size}"{weight}{style} text-anchor="{anchor}" fill="{hex}"{op}>{escaped}</text>"#
+            )
+            .unwrap();
+        }
     }
 }
 

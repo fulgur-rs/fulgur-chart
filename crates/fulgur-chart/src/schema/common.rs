@@ -48,6 +48,14 @@ pub struct LegendPlugin {
     pub display: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<LegendPosition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<LegendAlign>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reverse: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<LegendLabelsOptions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<LegendTitleOptions>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -57,6 +65,64 @@ pub enum LegendPosition {
     Bottom,
     Left,
     Right,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LegendAlign {
+    Start,
+    Center,
+    End,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum LegendPointStyle {
+    Circle,
+    Cross,
+    CrossRot,
+    Dash,
+    Line,
+    Rect,
+    RectRounded,
+    RectRot,
+    Star,
+    Triangle,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendLabelsOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<FontSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub box_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub box_height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_point_style: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point_style: Option<LegendPointStyle>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegendTitleOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<FontSpec>,
+    /// Chart.js numeric or side-specific padding object.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<serde_json::Value>,
 }
 
 /// options.plugins.datalabels configuration.

@@ -1251,6 +1251,7 @@ mod tests {
             x_axis: axis.clone(),
             y_axis: axis,
             legend: LegendPos::None,
+            legend_options: crate::ir::LegendOptions::default(),
             legend_title: None,
             title: None,
             width: 720.0,

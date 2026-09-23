@@ -59,68 +59,68 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 
     // 2. 凡例(カテゴリ別)。
+    let legend_title = common::legend_title(spec);
     let has_legend = matches!(
         spec.legend,
         LegendPos::Top | LegendPos::Bottom | LegendPos::Left | LegendPos::Right
-    ) && spec.categories.iter().any(|c| !c.is_empty());
+    ) && (spec.categories.iter().any(|c| !c.is_empty()) || legend_title.is_some());
+    let legend_font = common::legend_label_font_size(&spec.legend_options, label_font);
+    let legend_height = common::legend_horizontal_band_height(
+        &spec.legend_options,
+        label_font,
+        legend_title.is_some(),
+    );
     let legend_top = if has_legend && spec.legend == LegendPos::Top {
-        common::LEGEND_BAND
+        legend_height
     } else {
         0.0
     };
     let legend_bottom = if has_legend && spec.legend == LegendPos::Bottom {
-        common::LEGEND_BAND
+        legend_height
     } else {
         0.0
     };
     // Left/Right の凡例帯幅(カテゴリ名から算出)。
     let legend_left = if has_legend && spec.legend == LegendPos::Left {
-        common::legend_band_width_vertical(m, &spec.categories, label_font)
+        let mut names = spec.categories.clone();
+        names.extend(legend_title.map(str::to_owned));
+        common::legend_band_width_vertical_styled(m, &names, legend_font, &spec.legend_options)
     } else {
         0.0
     };
     let legend_right = if has_legend && spec.legend == LegendPos::Right {
-        common::legend_band_width_vertical(m, &spec.categories, label_font)
+        let mut names = spec.categories.clone();
+        names.extend(legend_title.map(str::to_owned));
+        common::legend_band_width_vertical_styled(m, &names, legend_font, &spec.legend_options)
     } else {
         0.0
     };
     if has_legend && matches!(spec.legend, LegendPos::Top | LegendPos::Bottom) {
-        // 各カテゴリのエントリ幅と合計（末尾の trailing 16 を最後だけ除く）。
-        let mut total = 0.0_f64;
-        let n = spec.categories.len();
-        for (k, cat) in spec.categories.iter().enumerate() {
-            total += common::legend_entry_width(m, cat, label_font);
-            if k == n - 1 {
-                total -= 16.0;
-            }
-        }
-        let start_x = (spec.width - total) / 2.0;
+        let entries: Vec<(String, Color)> = spec
+            .categories
+            .iter()
+            .enumerate()
+            .map(|(index, category)| {
+                let color = series.map(|series| series.fill_at(index)).unwrap_or(ink);
+                (category.clone(), color)
+            })
+            .collect();
         let legend_cy = if spec.legend == LegendPos::Top {
-            common::OUTER_PAD + title_band + common::LEGEND_BAND / 2.0
+            common::OUTER_PAD + title_band + legend_height / 2.0
         } else {
-            spec.height - common::OUTER_PAD - common::LEGEND_BAND / 2.0
+            spec.height - common::OUTER_PAD - legend_height / 2.0
         };
-        let mut cursor = start_x;
-        for (i, cat) in spec.categories.iter().enumerate() {
-            let swatch = series.map(|s| s.fill_at(i)).unwrap_or(ink);
-            items.push(Prim::Rect {
-                x: cursor,
-                y: legend_cy - 6.0,
-                w: 12.0,
-                h: 12.0,
-                fill: swatch,
-            });
-            items.push(Prim::Text {
-                x: cursor + 16.0,
-                y: legend_cy + label_font * common::TEXT_BASELINE_RATIO,
-                size: label_font,
-                anchor: Anchor::Start,
-                fill: ink,
-                content: cat.clone(),
-                rotate_deg: None,
-            });
-            cursor += common::legend_entry_width(m, cat, label_font);
-        }
+        common::draw_horizontal_legend(
+            &mut items,
+            &entries,
+            legend_title,
+            spec.width,
+            legend_cy,
+            label_font,
+            ink,
+            m,
+            &spec.legend_options,
+        );
     }
 
     // 2b. 凡例(Left/Right: 縦並び、カテゴリ別)。
@@ -147,15 +147,16 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // 円の縦スパン(area_top..area_bottom)中央に揃える。
         let area_top = common::OUTER_PAD + title_band + legend_top;
         let area_bottom = spec.height - common::OUTER_PAD - legend_bottom;
-        common::draw_vertical_legend(
+        common::draw_vertical_legend_styled(
             &mut items,
             &entries,
-            None,
+            legend_title,
             band_x,
             area_top,
             area_bottom,
             ink,
             label_font,
+            &spec.legend_options,
         );
     }
 

@@ -1,12 +1,12 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
 use crate::ir::{
-    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, RadialAxis, ScaleKind,
-    SizeMode, XPositions,
+    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendAlign, LegendOptions,
+    LegendPointStyle, LegendPos, RadialAxis, ScaleKind, SizeMode, XPositions,
 };
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, ValueScale, nice_ticks, vega_nice_ticks};
-use crate::scene::{Anchor, Prim};
+use crate::scene::{Anchor, Prim, StyledText};
 use crate::temporal::{TemporalTick, temporal_ticks};
 use crate::text::TextMeasurer;
 
@@ -219,8 +219,16 @@ fn has_legend(spec: &ChartSpec) -> bool {
     matches!(
         spec.legend,
         LegendPos::Top | LegendPos::Bottom | LegendPos::Left | LegendPos::Right
-    ) && (temporal_plot_right_legend_title(spec).is_some()
-        || spec.series.iter().any(|series| !series.name.is_empty()))
+    ) && (legend_title(spec).is_some() || spec.series.iter().any(|series| !series.name.is_empty()))
+}
+
+/// 凡例タイトル。Chart.js の明示タイトルと Vega temporal line の既存タイトルを扱う。
+pub(crate) fn legend_title(spec: &ChartSpec) -> Option<&str> {
+    if spec.legend_options.title_display {
+        spec.legend_title.as_deref()
+    } else {
+        temporal_plot_right_legend_title(spec)
+    }
 }
 
 /// `legend_title` を描画・予約する supported semantics。
@@ -758,6 +766,13 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
 
     // 凡例の有無。
     let legend = has_legend(spec);
+    let legend_title = legend_title(spec);
+    let legend_font = legend_label_font_size(&spec.legend_options, spec.theme.font_size);
+    let horizontal_legend_height = legend_horizontal_band_height(
+        &spec.legend_options,
+        spec.theme.font_size,
+        legend_title.is_some(),
+    );
 
     // プロット領域。
     let title_band = if spec.title.is_some() {
@@ -766,37 +781,41 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         0.0
     };
     let legend_top = if legend && spec.legend == LegendPos::Top {
-        LEGEND_BAND
+        horizontal_legend_height
     } else {
         0.0
     };
     let legend_bottom = if legend && spec.legend == LegendPos::Bottom {
-        LEGEND_BAND
+        horizontal_legend_height
     } else {
         0.0
     };
     // Left/Right の凡例帯幅(系列名から算出)。Top/Bottom 時は 0。
-    let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+    let mut series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+    series_names.extend(legend_title.map(str::to_owned));
     let legend_left = if legend && spec.legend == LegendPos::Left {
-        legend_band_width_vertical(m, &series_names, spec.theme.font_size)
+        legend_band_width_vertical_styled(m, &series_names, legend_font, &spec.legend_options)
     } else {
         0.0
     };
     let legend_right = if legend && spec.legend == LegendPos::Right {
-        let mut names = series_names.clone();
-        names.extend(temporal_plot_right_legend_title(spec).map(str::to_owned));
-        legend_band_width_vertical(m, &names, spec.theme.font_size)
+        legend_band_width_vertical_styled(m, &series_names, legend_font, &spec.legend_options)
     } else {
         0.0
     };
-    let vertical_legend_rows =
+    let vertical_legend_height =
         if legend && matches!(spec.legend, LegendPos::Left | LegendPos::Right) {
-            spec.series.len() + usize::from(temporal_plot_right_legend_title(spec).is_some())
+            let row_height = legend_vertical_row_height(&spec.legend_options, spec.theme.font_size);
+            spec.series.len() as f64 * row_height
+                + if legend_title.is_some() {
+                    legend_vertical_title_height(&spec.legend_options, spec.theme.font_size)
+                } else {
+                    0.0
+                }
         } else {
-            0
+            0.0
         };
-    let vertical_legend_overflow =
-        ((vertical_legend_rows as f64 * LEGEND_ROW_H - spec.height) / 2.0).max(0.0);
+    let vertical_legend_overflow = ((vertical_legend_height - spec.height) / 2.0).max(0.0);
     let (rotated_y_title_top_overflow, rotated_y_title_bottom_overflow) =
         if matches!(spec.size_mode, SizeMode::PlotArea) {
             spec.y_axis
@@ -1327,42 +1346,30 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
 
     // 5. 凡例(Top/Bottom: 横並び)。
     if has_legend(spec) && matches!(spec.legend, LegendPos::Top | LegendPos::Bottom) {
-        // 各エントリ幅と合計（末尾間隔 16 を最後だけ除く）。
-        let mut total = 0.0_f64;
-        for (k, ser) in spec.series.iter().enumerate() {
-            let ew = legend_entry_width(m, &ser.name, label_font);
-            total += ew;
-            if k == spec.series.len() - 1 {
-                total -= 16.0;
-            }
-        }
-        let start_x = (spec.width - total) / 2.0;
+        let entries: Vec<(String, Color)> = spec
+            .series
+            .iter()
+            .map(|series| (series.name.clone(), series.fill_at(0)))
+            .collect();
+        let legend_title = legend_title(spec);
+        let legend_height =
+            legend_horizontal_band_height(&spec.legend_options, label_font, legend_title.is_some());
         let legend_cy = if spec.legend == LegendPos::Top {
-            OUTER_PAD + title_band + LEGEND_BAND / 2.0
+            OUTER_PAD + title_band + legend_height / 2.0
         } else {
-            spec.height - OUTER_PAD - LEGEND_BAND / 2.0
+            spec.height - OUTER_PAD - legend_height / 2.0
         };
-        let mut cursor = start_x;
-        for ser in &spec.series {
-            items.push(Prim::Rect {
-                x: cursor,
-                y: legend_cy - 6.0,
-                w: 12.0,
-                h: 12.0,
-                fill: ser.fill_at(0),
-            });
-            items.push(Prim::Text {
-                x: cursor + 16.0,
-                y: legend_cy + label_font * TEXT_BASELINE_RATIO,
-                size: label_font,
-                anchor: Anchor::Start,
-                fill: ink,
-                content: ser.name.clone(),
-                rotate_deg: None,
-            });
-            let ew = legend_entry_width(m, &ser.name, label_font);
-            cursor += ew;
-        }
+        draw_horizontal_legend(
+            items,
+            &entries,
+            legend_title,
+            spec.width,
+            legend_cy,
+            label_font,
+            ink,
+            m,
+            &spec.legend_options,
+        );
     }
 
     // 5b. 凡例(Left/Right: 縦並び)。
@@ -1373,9 +1380,14 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             .map(|s| (s.name.clone(), s.fill_at(0)))
             .collect();
         let mut names: Vec<String> = entries.iter().map(|(n, _)| n.clone()).collect();
-        let legend_title = temporal_plot_right_legend_title(spec);
+        let legend_title = legend_title(spec);
         names.extend(legend_title.map(str::to_owned));
-        let band_w = legend_band_width_vertical(m, &names, label_font);
+        let band_w = legend_band_width_vertical_styled(
+            m,
+            &names,
+            legend_label_font_size(&spec.legend_options, label_font),
+            &spec.legend_options,
+        );
         let band_x = if spec.legend == LegendPos::Left {
             OUTER_PAD
         } else if matches!(spec.size_mode, SizeMode::PlotArea) {
@@ -1383,7 +1395,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         } else {
             spec.width - OUTER_PAD - band_w
         };
-        draw_vertical_legend(
+        draw_vertical_legend_styled(
             items,
             &entries,
             legend_title,
@@ -1392,6 +1404,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             frame.plot_bottom,
             ink,
             label_font,
+            &spec.legend_options,
         );
     }
 
@@ -1449,23 +1462,399 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
     }
 }
 
-/// 縦置き凡例(Left/Right)の帯幅: swatch(12) + gap(4) + 最大ラベル幅 + パディング(16)。
-/// 名前が空の系列も含めて算出する(レイアウトの確保量を呼び出し側と一致させるため)。
-/// `font_size` はラベル測定に使う基準フォント(テーマ)。
-pub fn legend_band_width_vertical(m: &TextMeasurer, names: &[String], font_size: f64) -> f64 {
-    let mut max_w = 0.0_f64;
-    for name in names {
-        let w = m.width(name, font_size as f32) as f64;
-        if w > max_w {
-            max_w = w;
-        }
-    }
-    12.0 + 4.0 + max_w + 16.0
+const LEGEND_SWATCH_GAP: f64 = 4.0;
+const LEGEND_BAND_SIDE_PAD: f64 = 16.0;
+const LEGEND_ROW_GAP: f64 = LEGEND_ROW_H - 12.0;
+
+pub fn legend_label_font_size(options: &LegendOptions, default_size: f64) -> f64 {
+    options
+        .labels_font_size
+        .filter(|size| size.is_finite() && *size > 0.0)
+        .map(|size| size.min(512.0))
+        .unwrap_or(default_size.min(512.0))
 }
 
-/// 縦置き凡例(Left/Right)を描く。entries は (名前, swatch色) の解決済みペア。
-/// プロットの縦スパン中央にエントリ群を配置する。
-/// `ink`/`font_size` はラベルの色とフォント(テーマ)。
+pub fn legend_label_color(options: &LegendOptions, default_color: Color) -> Color {
+    options.labels_color.unwrap_or(default_color)
+}
+
+fn legend_title_font_size(options: &LegendOptions, label_font_size: f64) -> f64 {
+    options
+        .title_font_size
+        .filter(|size| size.is_finite() && *size > 0.0)
+        .map(|size| size.min(512.0))
+        .unwrap_or(label_font_size)
+}
+
+fn legend_box_width(options: &LegendOptions) -> f64 {
+    options
+        .labels_box_width
+        .filter(|width| width.is_finite() && *width >= 0.0)
+        .map(|width| width.min(10_000.0))
+        .unwrap_or(12.0)
+}
+
+fn legend_box_height(options: &LegendOptions) -> f64 {
+    options
+        .labels_box_height
+        .filter(|height| height.is_finite() && *height >= 0.0)
+        .map(|height| height.min(10_000.0))
+        .unwrap_or(12.0)
+}
+
+fn legend_labels_padding(options: &LegendOptions, default: f64) -> f64 {
+    options
+        .labels_padding
+        .filter(|padding| padding.is_finite() && *padding >= 0.0)
+        .map(|padding| padding.min(10_000.0))
+        .unwrap_or(default)
+}
+
+fn legend_title_padding(options: &LegendOptions) -> crate::ir::LegendTitlePadding {
+    let side = |value: f64| {
+        if value.is_finite() && value >= 0.0 {
+            value.min(10_000.0)
+        } else {
+            0.0
+        }
+    };
+    crate::ir::LegendTitlePadding {
+        top: side(options.title_padding.top),
+        right: side(options.title_padding.right),
+        bottom: side(options.title_padding.bottom),
+        left: side(options.title_padding.left),
+    }
+}
+
+fn legend_font_attrs(
+    options: &LegendOptions,
+    title: bool,
+) -> (Option<String>, Option<String>, Option<String>) {
+    if title {
+        (
+            options.title_font_family.clone(),
+            options.title_font_weight.clone(),
+            options.title_font_style.clone(),
+        )
+    } else {
+        (
+            options.labels_font_family.clone(),
+            options.labels_font_weight.clone(),
+            options.labels_font_style.clone(),
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn legend_text_prim(
+    x: f64,
+    y: f64,
+    size: f64,
+    anchor: Anchor,
+    fill: Color,
+    content: String,
+    options: &LegendOptions,
+    title: bool,
+) -> Prim {
+    let (font_family, font_weight, font_style) = legend_font_attrs(options, title);
+    if font_family.is_some() || font_weight.is_some() || font_style.is_some() {
+        Prim::StyledText(Box::new(StyledText {
+            x,
+            y,
+            size,
+            anchor,
+            fill,
+            content,
+            rotate_deg: None,
+            font_family,
+            font_weight,
+            font_style,
+        }))
+    } else {
+        Prim::Text {
+            x,
+            y,
+            size,
+            anchor,
+            fill,
+            content,
+            rotate_deg: None,
+        }
+    }
+}
+
+fn legend_marker(items: &mut Vec<Prim>, x: f64, y: f64, color: Color, options: &LegendOptions) {
+    let width = legend_box_width(options);
+    let height = legend_box_height(options);
+    if !options.labels_use_point_style {
+        items.push(Prim::Rect {
+            x,
+            y,
+            w: width,
+            h: height,
+            fill: color,
+        });
+        return;
+    }
+
+    let cx = x + width / 2.0;
+    let cy = y + height / 2.0;
+    let stroke_width = (width.min(height) / 7.0).max(1.0);
+    let line = |x1, y1, x2, y2| Prim::Line {
+        x1,
+        y1,
+        x2,
+        y2,
+        stroke: color,
+        stroke_width,
+        dash: Vec::new(),
+    };
+    let polygon = |points: &[(f64, f64)]| {
+        let mut data = String::new();
+        for (index, (px, py)) in points.iter().enumerate() {
+            if index == 0 {
+                data.push_str(&format!("M{} {}", fmt_num(*px), fmt_num(*py)));
+            } else {
+                data.push_str(&format!(" L{} {}", fmt_num(*px), fmt_num(*py)));
+            }
+        }
+        data.push_str(" Z");
+        Prim::Path {
+            d: data,
+            fill: Some(color),
+            stroke: None,
+            stroke_width: 0.0,
+        }
+    };
+    match options
+        .labels_point_style
+        .unwrap_or(LegendPointStyle::Circle)
+    {
+        LegendPointStyle::Circle => items.push(Prim::Circle {
+            cx,
+            cy,
+            r: width.min(height) / 2.0,
+            fill: color,
+            stroke: color,
+            stroke_width: 0.0,
+        }),
+        LegendPointStyle::Cross => {
+            items.push(line(cx, y, cx, y + height));
+            items.push(line(x, cy, x + width, cy));
+        }
+        LegendPointStyle::CrossRot => {
+            items.push(line(x, y, x + width, y + height));
+            items.push(line(x, y + height, x + width, y));
+        }
+        LegendPointStyle::Dash => {
+            let dash_width = width * 0.6;
+            items.push(line(cx - dash_width / 2.0, cy, cx + dash_width / 2.0, cy));
+        }
+        LegendPointStyle::Line => items.push(line(x, cy, x + width, cy)),
+        LegendPointStyle::Rect | LegendPointStyle::RectRounded => items.push(Prim::Rect {
+            x,
+            y,
+            w: width,
+            h: height,
+            fill: color,
+        }),
+        LegendPointStyle::RectRot => items.push(polygon(&[
+            (cx, y),
+            (x + width, cy),
+            (cx, y + height),
+            (x, cy),
+        ])),
+        LegendPointStyle::Triangle => items.push(polygon(&[
+            (cx, y),
+            (x + width, y + height),
+            (x, y + height),
+        ])),
+        LegendPointStyle::Star => {
+            let radius = width.min(height) / 2.0;
+            let inner_radius = radius * 0.45;
+            let points: Vec<(f64, f64)> = (0..10)
+                .map(|index| {
+                    let angle =
+                        -std::f64::consts::FRAC_PI_2 + index as f64 * std::f64::consts::PI / 5.0;
+                    let r = if index % 2 == 0 { radius } else { inner_radius };
+                    (cx + angle.cos() * r, cy + angle.sin() * r)
+                })
+                .collect();
+            items.push(polygon(&points));
+        }
+    }
+}
+
+pub fn legend_entry_width_styled(
+    m: &TextMeasurer,
+    name: &str,
+    font_size: f64,
+    options: &LegendOptions,
+) -> f64 {
+    legend_box_width(options)
+        + LEGEND_SWATCH_GAP
+        + m.width(name, font_size.min(512.0) as f32) as f64
+}
+
+pub fn legend_band_width_vertical_styled(
+    m: &TextMeasurer,
+    names: &[String],
+    font_size: f64,
+    options: &LegendOptions,
+) -> f64 {
+    let measure_font_size = if options.title_display {
+        font_size.max(legend_title_font_size(options, font_size))
+    } else {
+        font_size
+    };
+    let max_w = names
+        .iter()
+        .map(|name| m.width(name, measure_font_size.min(512.0) as f32) as f64)
+        .fold(0.0, f64::max);
+    let padding = legend_title_padding(options);
+    legend_box_width(options)
+        + LEGEND_SWATCH_GAP
+        + max_w
+        + LEGEND_BAND_SIDE_PAD
+        + padding.left
+        + padding.right
+}
+
+/// 凡例用の上側/下側帯高。既存の 26px 帯を下限にし、タイトルと指定 font/box に応じて広げる。
+pub fn legend_horizontal_band_height(
+    options: &LegendOptions,
+    default_font_size: f64,
+    has_title: bool,
+) -> f64 {
+    let font_size = legend_label_font_size(options, default_font_size);
+    let labels_height = LEGEND_BAND
+        .max(font_size + 8.0)
+        .max(legend_box_height(options) + 8.0);
+    if has_title {
+        let title_font = legend_title_font_size(options, font_size);
+        let padding = legend_title_padding(options);
+        labels_height + title_font + padding.top + padding.bottom + 4.0
+    } else {
+        labels_height
+    }
+}
+
+fn legend_vertical_row_height(options: &LegendOptions, default_font_size: f64) -> f64 {
+    let font_size = legend_label_font_size(options, default_font_size);
+    let gap = legend_labels_padding(options, LEGEND_ROW_GAP);
+    let content_height = font_size.max(legend_box_height(options));
+    if options.labels_padding.is_some() {
+        content_height + gap
+    } else {
+        LEGEND_ROW_H.max(content_height + gap)
+    }
+}
+
+fn legend_vertical_title_height(options: &LegendOptions, default_font_size: f64) -> f64 {
+    let font_size =
+        legend_title_font_size(options, legend_label_font_size(options, default_font_size));
+    let padding = legend_title_padding(options);
+    (font_size + LEGEND_ROW_GAP + padding.top + padding.bottom).max(LEGEND_ROW_H)
+}
+
+/// Top/Bottom 凡例を横並びに描く。
+#[allow(clippy::too_many_arguments)]
+pub fn draw_horizontal_legend(
+    items: &mut Vec<Prim>,
+    entries: &[(String, Color)],
+    title: Option<&str>,
+    canvas_width: f64,
+    band_center_y: f64,
+    default_font_size: f64,
+    default_ink: Color,
+    m: &TextMeasurer,
+    options: &LegendOptions,
+) {
+    let font_size = legend_label_font_size(options, default_font_size);
+    let label_ink = legend_label_color(options, default_ink);
+    let box_width = legend_box_width(options);
+    let box_height = legend_box_height(options);
+    let gap = legend_labels_padding(options, LEGEND_BAND_SIDE_PAD);
+    let widths: Vec<f64> = entries
+        .iter()
+        .map(|(name, _)| legend_entry_width_styled(m, name, font_size, options))
+        .collect();
+    let total_width = widths.iter().sum::<f64>() + gap * entries.len().saturating_sub(1) as f64;
+    let start_x = match options.align {
+        LegendAlign::Start => 0.0,
+        LegendAlign::Center => (canvas_width - total_width) / 2.0,
+        LegendAlign::End => canvas_width - total_width,
+    };
+
+    let band_height = legend_horizontal_band_height(options, default_font_size, title.is_some());
+    let title_height = if let Some(title) = title {
+        let title_size = legend_title_font_size(options, font_size);
+        let padding = legend_title_padding(options);
+        let title_block_height = title_size + padding.top + padding.bottom + 4.0;
+        let band_top = band_center_y - band_height / 2.0;
+        let title_y = band_top + padding.top + title_size / 2.0 + title_size * TEXT_BASELINE_RATIO;
+        let title_ink = options.title_color.unwrap_or(label_ink);
+        let title_x = match options.align {
+            LegendAlign::Start => padding.left,
+            LegendAlign::Center => canvas_width / 2.0,
+            LegendAlign::End => canvas_width - padding.right,
+        };
+        let anchor = match options.align {
+            LegendAlign::Start => Anchor::Start,
+            LegendAlign::Center => Anchor::Middle,
+            LegendAlign::End => Anchor::End,
+        };
+        items.push(legend_text_prim(
+            title_x,
+            title_y,
+            title_size,
+            anchor,
+            title_ink,
+            title.to_string(),
+            options,
+            true,
+        ));
+        title_block_height
+    } else {
+        0.0
+    };
+    let label_band_center =
+        band_center_y - band_height / 2.0 + title_height + (band_height - title_height) / 2.0;
+
+    let mut indices: Vec<usize> = (0..entries.len()).collect();
+    if options.reverse {
+        indices.reverse();
+    }
+    let mut cursor_x = start_x;
+    for index in indices {
+        let (name, color) = &entries[index];
+        legend_marker(
+            items,
+            cursor_x,
+            label_band_center - box_height / 2.0,
+            *color,
+            options,
+        );
+        items.push(legend_text_prim(
+            cursor_x + box_width + LEGEND_SWATCH_GAP,
+            label_band_center + font_size * TEXT_BASELINE_RATIO,
+            font_size,
+            Anchor::Start,
+            label_ink,
+            name.clone(),
+            options,
+            false,
+        ));
+        cursor_x += widths[index] + gap;
+    }
+}
+
+/// 縦置き凡例(Left/Right)の帯幅。空名も幅計算に含める。
+pub fn legend_band_width_vertical(m: &TextMeasurer, names: &[String], font_size: f64) -> f64 {
+    legend_band_width_vertical_styled(m, names, font_size, &LegendOptions::default())
+}
+
+/// 縦置き凡例。既存の利用側に対する既定スタイルの互換 wrapper。
 #[allow(clippy::too_many_arguments)]
 pub fn draw_vertical_legend(
     items: &mut Vec<Prim>,
@@ -1477,47 +1866,89 @@ pub fn draw_vertical_legend(
     ink: Color,
     font_size: f64,
 ) {
-    let n = entries.len();
-    let title_rows = usize::from(title.is_some());
-    let group_h = (n + title_rows) as f64 * LEGEND_ROW_H;
-    let start_y = (plot_top + plot_bottom) / 2.0 - group_h / 2.0;
+    draw_vertical_legend_styled(
+        items,
+        entries,
+        title,
+        band_x,
+        plot_top,
+        plot_bottom,
+        ink,
+        font_size,
+        &LegendOptions::default(),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn draw_vertical_legend_styled(
+    items: &mut Vec<Prim>,
+    entries: &[(String, Color)],
+    title: Option<&str>,
+    band_x: f64,
+    plot_top: f64,
+    plot_bottom: f64,
+    default_ink: Color,
+    default_font_size: f64,
+    options: &LegendOptions,
+) {
+    let font_size = legend_label_font_size(options, default_font_size);
+    let ink = legend_label_color(options, default_ink);
+    let box_height = legend_box_height(options);
+    let row_height = legend_vertical_row_height(options, default_font_size);
+    let padding = legend_title_padding(options);
+    let title_size = legend_title_font_size(options, font_size);
+    let title_height = title.map_or(0.0, |_| legend_vertical_title_height(options, font_size));
+    let group_h = entries.len() as f64 * row_height + title_height;
+    let start_y = match options.align {
+        LegendAlign::Start => plot_top,
+        LegendAlign::Center => (plot_top + plot_bottom - group_h) / 2.0,
+        LegendAlign::End => plot_bottom - group_h,
+    };
     if let Some(title) = title {
-        items.push(Prim::Text {
-            x: band_x,
-            y: start_y + LEGEND_ROW_H / 2.0 + font_size * TEXT_BASELINE_RATIO,
-            size: font_size,
-            anchor: Anchor::Start,
-            fill: ink,
-            content: title.to_string(),
-            rotate_deg: None,
-        });
+        let title_y = start_y + title_height / 2.0 + title_size * TEXT_BASELINE_RATIO;
+        let title_ink = options.title_color.unwrap_or(ink);
+        items.push(legend_text_prim(
+            band_x + padding.left,
+            title_y,
+            title_size,
+            Anchor::Start,
+            title_ink,
+            title.to_string(),
+            options,
+            true,
+        ));
     }
-    for (i, (name, color)) in entries.iter().enumerate() {
-        let row_top = start_y + (i + title_rows) as f64 * LEGEND_ROW_H;
-        let row_center = row_top + LEGEND_ROW_H / 2.0;
-        items.push(Prim::Rect {
-            x: band_x,
-            y: row_center - 6.0,
-            w: 12.0,
-            h: 12.0,
-            fill: *color,
-        });
-        items.push(Prim::Text {
-            x: band_x + 16.0,
-            y: row_center + font_size * TEXT_BASELINE_RATIO,
-            size: font_size,
-            anchor: Anchor::Start,
-            fill: ink,
-            content: name.clone(),
-            rotate_deg: None,
-        });
+    let mut indices: Vec<usize> = (0..entries.len()).collect();
+    if options.reverse {
+        indices.reverse();
+    }
+    for (row, index) in indices.into_iter().enumerate() {
+        let (name, color) = &entries[index];
+        let row_top = start_y + title_height + row as f64 * row_height;
+        let row_center = row_top + row_height / 2.0;
+        legend_marker(
+            items,
+            band_x,
+            row_center - box_height / 2.0,
+            *color,
+            options,
+        );
+        items.push(legend_text_prim(
+            band_x + legend_box_width(options) + LEGEND_SWATCH_GAP,
+            row_center + font_size * TEXT_BASELINE_RATIO,
+            font_size,
+            Anchor::Start,
+            ink,
+            name.clone(),
+            options,
+            false,
+        ));
     }
 }
 
-/// 凡例 1 エントリの占有幅: swatch幅(12) + gap(4) + ラベル幅 + trailing間隔(16)。
-/// `font_size` はラベル測定に使う基準フォント(テーマ)。
+/// 凡例 1 エントリの占有幅。既定では swatch(12) + gap(4) + label + trailing(16)。
 pub fn legend_entry_width(m: &TextMeasurer, name: &str, font_size: f64) -> f64 {
-    12.0 + 4.0 + m.width(name, font_size as f32) as f64 + 16.0
+    legend_entry_width_styled(m, name, font_size, &LegendOptions::default()) + LEGEND_BAND_SIDE_PAD
 }
 
 /// 値ラベルの Prim::Text を生成する(フォント=size、内容=fmt_num(v)/fmt_num_log(v))。
@@ -1614,6 +2045,7 @@ mod tests {
                 scale_kind: ScaleKind::Linear,
             },
             legend: LegendPos::None,
+            legend_options: crate::ir::LegendOptions::default(),
             legend_title: None,
             title: None,
             width,

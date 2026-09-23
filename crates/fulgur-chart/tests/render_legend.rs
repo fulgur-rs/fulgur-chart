@@ -1,6 +1,8 @@
 use fulgur_chart::frontend::chartjs;
 use fulgur_chart::layout::build_scene;
-use fulgur_chart::layout::common::{OUTER_PAD, legend_band_width_vertical};
+use fulgur_chart::layout::common::{
+    OUTER_PAD, TEXT_BASELINE_RATIO, legend_band_width_vertical, legend_horizontal_band_height,
+};
 use fulgur_chart::render::render_chart;
 use fulgur_chart::scene::Prim;
 use fulgur_chart::text::TextMeasurer;
@@ -101,6 +103,138 @@ fn legend_display_false_no_labels() {
       "datasets":[{"label":"売上","data":[1]}]},
       "options":{"plugins":{"legend":{"display":false,"position":"left"}}}}"#;
     assert!(!render(json).contains(">売上</text>"));
+}
+
+#[test]
+fn legend_visual_options_change_alignment_markers_and_text_style() {
+    let json = r##"{"type":"line","data":{"labels":["x"],"datasets":[
+      {"label":"First","data":[1]},{"label":"Second","data":[2]}]},
+      "options":{"plugins":{"legend":{"align":"end","reverse":true,
+        "labels":{"color":"#123456","font":{"size":15,"family":"Fira Sans","weight":600,"style":"italic"},
+          "padding":8,"boxWidth":22,"boxHeight":14,"usePointStyle":true,"pointStyle":"triangle"},
+        "title":{"display":true,"text":"Keys","color":"#abcdef",
+          "font":{"size":18,"family":"Fira Mono","weight":"bold"},"padding":{"top":2,"bottom":4}}
+      }}}}"##;
+    let spec = chartjs::parse(json, true).unwrap();
+    let svg = render_chart(&spec);
+    let measurer = TextMeasurer::new(fulgur_chart::font::DEFAULT_FONT).unwrap();
+    let scene = build_scene(&spec, &measurer);
+
+    assert!(svg.contains(
+        "font-family=\"Fira Sans\" font-size=\"15\" font-weight=\"600\" font-style=\"italic\""
+    ));
+    assert!(svg.contains("font-family=\"Fira Mono\" font-size=\"18\" font-weight=\"bold\""));
+    assert!(svg.contains("fill=\"#123456\""));
+    assert!(svg.contains("fill=\"#abcdef\""));
+
+    let title_y = scene
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Prim::StyledText(text) if text.content == "Keys" => Some(text.y),
+            _ => None,
+        })
+        .unwrap();
+    let title_size = spec.legend_options.title_font_size.unwrap();
+    let legend_height =
+        legend_horizontal_band_height(&spec.legend_options, spec.theme.font_size, true);
+    let expected_title_y = OUTER_PAD
+        + spec.legend_options.title_padding.top
+        + title_size / 2.0
+        + title_size * TEXT_BASELINE_RATIO;
+    assert!((title_y - expected_title_y).abs() < 0.001);
+    assert!(legend_height > title_size);
+
+    let labels: Vec<(usize, f64, fulgur_chart::ir::Color)> = scene
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| match item {
+            Prim::StyledText(text) if text.content == "First" || text.content == "Second" => {
+                Some((index, text.x, text.fill))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels.len(), 2);
+    assert_eq!(
+        labels[0].2,
+        fulgur_chart::color::parse_color("#123456").unwrap()
+    );
+    assert!(
+        labels[0].1 < labels[1].1,
+        "reverse keeps dataset order reversed"
+    );
+    assert!(matches!(scene.items[labels[0].0 - 1], Prim::Path { .. }));
+    assert!(
+        scene
+            .items
+            .iter()
+            .any(|item| matches!(item, Prim::StyledText(text)
+        if text.content == "Keys"
+            && text.fill == fulgur_chart::color::parse_color("#abcdef").unwrap()
+            && text.size == 18.0))
+    );
+}
+
+#[test]
+fn vertical_legend_options_apply_order_row_spacing_and_title() {
+    let json = r##"{"type":"radar","data":{"labels":["x","y"],"datasets":[
+      {"label":"First","data":[1,2]},{"label":"Second","data":[2,1]}]},
+      "options":{"plugins":{"legend":{"position":"right","align":"end","reverse":true,
+        "labels":{"color":"#223344","font":{"size":15},"padding":8,
+          "boxWidth":22,"boxHeight":14,"usePointStyle":true,"pointStyle":"rectRot"},
+        "title":{"display":true,"text":"Series"}
+      }}}}"##;
+    let spec = chartjs::parse(json, true).unwrap();
+    let measurer = TextMeasurer::new(fulgur_chart::font::DEFAULT_FONT).unwrap();
+    let scene = build_scene(&spec, &measurer);
+
+    let labels: Vec<(usize, f64, f64)> = scene
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| match item {
+            Prim::Text { y, content, .. } if content == "First" || content == "Second" => {
+                Some((index, 0.0, *y))
+            }
+            Prim::StyledText(text) if text.content == "First" || text.content == "Second" => {
+                Some((index, 0.0, text.y))
+            }
+            Prim::Text { x, y, content, .. } if content == "Series" => Some((index, *x, *y)),
+            Prim::StyledText(text) if text.content == "Series" => Some((index, text.x, text.y)),
+            _ => None,
+        })
+        .collect();
+    let series_labels: Vec<(usize, f64)> = labels
+        .iter()
+        .filter_map(|(index, _, y)| {
+            let content = match &scene.items[*index] {
+                Prim::Text { content, .. } => content,
+                Prim::StyledText(text) => &text.content,
+                _ => return None,
+            };
+            (content == "First" || content == "Second").then_some((*index, *y))
+        })
+        .collect();
+    assert_eq!(series_labels.len(), 2);
+    assert!(
+        series_labels[0].1 < series_labels[1].1,
+        "reverse controls vertical row order"
+    );
+    assert!(matches!(
+        scene.items[series_labels[0].0 - 1],
+        Prim::Path { .. }
+    ));
+    let title_y = labels
+        .iter()
+        .find_map(|(index, _, y)| match &scene.items[*index] {
+            Prim::Text { content, .. } if content == "Series" => Some(*y),
+            Prim::StyledText(text) if text.content == "Series" => Some(text.y),
+            _ => None,
+        })
+        .unwrap();
+    assert!(title_y < series_labels[0].1);
 }
 
 #[test]

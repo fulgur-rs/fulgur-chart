@@ -3,9 +3,9 @@
 //! scatter 固有のフレームを自前で組む。共有できる凡例/定数/テーマは `common` を再利用する。
 
 use super::common::{
-    AXIS_TITLE_BAND, LEGEND_BAND, OUTER_PAD, TEXT_BASELINE_RATIO, TITLE_BAND, TITLE_FONT,
-    X_LABEL_BAND, X_LABEL_CENTER_RATIO, draw_vertical_legend, legend_band_width_vertical,
-    legend_entry_width,
+    AXIS_TITLE_BAND, OUTER_PAD, TEXT_BASELINE_RATIO, TITLE_BAND, TITLE_FONT, X_LABEL_BAND,
+    X_LABEL_CENTER_RATIO, draw_horizontal_legend, draw_vertical_legend_styled,
+    legend_band_width_vertical_styled, legend_horizontal_band_height, legend_label_font_size,
 };
 use crate::ir::{
     AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, Point, ScaleKind,
@@ -74,34 +74,41 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
         .unwrap_or(0.0);
     let y_axis_w = max_y_w as f64 + 10.0 + y_title_w;
     let legend = has_legend(spec);
+    let legend_title = super::common::legend_title(spec);
+    let legend_font = legend_label_font_size(&spec.legend_options, label_font);
     let title_band = if spec.title.is_some() {
         TITLE_BAND
     } else {
         0.0
     };
+    let legend_height =
+        legend_horizontal_band_height(&spec.legend_options, label_font, legend_title.is_some());
     let legend_top = if legend && spec.legend == LegendPos::Top {
-        LEGEND_BAND
+        legend_height
     } else {
         0.0
     };
     let legend_bottom = if legend && spec.legend == LegendPos::Bottom {
-        LEGEND_BAND
+        legend_height
     } else {
         0.0
     };
     // series_names の割り当ては凡例が左右にあるときだけ必要なため遅延評価する。
-    let (legend_left, legend_right_w) =
-        if legend && (spec.legend == LegendPos::Left || spec.legend == LegendPos::Right) {
-            let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
-            let w = legend_band_width_vertical(m, &series_names, label_font);
-            if spec.legend == LegendPos::Left {
-                (w, 0.0)
-            } else {
-                (0.0, w)
-            }
+    let (legend_left, legend_right_w) = if legend
+        && (spec.legend == LegendPos::Left || spec.legend == LegendPos::Right)
+    {
+        let mut series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+        series_names.extend(legend_title.map(str::to_owned));
+        let w =
+            legend_band_width_vertical_styled(m, &series_names, legend_font, &spec.legend_options);
+        if spec.legend == LegendPos::Left {
+            (w, 0.0)
         } else {
-            (0.0, 0.0)
-        };
+            (0.0, w)
+        }
+    } else {
+        (0.0, 0.0)
+    };
     // X 軸タイトルがあれば、x ラベル帯の下側にさらにタイトル帯を確保して plot_bottom を上へ押し上げる。
     // title=None(既定)なら 0.0 で、既存レイアウトは変わらない。
     let x_title_h = if spec.x_axis.title.is_some() {
@@ -224,7 +231,8 @@ fn has_legend(spec: &ChartSpec) -> bool {
     matches!(
         spec.legend,
         LegendPos::Top | LegendPos::Bottom | LegendPos::Left | LegendPos::Right
-    ) && spec.series.iter().any(|s| !s.name.is_empty())
+    ) && (spec.series.iter().any(|s| !s.name.is_empty())
+        || super::common::legend_title(spec).is_some())
 }
 
 /// 全系列の全点から 1 軸ぶんのドメインを求める。`select` で x/y を選ぶ。
@@ -305,9 +313,18 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     } else {
         0.0
     };
+    let legend_title = super::common::legend_title(spec);
+    let legend_height =
+        legend_horizontal_band_height(&spec.legend_options, label_font, legend_title.is_some());
     let legend_right = if legend && spec.legend == LegendPos::Right {
-        let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
-        legend_band_width_vertical(m, &series_names, label_font)
+        let mut series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+        series_names.extend(legend_title.map(str::to_owned));
+        legend_band_width_vertical_styled(
+            m,
+            &series_names,
+            legend_label_font_size(&spec.legend_options, label_font),
+            &spec.legend_options,
+        )
     } else {
         0.0
     };
@@ -496,40 +513,27 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     // 6. 凡例(Top/Bottom: 横並び。draw_frame と同じ配置)。
     if legend && matches!(spec.legend, LegendPos::Top | LegendPos::Bottom) {
-        let mut total = 0.0_f64;
-        for (k, ser) in spec.series.iter().enumerate() {
-            let ew = legend_entry_width(m, &ser.name, label_font);
-            total += ew;
-            if k == spec.series.len() - 1 {
-                total -= 16.0;
-            }
-        }
-        let start_x = (spec.width - total) / 2.0;
+        let entries: Vec<(String, Color)> = spec
+            .series
+            .iter()
+            .map(|series| (series.name.clone(), series.fill_at(0)))
+            .collect();
         let legend_cy = if spec.legend == LegendPos::Top {
-            OUTER_PAD + title_band + LEGEND_BAND / 2.0
+            OUTER_PAD + title_band + legend_height / 2.0
         } else {
-            spec.height - OUTER_PAD - LEGEND_BAND / 2.0
+            spec.height - OUTER_PAD - legend_height / 2.0
         };
-        let mut cursor = start_x;
-        for ser in &spec.series {
-            items.push(Prim::Rect {
-                x: cursor,
-                y: legend_cy - 6.0,
-                w: 12.0,
-                h: 12.0,
-                fill: ser.fill_at(0),
-            });
-            items.push(Prim::Text {
-                x: cursor + 16.0,
-                y: legend_cy + label_font * TEXT_BASELINE_RATIO,
-                size: label_font,
-                anchor: Anchor::Start,
-                fill: ink,
-                content: ser.name.clone(),
-                rotate_deg: None,
-            });
-            cursor += legend_entry_width(m, &ser.name, label_font);
-        }
+        draw_horizontal_legend(
+            &mut items,
+            &entries,
+            legend_title,
+            spec.width,
+            legend_cy,
+            label_font,
+            ink,
+            m,
+            &spec.legend_options,
+        );
     }
 
     // 6b. 凡例(Left/Right: 縦並び)。
@@ -544,15 +548,16 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         } else {
             spec.width - OUTER_PAD - legend_right
         };
-        draw_vertical_legend(
+        draw_vertical_legend_styled(
             &mut items,
             &entries,
-            None,
+            legend_title,
             band_x,
             plot_top,
             plot_bottom,
             ink,
             label_font,
+            &spec.legend_options,
         );
     }
 
@@ -671,6 +676,7 @@ mod tests {
                 scale_kind: ScaleKind::Linear,
             },
             legend: LegendPos::None,
+            legend_options: crate::ir::LegendOptions::default(),
             legend_title: None,
             title: None,
             width: 600.0,
