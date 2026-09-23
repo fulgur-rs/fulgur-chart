@@ -19,6 +19,173 @@ struct AreaInterval {
     target: [AreaPoint; 2],
 }
 
+#[derive(Clone, Copy)]
+struct AreaEdge {
+    point_index: usize,
+    min_x: f64,
+    max_x: f64,
+}
+
+struct AreaLineShape {
+    points: Vec<AreaPoint>,
+    bounds: Option<(f64, f64)>,
+    monotonic_x: bool,
+    edges: Vec<AreaEdge>,
+    edge_index: Option<AreaXIntervalIndex>,
+}
+
+struct AreaXRange {
+    min_x: f64,
+    max_x: f64,
+    index: usize,
+}
+
+struct AreaXIntervalIndex {
+    ranges: Vec<AreaXRange>,
+    max_x_tree: Vec<f64>,
+    leaf_count: usize,
+}
+
+impl AreaXIntervalIndex {
+    fn new(bounds: &[(f64, f64)]) -> Self {
+        let mut ranges: Vec<AreaXRange> = bounds
+            .iter()
+            .enumerate()
+            .map(|(index, &(min_x, max_x))| AreaXRange {
+                min_x,
+                max_x,
+                index,
+            })
+            .collect();
+        ranges.sort_by(|a, b| {
+            a.min_x
+                .total_cmp(&b.min_x)
+                .then_with(|| a.index.cmp(&b.index))
+        });
+
+        let leaf_count = ranges.len().next_power_of_two().max(1);
+        let mut max_x_tree = vec![f64::NEG_INFINITY; leaf_count * 2];
+        for (index, range) in ranges.iter().enumerate() {
+            max_x_tree[leaf_count + index] = range.max_x;
+        }
+        for index in (1..leaf_count).rev() {
+            max_x_tree[index] = max_x_tree[index * 2].max(max_x_tree[index * 2 + 1]);
+        }
+
+        Self {
+            ranges,
+            max_x_tree,
+            leaf_count,
+        }
+    }
+
+    fn overlapping_indices(&self, min_x: f64, max_x: f64) -> Vec<usize> {
+        if min_x >= max_x || self.ranges.is_empty() {
+            return Vec::new();
+        }
+
+        let mut indices = Vec::new();
+        self.collect_overlapping(1, 0, self.leaf_count, min_x, max_x, &mut indices);
+        indices.sort_unstable();
+        indices
+    }
+
+    fn collect_overlapping(
+        &self,
+        node: usize,
+        start: usize,
+        end: usize,
+        min_x: f64,
+        max_x: f64,
+        indices: &mut Vec<usize>,
+    ) {
+        if start >= self.ranges.len()
+            || self.ranges[start].min_x >= max_x
+            || self.max_x_tree[node] <= min_x
+        {
+            return;
+        }
+        if end - start == 1 {
+            indices.push(self.ranges[start].index);
+            return;
+        }
+
+        let middle = start + (end - start) / 2;
+        self.collect_overlapping(node * 2, start, middle, min_x, max_x, indices);
+        self.collect_overlapping(node * 2 + 1, middle, end, min_x, max_x, indices);
+    }
+}
+
+impl AreaLineShape {
+    fn new(points: Vec<AreaPoint>) -> Self {
+        let bounds = area_x_bounds(&points);
+        let monotonic_x = area_points_have_monotonic_x(&points);
+        let edges: Vec<AreaEdge> = if monotonic_x {
+            Vec::new()
+        } else {
+            points
+                .windows(2)
+                .enumerate()
+                .filter_map(|(point_index, pair)| {
+                    let [start, end] = [pair[0], pair[1]];
+                    (start.0 != end.0).then_some(AreaEdge {
+                        point_index,
+                        min_x: start.0.min(end.0),
+                        max_x: start.0.max(end.0),
+                    })
+                })
+                .collect()
+        };
+        let edge_index = (!monotonic_x).then(|| {
+            let edge_bounds: Vec<(f64, f64)> =
+                edges.iter().map(|edge| (edge.min_x, edge.max_x)).collect();
+            AreaXIntervalIndex::new(&edge_bounds)
+        });
+
+        Self {
+            points,
+            bounds,
+            monotonic_x,
+            edges,
+            edge_index,
+        }
+    }
+
+    fn overlapping_edge_indices(&self, min_x: f64, max_x: f64) -> Vec<usize> {
+        if min_x >= max_x {
+            return Vec::new();
+        }
+        if let Some(index) = &self.edge_index {
+            return index.overlapping_indices(min_x, max_x);
+        }
+
+        let start = first_area_segment_near_x(&self.points, min_x);
+        let end = self.points.partition_point(|point| point.0 < max_x);
+        (start.min(end)..end.min(self.points.len().saturating_sub(1)))
+            .filter(|&index| self.points[index].0 != self.points[index + 1].0)
+            .collect()
+    }
+
+    fn edge_points(&self, index: usize) -> [AreaPoint; 2] {
+        let point_index = if self.monotonic_x {
+            index
+        } else {
+            self.edges[index].point_index
+        };
+        [self.points[point_index], self.points[point_index + 1]]
+    }
+
+    fn edge_bounds(&self, index: usize) -> (f64, f64) {
+        if self.monotonic_x {
+            let [start, end] = self.edge_points(index);
+            (start.0, end.0)
+        } else {
+            let edge = self.edges[index];
+            (edge.min_x, edge.max_x)
+        }
+    }
+}
+
 struct ColoredAreaRun {
     color: crate::ir::Color,
     source: Vec<AreaPoint>,
@@ -354,32 +521,51 @@ pub(crate) fn chartjs_area_fill_primitives(
         plot_top: frame.plot_top,
         plot_bottom: frame.plot_bottom,
     };
+    let dataset_target_shapes = dataset_target_segments.map(|segments| {
+        segments
+            .into_iter()
+            .filter_map(|segment| {
+                if segment.len() < 2 {
+                    return None;
+                }
+                let points: Vec<AreaPoint> = segment.iter().map(|&(x, y, _)| (x, y)).collect();
+                Some(AreaLineShape::new(area_line_points(
+                    &points,
+                    style.target_interpolation,
+                    style.target_step,
+                    style.plot_top,
+                    style.plot_bottom,
+                )))
+            })
+            .collect::<Vec<_>>()
+    });
+    let dataset_target_index = dataset_target_shapes.as_ref().map(|shapes| {
+        let bounds: Vec<(f64, f64)> = shapes
+            .iter()
+            .map(|shape| shape.bounds.unwrap_or((f64::INFINITY, f64::NEG_INFINITY)))
+            .collect();
+        AreaXIntervalIndex::new(&bounds)
+    });
     let mut output = Vec::new();
 
     for segment in source_segments {
-        if let Some(target_segments) = &dataset_target_segments {
+        if let (Some(target_shapes), Some(target_index)) =
+            (&dataset_target_shapes, &dataset_target_index)
+        {
             let source_points: Vec<AreaPoint> = segment.iter().map(|&(x, y, _)| (x, y)).collect();
-            let source_shape = area_line_points(
+            let source_shape = AreaLineShape::new(area_line_points(
                 &source_points,
                 style.source_interpolation,
                 style.source_step,
                 style.plot_top,
                 style.plot_bottom,
-            );
-            for target_segment in target_segments {
-                let target_points: Vec<AreaPoint> =
-                    target_segment.iter().map(|&(x, y, _)| (x, y)).collect();
-                if target_points.len() < 2 {
-                    continue;
+            ));
+            if let Some((min_x, max_x)) = source_shape.bounds {
+                for target_index in target_index.overlapping_indices(min_x, max_x) {
+                    if let Some(target_shape) = target_shapes.get(target_index) {
+                        emit_dataset_area_shapes(&mut output, &source_shape, target_shape, style);
+                    }
                 }
-                let target_shape = area_line_points(
-                    &target_points,
-                    style.target_interpolation,
-                    style.target_step,
-                    style.plot_top,
-                    style.plot_bottom,
-                );
-                emit_dataset_area_shapes(&mut output, &source_shape, &target_shape, style);
             }
             continue;
         }
@@ -581,12 +767,12 @@ fn interpolate_span_gap_values(values: &mut [Option<f64>]) {
 
 fn emit_dataset_area_shapes(
     output: &mut Vec<Prim>,
-    source: &[AreaPoint],
-    target: &[AreaPoint],
+    source: &AreaLineShape,
+    target: &AreaLineShape,
     style: AreaFillStyle,
 ) {
     let mut current = None;
-    for interval in area_intervals(source, target) {
+    for interval in area_intervals_between_shapes(source, target) {
         if style.above == style.below {
             append_colored_area_segment(
                 output,
@@ -657,10 +843,12 @@ fn emit_area_run(
         return;
     }
 
+    let source_shape = AreaLineShape::new(source_shape);
+    let target_shape = AreaLineShape::new(target_shape);
     // Partition both independently shaped lines at the union of their x coordinates. This
     // keeps curve samples and differing step modes aligned before checking for crossings.
     let mut colored_run = None;
-    for interval in area_intervals(&source_shape, &target_shape) {
+    for interval in area_intervals_between_shapes(&source_shape, &target_shape) {
         emit_colored_area_interval(output, &mut colored_run, interval, style.above, style.below);
     }
     flush_colored_area_run(output, &mut colored_run);
@@ -735,15 +923,58 @@ fn cubic_point(p0: AreaPoint, cp1: AreaPoint, cp2: AreaPoint, p1: AreaPoint, t: 
     )
 }
 
-fn area_intervals(source: &[AreaPoint], target: &[AreaPoint]) -> Vec<AreaInterval> {
-    if !area_points_have_monotonic_x(source) || !area_points_have_monotonic_x(target) {
-        return area_intervals_for_unordered_x(source, target);
+fn area_points_have_monotonic_x(points: &[AreaPoint]) -> bool {
+    points.windows(2).all(|pair| pair[0].0 <= pair[1].0)
+}
+
+fn first_area_segment_near_x(points: &[AreaPoint], x: f64) -> usize {
+    points
+        .partition_point(|point| point.0 <= x)
+        .saturating_sub(1)
+}
+
+fn area_x_bounds(points: &[AreaPoint]) -> Option<(f64, f64)> {
+    let &(first_x, _) = points.first()?;
+    let (min_x, max_x) = points
+        .iter()
+        .fold((first_x, first_x), |(min_x, max_x), point| {
+            (min_x.min(point.0), max_x.max(point.0))
+        });
+    Some((min_x, max_x))
+}
+
+fn area_intervals_between_shapes(
+    source: &AreaLineShape,
+    target: &AreaLineShape,
+) -> Vec<AreaInterval> {
+    let (Some((source_min, source_max)), Some((target_min, target_max))) =
+        (source.bounds, target.bounds)
+    else {
+        return Vec::new();
+    };
+    let min_x = source_min.max(target_min);
+    let max_x = source_max.min(target_max);
+    if min_x >= max_x {
+        return Vec::new();
     }
 
-    let mut source_index = 0;
-    let mut target_index = 0;
-    let mut source_segment = next_area_segment(source, &mut source_index);
-    let mut target_segment = next_area_segment(target, &mut target_index);
+    if source.monotonic_x && target.monotonic_x {
+        area_intervals_for_monotonic_x(source, target, min_x, max_x)
+    } else {
+        area_intervals_for_unordered_shapes(source, target, min_x, max_x)
+    }
+}
+
+fn area_intervals_for_monotonic_x(
+    source: &AreaLineShape,
+    target: &AreaLineShape,
+    min_x: f64,
+    max_x: f64,
+) -> Vec<AreaInterval> {
+    let mut source_index = first_area_segment_near_x(&source.points, min_x);
+    let mut target_index = first_area_segment_near_x(&target.points, min_x);
+    let mut source_segment = next_area_segment_before_x(&source.points, &mut source_index, max_x);
+    let mut target_segment = next_area_segment_before_x(&target.points, &mut target_index, max_x);
     let mut intervals = Vec::new();
 
     while let (Some(source_edge), Some(target_edge)) = (source_segment, target_segment) {
@@ -762,34 +993,45 @@ fn area_intervals(source: &[AreaPoint], target: &[AreaPoint]) -> Vec<AreaInterva
             });
         }
 
-        let source_end = source_edge[1].0;
-        let target_end = target_edge[1].0;
-        if source_end <= target_end {
-            source_segment = next_area_segment(source, &mut source_index);
+        if source_edge[1].0 <= target_edge[1].0 {
+            source_segment = next_area_segment_before_x(&source.points, &mut source_index, max_x);
         }
-        if target_end <= source_end {
-            target_segment = next_area_segment(target, &mut target_index);
+        if target_edge[1].0 <= source_edge[1].0 {
+            target_segment = next_area_segment_before_x(&target.points, &mut target_index, max_x);
         }
     }
     intervals
 }
 
-fn area_points_have_monotonic_x(points: &[AreaPoint]) -> bool {
-    points.windows(2).all(|pair| pair[0].0 <= pair[1].0)
-}
-
-fn area_intervals_for_unordered_x(source: &[AreaPoint], target: &[AreaPoint]) -> Vec<AreaInterval> {
-    let mut xs: Vec<f64> = source
-        .windows(2)
-        .chain(target.windows(2))
-        .filter(|pair| pair[0].0 != pair[1].0)
-        .flat_map(|pair| [pair[0].0, pair[1].0])
-        .collect();
+fn area_intervals_for_unordered_shapes(
+    source: &AreaLineShape,
+    target: &AreaLineShape,
+    min_x: f64,
+    max_x: f64,
+) -> Vec<AreaInterval> {
+    let source_indices = source.overlapping_edge_indices(min_x, max_x);
+    let target_indices = target.overlapping_edge_indices(min_x, max_x);
+    let mut xs = vec![min_x, max_x];
+    for edge in source_indices
+        .iter()
+        .map(|&index| source.edge_points(index))
+        .chain(
+            target_indices
+                .iter()
+                .map(|&index| target.edge_points(index)),
+        )
+    {
+        for x in [edge[0].0, edge[1].0] {
+            if x > min_x && x < max_x {
+                xs.push(x);
+            }
+        }
+    }
     xs.sort_by(f64::total_cmp);
     xs.dedup_by(|a, b| *a == *b);
 
-    let source_starts = unordered_segment_starts(source);
-    let target_starts = unordered_segment_starts(target);
+    let source_starts = unordered_edge_starts(source, &source_indices);
+    let target_starts = unordered_edge_starts(target, &target_indices);
     let mut source_start_index = 0;
     let mut target_start_index = 0;
     let mut active_source = BinaryHeap::new();
@@ -829,20 +1071,17 @@ fn area_intervals_for_unordered_x(source: &[AreaPoint], target: &[AreaPoint]) ->
     intervals
 }
 
-fn unordered_segment_starts(points: &[AreaPoint]) -> Vec<(f64, usize)> {
-    let mut starts: Vec<(f64, usize)> = points
-        .windows(2)
-        .enumerate()
-        .filter_map(|(index, pair)| {
-            (pair[0].0 != pair[1].0).then_some((pair[0].0.min(pair[1].0), index))
-        })
+fn unordered_edge_starts(shape: &AreaLineShape, indices: &[usize]) -> Vec<(f64, usize)> {
+    let mut starts: Vec<(f64, usize)> = indices
+        .iter()
+        .map(|&index| (shape.edge_bounds(index).0, index))
         .collect();
     starts.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     starts
 }
 
 fn active_unordered_segment(
-    points: &[AreaPoint],
+    shape: &AreaLineShape,
     starts: &[(f64, usize)],
     start_index: &mut usize,
     active: &mut BinaryHeap<Reverse<usize>>,
@@ -856,19 +1095,26 @@ fn active_unordered_segment(
         *start_index += 1;
     }
     while let Some(Reverse(index)) = active.peek().copied() {
-        if points[index].0.max(points[index + 1].0) <= x {
+        if shape.edge_bounds(index).1 <= x {
             active.pop();
         } else {
             break;
         }
     }
     let index = active.peek()?.0;
-    Some([points[index], points[index + 1]])
+    Some(shape.edge_points(index))
 }
 
-fn next_area_segment(points: &[AreaPoint], index: &mut usize) -> Option<[AreaPoint; 2]> {
+fn next_area_segment_before_x(
+    points: &[AreaPoint],
+    index: &mut usize,
+    max_x: f64,
+) -> Option<[AreaPoint; 2]> {
     while *index + 1 < points.len() {
         let segment = [points[*index], points[*index + 1]];
+        if segment[0].0 >= max_x {
+            return None;
+        }
         *index += 1;
         if segment[0].0 < segment[1].0 {
             return Some(segment);
@@ -2046,13 +2292,39 @@ mod tests {
         let source = [(0.0, 0.0), (2.0, 2.0), (1.0, 4.0), (3.0, 6.0)];
         let target = [(0.0, 1.0), (3.0, 1.0)];
 
-        let intervals = area_intervals(&source, &target);
+        let source = AreaLineShape::new(source.to_vec());
+        let target = AreaLineShape::new(target.to_vec());
+        let intervals = area_intervals_between_shapes(&source, &target);
 
         assert_eq!(intervals.len(), 3);
         assert_eq!(intervals[0].source, [(0.0, 0.0), (1.0, 1.0)]);
         assert_eq!(intervals[1].source, [(1.0, 1.0), (2.0, 2.0)]);
         assert_eq!(intervals[2].source, [(2.0, 5.0), (3.0, 6.0)]);
         assert_eq!(intervals[2].target, [(2.0, 1.0), (3.0, 1.0)]);
+    }
+
+    #[test]
+    fn area_x_interval_index_reports_all_overlaps_in_original_order() {
+        let index = AreaXIntervalIndex::new(&[(3.0, 7.0), (1.0, 4.0), (8.0, 9.0), (10.0, 13.0)]);
+
+        assert_eq!(index.overlapping_indices(3.0, 5.0), vec![0, 1]);
+        assert_eq!(index.overlapping_indices(7.0, 8.0), Vec::<usize>::new());
+        assert_eq!(index.overlapping_indices(8.5, 12.0), vec![2, 3]);
+    }
+
+    #[test]
+    fn monotonic_area_shape_queries_only_overlapping_edges() {
+        let points: Vec<AreaPoint> = (0..10_000).map(|x| (x as f64, x as f64)).collect();
+        let shape = AreaLineShape::new(points);
+
+        assert_eq!(
+            shape.overlapping_edge_indices(8_765.5, 8_766.5),
+            vec![8_765, 8_766]
+        );
+        assert_eq!(
+            shape.overlapping_edge_indices(-2.0, -1.0),
+            Vec::<usize>::new()
+        );
     }
 
     fn stacked_area_spec(categories: Vec<&str>, series: Vec<(&str, Vec<f64>)>) -> ChartSpec {
