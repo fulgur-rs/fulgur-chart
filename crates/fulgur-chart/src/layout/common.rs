@@ -270,7 +270,7 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
             ..
         } | crate::ir::ChartKind::Line { stacked: true }
     ) {
-        // 積み上げ: カテゴリごとに正値の和(上限)・負値の和(下限)をとる。
+        // 積み上げ: カテゴリ・stack ID ごとに正値の和(上限)・負値の和(下限)をとる。
         // chart.js 互換: beginAtZero=false のとき 0 ではなく実データの個別値を境界にする。
         // 全正値ケース(neg_sum が常に 0)では min_individual を下限として使う。
         // 全負値ケース(pos_sum が常に 0)では max_individual を上限として使う。
@@ -278,10 +278,13 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         let mut has_negative = false;
         let mut min_individual = f64::INFINITY;
         let mut max_individual = f64::NEG_INFINITY;
+        let (series_groups, group_count) = stack_group_indices(&spec.series);
+        let mut pos_sums = vec![0.0_f64; group_count];
+        let mut neg_sums = vec![0.0_f64; group_count];
         for i in 0..spec.categories.len() {
-            let mut pos_sum = 0.0_f64;
-            let mut neg_sum = 0.0_f64;
-            for ser in &spec.series {
+            pos_sums.fill(0.0);
+            neg_sums.fill(0.0);
+            for (series_index, ser) in spec.series.iter().enumerate() {
                 if let Some(&v) = ser.values.get(i)
                     && v.is_finite()
                 {
@@ -291,20 +294,25 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
                     if v > max_individual {
                         max_individual = v;
                     }
+                    let group = series_groups[series_index];
                     if v >= 0.0 {
-                        pos_sum += v;
+                        pos_sums[group] += v;
                         has_positive = true;
                     } else {
-                        neg_sum += v;
+                        neg_sums[group] += v;
                         has_negative = true;
                     }
                 }
             }
-            if pos_sum > data_max {
-                data_max = pos_sum;
+            for &pos_sum in &pos_sums {
+                if pos_sum > data_max {
+                    data_max = pos_sum;
+                }
             }
-            if neg_sum < data_min {
-                data_min = neg_sum;
+            for &neg_sum in &neg_sums {
+                if neg_sum < data_min {
+                    data_min = neg_sum;
+                }
             }
         }
         if !has_negative && min_individual.is_finite() {
@@ -328,6 +336,27 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         }
     }
     resolve_axis_domain(axis, data_min, data_max)
+}
+
+/// Maps each series to a compact stack-group index in first-seen order.
+/// Unset IDs share one legacy group; Chart.js fills omitted IDs with the type default before
+/// constructing the IR, so explicit bar/line IDs join the corresponding default.
+pub(crate) fn stack_group_indices(series: &[crate::ir::Series]) -> (Vec<usize>, usize) {
+    let mut groups_by_id = std::collections::HashMap::<Option<&str>, usize>::new();
+    let mut group_count = 0;
+    let indices = series
+        .iter()
+        .map(|series| {
+            *groups_by_id
+                .entry(series.stack.as_deref())
+                .or_insert_with(|| {
+                    let index = group_count;
+                    group_count += 1;
+                    index
+                })
+        })
+        .collect();
+    (indices, group_count)
 }
 
 /// Cartesian 線形軸の自動 domain に hard min/max、suggested、beginAtZero を適用する。
@@ -463,10 +492,10 @@ pub(crate) fn clip_axis_value(value: f64, ticks: &NiceTicks) -> f64 {
 /// 正の `min`/`max` は hard bound として指定側を固定し、suggested やデータによる
 /// 拡張より優先する。非正の hard bound は対数軸で使えないため無視する。
 ///
-/// `ChartKind::Bar { value_stacked: true, .. }` はカテゴリごとに正の値を合算して
+/// `ChartKind::Bar { value_stacked: true, .. }` はカテゴリ・stack ID ごとに正の値を合算して
 /// domain 上限へ含める。対数軸では非正値を写像できないため積み上げの合計にも含めない。
-/// `ChartKind::Line { stacked: true }` は別 issue の対象で、現状の各フロントエンドからは
-/// 到達しない(Vega-Lite の scale_kind は Linear 固定、Chart.js は stacked を false にする)。
+/// `ChartKind::Line { stacked: true }` の対数値域は未対応。現状のフロントエンドは
+/// Vega-Lite で線形軸、Chart.js で stacked=false を使う。
 fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
     let mut min_positive = f64::INFINITY;
     let mut max_positive = f64::NEG_INFINITY;
@@ -478,12 +507,13 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
             ..
         }
     );
+    let (series_groups, group_count) = stack_group_indices(&spec.series);
     let mut positive_stack_sums = if is_stacked_bar {
-        vec![0.0_f64; spec.categories.len()]
+        vec![vec![0.0_f64; spec.categories.len()]; group_count]
     } else {
         Vec::new()
     };
-    for s in &spec.series {
+    for (series_index, s) in spec.series.iter().enumerate() {
         for (index, &v) in s.values.iter().enumerate() {
             if !v.is_finite() {
                 continue;
@@ -499,7 +529,10 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
                 if v > max_positive {
                     max_positive = v;
                 }
-                if let Some(sum) = positive_stack_sums.get_mut(index) {
+                if let Some(sum) = positive_stack_sums
+                    .get_mut(series_groups[series_index])
+                    .and_then(|sums| sums.get_mut(index))
+                {
                     // 正のスタック合計を有限に保つ。極端な IR 入力で加算が overflow
                     // した場合は、有限 f64 の最大値で飽和させる。
                     *sum = if *sum > f64::MAX - v {
@@ -513,9 +546,11 @@ fn log_value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         }
     }
     if is_stacked_bar {
-        for sum in positive_stack_sums {
-            if sum > max_positive {
-                max_positive = sum;
+        for sums in positive_stack_sums {
+            for sum in sums {
+                if sum > max_positive {
+                    max_positive = sum;
+                }
             }
         }
     }
@@ -2015,6 +2050,7 @@ mod tests {
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
+                stack: None,
                 series_type: SeriesType::Bar,
                 point_radius: None,
                 box_points: vec![],
@@ -2525,6 +2561,7 @@ mod tests {
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
+                stack: None,
                 series_type: SeriesType::Line,
                 point_radius: None,
                 box_points: vec![],
@@ -2543,6 +2580,7 @@ mod tests {
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
+                stack: None,
                 series_type: SeriesType::Line,
                 point_radius: None,
                 box_points: vec![],
@@ -2561,6 +2599,7 @@ mod tests {
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
+                stack: None,
                 series_type: SeriesType::Line,
                 point_radius: None,
                 box_points: vec![],
@@ -2574,6 +2613,55 @@ mod tests {
         // cat1: 20 が正、-8 と -3 が負 -> 負側も個別和ではなくサム(-11)になる
         // ことを検証(個別値の最小は -8 だが、負サムの合計 -11 が下限になるべき)。
         assert_eq!((lo, hi), (-11.0, 23.0));
+    }
+
+    #[test]
+    fn value_domain_sums_stacked_lines_per_stack_id_and_sign() {
+        let mut spec = crate::frontend::chartjs::parse(
+            r#"{"type":"line","data":{"labels":["A","B"],"datasets":[
+              {"stack":"warm","data":[2,-3]},
+              {"stack":"warm","data":[4,-5]},
+              {"stack":"cool","data":[10,-1]},
+              {"stack":"cool","data":[20,-2]}
+            ]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.kind = ChartKind::Line { stacked: true };
+
+        assert_eq!(value_domain(&spec, &spec.y_axis), (-8.0, 30.0));
+    }
+
+    #[test]
+    fn value_domain_sums_stacked_bars_per_stack_id_and_sign() {
+        let spec = crate::frontend::chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[
+              {"stack":"warm","data":[2,-3]},
+              {"stack":"warm","data":[4,-5]},
+              {"stack":"cool","data":[10,-1]},
+              {"stack":"cool","data":[20,-2]}
+            ]},"options":{"scales":{"x":{"stacked":true},"y":{"stacked":true}}}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(value_domain(&spec, &spec.y_axis), (-8.0, 30.0));
+    }
+
+    #[test]
+    fn log_value_domain_sums_stacked_bars_per_stack_id() {
+        let spec = crate::frontend::chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"stack":"small","data":[10]},
+              {"stack":"small","data":[20]},
+              {"stack":"large","data":[100]},
+              {"stack":"large","data":[200]}
+            ]},"options":{"scales":{"x":{"stacked":true},"y":{"stacked":true,"type":"logarithmic","beginAtZero":false}}}}"#,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(value_domain(&spec, &spec.y_axis), (10.0, 300.0));
     }
 
     #[test]
