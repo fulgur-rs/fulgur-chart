@@ -247,10 +247,18 @@ fn draw_line_dataset(
         }
         let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
         match ser.interpolation {
-            crate::ir::LineInterpolation::Linear | crate::ir::LineInterpolation::Monotone => {
+            crate::ir::LineInterpolation::Linear => {
                 items.push(Prim::Polyline {
                     points: xy,
                     stroke: ser.stroke_at(0),
+                    stroke_width: ser.stroke_width,
+                });
+            }
+            crate::ir::LineInterpolation::Monotone => {
+                items.push(Prim::Path {
+                    d: super::monotone::monotone_path(&xy),
+                    fill: None,
+                    stroke: Some(ser.stroke_at(0)),
                     stroke_width: ser.stroke_width,
                 });
             }

@@ -146,6 +146,13 @@ pub struct BarDataset {
     pub border_width: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tension: Option<f64>,
+    /// Cubic interpolation mode for line overrides in mixed charts.
+    #[serde(
+        rename = "cubicInterpolationMode",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cubic_interpolation_mode: Option<CubicMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fill: Option<LineFillSpec>,
 }
@@ -1681,6 +1688,16 @@ mod tests {
         let json = r#"{"data":[10,null,30]}"#;
         let d: BarDataset = serde_json::from_str(json).unwrap();
         assert_eq!(d.data, vec![Some(10.0), None, Some(30.0)]);
+    }
+
+    #[test]
+    fn bar_dataset_accepts_cubic_mode_for_line_overrides() {
+        assert!(
+            serde_json::from_str::<BarDataset>(
+                r#"{"type":"line","data":[1,2],"cubicInterpolationMode":"monotone"}"#
+            )
+            .is_ok()
+        );
     }
 
     #[test]
