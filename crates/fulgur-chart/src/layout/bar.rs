@@ -21,19 +21,25 @@ pub(crate) enum BarSide {
     Left,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct BarBounds {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) w: f64,
+    pub(crate) h: f64,
+}
+
 /// Builds a bar rectangle or a path with Chart.js-style rounded corners.
 /// `base_side` names the edge touching the bar's base; uniform radii only round the opposite edge.
 pub(crate) fn bar_primitive(
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
+    bounds: BarBounds,
     fill: crate::ir::Color,
     radius: Option<BarBorderRadius>,
     base_side: BarSide,
     uniform_enabled: bool,
 ) -> Prim {
     const KAPPA: f64 = 0.5522847498307936;
+    let BarBounds { x, y, w, h } = bounds;
 
     let (top_left, top_right, bottom_left, bottom_right) = match radius {
         Some(BarBorderRadius::Uniform(value)) if uniform_enabled => match base_side {
@@ -389,7 +395,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     let legacy_geometry = spec.series.iter().all(|series| {
         series
             .bar_geometry
-            .map_or(true, |geometry| !geometry.has_geometry_controls())
+            .is_none_or(|geometry| !geometry.has_geometry_controls())
     });
     let s = spec.series.len().max(1);
     let placement_stacked = matches!(
@@ -801,10 +807,12 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     })
             });
         items.push(bar_primitive(
-            b.x,
-            b.y,
-            b.w,
-            b.h,
+            BarBounds {
+                x: b.x,
+                y: b.y,
+                w: b.w,
+                h: b.h,
+            },
             ser.fill_at(b.index),
             ser.bar_geometry.and_then(|geometry| geometry.border_radius),
             base_side,
@@ -875,7 +883,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let legacy_geometry = spec.series.iter().all(|series| {
         series
             .bar_geometry
-            .map_or(true, |geometry| !geometry.has_geometry_controls())
+            .is_none_or(|geometry| !geometry.has_geometry_controls())
     });
 
     // 横棒は値軸が x のため x_axis を渡す（begin_at_zero/suggested も x_axis から読む）。
@@ -1263,10 +1271,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                         })
                 });
                 items.push(bar_primitive(
-                    x,
-                    by,
-                    w,
-                    bar_height,
+                    BarBounds {
+                        x,
+                        y: by,
+                        w,
+                        h: bar_height,
+                    },
                     ser.fill_at(i),
                     ser.bar_geometry.and_then(|geometry| geometry.border_radius),
                     if base <= head {
@@ -1333,10 +1343,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 let x = base.min(head);
                 let w = (head - base).abs();
                 items.push(bar_primitive(
-                    x,
-                    by,
-                    w,
-                    bar_height,
+                    BarBounds {
+                        x,
+                        y: by,
+                        w,
+                        h: bar_height,
+                    },
                     ser.fill_at(i),
                     ser.bar_geometry.and_then(|geometry| geometry.border_radius),
                     if base <= head {
@@ -1393,10 +1405,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 let x = base.min(head);
                 let w = (head - base).abs();
                 items.push(bar_primitive(
-                    x,
-                    by,
-                    w,
-                    bar_height,
+                    BarBounds {
+                        x,
+                        y: by,
+                        w,
+                        h: bar_height,
+                    },
                     ser.fill_at(i),
                     ser.bar_geometry.and_then(|geometry| geometry.border_radius),
                     if base <= head {
