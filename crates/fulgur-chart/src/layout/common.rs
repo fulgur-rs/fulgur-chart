@@ -660,23 +660,20 @@ pub(crate) fn log_axis_domain_from_extrema(
                 domain_min = lower;
             }
         } else {
-            // domain_min が f64::MAX 近傍(> f64::MAX/10)だと ×10 が +inf へオーバーフロー
-            // しうる。線形版の `domain_min + 1.0` と違い ×10 は極端な入力で非有限に
-            // なりうるため、その場合は f64::MAX(有限の中で広げられる最大値)へ丸める。
-            // これは domain_min < f64::MAX を保証しない: domain_min 自身が f64::MAX の
-            // とき(例: 単一の f64::MAX 値のみのデータ)は f64::MAX == domain_min のままで
-            // 縮退が解消されない。ただし線形版も同じ入力極限で
-            // `f64::MAX + 1.0 == f64::MAX`(丸めで無変化)という同じ性質を持つため、
-            // これは対数専用の後退ではない。この関数(`value_domain` 経由含む)は pub であり、
-            // 戻り値 (f64, f64) は「常に有限」という契約を将来のどんな呼び出し元に対しても
-            // 維持すべきなので、今日の唯一の呼び出し元 log_ticks_within が非有限入力を
-            // 許容する(scale.rs のコメント参照)ことに頼らず、ここで有限性を保証しておく。
+            // 下端×10 が overflow するか丸めで変化しない場合は、上端÷10 で下側へ広げる。
+            // これにより単一の f64::MAX でも幅のある有限 domain になる。
             let expanded = domain_min * 10.0;
-            domain_max = if expanded.is_finite() {
-                expanded
+            if expanded.is_finite() && expanded > domain_min {
+                domain_max = expanded;
             } else {
-                f64::MAX
-            };
+                let lower = domain_max / 10.0;
+                if lower.is_finite() && lower > 0.0 && lower < domain_max {
+                    domain_min = lower;
+                } else {
+                    // 既知の有限端点を維持する最終 fallback。
+                    domain_max = f64::MAX;
+                }
+            }
         }
     }
     (domain_min, domain_max)
@@ -2462,16 +2459,32 @@ mod tests {
     fn log_value_domain_degenerate_domain_near_f64_max_stays_finite() {
         // domain_min == domain_max == 5e307 (> f64::MAX/10) だと、線形版の
         // `+1.0` に相当する縮退補正が単純な ×10 だと +inf にオーバーフローする。
-        // 有限のまま広がることを固定する回帰テスト(beginAtZero の decade floor
-        // 丸めはこのテストの主眼と無関係なので false にして分離する)。
+        // 上端から下へ広げて、有限で幅を持つことを固定する回帰テスト。
         let mut spec = make_bar_spec(1, 600.0);
         spec.y_axis.scale_kind = ScaleKind::Logarithmic;
         spec.y_axis.begin_at_zero = false;
         spec.series[0].values = vec![5e307, 5e307];
         let (min, max) = value_domain(&spec, &spec.y_axis);
-        assert_eq!(min, 5e307);
+        assert_eq!(min, 5e306);
         assert!(max.is_finite(), "max should stay finite, got {max}");
-        assert!(max > min, "max={max} should exceed min={min}");
+        assert_eq!(max, 5e307);
+    }
+
+    #[test]
+    fn log_value_domain_single_f64_max_widens_downward() {
+        let mut spec = make_bar_spec(1, 600.0);
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.begin_at_zero = false;
+        spec.series[0].values = vec![f64::MAX];
+
+        let (min, max) = value_domain(&spec, &spec.y_axis);
+
+        assert_eq!(max, f64::MAX);
+        assert_eq!(min, f64::MAX / 10.0);
+        assert!(
+            max > min,
+            "domain must have a positive width: [{min}, {max}]"
+        );
     }
 
     #[test]

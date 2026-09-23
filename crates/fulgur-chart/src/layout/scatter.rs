@@ -829,6 +829,27 @@ mod tests {
     }
 
     #[test]
+    fn log_scatter_domain_for_single_f64_max_value_has_positive_width() {
+        let mut spec = make_scatter_spec(&[(f64::MAX, f64::MAX)]);
+        spec.x_axis.scale_kind = ScaleKind::Logarithmic;
+        spec.y_axis.scale_kind = ScaleKind::Logarithmic;
+
+        let x_domain = axis_domain(&spec, &spec.x_axis, |p| p.x);
+        let y_domain = axis_domain(&spec, &spec.y_axis, |p| p.y);
+
+        assert_eq!(x_domain, (f64::MAX / 10.0, f64::MAX));
+        assert_eq!(y_domain, (f64::MAX / 10.0, f64::MAX));
+
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let layout = compute_scatter_layout(&spec, &m);
+        let points = scatter_points(&spec, &layout);
+        assert_eq!(points.len(), 1);
+        assert!(points[0].cx.is_finite() && points[0].cy.is_finite());
+        assert!((layout.plot_left..=layout.plot_right).contains(&points[0].cx));
+        assert!((layout.plot_top..=layout.plot_bottom).contains(&points[0].cy));
+    }
+
+    #[test]
     fn log_x_scale_places_each_decade_at_equal_pixel_intervals() {
         let mut spec = make_scatter_spec(&[(1.0, 1.0), (10.0, 2.0), (100.0, 3.0)]);
         spec.x_axis.scale_kind = ScaleKind::Logarithmic;
