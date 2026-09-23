@@ -203,12 +203,13 @@ fn finite_text_width(m: &TextMeasurer, text: &str, font_size: f64) -> f64 {
 }
 
 /// 横棒の左右凡例帯幅。巨大な fontSize でも有限な境界を返す。
-fn horizontal_legend_band_width(m: &TextMeasurer, names: &[String], font_size: f64) -> f64 {
-    let max_width = names
-        .iter()
-        .map(|name| finite_text_width(m, name, font_size))
-        .fold(0.0, f64::max);
-    12.0 + 4.0 + max_width + 16.0
+fn horizontal_legend_band_width(
+    m: &TextMeasurer,
+    names: &[String],
+    font_size: f64,
+    options: &crate::ir::LegendOptions,
+) -> f64 {
+    crate::layout::common::legend_band_width_vertical_styled(m, names, font_size, options)
 }
 
 /// 横棒の値軸端ラベル用のプロット境界を算出する。
@@ -423,39 +424,48 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
     let cat_w = max_cat_w + 10.0;
 
-    // 凡例の有無(縦棒と同じ判定: Top/Bottom/Left/Right かつ名前付き系列あり)。
+    let legend_title = crate::layout::common::legend_title(spec);
+    // 凡例の有無(Top/Bottom/Left/Right かつ名前付き系列またはタイトルあり)。
     let has_legend = matches!(
         spec.legend,
         crate::ir::LegendPos::Top
             | crate::ir::LegendPos::Bottom
             | crate::ir::LegendPos::Left
             | crate::ir::LegendPos::Right
-    ) && spec.series.iter().any(|s| !s.name.is_empty());
+    ) && (spec.series.iter().any(|s| !s.name.is_empty())
+        || legend_title.is_some());
 
     let title_band = if spec.title.is_some() {
         TITLE_BAND
     } else {
         0.0
     };
+    let legend_font = legend_label_font_size(&spec.legend_options, spec.theme.font_size);
+    let legend_height = legend_horizontal_band_height(
+        &spec.legend_options,
+        spec.theme.font_size,
+        legend_title.is_some(),
+    );
     let legend_top = if has_legend && spec.legend == crate::ir::LegendPos::Top {
-        LEGEND_BAND
+        legend_height
     } else {
         0.0
     };
     let legend_bottom = if has_legend && spec.legend == crate::ir::LegendPos::Bottom {
-        LEGEND_BAND
+        legend_height
     } else {
         0.0
     };
     // Left/Right の凡例帯幅(系列名から算出)。
-    let series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+    let mut series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
+    series_names.extend(legend_title.map(str::to_owned));
     let legend_left = if has_legend && spec.legend == crate::ir::LegendPos::Left {
-        horizontal_legend_band_width(m, &series_names, label_font)
+        horizontal_legend_band_width(m, &series_names, legend_font, &spec.legend_options)
     } else {
         0.0
     };
     let legend_right = if has_legend && spec.legend == crate::ir::LegendPos::Right {
-        horizontal_legend_band_width(m, &series_names, label_font)
+        horizontal_legend_band_width(m, &series_names, legend_font, &spec.legend_options)
     } else {
         0.0
     };
@@ -787,40 +797,28 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             crate::ir::LegendPos::Top | crate::ir::LegendPos::Bottom
         )
     {
-        let mut total = 0.0_f64;
-        for (k, ser) in spec.series.iter().enumerate() {
-            let ew = legend_entry_width(m, &ser.name, label_font);
-            total += ew;
-            if k == spec.series.len() - 1 {
-                total -= 16.0;
-            }
-        }
-        let start_x = (spec.width - total) / 2.0;
+        let entries: Vec<(String, crate::ir::Color)> = spec
+            .series
+            .iter()
+            .map(|series| (series.name.clone(), series.fill_at(0)))
+            .collect();
+        let legend_title = crate::layout::common::legend_title(spec);
         let legend_cy = if spec.legend == crate::ir::LegendPos::Top {
-            OUTER_PAD + title_band + LEGEND_BAND / 2.0
+            OUTER_PAD + title_band + legend_height / 2.0
         } else {
-            spec.height - OUTER_PAD - LEGEND_BAND / 2.0
+            spec.height - OUTER_PAD - legend_height / 2.0
         };
-        let mut cursor = start_x;
-        for ser in &spec.series {
-            items.push(Prim::Rect {
-                x: cursor,
-                y: legend_cy - 6.0,
-                w: 12.0,
-                h: 12.0,
-                fill: ser.fill_at(0),
-            });
-            items.push(Prim::Text {
-                x: cursor + 16.0,
-                y: legend_cy + label_font * TEXT_BASELINE_RATIO,
-                size: label_font,
-                anchor: Anchor::Start,
-                fill: ink,
-                content: ser.name.clone(),
-                rotate_deg: None,
-            });
-            cursor += legend_entry_width(m, &ser.name, label_font);
-        }
+        draw_horizontal_legend(
+            &mut items,
+            &entries,
+            legend_title,
+            spec.width,
+            legend_cy,
+            label_font,
+            ink,
+            m,
+            &spec.legend_options,
+        );
     }
 
     // 5b. 凡例(Left/Right: 縦並び)。
@@ -840,15 +838,16 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         } else {
             spec.width - OUTER_PAD - legend_right
         };
-        draw_vertical_legend(
+        draw_vertical_legend_styled(
             &mut items,
             &entries,
-            None,
+            crate::layout::common::legend_title(spec),
             band_x,
             plot_top,
             plot_bottom,
             ink,
             label_font,
+            &spec.legend_options,
         );
     }
 
@@ -1156,12 +1155,22 @@ mod horizontal_axis_style_tests {
             .map(|series| series.name.clone())
             .collect();
         let legend_left = if has_legend && spec.legend == crate::ir::LegendPos::Left {
-            horizontal_legend_band_width(m, &series_names, spec.theme.font_size)
+            horizontal_legend_band_width(
+                m,
+                &series_names,
+                spec.theme.font_size,
+                &spec.legend_options,
+            )
         } else {
             0.0
         };
         let legend_right = if has_legend && spec.legend == crate::ir::LegendPos::Right {
-            horizontal_legend_band_width(m, &series_names, spec.theme.font_size)
+            horizontal_legend_band_width(
+                m,
+                &series_names,
+                spec.theme.font_size,
+                &spec.legend_options,
+            )
         } else {
             0.0
         };

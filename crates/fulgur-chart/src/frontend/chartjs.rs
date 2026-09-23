@@ -157,6 +157,42 @@ struct RawLegend {
     #[serde(default = "default_true")]
     display: bool,
     position: Option<String>,
+    align: Option<String>,
+    reverse: Option<bool>,
+    labels: Option<RawLegendLabels>,
+    title: Option<RawLegendTitle>,
+}
+
+#[derive(Deserialize, Default)]
+struct RawLegendLabels {
+    color: Option<String>,
+    font: Option<RawLegendFont>,
+    padding: Option<f64>,
+    #[serde(rename = "boxWidth")]
+    box_width: Option<f64>,
+    #[serde(rename = "boxHeight")]
+    box_height: Option<f64>,
+    #[serde(rename = "usePointStyle")]
+    use_point_style: Option<bool>,
+    #[serde(rename = "pointStyle")]
+    point_style: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct RawLegendTitle {
+    display: Option<bool>,
+    text: Option<String>,
+    color: Option<String>,
+    font: Option<RawLegendFont>,
+    padding: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, Default)]
+struct RawLegendFont {
+    size: Option<f64>,
+    family: Option<String>,
+    weight: Option<serde_json::Value>,
+    style: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -1024,7 +1060,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             },
         },
         legend: legend_pos(&raw.options.plugins.legend),
-        legend_title: None,
+        legend_options: legend_options(&raw.options.plugins.legend),
+        legend_title: legend_title(&raw.options.plugins.legend),
         title: raw
             .options
             .plugins
@@ -1193,6 +1230,120 @@ fn legend_pos(l: &Option<RawLegend>) -> LegendPos {
     }
 }
 
+fn legend_options(l: &Option<RawLegend>) -> LegendOptions {
+    let Some(l) = l else {
+        return LegendOptions::default();
+    };
+    let labels = l.labels.as_ref();
+    let labels_font = labels.and_then(|labels| labels.font.as_ref());
+    let title = l.title.as_ref();
+    let title_font = title.and_then(|title| title.font.as_ref());
+    LegendOptions {
+        align: match l.align.as_deref() {
+            Some("start") => LegendAlign::Start,
+            Some("end") => LegendAlign::End,
+            _ => LegendAlign::Center,
+        },
+        reverse: l.reverse.unwrap_or(false),
+        labels_color: labels
+            .and_then(|labels| labels.color.as_deref())
+            .and_then(parse_color),
+        labels_font_size: labels_font.and_then(|font| positive_finite(font.size)),
+        labels_font_family: labels_font.and_then(|font| font.family.clone()),
+        labels_font_weight: labels_font.and_then(|font| font_weight(&font.weight)),
+        labels_font_style: labels_font.and_then(|font| font.style.clone()),
+        labels_padding: labels.and_then(|labels| nonnegative_finite(labels.padding)),
+        labels_box_width: labels.and_then(|labels| nonnegative_finite(labels.box_width)),
+        labels_box_height: labels.and_then(|labels| nonnegative_finite(labels.box_height)),
+        labels_use_point_style: labels
+            .is_some_and(|labels| labels.use_point_style.unwrap_or(false)),
+        labels_point_style: labels
+            .and_then(|labels| labels.point_style.as_deref())
+            .and_then(legend_point_style),
+        title_display: title.is_some_and(|title| title.display.unwrap_or(false)),
+        title_color: title
+            .and_then(|title| title.color.as_deref())
+            .and_then(parse_color),
+        title_font_size: title_font.and_then(|font| positive_finite(font.size)),
+        title_font_family: title_font.and_then(|font| font.family.clone()),
+        title_font_weight: title_font.and_then(|font| font_weight(&font.weight)),
+        title_font_style: title_font.and_then(|font| font.style.clone()),
+        title_padding: title
+            .and_then(|title| title.padding.as_ref())
+            .map(legend_title_padding)
+            .unwrap_or_default(),
+    }
+}
+
+fn legend_title(l: &Option<RawLegend>) -> Option<String> {
+    l.as_ref()?
+        .title
+        .as_ref()
+        .filter(|title| title.display.unwrap_or(false))?
+        .text
+        .clone()
+        .filter(|text| !text.is_empty())
+}
+
+fn font_weight(weight: &Option<serde_json::Value>) -> Option<String> {
+    match weight.as_ref()? {
+        serde_json::Value::String(weight) => Some(weight.clone()),
+        serde_json::Value::Number(weight) => Some(weight.to_string()),
+        _ => None,
+    }
+}
+
+fn positive_finite(value: Option<f64>) -> Option<f64> {
+    value.filter(|value| value.is_finite() && *value > 0.0)
+}
+
+fn nonnegative_finite(value: Option<f64>) -> Option<f64> {
+    value.filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn legend_point_style(value: &str) -> Option<LegendPointStyle> {
+    Some(match value {
+        "circle" => LegendPointStyle::Circle,
+        "cross" => LegendPointStyle::Cross,
+        "crossRot" => LegendPointStyle::CrossRot,
+        "dash" => LegendPointStyle::Dash,
+        "line" => LegendPointStyle::Line,
+        "rect" => LegendPointStyle::Rect,
+        "rectRounded" => LegendPointStyle::RectRounded,
+        "rectRot" => LegendPointStyle::RectRot,
+        "star" => LegendPointStyle::Star,
+        "triangle" => LegendPointStyle::Triangle,
+        _ => return None,
+    })
+}
+
+fn legend_title_padding(value: &serde_json::Value) -> LegendTitlePadding {
+    let side = |key: &str| {
+        value
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .unwrap_or(0.0)
+    };
+    if let Some(padding) = value
+        .as_f64()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+    {
+        return LegendTitlePadding {
+            top: padding,
+            right: padding,
+            bottom: padding,
+            left: padding,
+        };
+    }
+    LegendTitlePadding {
+        top: side("top"),
+        right: side("right"),
+        bottom: side("bottom"),
+        left: side("left"),
+    }
+}
+
 /// strict モード用: 既知キーのホワイトリストに照らし、未知キーを検出する。
 ///
 /// 防御的に走査し、ノードが欠落/想定外の形なら `Ok(())` を返す（後段の通常パースが
@@ -1281,6 +1432,56 @@ fn check_unknown_keys(
                 &["title", "legend", "datalabels", "decimation"]
             };
             check_object(plugins, allowed_plugins, "options.plugins")?;
+            if let Some(legend) = plugins.get("legend").and_then(|v| v.as_object()) {
+                check_object(
+                    legend,
+                    &["display", "position", "align", "reverse", "labels", "title"],
+                    "options.plugins.legend",
+                )?;
+                if let Some(labels) = legend.get("labels").and_then(|v| v.as_object()) {
+                    check_object(
+                        labels,
+                        &[
+                            "color",
+                            "font",
+                            "padding",
+                            "boxWidth",
+                            "boxHeight",
+                            "usePointStyle",
+                            "pointStyle",
+                        ],
+                        "options.plugins.legend.labels",
+                    )?;
+                    if let Some(font) = labels.get("font").and_then(|v| v.as_object()) {
+                        check_object(
+                            font,
+                            &["size", "family", "weight", "style", "lineHeight"],
+                            "options.plugins.legend.labels.font",
+                        )?;
+                    }
+                }
+                if let Some(title) = legend.get("title").and_then(|v| v.as_object()) {
+                    check_object(
+                        title,
+                        &["display", "text", "color", "font", "padding"],
+                        "options.plugins.legend.title",
+                    )?;
+                    if let Some(font) = title.get("font").and_then(|v| v.as_object()) {
+                        check_object(
+                            font,
+                            &["size", "family", "weight", "style", "lineHeight"],
+                            "options.plugins.legend.title.font",
+                        )?;
+                    }
+                    if let Some(padding) = title.get("padding").and_then(|v| v.as_object()) {
+                        check_object(
+                            padding,
+                            &["top", "right", "bottom", "left"],
+                            "options.plugins.legend.title.padding",
+                        )?;
+                    }
+                }
+            }
             if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
                 check_object(dl, &["display"], "options.plugins.datalabels")?;
             }
@@ -1846,6 +2047,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         x_axis: no_axis.clone(),
         y_axis: no_axis,
         legend: crate::ir::LegendPos::None,
+        legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
         title: raw
             .options
@@ -2220,7 +2422,8 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             scale_kind: ScaleKind::Linear,
         },
         legend: legend_pos(&raw.options.plugins.legend),
-        legend_title: None,
+        legend_options: legend_options(&raw.options.plugins.legend),
+        legend_title: legend_title(&raw.options.plugins.legend),
         title: raw
             .options
             .plugins
@@ -2568,6 +2771,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         x_axis: zero_axis(),
         y_axis: zero_axis(),
         legend: crate::ir::LegendPos::None,
+        legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
         title: raw
             .options
@@ -2802,6 +3006,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         x_axis: zero_axis(),
         y_axis: zero_axis(),
         legend: LegendPos::None,
+        legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
         title,
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
@@ -2977,6 +3182,7 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         x_axis: zero_axis(),
         y_axis: zero_axis(),
         legend: LegendPos::None,
+        legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
         title,
         width: raw.width.unwrap_or(500.0),

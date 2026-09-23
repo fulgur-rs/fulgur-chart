@@ -391,6 +391,7 @@ pub fn parse_with_limits(
         } else {
             LegendPos::Top
         },
+        legend_options: crate::ir::LegendOptions::default(),
         legend_title,
         title,
         width,

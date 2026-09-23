@@ -1,5 +1,5 @@
 use fulgur_chart::frontend::chartjs;
-use fulgur_chart::ir::{ChartKind, Point, ScaleKind, SeriesType};
+use fulgur_chart::ir::{ChartKind, LegendAlign, LegendPointStyle, Point, ScaleKind, SeriesType};
 
 #[test]
 fn parses_minimal_bar_spec() {
@@ -83,6 +83,89 @@ fn title_not_displayed_is_none() {
       "options":{"plugins":{"title":{"display":false,"text":"x"}}} }"#;
     let spec = chartjs::parse(json, false).unwrap();
     assert_eq!(spec.title, None);
+}
+
+#[test]
+fn legend_options_and_title_are_resolved_from_plugin_config() {
+    let json = r##"{
+      "type":"line",
+      "data":{"labels":["A"],"datasets":[{"label":"Alpha","data":[1]}]},
+      "options":{"plugins":{"legend":{
+        "align":"start","reverse":true,
+        "labels":{"color":"#123456","font":{"size":15,"family":"Fira Sans","weight":600,"style":"italic"},
+          "padding":8,"boxWidth":22,"boxHeight":14,"usePointStyle":true,"pointStyle":"triangle"},
+        "title":{"display":true,"text":"Series","color":"#abcdef",
+          "font":{"size":18,"family":"Fira Mono","weight":"bold","style":"oblique"},
+          "padding":{"top":2,"right":3,"bottom":4,"left":5}}
+      }}}
+    }"##;
+    let spec = chartjs::parse(json, true).unwrap();
+
+    assert_eq!(spec.legend_options.align, LegendAlign::Start);
+    assert!(spec.legend_options.reverse);
+    let labels_color = spec.legend_options.labels_color.unwrap();
+    assert_eq!(
+        (labels_color.r, labels_color.g, labels_color.b),
+        (18, 52, 86)
+    );
+    assert_eq!(spec.legend_options.labels_font_size, Some(15.0));
+    assert_eq!(
+        spec.legend_options.labels_font_family.as_deref(),
+        Some("Fira Sans")
+    );
+    assert_eq!(
+        spec.legend_options.labels_font_weight.as_deref(),
+        Some("600")
+    );
+    assert_eq!(
+        spec.legend_options.labels_font_style.as_deref(),
+        Some("italic")
+    );
+    assert_eq!(spec.legend_options.labels_padding, Some(8.0));
+    assert_eq!(spec.legend_options.labels_box_width, Some(22.0));
+    assert_eq!(spec.legend_options.labels_box_height, Some(14.0));
+    assert!(spec.legend_options.labels_use_point_style);
+    assert_eq!(
+        spec.legend_options.labels_point_style,
+        Some(LegendPointStyle::Triangle)
+    );
+    assert!(spec.legend_options.title_display);
+    assert_eq!(spec.legend_title.as_deref(), Some("Series"));
+    let title_color = spec.legend_options.title_color.unwrap();
+    assert_eq!(
+        (title_color.r, title_color.g, title_color.b),
+        (171, 205, 239)
+    );
+    assert_eq!(spec.legend_options.title_font_size, Some(18.0));
+    assert_eq!(
+        spec.legend_options.title_font_family.as_deref(),
+        Some("Fira Mono")
+    );
+    assert_eq!(
+        spec.legend_options.title_font_weight.as_deref(),
+        Some("bold")
+    );
+    assert_eq!(
+        spec.legend_options.title_font_style.as_deref(),
+        Some("oblique")
+    );
+    assert_eq!(
+        spec.legend_options.title_padding,
+        fulgur_chart::ir::LegendTitlePadding {
+            top: 2.0,
+            right: 3.0,
+            bottom: 4.0,
+            left: 5.0,
+        }
+    );
+}
+
+#[test]
+fn strict_legend_config_rejects_unknown_nested_keys() {
+    let json = r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]},
+      "options":{"plugins":{"legend":{"labels":{"font":{"famly":"typo"}}}}}}"#;
+    assert!(chartjs::parse(json, true).is_err());
+    assert!(chartjs::parse(json, false).is_ok());
 }
 
 #[test]

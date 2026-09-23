@@ -75,6 +75,20 @@ pub enum Prim {
         content: String,
         rotate_deg: Option<f64>, // Some(deg) → SVG transform="rotate(deg,x,y)"
     },
+    /// Text with explicit SVG font attributes. Raster output uses the selected font face and
+    /// approximates weight/style where possible.
+    StyledText {
+        x: f64,
+        y: f64,
+        size: f64,
+        anchor: Anchor,
+        fill: Color,
+        content: String,
+        rotate_deg: Option<f64>,
+        font_family: Option<String>,
+        font_weight: Option<String>,
+        font_style: Option<String>,
+    },
 }
 
 /// 1枚のチャート画像。
