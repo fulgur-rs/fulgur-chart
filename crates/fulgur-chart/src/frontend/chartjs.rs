@@ -211,7 +211,7 @@ struct RawDataset {
     #[serde(default)]
     label: String,
     #[serde(default)]
-    order: Option<i32>,
+    order: Option<f64>,
     /// dataset 別の描画種別("bar"/"line")。混合チャートで使う。未指定なら chart 基本型に従う。
     #[serde(rename = "type", default)]
     dataset_type: Option<String>,
@@ -852,7 +852,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .enumerate()
         .map(|(i, ds)| {
             if let Some(orders) = dataset_orders.as_mut() {
-                orders.push(ds.order.unwrap_or(0));
+                orders.push(ds.order.unwrap_or(0.0));
             }
             // 点ベースは点データ、boxplot はボックスデータ、それ以外は数値配列を採る。`data` は一度だけ消費する。
             let (values, points, box_points) = if is_point_based {
@@ -947,13 +947,17 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // 描画側はこの順序を逆にたどり、高い order を先に(背面へ)描く。
     // 非 mixed chart は追加の order 配列・並べ替え領域を確保しない。
     let series = if let Some(orders) = dataset_orders {
-        let mut ordered_series: Vec<(i32, usize, Series)> = series
+        let mut ordered_series: Vec<(f64, usize, Series)> = series
             .into_iter()
             .zip(orders)
             .enumerate()
             .map(|(index, (series, order))| (order, index, series))
             .collect();
-        ordered_series.sort_by_key(|(order, index, _)| (*order, *index));
+        ordered_series.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.cmp(&b.1))
+        });
         ordered_series
             .into_iter()
             .map(|(_, _, series)| series)

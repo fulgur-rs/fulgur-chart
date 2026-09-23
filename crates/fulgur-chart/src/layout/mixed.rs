@@ -21,6 +21,7 @@ const BAR_FILL_RATIO: f64 = 0.9;
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
 
+/// Builds a mixed chart, painting datasets from higher order to lower order.
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 共有フレーム(カテゴリ x・全系列 values からの y ドメイン)。
     let frame = common::compute(spec, m);
@@ -59,6 +60,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 }
 
+/// Paints one bar dataset at its slot in ascending Chart.js order.
 fn draw_bar_dataset(
     items: &mut Vec<Prim>,
     spec: &ChartSpec,
@@ -114,6 +116,7 @@ fn draw_bar_dataset(
     }
 }
 
+/// Paints the area, line, markers, and labels for one mixed-chart line dataset.
 fn draw_line_dataset(
     items: &mut Vec<Prim>,
     spec: &ChartSpec,

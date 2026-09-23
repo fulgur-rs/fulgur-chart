@@ -85,7 +85,7 @@ pub struct BarDataset {
     pub label: Option<String>,
     /// Drawing order for mixed bar+line charts. Higher values are painted behind lower values.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub order: Option<i32>,
+    pub order: Option<f64>,
     /// Per-dataset chart type for mixed bar+line charts. Only "bar" or "line" are valid.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub dataset_type: Option<BarOrLine>,
@@ -186,7 +186,7 @@ pub struct LineDataset {
     pub label: Option<String>,
     /// Drawing order for mixed bar+line charts. Higher values are painted behind lower values.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub order: Option<i32>,
+    pub order: Option<f64>,
     pub data: Vec<Option<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,

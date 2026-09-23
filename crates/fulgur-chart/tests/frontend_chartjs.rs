@@ -28,6 +28,7 @@ fn parses_minimal_bar_spec() {
     assert_eq!(spec.series[0].fill.len(), 1); // bar は系列1色
 }
 
+/// Mixed dataset order sorts rendered legends and inspection models consistently.
 #[test]
 fn mixed_dataset_order_controls_series_and_model_order() {
     let json = r#"{
@@ -36,7 +37,8 @@ fn mixed_dataset_order_controls_series_and_model_order() {
         {"label":"late line", "type":"line", "order":4, "data":[4]},
         {"label":"early bar", "type":"bar", "order":-1, "data":[1]},
         {"label":"default line", "type":"line", "data":[2]},
-        {"label":"default bar", "type":"bar", "order":0, "data":[3]}
+        {"label":"default bar", "type":"bar", "order":0, "data":[3]},
+        {"label":"fractional line", "type":"line", "order":0.5, "data":[5]}
       ]}
     }"#;
     let spec = chartjs::parse(json, true).unwrap();
@@ -47,7 +49,13 @@ fn mixed_dataset_order_controls_series_and_model_order() {
         .collect();
     assert_eq!(
         labels,
-        ["early bar", "default line", "default bar", "late line"]
+        [
+            "early bar",
+            "default line",
+            "default bar",
+            "fractional line",
+            "late line"
+        ]
     );
     let svg = fulgur_chart::render::render_chart(&spec);
     let legend_positions: Vec<_> = labels
@@ -65,16 +73,17 @@ fn mixed_dataset_order_controls_series_and_model_order() {
     assert_eq!(model_labels, labels);
 }
 
+/// Bar and line schemas accept numeric order values, while unsupported types reject them.
 #[test]
 fn dataset_order_is_accepted_by_bar_and_line_schemas() {
     use fulgur_chart::schema::chartjs::ChartJsSpec;
 
     let bar_json = r#"{"type":"bar","data":{"datasets":[
-      {"type":"bar","order":2,"data":[1]},
-      {"type":"line","order":1,"data":[2]}
+      {"type":"bar","order":2.5,"data":[1]},
+      {"type":"line","order":1.5,"data":[2]}
     ]}}"#;
     let line_json = r#"{"type":"line","data":{"datasets":[
-      {"order":-1,"data":[1]}
+      {"order":-1.25,"data":[1]}
     ]}}"#;
     let pie_json = r#"{"type":"pie","data":{"datasets":[
       {"order":1,"data":[1]}

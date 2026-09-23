@@ -5,6 +5,7 @@ use fulgur_chart::render::render_chart;
 use fulgur_chart::scene::Prim;
 use fulgur_chart::text::TextMeasurer;
 
+/// Parses and renders one Chart.js-compatible JSON spec as SVG.
 fn render(json: &str) -> String {
     render_chart(&chartjs::parse(json, false).unwrap())
 }
@@ -60,12 +61,13 @@ fn mixed_snapshot() {
     insta::assert_snapshot!(svg);
 }
 
+/// Higher order datasets paint behind lower order datasets across bar and line layers.
 #[test]
 fn mixed_dataset_order_controls_front_to_back_painting() {
     let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
     let high_order_line_json = r##"{"type":"bar","data":{"labels":["x"],"datasets":[
       {"label":"bar","order":1,"data":[1],"backgroundColor":"#ff0000"},
-      {"label":"line","type":"line","order":2,"data":[2],"borderColor":"#0000ff"}
+      {"label":"line","type":"line","order":2.5,"data":[2],"borderColor":"#0000ff"}
     ]}}"##;
     let high_order_line = chartjs::parse(high_order_line_json, false).unwrap();
     let scene = build_scene(&high_order_line, &m);
@@ -89,8 +91,8 @@ fn mixed_dataset_order_controls_front_to_back_painting() {
     );
 
     let high_order_bar_json = r##"{"type":"bar","data":{"labels":["x"],"datasets":[
-      {"label":"bar","order":2,"data":[1],"backgroundColor":"#ff0000"},
-      {"label":"line","type":"line","order":1,"data":[2],"borderColor":"#0000ff"}
+      {"label":"bar","order":2.5,"data":[1],"backgroundColor":"#ff0000"},
+      {"label":"line","type":"line","order":1.5,"data":[2],"borderColor":"#0000ff"}
     ]}}"##;
     let high_order_bar = chartjs::parse(high_order_bar_json, false).unwrap();
     let scene = build_scene(&high_order_bar, &m);
