@@ -300,6 +300,53 @@ fn fill_to_span_gaps_target_interpolates_through_missing_values() {
 }
 
 #[test]
+fn colored_fill_respects_different_source_and_target_step_modes() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[5,5],"stepped":"after","borderColor":"#0000ff","fill":false},
+      {"data":[3,7],"stepped":"before","borderColor":"#00aa00","fill":{
+        "target":0,"above":"#ff0000","below":"#0000ff"
+      }}
+    ]}}"##;
+    let scene = line_scene(json);
+    let colors: Vec<_> = area_paths(&scene)
+        .iter()
+        .map(|(_, color)| (color.r, color.g, color.b))
+        .collect();
+
+    assert!(
+        colors.contains(&(0, 0, 255)),
+        "missing below fill: {colors:?}"
+    );
+    assert!(
+        !colors.contains(&(255, 0, 0)),
+        "a stepped line's vertical jump must not be treated as a diagonal crossing: {colors:?}"
+    );
+}
+
+#[test]
+fn colored_fill_tracks_curved_target_geometry() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C"],"datasets":[
+      {"data":[0,10,0],"tension":0.8,"borderColor":"#0000ff","fill":false},
+      {"data":[6,6,6],"borderColor":"#00aa00","fill":{
+        "target":0,"above":"#ff0000","below":"#0000ff"
+      }}
+    ]}}"##;
+    let scene = line_scene(json);
+    let areas = area_paths(&scene);
+    let target_has_curve = scene.items.iter().any(|item| {
+        matches!(item, Prim::Path { d, stroke: Some(color), .. }
+            if (color.r, color.g, color.b) == (0, 0, 255) && d.contains(" C "))
+    });
+    let fill_has_curve_samples = areas.iter().any(|(d, _)| d.matches("L ").count() > 8);
+
+    assert!(target_has_curve, "fixture must draw a curved target line");
+    assert!(
+        fill_has_curve_samples,
+        "area boundary should follow the curved target instead of joining only data points"
+    );
+}
+
+#[test]
 fn tension_uses_bezier_path() {
     let svg = render(
         r#"{"type":"line","data":{"labels":["A","B","C"],"datasets":[{"data":[1,3,2],"tension":0.4}]}}"#,

@@ -72,6 +72,86 @@ pub fn monotone_path(points: &[(f64, f64)]) -> String {
     d
 }
 
+/// Sample the same monotone-X cubics used by [`monotone_path`].
+pub(crate) fn monotone_samples(
+    points: &[(f64, f64)],
+    samples_per_segment: usize,
+) -> Vec<(f64, f64)> {
+    let points: Vec<(f64, f64)> = points
+        .iter()
+        .map(|&(x, y)| (finite_or_zero(x), finite_or_zero(y)))
+        .collect();
+    if points.len() < 2 {
+        return points;
+    }
+
+    let steps = samples_per_segment.max(1);
+    if points.len() == 2 {
+        return (0..=steps)
+            .map(|step| {
+                let t = step as f64 / steps as f64;
+                (
+                    points[0].0 + (points[1].0 - points[0].0) * t,
+                    points[0].1 + (points[1].1 - points[0].1) * t,
+                )
+            })
+            .collect();
+    }
+
+    let interior_tangents: Vec<f64> = points
+        .windows(3)
+        .map(|triple| slope3(triple[0], triple[1], triple[2]))
+        .collect();
+    let mut tangents = Vec::with_capacity(points.len());
+    tangents.push(slope2(points[0], points[1], interior_tangents[0]));
+    tangents.extend_from_slice(&interior_tangents);
+    tangents.push(slope2(
+        points[points.len() - 2],
+        points[points.len() - 1],
+        *interior_tangents.last().unwrap(),
+    ));
+
+    let mut sampled = vec![points[0]];
+    for i in 0..points.len() - 1 {
+        let p0 = points[i];
+        let p1 = points[i + 1];
+        let h = p1.0 - p0.0;
+        let lo = p0.1.min(p1.1);
+        let hi = p0.1.max(p1.1);
+        let cp1 = (
+            p0.0 + h / 3.0,
+            clamp_y(p0.1 + tangents[i] * h / 3.0, lo, hi),
+        );
+        let cp2 = (
+            p1.0 - h / 3.0,
+            clamp_y(p1.1 - tangents[i + 1] * h / 3.0, lo, hi),
+        );
+        for step in 1..=steps {
+            let t = step as f64 / steps as f64;
+            sampled.push(cubic_point(p0, cp1, cp2, p1, t));
+        }
+    }
+    sampled
+}
+
+fn cubic_point(
+    p0: (f64, f64),
+    cp1: (f64, f64),
+    cp2: (f64, f64),
+    p1: (f64, f64),
+    t: f64,
+) -> (f64, f64) {
+    let one_minus_t = 1.0 - t;
+    let a = one_minus_t * one_minus_t * one_minus_t;
+    let b = 3.0 * one_minus_t * one_minus_t * t;
+    let c = 3.0 * one_minus_t * t * t;
+    let d = t * t * t;
+    (
+        a * p0.0 + b * cp1.0 + c * cp2.0 + d * p1.0,
+        a * p0.1 + b * cp1.1 + c * cp2.1 + d * p1.1,
+    )
+}
+
 fn finite_or_zero(value: f64) -> f64 {
     if value.is_finite() { value } else { 0.0 }
 }
