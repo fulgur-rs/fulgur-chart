@@ -49,7 +49,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     draw_bar_dataset(&mut items, spec, &frame, n, ser, bar_slot, bar_count);
                 }
             }
-            SeriesType::Line => draw_line_dataset(&mut items, spec, &frame, n, ser),
+            SeriesType::Line => draw_line_dataset(&mut items, spec, &frame, n, series_index, ser),
         }
     }
 
@@ -122,6 +122,7 @@ fn draw_line_dataset(
     spec: &ChartSpec,
     frame: &common::Frame,
     n: usize,
+    series_index: usize,
     ser: &crate::ir::Series,
 ) {
     // 有効点列: (x, y, 元カテゴリインデックス)。欠損・非有限値を除外。
@@ -160,35 +161,45 @@ fn draw_line_dataset(
     // gap を跨いだ塗りを防ぐ。非 null / 非 gap 系列では 1 セグメントで従来と同一のパス
     // データを出力する(バイト不変)。
     if ser.area {
-        let baseline_y = frame
-            .ys
-            .map(0.0_f64.clamp(frame.ticks.min, frame.ticks.max));
-        for seg in &segments {
-            if seg.is_empty() {
-                continue;
+        if ser.area_fill.is_some() {
+            items.extend(super::line::chartjs_area_fill_primitives(
+                spec,
+                frame,
+                series_index,
+                &segments,
+                None,
+            ));
+        } else {
+            let baseline_y = frame
+                .ys
+                .map(0.0_f64.clamp(frame.ticks.min, frame.ticks.max));
+            for seg in &segments {
+                if seg.is_empty() {
+                    continue;
+                }
+                let mut d = String::new();
+                for (k, &(x, y, _)) in seg.iter().enumerate() {
+                    let cmd = if k == 0 { 'M' } else { 'L' };
+                    write!(d, "{} {} {} ", cmd, fmt_num(x), fmt_num(y)).unwrap();
+                }
+                let (last_x, _, _) = seg[seg.len() - 1];
+                let (first_x, _, _) = seg[0];
+                write!(
+                    d,
+                    "L {} {} L {} {} Z",
+                    fmt_num(last_x),
+                    fmt_num(baseline_y),
+                    fmt_num(first_x),
+                    fmt_num(baseline_y)
+                )
+                .unwrap();
+                items.push(Prim::Path {
+                    d,
+                    fill: Some(ser.fill_at(0)),
+                    stroke: None,
+                    stroke_width: 0.0,
+                });
             }
-            let mut d = String::new();
-            for (k, &(x, y, _)) in seg.iter().enumerate() {
-                let cmd = if k == 0 { 'M' } else { 'L' };
-                write!(d, "{} {} {} ", cmd, fmt_num(x), fmt_num(y)).unwrap();
-            }
-            let (last_x, _, _) = seg[seg.len() - 1];
-            let (first_x, _, _) = seg[0];
-            write!(
-                d,
-                "L {} {} L {} {} Z",
-                fmt_num(last_x),
-                fmt_num(baseline_y),
-                fmt_num(first_x),
-                fmt_num(baseline_y)
-            )
-            .unwrap();
-            items.push(Prim::Path {
-                d,
-                fill: Some(ser.fill_at(0)),
-                stroke: None,
-                stroke_width: 0.0,
-            });
         }
     }
 

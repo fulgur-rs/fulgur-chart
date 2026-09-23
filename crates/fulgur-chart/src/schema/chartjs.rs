@@ -99,7 +99,7 @@ pub struct BarDataset {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tension: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fill: Option<FillSpec>,
+    pub fill: Option<LineFillSpec>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -201,7 +201,7 @@ pub struct LineDataset {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stepped: Option<Stepped>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fill: Option<FillSpec>,
+    pub fill: Option<LineFillSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub point_radius: Option<f64>,
 }
@@ -228,6 +228,45 @@ pub enum SteppedMode {
 pub enum FillSpec {
     Bool(bool),
     Mode(String),
+}
+
+/// Line area fill target and optional colors for the two sides of another line.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum LineFillSpec {
+    Bool(bool),
+    Index(f64),
+    Mode(String),
+    Value(FillValue),
+    Colors(FillWithColors),
+}
+
+/// A value target for a line area fill.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FillValue {
+    pub value: f64,
+}
+
+/// A fill target with optional colors above and below its line.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FillWithColors {
+    pub target: FillTargetSpec,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub above: Option<ColorString>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub below: Option<ColorString>,
+}
+
+/// A line fill target accepted inside `FillWithColors`.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum FillTargetSpec {
+    Bool(bool),
+    Index(f64),
+    Mode(String),
+    Value(FillValue),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

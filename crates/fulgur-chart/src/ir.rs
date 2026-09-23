@@ -72,6 +72,26 @@ pub enum SeriesType {
     Line,
 }
 
+/// Geometry and optional side colors for a filled line area.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AreaFill {
+    pub target: AreaFillTarget,
+    pub above: Option<Color>,
+    pub below: Option<Color>,
+}
+
+/// Destination for a line area's closed polygon.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AreaFillTarget {
+    Origin,
+    Start,
+    End,
+    Value(f64),
+    /// Index into `ChartSpec.series` after mixed dataset order has been applied.
+    Dataset(usize),
+    Stack,
+}
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub enum XPositions {
     #[default]
@@ -118,6 +138,8 @@ pub struct Series {
     pub stroke: Vec<Color>, // 同上
     pub stroke_width: f64,
     pub area: bool, // line のとき塗りつぶすか
+    /// Chart.js-specific target and colors. `None` preserves other frontends' legacy area rules.
+    pub area_fill: Option<AreaFill>,
     pub interpolation: LineInterpolation,
     /// Whether a line connects across missing data points.
     pub span_gaps: bool,
@@ -624,6 +646,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
+            area_fill: None,
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
@@ -647,6 +670,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
+            area_fill: None,
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
@@ -671,6 +695,7 @@ mod tests {
             stroke: vec![],
             stroke_width: 1.0,
             area: false,
+            area_fill: None,
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,

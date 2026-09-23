@@ -1,11 +1,215 @@
 //! line / area チャート。共有フレーム(common)の上に折れ線・面・マーカーを重ねる。
 
 use super::{common, monotone::monotone_path};
-use crate::ir::{ChartKind, ChartSpec, StepMode};
+use crate::ir::{AreaFillTarget, ChartKind, ChartSpec, LineInterpolation, StepMode};
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::fmt::Write;
+
+type AreaPoint = (f64, f64);
+type LinePoint = (f64, f64, usize);
+type LineSegments = Vec<Vec<LinePoint>>;
+
+fn source_segments_have_area_edge(segments: &[Vec<LinePoint>]) -> bool {
+    segments.iter().any(|segment| segment.len() >= 2)
+}
+
+#[derive(Clone, Copy)]
+struct AreaInterval {
+    source: [AreaPoint; 2],
+    target: [AreaPoint; 2],
+}
+
+#[derive(Clone, Copy)]
+struct AreaEdge {
+    point_index: usize,
+    min_x: f64,
+    max_x: f64,
+}
+
+struct AreaLineShape {
+    points: Vec<AreaPoint>,
+    bounds: Option<(f64, f64)>,
+    monotonic_x: bool,
+    edges: Vec<AreaEdge>,
+    edge_index: Option<AreaXIntervalIndex>,
+}
+
+struct AreaXRange {
+    min_x: f64,
+    max_x: f64,
+    index: usize,
+}
+
+struct AreaXIntervalIndex {
+    ranges: Vec<AreaXRange>,
+    max_x_tree: Vec<f64>,
+    leaf_count: usize,
+}
+
+impl AreaXIntervalIndex {
+    fn new(bounds: &[(f64, f64)]) -> Self {
+        let mut ranges: Vec<AreaXRange> = bounds
+            .iter()
+            .enumerate()
+            .map(|(index, &(min_x, max_x))| AreaXRange {
+                min_x,
+                max_x,
+                index,
+            })
+            .collect();
+        ranges.sort_by(|a, b| {
+            a.min_x
+                .total_cmp(&b.min_x)
+                .then_with(|| a.index.cmp(&b.index))
+        });
+
+        let leaf_count = ranges.len().next_power_of_two().max(1);
+        let mut max_x_tree = vec![f64::NEG_INFINITY; leaf_count * 2];
+        for (index, range) in ranges.iter().enumerate() {
+            max_x_tree[leaf_count + index] = range.max_x;
+        }
+        for index in (1..leaf_count).rev() {
+            max_x_tree[index] = max_x_tree[index * 2].max(max_x_tree[index * 2 + 1]);
+        }
+
+        Self {
+            ranges,
+            max_x_tree,
+            leaf_count,
+        }
+    }
+
+    fn overlapping_indices(&self, min_x: f64, max_x: f64) -> Vec<usize> {
+        if min_x >= max_x || self.ranges.is_empty() {
+            return Vec::new();
+        }
+
+        let mut indices = Vec::new();
+        self.collect_overlapping(1, 0, self.leaf_count, min_x, max_x, &mut indices);
+        indices.sort_unstable();
+        indices
+    }
+
+    fn collect_overlapping(
+        &self,
+        node: usize,
+        start: usize,
+        end: usize,
+        min_x: f64,
+        max_x: f64,
+        indices: &mut Vec<usize>,
+    ) {
+        if start >= self.ranges.len()
+            || self.ranges[start].min_x >= max_x
+            || self.max_x_tree[node] <= min_x
+        {
+            return;
+        }
+        if end - start == 1 {
+            indices.push(self.ranges[start].index);
+            return;
+        }
+
+        let middle = start + (end - start) / 2;
+        self.collect_overlapping(node * 2, start, middle, min_x, max_x, indices);
+        self.collect_overlapping(node * 2 + 1, middle, end, min_x, max_x, indices);
+    }
+}
+
+impl AreaLineShape {
+    fn new(points: Vec<AreaPoint>) -> Self {
+        let bounds = area_x_bounds(&points);
+        let monotonic_x = area_points_have_monotonic_x(&points);
+        let edges: Vec<AreaEdge> = if monotonic_x {
+            Vec::new()
+        } else {
+            points
+                .windows(2)
+                .enumerate()
+                .filter_map(|(point_index, pair)| {
+                    let [start, end] = [pair[0], pair[1]];
+                    (start.0 != end.0).then_some(AreaEdge {
+                        point_index,
+                        min_x: start.0.min(end.0),
+                        max_x: start.0.max(end.0),
+                    })
+                })
+                .collect()
+        };
+        let edge_index = (!monotonic_x).then(|| {
+            let edge_bounds: Vec<(f64, f64)> =
+                edges.iter().map(|edge| (edge.min_x, edge.max_x)).collect();
+            AreaXIntervalIndex::new(&edge_bounds)
+        });
+
+        Self {
+            points,
+            bounds,
+            monotonic_x,
+            edges,
+            edge_index,
+        }
+    }
+
+    fn overlapping_edge_indices(&self, min_x: f64, max_x: f64) -> Vec<usize> {
+        if min_x >= max_x {
+            return Vec::new();
+        }
+        if let Some(index) = &self.edge_index {
+            return index.overlapping_indices(min_x, max_x);
+        }
+
+        let start = first_area_segment_near_x(&self.points, min_x);
+        let end = self.points.partition_point(|point| point.0 < max_x);
+        (start.min(end)..end.min(self.points.len().saturating_sub(1)))
+            .filter(|&index| self.points[index].0 != self.points[index + 1].0)
+            .collect()
+    }
+
+    fn edge_points(&self, index: usize) -> [AreaPoint; 2] {
+        let point_index = if self.monotonic_x {
+            index
+        } else {
+            self.edges[index].point_index
+        };
+        [self.points[point_index], self.points[point_index + 1]]
+    }
+
+    fn edge_bounds(&self, index: usize) -> (f64, f64) {
+        if self.monotonic_x {
+            let [start, end] = self.edge_points(index);
+            (start.0, end.0)
+        } else {
+            let edge = self.edges[index];
+            (edge.min_x, edge.max_x)
+        }
+    }
+}
+
+struct ColoredAreaRun {
+    color: crate::ir::Color,
+    source: Vec<AreaPoint>,
+    target: Vec<AreaPoint>,
+}
+
+#[derive(Clone, Copy)]
+struct AreaFillStyle {
+    source_interpolation: LineInterpolation,
+    target_interpolation: LineInterpolation,
+    source_step: Option<StepMode>,
+    target_step: Option<StepMode>,
+    above: crate::ir::Color,
+    below: crate::ir::Color,
+    preserve_singleton: bool,
+    plot_top: f64,
+    plot_bottom: f64,
+}
+
+const AREA_CURVE_SAMPLES: usize = 16;
 
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
@@ -38,6 +242,64 @@ fn segments_for_valid_points(
         segments.push(current);
     }
     segments
+}
+
+fn rendered_line_segments(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    series_index: usize,
+    offsets: Option<&[Vec<(f64, f64)>]>,
+) -> (LineSegments, bool) {
+    let Some(series) = spec.series.get(series_index) else {
+        return (Vec::new(), false);
+    };
+    if series.series_type != crate::ir::SeriesType::Line {
+        return (Vec::new(), false);
+    }
+
+    let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
+    let valid: Vec<(f64, f64, usize)> = (0..spec.categories.len())
+        .filter_map(|category| {
+            let x = if matches!(spec.kind, ChartKind::Mixed) {
+                common::category_center(frame, category, spec.categories.len().max(1))
+            } else {
+                common::line_x(spec, frame, category)
+            };
+            let y = if let Some(offsets) = offsets {
+                frame.ys.map(common::clip_axis_value(
+                    offsets.get(series_index)?.get(category)?.1,
+                    &frame.ticks,
+                ))
+            } else {
+                let value = series.values.get(category).copied()?;
+                if !value.is_finite() || (is_log && value <= 0.0) {
+                    return None;
+                }
+                frame.ys.map(common::clip_axis_value(value, &frame.ticks))
+            };
+            Some((x, y, category))
+        })
+        .collect();
+
+    // Mixed layout currently draws gaps as separate segments and ignores spanGaps.
+    let span_gaps = series.span_gaps && !matches!(spec.kind, ChartKind::Mixed);
+    let segments = segments_for_valid_points(&valid, span_gaps);
+    let decimation = if matches!(spec.kind, ChartKind::Mixed) || offsets.is_some() {
+        None
+    } else {
+        crate::layout::decimate::resolve(
+            &spec.decimation,
+            frame.plot_right - frame.plot_left,
+            valid.len(),
+        )
+    };
+    let decimated = decimation.is_some();
+    let segments = if let Some((algorithm, samples)) = decimation {
+        crate::layout::decimate::decimate_segments(&segments, algorithm, samples)
+    } else {
+        segments
+    };
+    (segments, decimated)
 }
 
 /// 隣接する点の間に階段状の折れ点を追加する。
@@ -206,6 +468,808 @@ fn stack_offsets(spec: &ChartSpec) -> Vec<Vec<(f64, f64)>> {
         .collect()
 }
 
+/// Builds Chart.js area fills to another dataset or axis boundary.
+pub(crate) fn chartjs_area_fill_primitives(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    source_index: usize,
+    source_segments: &[Vec<(f64, f64, usize)>],
+    offsets: Option<&[Vec<(f64, f64)>]>,
+) -> Vec<Prim> {
+    let Some(source) = spec.series.get(source_index) else {
+        return Vec::new();
+    };
+    let Some(area_fill) = source.area_fill.as_ref() else {
+        return Vec::new();
+    };
+    if matches!(area_fill.target, AreaFillTarget::Dataset(_))
+        && !source_segments_have_area_edge(source_segments)
+    {
+        return Vec::new();
+    }
+    // Dataset target は source の欠損/間引きに依存せず、target 自身の描画点列を使う。
+    let dataset_target_segments = match area_fill.target {
+        AreaFillTarget::Dataset(target_index) => {
+            Some(rendered_line_segments(spec, frame, target_index, offsets).0)
+        }
+        _ => None,
+    };
+    let span_gap_targets = if matches!(area_fill.target, AreaFillTarget::Dataset(_)) {
+        Vec::new()
+    } else {
+        span_gap_target_y_cache(spec, frame, source_index, area_fill.target, offsets)
+    };
+    let base_color = source.fill_at(0);
+    let above = area_fill.above.unwrap_or(base_color);
+    let below = area_fill.below.unwrap_or(base_color);
+    let preserve_singleton = matches!(area_fill.target, AreaFillTarget::Origin);
+    let target_step_mode = match area_fill.target {
+        AreaFillTarget::Dataset(target_index) => spec
+            .series
+            .get(target_index)
+            .and_then(|target| target.step_mode),
+        _ => source.step_mode,
+    };
+    let target_interpolation = match area_fill.target {
+        AreaFillTarget::Dataset(target_index) => spec
+            .series
+            .get(target_index)
+            .map(|target| target.interpolation)
+            .unwrap_or(source.interpolation),
+        _ => source.interpolation,
+    };
+    let mixed = matches!(spec.kind, ChartKind::Mixed);
+    let style = AreaFillStyle {
+        source_interpolation: area_fill_interpolation(source.interpolation, mixed),
+        target_interpolation: area_fill_interpolation(target_interpolation, mixed),
+        source_step: if mixed { None } else { source.step_mode },
+        target_step: if mixed { None } else { target_step_mode },
+        above,
+        below,
+        preserve_singleton,
+        plot_top: frame.plot_top,
+        plot_bottom: frame.plot_bottom,
+    };
+    let dataset_target_shapes = dataset_target_segments.map(|segments| {
+        segments
+            .into_iter()
+            .filter_map(|segment| {
+                if segment.len() < 2 {
+                    return None;
+                }
+                let points: Vec<AreaPoint> = segment.iter().map(|&(x, y, _)| (x, y)).collect();
+                Some(AreaLineShape::new(area_line_points(
+                    &points,
+                    style.target_interpolation,
+                    style.target_step,
+                    style.plot_top,
+                    style.plot_bottom,
+                )))
+            })
+            .collect::<Vec<_>>()
+    });
+    let dataset_target_index = dataset_target_shapes.as_ref().map(|shapes| {
+        let bounds: Vec<(f64, f64)> = shapes
+            .iter()
+            .map(|shape| shape.bounds.unwrap_or((f64::INFINITY, f64::NEG_INFINITY)))
+            .collect();
+        AreaXIntervalIndex::new(&bounds)
+    });
+    let mut output = Vec::new();
+
+    for segment in source_segments {
+        if let (Some(target_shapes), Some(target_index)) =
+            (&dataset_target_shapes, &dataset_target_index)
+        {
+            let source_points: Vec<AreaPoint> = segment.iter().map(|&(x, y, _)| (x, y)).collect();
+            let source_shape = AreaLineShape::new(area_line_points(
+                &source_points,
+                style.source_interpolation,
+                style.source_step,
+                style.plot_top,
+                style.plot_bottom,
+            ));
+            if let Some((min_x, max_x)) = source_shape.bounds {
+                for target_index in target_index.overlapping_indices(min_x, max_x) {
+                    if let Some(target_shape) = target_shapes.get(target_index) {
+                        emit_dataset_area_shapes(&mut output, &source_shape, target_shape, style);
+                    }
+                }
+            }
+            continue;
+        }
+
+        let mut source_run = Vec::new();
+        let mut target_run = Vec::new();
+        for &(x, source_y, category) in segment {
+            if let Some(target_y) = area_target_y(
+                spec,
+                frame,
+                source_index,
+                category,
+                offsets,
+                &span_gap_targets,
+            ) {
+                source_run.push((x, source_y));
+                target_run.push((x, target_y));
+            } else {
+                emit_area_run(&mut output, &source_run, &target_run, style);
+                source_run.clear();
+                target_run.clear();
+            }
+        }
+        emit_area_run(&mut output, &source_run, &target_run, style);
+    }
+
+    output
+}
+
+fn area_fill_interpolation(interpolation: LineInterpolation, mixed: bool) -> LineInterpolation {
+    if mixed && !matches!(interpolation, LineInterpolation::CatmullRom { .. }) {
+        LineInterpolation::Linear
+    } else {
+        interpolation
+    }
+}
+
+fn area_target_y(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    source_index: usize,
+    category: usize,
+    offsets: Option<&[Vec<(f64, f64)>]>,
+    span_gap_targets: &[Option<Vec<Option<f64>>>],
+) -> Option<f64> {
+    let source = spec.series.get(source_index)?;
+    let fill = source.area_fill.as_ref()?;
+    match fill.target {
+        AreaFillTarget::Origin => {
+            let value = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
+            Some(frame.ys.map(value))
+        }
+        AreaFillTarget::Start => Some(frame.plot_bottom),
+        AreaFillTarget::End => Some(frame.plot_top),
+        AreaFillTarget::Value(value) => {
+            if !value.is_finite()
+                || (spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic && value <= 0.0)
+            {
+                None
+            } else {
+                Some(frame.ys.map(common::clip_axis_value(value, &frame.ticks)))
+            }
+        }
+        AreaFillTarget::Dataset(target_index) => {
+            cached_series_y_at(span_gap_targets, target_index, category)
+                .or_else(|| series_y_at(spec, frame, target_index, category, offsets))
+        }
+        AreaFillTarget::Stack => {
+            if let Some(offsets) = offsets {
+                let near = offsets.get(source_index)?.get(category)?.0;
+                Some(frame.ys.map(common::clip_axis_value(near, &frame.ticks)))
+            } else {
+                stack_target_y(spec, frame, source_index, category, span_gap_targets)
+            }
+        }
+    }
+}
+
+fn span_gap_target_y_cache(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    source_index: usize,
+    target: AreaFillTarget,
+    offsets: Option<&[Vec<(f64, f64)>]>,
+) -> Vec<Option<Vec<Option<f64>>>> {
+    let mut cache = vec![None; spec.series.len()];
+    match target {
+        AreaFillTarget::Stack if offsets.is_none() => {
+            for index in 0..source_index {
+                if spec.series[index].series_type == crate::ir::SeriesType::Line {
+                    cache_span_gap_target(spec, frame, index, None, &mut cache);
+                }
+            }
+        }
+        _ => {}
+    }
+    cache
+}
+
+fn cache_span_gap_target(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    series_index: usize,
+    offsets: Option<&[Vec<(f64, f64)>]>,
+    cache: &mut [Option<Vec<Option<f64>>>],
+) {
+    let Some(series) = spec.series.get(series_index) else {
+        return;
+    };
+    if !series.span_gaps {
+        return;
+    }
+
+    let mut values: Vec<Option<f64>> = (0..spec.categories.len())
+        .map(|category| series_y_at(spec, frame, series_index, category, offsets))
+        .collect();
+    interpolate_span_gap_values(&mut values);
+    cache[series_index] = Some(values);
+}
+
+fn cached_series_y_at(
+    cache: &[Option<Vec<Option<f64>>>],
+    series_index: usize,
+    category: usize,
+) -> Option<f64> {
+    cache
+        .get(series_index)?
+        .as_ref()?
+        .get(category)
+        .copied()
+        .flatten()
+}
+
+fn stack_target_y(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    source_index: usize,
+    category: usize,
+    span_gap_targets: &[Option<Vec<Option<f64>>>],
+) -> Option<f64> {
+    spec.series.get(source_index)?;
+    let find_target = |index: usize| {
+        let series = spec.series.get(index)?;
+        if series.series_type != crate::ir::SeriesType::Line {
+            return None;
+        }
+        cached_series_y_at(span_gap_targets, index, category)
+            .or_else(|| series_y_at(spec, frame, index, category, None))
+    };
+    for index in (0..source_index).rev() {
+        if let Some(y) = find_target(index) {
+            return Some(y);
+        }
+    }
+    Some(frame.plot_bottom)
+}
+
+fn series_y_at(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    series_index: usize,
+    category: usize,
+    offsets: Option<&[Vec<(f64, f64)>]>,
+) -> Option<f64> {
+    let series = spec.series.get(series_index)?;
+    if series.series_type != crate::ir::SeriesType::Line {
+        return None;
+    }
+    let value = if let Some(offsets) = offsets {
+        offsets.get(series_index)?.get(category)?.1
+    } else {
+        series.values.get(category).copied()?
+    };
+    if !value.is_finite()
+        || (spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic && value <= 0.0)
+    {
+        return None;
+    }
+    Some(frame.ys.map(common::clip_axis_value(value, &frame.ticks)))
+}
+
+fn interpolate_span_gap_values(values: &mut [Option<f64>]) {
+    let mut previous = None;
+    for index in 0..values.len() {
+        let Some(current_y) = values[index] else {
+            continue;
+        };
+        if let Some((previous_index, previous_y)) = previous {
+            let span = (index - previous_index) as f64;
+            for (offset, value) in values[previous_index + 1..index].iter_mut().enumerate() {
+                let gap_index = previous_index + 1 + offset;
+                let ratio = (gap_index - previous_index) as f64 / span;
+                *value = Some(previous_y + (current_y - previous_y) * ratio);
+            }
+        }
+        previous = Some((index, current_y));
+    }
+}
+
+fn emit_dataset_area_shapes(
+    output: &mut Vec<Prim>,
+    source: &AreaLineShape,
+    target: &AreaLineShape,
+    style: AreaFillStyle,
+) {
+    let mut current = None;
+    for interval in area_intervals_between_shapes(source, target) {
+        if style.above == style.below {
+            append_colored_area_segment(
+                output,
+                &mut current,
+                style.above,
+                &interval.source,
+                &interval.target,
+            );
+        } else {
+            emit_colored_area_interval(output, &mut current, interval, style.above, style.below);
+        }
+    }
+    flush_colored_area_run(output, &mut current);
+}
+
+fn emit_area_run(
+    output: &mut Vec<Prim>,
+    source_points: &[AreaPoint],
+    target_points: &[AreaPoint],
+    style: AreaFillStyle,
+) {
+    if style.preserve_singleton && source_points.len() == 1 && style.above == style.below {
+        let (x, source_y) = source_points[0];
+        let (_, target_y) = target_points[0];
+        let d = format!(
+            "M {} {} L {} {} L {} {} Z",
+            fmt_num(x),
+            fmt_num(source_y),
+            fmt_num(x),
+            fmt_num(target_y),
+            fmt_num(x),
+            fmt_num(target_y)
+        );
+        output.push(Prim::Path {
+            d,
+            fill: Some(style.above),
+            stroke: None,
+            stroke_width: 0.0,
+        });
+        return;
+    }
+    if source_points.len() < 2 || target_points.len() < 2 {
+        return;
+    }
+    let source_shape = area_line_points(
+        source_points,
+        style.source_interpolation,
+        style.source_step,
+        style.plot_top,
+        style.plot_bottom,
+    );
+    let target_shape = area_line_points(
+        target_points,
+        style.target_interpolation,
+        style.target_step,
+        style.plot_top,
+        style.plot_bottom,
+    );
+    if style.above == style.below {
+        if let Some(d) = area_path_between(&source_shape, &target_shape) {
+            output.push(Prim::Path {
+                d,
+                fill: Some(style.above),
+                stroke: None,
+                stroke_width: 0.0,
+            });
+        }
+        return;
+    }
+
+    let source_shape = AreaLineShape::new(source_shape);
+    let target_shape = AreaLineShape::new(target_shape);
+    // Partition both independently shaped lines at the union of their x coordinates. This
+    // keeps curve samples and differing step modes aligned before checking for crossings.
+    let mut colored_run = None;
+    for interval in area_intervals_between_shapes(&source_shape, &target_shape) {
+        emit_colored_area_interval(output, &mut colored_run, interval, style.above, style.below);
+    }
+    flush_colored_area_run(output, &mut colored_run);
+}
+
+fn area_line_points(
+    points: &[AreaPoint],
+    interpolation: LineInterpolation,
+    step_mode: Option<StepMode>,
+    plot_top: f64,
+    plot_bottom: f64,
+) -> Vec<AreaPoint> {
+    if let Some(mode) = step_mode {
+        return step_points(points.iter().copied(), mode);
+    }
+    match interpolation {
+        LineInterpolation::Linear => points.to_vec(),
+        LineInterpolation::CatmullRom { tension } => {
+            catmull_rom_samples(points, tension, plot_top, plot_bottom)
+        }
+        LineInterpolation::Monotone => {
+            super::monotone::monotone_samples(points, AREA_CURVE_SAMPLES)
+        }
+    }
+}
+
+fn catmull_rom_samples(
+    points: &[AreaPoint],
+    tension: f64,
+    min_y: f64,
+    max_y: f64,
+) -> Vec<AreaPoint> {
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    let mut sampled = vec![points[0]];
+    for index in 0..points.len() - 1 {
+        let p0 = points[index.saturating_sub(1)];
+        let p1 = points[index];
+        let p2 = points[index + 1];
+        let p3 = points[(index + 2).min(points.len() - 1)];
+        let cp1 = (
+            p1.0 + (p2.0 - p0.0) / 6.0 * tension,
+            (p1.1 + (p2.1 - p0.1) / 6.0 * tension).clamp(min_y, max_y),
+        );
+        let cp2 = (
+            p2.0 - (p3.0 - p1.0) / 6.0 * tension,
+            (p2.1 - (p3.1 - p1.1) / 6.0 * tension).clamp(min_y, max_y),
+        );
+        for step in 1..=AREA_CURVE_SAMPLES {
+            sampled.push(cubic_point(
+                p1,
+                cp1,
+                cp2,
+                p2,
+                step as f64 / AREA_CURVE_SAMPLES as f64,
+            ));
+        }
+    }
+    sampled
+}
+
+fn cubic_point(p0: AreaPoint, cp1: AreaPoint, cp2: AreaPoint, p1: AreaPoint, t: f64) -> AreaPoint {
+    let one_minus_t = 1.0 - t;
+    let a = one_minus_t * one_minus_t * one_minus_t;
+    let b = 3.0 * one_minus_t * one_minus_t * t;
+    let c = 3.0 * one_minus_t * t * t;
+    let d = t * t * t;
+    (
+        a * p0.0 + b * cp1.0 + c * cp2.0 + d * p1.0,
+        a * p0.1 + b * cp1.1 + c * cp2.1 + d * p1.1,
+    )
+}
+
+fn area_points_have_monotonic_x(points: &[AreaPoint]) -> bool {
+    points.windows(2).all(|pair| pair[0].0 <= pair[1].0)
+}
+
+fn first_area_segment_near_x(points: &[AreaPoint], x: f64) -> usize {
+    points
+        .partition_point(|point| point.0 <= x)
+        .saturating_sub(1)
+}
+
+fn area_x_bounds(points: &[AreaPoint]) -> Option<(f64, f64)> {
+    let &(first_x, _) = points.first()?;
+    let (min_x, max_x) = points
+        .iter()
+        .fold((first_x, first_x), |(min_x, max_x), point| {
+            (min_x.min(point.0), max_x.max(point.0))
+        });
+    Some((min_x, max_x))
+}
+
+fn area_intervals_between_shapes(
+    source: &AreaLineShape,
+    target: &AreaLineShape,
+) -> Vec<AreaInterval> {
+    let (Some((source_min, source_max)), Some((target_min, target_max))) =
+        (source.bounds, target.bounds)
+    else {
+        return Vec::new();
+    };
+    let min_x = source_min.max(target_min);
+    let max_x = source_max.min(target_max);
+    if min_x >= max_x {
+        return Vec::new();
+    }
+
+    if source.monotonic_x && target.monotonic_x {
+        area_intervals_for_monotonic_x(source, target, min_x, max_x)
+    } else {
+        area_intervals_for_unordered_shapes(source, target, min_x, max_x)
+    }
+}
+
+fn area_intervals_for_monotonic_x(
+    source: &AreaLineShape,
+    target: &AreaLineShape,
+    min_x: f64,
+    max_x: f64,
+) -> Vec<AreaInterval> {
+    let mut source_index = first_area_segment_near_x(&source.points, min_x);
+    let mut target_index = first_area_segment_near_x(&target.points, min_x);
+    let mut source_segment = next_area_segment_before_x(&source.points, &mut source_index, max_x);
+    let mut target_segment = next_area_segment_before_x(&target.points, &mut target_index, max_x);
+    let mut intervals = Vec::new();
+
+    while let (Some(source_edge), Some(target_edge)) = (source_segment, target_segment) {
+        let x0 = source_edge[0].0.max(target_edge[0].0);
+        let x1 = source_edge[1].0.min(target_edge[1].0);
+        if x0 < x1 {
+            intervals.push(AreaInterval {
+                source: [
+                    point_on_segment(source_edge, x0),
+                    point_on_segment(source_edge, x1),
+                ],
+                target: [
+                    point_on_segment(target_edge, x0),
+                    point_on_segment(target_edge, x1),
+                ],
+            });
+        }
+
+        if source_edge[1].0 <= target_edge[1].0 {
+            source_segment = next_area_segment_before_x(&source.points, &mut source_index, max_x);
+        }
+        if target_edge[1].0 <= source_edge[1].0 {
+            target_segment = next_area_segment_before_x(&target.points, &mut target_index, max_x);
+        }
+    }
+    intervals
+}
+
+fn area_intervals_for_unordered_shapes(
+    source: &AreaLineShape,
+    target: &AreaLineShape,
+    min_x: f64,
+    max_x: f64,
+) -> Vec<AreaInterval> {
+    let source_indices = source.overlapping_edge_indices(min_x, max_x);
+    let target_indices = target.overlapping_edge_indices(min_x, max_x);
+    let mut xs = vec![min_x, max_x];
+    for edge in source_indices
+        .iter()
+        .map(|&index| source.edge_points(index))
+        .chain(
+            target_indices
+                .iter()
+                .map(|&index| target.edge_points(index)),
+        )
+    {
+        for x in [edge[0].0, edge[1].0] {
+            if x > min_x && x < max_x {
+                xs.push(x);
+            }
+        }
+    }
+    xs.sort_by(f64::total_cmp);
+    xs.dedup_by(|a, b| *a == *b);
+
+    let source_starts = unordered_edge_starts(source, &source_indices);
+    let target_starts = unordered_edge_starts(target, &target_indices);
+    let mut source_start_index = 0;
+    let mut target_start_index = 0;
+    let mut active_source = BinaryHeap::new();
+    let mut active_target = BinaryHeap::new();
+    let mut intervals = Vec::new();
+
+    // x 区間ごとに全線分を再走査せず、元の順で最初の有効線分を選ぶ。
+    for pair in xs.windows(2) {
+        let [x0, x1] = [pair[0], pair[1]];
+        let source_segment = active_unordered_segment(
+            source,
+            &source_starts,
+            &mut source_start_index,
+            &mut active_source,
+            x0,
+        );
+        let target_segment = active_unordered_segment(
+            target,
+            &target_starts,
+            &mut target_start_index,
+            &mut active_target,
+            x0,
+        );
+        if let (Some(source_segment), Some(target_segment)) = (source_segment, target_segment) {
+            intervals.push(AreaInterval {
+                source: [
+                    point_on_segment(source_segment, x0),
+                    point_on_segment(source_segment, x1),
+                ],
+                target: [
+                    point_on_segment(target_segment, x0),
+                    point_on_segment(target_segment, x1),
+                ],
+            });
+        }
+    }
+    intervals
+}
+
+fn unordered_edge_starts(shape: &AreaLineShape, indices: &[usize]) -> Vec<(f64, usize)> {
+    let mut starts: Vec<(f64, usize)> = indices
+        .iter()
+        .map(|&index| (shape.edge_bounds(index).0, index))
+        .collect();
+    starts.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    starts
+}
+
+fn active_unordered_segment(
+    shape: &AreaLineShape,
+    starts: &[(f64, usize)],
+    start_index: &mut usize,
+    active: &mut BinaryHeap<Reverse<usize>>,
+    x: f64,
+) -> Option<[AreaPoint; 2]> {
+    while starts
+        .get(*start_index)
+        .is_some_and(|(start, _)| *start <= x)
+    {
+        active.push(Reverse(starts[*start_index].1));
+        *start_index += 1;
+    }
+    while let Some(Reverse(index)) = active.peek().copied() {
+        if shape.edge_bounds(index).1 <= x {
+            active.pop();
+        } else {
+            break;
+        }
+    }
+    let index = active.peek()?.0;
+    Some(shape.edge_points(index))
+}
+
+fn next_area_segment_before_x(
+    points: &[AreaPoint],
+    index: &mut usize,
+    max_x: f64,
+) -> Option<[AreaPoint; 2]> {
+    while *index + 1 < points.len() {
+        let segment = [points[*index], points[*index + 1]];
+        if segment[0].0 >= max_x {
+            return None;
+        }
+        *index += 1;
+        if segment[0].0 < segment[1].0 {
+            return Some(segment);
+        }
+    }
+    None
+}
+
+fn point_on_segment(segment: [AreaPoint; 2], x: f64) -> AreaPoint {
+    let [start, end] = segment;
+    let ratio = (x - start.0) / (end.0 - start.0);
+    (x, start.1 + (end.1 - start.1) * ratio)
+}
+
+fn emit_colored_area_interval(
+    output: &mut Vec<Prim>,
+    current: &mut Option<ColoredAreaRun>,
+    interval: AreaInterval,
+    above: crate::ir::Color,
+    below: crate::ir::Color,
+) {
+    let [source_start, source_end] = interval.source;
+    let [target_start, target_end] = interval.target;
+    let delta_start = source_start.1 - target_start.1;
+    let delta_end = source_end.1 - target_end.1;
+    if delta_start == 0.0 && delta_end == 0.0 {
+        return;
+    }
+    if (delta_start < 0.0 && delta_end > 0.0) || (delta_start > 0.0 && delta_end < 0.0) {
+        let ratio = delta_start / (delta_start - delta_end);
+        let crossing = (
+            source_start.0 + (source_end.0 - source_start.0) * ratio,
+            source_start.1 + (source_end.1 - source_start.1) * ratio,
+        );
+        let first_color = if delta_start < 0.0 { above } else { below };
+        let second_color = if delta_end < 0.0 { above } else { below };
+        append_colored_area_segment(
+            output,
+            current,
+            first_color,
+            &[source_start, crossing],
+            &[target_start, crossing],
+        );
+        append_colored_area_segment(
+            output,
+            current,
+            second_color,
+            &[crossing, source_end],
+            &[crossing, target_end],
+        );
+    } else {
+        let color = if delta_start + delta_end < 0.0 {
+            above
+        } else {
+            below
+        };
+        append_colored_area_segment(
+            output,
+            current,
+            color,
+            &[source_start, source_end],
+            &[target_start, target_end],
+        );
+    }
+}
+
+fn append_colored_area_segment(
+    output: &mut Vec<Prim>,
+    current: &mut Option<ColoredAreaRun>,
+    color: crate::ir::Color,
+    source: &[AreaPoint; 2],
+    target: &[AreaPoint; 2],
+) {
+    let disconnected = current.as_ref().is_some_and(|run| {
+        run.color != color
+            || run.source.last().is_none_or(|point| point.0 != source[0].0)
+            || run.target.last().is_none_or(|point| point.0 != target[0].0)
+    });
+    if disconnected {
+        flush_colored_area_run(output, current);
+    }
+    match current {
+        Some(run) => {
+            if run.source.last() != Some(&source[0]) || run.target.last() != Some(&target[0]) {
+                run.source.push(source[0]);
+                run.target.push(target[0]);
+            }
+            if run.source.last() != Some(&source[1]) || run.target.last() != Some(&target[1]) {
+                run.source.push(source[1]);
+                run.target.push(target[1]);
+            }
+        }
+        None => {
+            *current = Some(ColoredAreaRun {
+                color,
+                source: source.to_vec(),
+                target: target.to_vec(),
+            });
+        }
+    }
+}
+
+fn flush_colored_area_run(output: &mut Vec<Prim>, current: &mut Option<ColoredAreaRun>) {
+    let Some(run) = current.take() else {
+        return;
+    };
+    if let Some(d) = area_path_between(&run.source, &run.target) {
+        output.push(Prim::Path {
+            d,
+            fill: Some(run.color),
+            stroke: None,
+            stroke_width: 0.0,
+        });
+    }
+}
+
+fn area_path_between(source: &[(f64, f64)], target: &[(f64, f64)]) -> Option<String> {
+    if source.len() < 2 || target.len() < 2 {
+        return None;
+    }
+    let mut d = String::new();
+    for (index, &(x, y)) in source.iter().enumerate() {
+        let command = if index == 0 { 'M' } else { 'L' };
+        write!(d, "{command} {} {} ", fmt_num(x), fmt_num(y)).unwrap();
+    }
+    if target.iter().all(|(_, y)| *y == target[0].1) {
+        let (last_x, last_y) = target[target.len() - 1];
+        let (first_x, first_y) = target[0];
+        write!(
+            d,
+            "L {} {} L {} {} ",
+            fmt_num(last_x),
+            fmt_num(last_y),
+            fmt_num(first_x),
+            fmt_num(first_y)
+        )
+        .unwrap();
+    } else {
+        for &(x, y) in target.iter().rev() {
+            write!(d, "L {} {} ", fmt_num(x), fmt_num(y)).unwrap();
+        }
+    }
+    write!(d, "Z").unwrap();
+    Some(d)
+}
+
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let frame = common::compute(spec, m);
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
@@ -283,61 +1347,72 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // 非 null / 非 gap 系列では segments が 1 本のため、旧「valid 全体で 1 多角形」
         // 経路と同一のパスデータを出力する(バイト不変)。
         if ser.area {
-            let baseline_y = frame
-                .ys
-                .map(0.0_f64.clamp(frame.ticks.min, frame.ticks.max));
-            for seg in &segments {
-                if seg.is_empty() {
-                    continue;
-                }
-                let mut d = String::new();
-                let (first_x, last_x) = match area_points(seg, ser.step_mode) {
-                    AreaPoints::Borrowed(points) => {
-                        append_area_points(&mut d, points.iter().map(|&(x, y, _)| (x, y)))
+            if ser.area_fill.is_some() {
+                items.extend(chartjs_area_fill_primitives(
+                    spec,
+                    &frame,
+                    si,
+                    &segments,
+                    offsets.as_deref(),
+                ));
+            } else {
+                let baseline_y = frame
+                    .ys
+                    .map(0.0_f64.clamp(frame.ticks.min, frame.ticks.max));
+                for seg in &segments {
+                    if seg.is_empty() {
+                        continue;
                     }
-                    AreaPoints::Stepped(points) => append_area_points(&mut d, points),
-                };
-                if let Some(offsets) = &offsets {
-                    // far 辺(area_points 経由)と同じ step_mode を near 辺にも適用する。
-                    // 揃えないと Before/After/Middle で上下辺の形状が食い違う
-                    // (現行 parser は stacked area に step_mode を設定しないため到達不能だが、
-                    // 公開 IR は Line{stacked:true} と Series::step_mode を併用できる)。
-                    let near_points: Vec<(f64, f64)> = seg
-                        .iter()
-                        .map(|&(_, _, cat)| {
-                            (
-                                common::line_x(spec, &frame, cat),
-                                frame
-                                    .ys
-                                    .map(common::clip_axis_value(offsets[si][cat].0, &frame.ticks)),
-                            )
-                        })
-                        .collect();
-                    let near_points = match ser.step_mode {
-                        Some(step_mode) => step_points(near_points.into_iter(), step_mode),
-                        None => near_points,
+                    let mut d = String::new();
+                    let (first_x, last_x) = match area_points(seg, ser.step_mode) {
+                        AreaPoints::Borrowed(points) => {
+                            append_area_points(&mut d, points.iter().map(|&(x, y, _)| (x, y)))
+                        }
+                        AreaPoints::Stepped(points) => append_area_points(&mut d, points),
                     };
-                    for &(near_x, near_y) in near_points.iter().rev() {
-                        write!(d, "L {} {} ", fmt_num(near_x), fmt_num(near_y)).unwrap();
+                    if let Some(offsets) = &offsets {
+                        // far 辺(area_points 経由)と同じ step_mode を near 辺にも適用する。
+                        // 揃えないと Before/After/Middle で上下辺の形状が食い違う
+                        // (現行 parser は stacked area に step_mode を設定しないため到達不能だが、
+                        // 公開 IR は Line{stacked:true} と Series::step_mode を併用できる)。
+                        let near_points: Vec<(f64, f64)> = seg
+                            .iter()
+                            .map(|&(_, _, cat)| {
+                                (
+                                    common::line_x(spec, &frame, cat),
+                                    frame.ys.map(common::clip_axis_value(
+                                        offsets[si][cat].0,
+                                        &frame.ticks,
+                                    )),
+                                )
+                            })
+                            .collect();
+                        let near_points = match ser.step_mode {
+                            Some(step_mode) => step_points(near_points.into_iter(), step_mode),
+                            None => near_points,
+                        };
+                        for &(near_x, near_y) in near_points.iter().rev() {
+                            write!(d, "L {} {} ", fmt_num(near_x), fmt_num(near_y)).unwrap();
+                        }
+                        write!(d, "Z").unwrap();
+                    } else {
+                        write!(
+                            d,
+                            "L {} {} L {} {} Z",
+                            fmt_num(last_x),
+                            fmt_num(baseline_y),
+                            fmt_num(first_x),
+                            fmt_num(baseline_y)
+                        )
+                        .unwrap();
                     }
-                    write!(d, "Z").unwrap();
-                } else {
-                    write!(
+                    items.push(Prim::Path {
                         d,
-                        "L {} {} L {} {} Z",
-                        fmt_num(last_x),
-                        fmt_num(baseline_y),
-                        fmt_num(first_x),
-                        fmt_num(baseline_y)
-                    )
-                    .unwrap();
+                        fill: Some(ser.fill_at(0)),
+                        stroke: None,
+                        stroke_width: 0.0,
+                    });
                 }
-                items.push(Prim::Path {
-                    d,
-                    fill: Some(ser.fill_at(0)),
-                    stroke: None,
-                    stroke_width: 0.0,
-                });
             }
         }
 
@@ -837,6 +1912,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn span_gap_y_cache_interpolates_only_internal_missing_runs() {
+        let mut values = vec![None, Some(10.0), None, None, Some(50.0), None];
+
+        interpolate_span_gap_values(&mut values);
+
+        assert_eq!(
+            values,
+            vec![
+                None,
+                Some(10.0),
+                Some(23.333333333333332),
+                Some(36.666666666666664),
+                Some(50.0),
+                None
+            ]
+        );
+    }
+
     /// 実機バグ回帰テスト: chart.js は対数y軸上の値0を "skip" 点として扱い(marker
     /// も接続線も描かない、ドメイン計算にのみ使う)。修正前は 0 を通常の有限値として
     /// 扱い、軸の床(floor)にクランプされた位置へマーカーと接続線を描いてしまい、
@@ -1202,6 +2296,55 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn unordered_area_intervals_keep_the_first_covering_segment() {
+        let source = [(0.0, 0.0), (2.0, 2.0), (1.0, 4.0), (3.0, 6.0)];
+        let target = [(0.0, 1.0), (3.0, 1.0)];
+
+        let source = AreaLineShape::new(source.to_vec());
+        let target = AreaLineShape::new(target.to_vec());
+        let intervals = area_intervals_between_shapes(&source, &target);
+
+        assert_eq!(intervals.len(), 3);
+        assert_eq!(intervals[0].source, [(0.0, 0.0), (1.0, 1.0)]);
+        assert_eq!(intervals[1].source, [(1.0, 1.0), (2.0, 2.0)]);
+        assert_eq!(intervals[2].source, [(2.0, 5.0), (3.0, 6.0)]);
+        assert_eq!(intervals[2].target, [(2.0, 1.0), (3.0, 1.0)]);
+    }
+
+    #[test]
+    fn area_x_interval_index_reports_all_overlaps_in_original_order() {
+        let index = AreaXIntervalIndex::new(&[(3.0, 7.0), (1.0, 4.0), (8.0, 9.0), (10.0, 13.0)]);
+
+        assert_eq!(index.overlapping_indices(3.0, 5.0), vec![0, 1]);
+        assert_eq!(index.overlapping_indices(7.0, 8.0), Vec::<usize>::new());
+        assert_eq!(index.overlapping_indices(8.5, 12.0), vec![2, 3]);
+    }
+
+    #[test]
+    fn monotonic_area_shape_queries_only_overlapping_edges() {
+        let points: Vec<AreaPoint> = (0..10_000).map(|x| (x as f64, x as f64)).collect();
+        let shape = AreaLineShape::new(points);
+
+        assert_eq!(
+            shape.overlapping_edge_indices(8_765.5, 8_766.5),
+            vec![8_765, 8_766]
+        );
+        assert_eq!(
+            shape.overlapping_edge_indices(-2.0, -1.0),
+            Vec::<usize>::new()
+        );
+    }
+
+    #[test]
+    fn area_fill_target_shapes_are_skipped_without_source_edges() {
+        assert!(!source_segments_have_area_edge(&[vec![(1.0, 2.0, 0)]]));
+        assert!(source_segments_have_area_edge(&[vec![
+            (1.0, 2.0, 0),
+            (2.0, 3.0, 1)
+        ]]));
+    }
+
     fn stacked_area_spec(categories: Vec<&str>, series: Vec<(&str, Vec<f64>)>) -> ChartSpec {
         use crate::ir::{
             AxisBorder, AxisGrid, AxisSpec, ChartKind, Decimation, LegendPos, Point, ScaleKind,
@@ -1237,6 +2380,7 @@ mod tests {
                         stroke: vec![color],
                         stroke_width: 2.0,
                         area: true,
+                        area_fill: None,
                         interpolation: crate::ir::LineInterpolation::Linear,
                         span_gaps: false,
                         step_mode: None,

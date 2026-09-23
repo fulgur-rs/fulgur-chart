@@ -145,6 +145,32 @@ fn area_fill_string_mode_is_filled() {
 }
 
 #[test]
+fn line_schema_accepts_fill_target_with_above_and_below_colors() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+
+    let json = r##"{"type":"line","data":{"datasets":[
+      {"data":[1,3],"fill":{"target":"-1","above":"#ff0000","below":"#0000ff"}},
+      {"data":[3,1],"fill":0}
+    ]}}"##;
+
+    assert!(serde_json::from_str::<ChartJsSpec>(json).is_ok());
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn mixed_line_dataset_schema_accepts_advanced_fill_targets() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+
+    let json = r##"{"type":"bar","data":{"datasets":[
+      {"type":"line","data":[1,3],"fill":{"target":"origin","above":"#ff0000"}},
+      {"type":"bar","data":[2,2]}
+    ]}}"##;
+
+    assert!(serde_json::from_str::<ChartJsSpec>(json).is_ok());
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
 fn title_from_plugins() {
     let json = r#"{ "type":"bar","data":{"labels":[],"datasets":[]},
       "options":{"plugins":{"title":{"display":true,"text":"四半期売上"}}} }"#;
