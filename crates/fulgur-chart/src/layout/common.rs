@@ -279,9 +279,11 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         let mut min_individual = f64::INFINITY;
         let mut max_individual = f64::NEG_INFINITY;
         let (series_groups, group_count) = stack_group_indices(&spec.series);
+        let mut pos_sums = vec![0.0_f64; group_count];
+        let mut neg_sums = vec![0.0_f64; group_count];
         for i in 0..spec.categories.len() {
-            let mut pos_sums = vec![0.0_f64; group_count];
-            let mut neg_sums = vec![0.0_f64; group_count];
+            pos_sums.fill(0.0);
+            neg_sums.fill(0.0);
             for (series_index, ser) in spec.series.iter().enumerate() {
                 if let Some(&v) = ser.values.get(i)
                     && v.is_finite()
@@ -302,12 +304,12 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
                     }
                 }
             }
-            for pos_sum in pos_sums {
+            for &pos_sum in &pos_sums {
                 if pos_sum > data_max {
                     data_max = pos_sum;
                 }
             }
-            for neg_sum in neg_sums {
+            for &neg_sum in &neg_sums {
                 if neg_sum < data_min {
                     data_min = neg_sum;
                 }
