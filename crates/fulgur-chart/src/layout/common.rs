@@ -1792,7 +1792,7 @@ pub fn draw_horizontal_legend(
         let padding = legend_title_padding(options);
         let title_block_height = title_size + padding.top + padding.bottom + 4.0;
         let band_top = band_center_y - band_height / 2.0;
-        let title_y = band_top + padding.top + title_size * TEXT_BASELINE_RATIO;
+        let title_y = band_top + padding.top + title_size / 2.0 + title_size * TEXT_BASELINE_RATIO;
         let title_ink = options.title_color.unwrap_or(label_ink);
         let title_x = match options.align {
             LegendAlign::Start => padding.left,

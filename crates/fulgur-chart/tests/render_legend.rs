@@ -1,6 +1,8 @@
 use fulgur_chart::frontend::chartjs;
 use fulgur_chart::layout::build_scene;
-use fulgur_chart::layout::common::{OUTER_PAD, legend_band_width_vertical};
+use fulgur_chart::layout::common::{
+    OUTER_PAD, TEXT_BASELINE_RATIO, legend_band_width_vertical, legend_horizontal_band_height,
+};
 use fulgur_chart::render::render_chart;
 use fulgur_chart::scene::Prim;
 use fulgur_chart::text::TextMeasurer;
@@ -124,6 +126,24 @@ fn legend_visual_options_change_alignment_markers_and_text_style() {
     assert!(svg.contains("font-family=\"Fira Mono\" font-size=\"18\" font-weight=\"bold\""));
     assert!(svg.contains("fill=\"#123456\""));
     assert!(svg.contains("fill=\"#abcdef\""));
+
+    let title_y = scene
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Prim::StyledText(text) if text.content == "Keys" => Some(text.y),
+            _ => None,
+        })
+        .unwrap();
+    let title_size = spec.legend_options.title_font_size.unwrap();
+    let legend_height =
+        legend_horizontal_band_height(&spec.legend_options, spec.theme.font_size, true);
+    let expected_title_y = OUTER_PAD
+        + spec.legend_options.title_padding.top
+        + title_size / 2.0
+        + title_size * TEXT_BASELINE_RATIO;
+    assert!((title_y - expected_title_y).abs() < 0.001);
+    assert!(legend_height > title_size);
 
     let labels: Vec<(usize, f64, fulgur_chart::ir::Color)> = scene
         .items
