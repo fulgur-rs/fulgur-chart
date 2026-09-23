@@ -83,6 +83,9 @@ fn chartjs_monotone_cubic_mode_uses_monotone_line_geometry() {
     let monotone_scene = line_scene(
         r#"{"type":"line","data":{"labels":["A","B","C"],"datasets":[{"data":[0,2,7],"tension":0.8,"cubicInterpolationMode":"monotone"}]}}"#,
     );
+    let monotone_zero_tension_scene = line_scene(
+        r#"{"type":"line","data":{"labels":["A","B","C"],"datasets":[{"data":[0,2,7],"tension":0.0,"cubicInterpolationMode":"monotone"}]}}"#,
+    );
     let catmull_scene = line_scene(
         r#"{"type":"line","data":{"labels":["A","B","C"],"datasets":[{"data":[0,2,7],"tension":0.8}]}}"#,
     );
@@ -104,8 +107,10 @@ fn chartjs_monotone_cubic_mode_uses_monotone_line_geometry() {
     };
 
     let monotone_path = stroke_path(&monotone_scene);
+    let monotone_zero_tension_path = stroke_path(&monotone_zero_tension_scene);
     let catmull_path = stroke_path(&catmull_scene);
     assert!(monotone_path.contains(" C "), "{monotone_path}");
+    assert_eq!(monotone_path, monotone_zero_tension_path);
     assert_ne!(monotone_path, catmull_path);
 }
 
