@@ -300,6 +300,41 @@ fn fill_to_span_gaps_target_interpolates_through_missing_values() {
 }
 
 #[test]
+fn dataset_fill_keeps_target_vertices_omitted_by_source_gaps() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C"],"datasets":[
+      {"data":[1,null,1],"spanGaps":true,"borderColor":"#ff0000","fill":1},
+      {"data":[0,5,0],"borderColor":"#0000ff","fill":false}
+    ]}}"##;
+    let scene = line_scene(json);
+    let target = line_points_by_color(&scene, (0, 0, 255));
+    let area = area_paths(&scene).first().expect("source area").0;
+    let target_middle = format!(
+        "L {} {}",
+        fulgur_chart::num::fmt_num(target[1].0),
+        fulgur_chart::num::fmt_num(target[1].1)
+    );
+
+    assert!(
+        area.contains(&target_middle),
+        "area boundary omitted the target's middle vertex: {area}"
+    );
+}
+
+#[test]
+fn dataset_fill_does_not_cross_target_gap_omitted_by_source() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C"],"datasets":[
+      {"data":[1,null,1],"spanGaps":true,"borderColor":"#ff0000","fill":1},
+      {"data":[0,null,0],"borderColor":"#0000ff","fill":false}
+    ]}}"##;
+    let scene = line_scene(json);
+
+    assert!(
+        area_paths(&scene).is_empty(),
+        "fill bridged a target gap that fell between source points"
+    );
+}
+
+#[test]
 fn colored_fill_respects_different_source_and_target_step_modes() {
     let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
       {"data":[5,5],"stepped":"after","borderColor":"#0000ff","fill":false},
