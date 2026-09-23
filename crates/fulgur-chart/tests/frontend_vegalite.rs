@@ -1406,7 +1406,7 @@ fn line_mark_maps_to_line() {
         "encoding": {"x": {"field":"cat"}, "y": {"field":"val"}}
     }"#;
     let spec = vegalite::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line { stacked: false }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: false, .. }));
 }
 
 const CATEGORICAL_AREA_STACKED: &str = r#"{
@@ -1427,7 +1427,7 @@ const CATEGORICAL_AREA_STACKED: &str = r#"{
 #[test]
 fn area_with_color_defaults_to_stacked() {
     let spec = vegalite::parse(CATEGORICAL_AREA_STACKED, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: true, .. }));
     assert!(spec.series.iter().all(|s| s.area));
 }
 
@@ -1438,7 +1438,7 @@ fn area_stack_null_disables_stacking() {
         r#""y": {"field": "sales", "type": "quantitative", "stack": null}"#,
     );
     let spec = vegalite::parse(&json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line { stacked: false }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: false, .. }));
 }
 
 #[test]
@@ -1452,7 +1452,7 @@ fn area_without_color_is_never_stacked() {
         }
     }"#;
     let spec = vegalite::parse(json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line { stacked: false }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: false, .. }));
     assert_eq!(spec.series.len(), 1);
     assert!(spec.series[0].area);
 }
@@ -1464,7 +1464,7 @@ fn area_stack_zero_is_explicit_stacked() {
         r#""y": {"field": "sales", "type": "quantitative", "stack": "zero"}"#,
     );
     let spec = vegalite::parse(&json, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: true, .. }));
 }
 
 #[test]
@@ -2848,7 +2848,7 @@ const TEMPORAL_AREA_STACKED: &str = r#"{
 #[test]
 fn temporal_area_with_color_defaults_to_stacked() {
     let spec = vegalite::parse(TEMPORAL_AREA_STACKED, false).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: true, .. }));
     assert!(spec.series.iter().all(|s| s.area));
     assert!(matches!(spec.x_positions, XPositions::Temporal { .. }));
 

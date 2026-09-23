@@ -24,7 +24,7 @@ const TEMPORAL_AREA_STACKED: &str = r#"{
 #[test]
 fn temporal_area_with_color_is_stacked_and_renders() {
     let spec = vegalite::parse(TEMPORAL_AREA_STACKED, true).unwrap();
-    assert!(matches!(spec.kind, ChartKind::Line { stacked: true }));
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: true, .. }));
     assert!(spec.series.iter().all(|s| s.area));
     let svg = render(TEMPORAL_AREA_STACKED);
     assert!(svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"));

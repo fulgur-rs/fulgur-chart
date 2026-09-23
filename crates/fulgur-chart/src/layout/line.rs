@@ -244,6 +244,28 @@ fn segments_for_valid_points(
     segments
 }
 
+fn stacked_source_value_is_valid(
+    spec: &ChartSpec,
+    series: &crate::ir::Series,
+    category: usize,
+) -> bool {
+    let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
+    let missing_values_are_gaps = matches!(
+        spec.kind,
+        ChartKind::Line {
+            stacked_missing_values_are_gaps: true,
+            ..
+        }
+    );
+    if !is_log && !missing_values_are_gaps {
+        return true;
+    }
+    series
+        .values
+        .get(category)
+        .is_some_and(|value| value.is_finite() && (!is_log || *value > 0.0))
+}
+
 fn rendered_line_segments(
     spec: &ChartSpec,
     frame: &common::Frame,
@@ -260,6 +282,9 @@ fn rendered_line_segments(
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let valid: Vec<(f64, f64, usize)> = (0..spec.categories.len())
         .filter_map(|category| {
+            if offsets.is_some() && !stacked_source_value_is_valid(spec, series, category) {
+                return None;
+            }
             let x = if matches!(spec.kind, ChartKind::Mixed) {
                 common::category_center(frame, category, spec.categories.len().max(1))
             } else {
@@ -384,17 +409,15 @@ fn append_area_points(d: &mut String, points: impl IntoIterator<Item = (f64, f64
 /// (bar の `vertical_bar_boxes` と同じ null 挙動)。対数y軸では非正値も `build()` と同じく
 /// skip する(chart.js は log 軸上の非正値を欠損として扱うため)。hard y bound の範囲外も
 /// marker geometry から除外する(描画用の線分は axis edge で clamp する)。
-/// stacked: `build()` の `valid` 構築と同じく全カテゴリを検討する(欠損/非有限は
-/// `stack_offsets` が 0 として補完済み)。ただし hard y bound 外は描画されないため除く。
-/// 対数軸との組み合わせは `value_domain` 側で未対応・到達不能。1系列だけ欠損があっても
-/// 隣接系列の帯は一貫している必要があるため、非stacked と違い欠損点は skip しない
-/// (これも自動レビュー指摘で発見・修正した)。
+/// stacked: `stack_offsets` は欠損/非有限を 0 として他系列の累積計算を続ける。
+/// Chart.js stacked line は欠損した系列自身の点を skip して gap にする。対数軸では元データの
+/// 非正値も skip する。
 pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
 ) -> Vec<crate::layout::scatter::PointBox> {
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
-    let stacked = matches!(spec.kind, ChartKind::Line { stacked: true });
+    let stacked = matches!(spec.kind, ChartKind::Line { stacked: true, .. });
     let offsets = stacked.then(|| stack_offsets(spec));
     let mut pts = Vec::new();
     for (sidx, ser) in spec.series.iter().enumerate() {
@@ -403,6 +426,9 @@ pub fn line_points(
         }
         for i in 0..spec.categories.len() {
             let x = common::line_x(spec, frame, i);
+            if offsets.is_some() && !stacked_source_value_is_valid(spec, ser, i) {
+                continue;
+            }
             let plot_y = if let Some(offsets) = &offsets {
                 offsets[sidx][i].1 // far
             } else {
@@ -747,6 +773,9 @@ fn series_y_at(
         return None;
     }
     let value = if let Some(offsets) = offsets {
+        if !stacked_source_value_is_valid(spec, series, category) {
+            return None;
+        }
         offsets.get(series_index)?.get(category)?.1
     } else {
         series.values.get(category).copied()?
@@ -1276,9 +1305,9 @@ fn area_path_between(source: &[(f64, f64)], target: &[(f64, f64)]) -> Option<Str
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let frame = common::compute(spec, m);
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
-    let stacked = matches!(spec.kind, ChartKind::Line { stacked: true });
-    // 積み上げは常に密なデータ前提(色分け系列は必ず全カテゴリで値を持つ; VL フロントエンドが
-    // build_categorical/build_temporal_line で保証する)なので gap 分割・間引きを行わない。
+    let stacked = matches!(spec.kind, ChartKind::Line { stacked: true, .. });
+    // 積み上げは各カテゴリの累積値を共有するため、系列ごとの間引きは行わない。
+    // 欠損値の線描画上の扱いはChartKindの設定に従い、累積計算では0として扱う。
     // 複数系列を独立に間引くと x 位置がずれてスタックが破綻するため意図的にスキップする。
     let offsets = stacked.then(|| stack_offsets(spec));
 
@@ -1296,6 +1325,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             .filter_map(|i| {
                 let x = common::line_x(spec, &frame, i);
                 if let Some(offsets) = &offsets {
+                    if !stacked_source_value_is_valid(spec, ser, i) {
+                        return None;
+                    }
                     Some((
                         x,
                         frame
@@ -1697,6 +1729,24 @@ mod tests {
         );
         assert_eq!(ps.len(), 2, "非正値は欠損として skip されるべき");
         assert!(ps.iter().all(|p| p.index >= 2));
+    }
+
+    #[test]
+    fn series_y_at_skips_invalid_stacked_source_values() {
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10,null,-5]}]},
+               "options":{"scales":{"y":{"type":"logarithmic","stacked":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let offsets = stack_offsets(&spec);
+
+        assert!(series_y_at(&spec, &frame, 0, 0, Some(&offsets)).is_some());
+        assert!(series_y_at(&spec, &frame, 0, 1, Some(&offsets)).is_none());
+        assert!(series_y_at(&spec, &frame, 0, 2, Some(&offsets)).is_none());
     }
 
     #[test]
@@ -2367,7 +2417,10 @@ mod tests {
             scale_kind: ScaleKind::Linear,
         };
         ChartSpec {
-            kind: ChartKind::Line { stacked: true },
+            kind: ChartKind::Line {
+                stacked: true,
+                stacked_missing_values_are_gaps: false,
+            },
             categories: categories.into_iter().map(str::to_string).collect(),
             x_positions: XPositions::Category,
             series: series
@@ -2461,7 +2514,10 @@ mod tests {
             false,
         )
         .unwrap();
-        spec.kind = ChartKind::Line { stacked: true };
+        spec.kind = ChartKind::Line {
+            stacked: true,
+            stacked_missing_values_are_gaps: false,
+        };
 
         let offsets = stack_offsets(&spec);
         assert_eq!(offsets[0][0], (0.0, 2.0));

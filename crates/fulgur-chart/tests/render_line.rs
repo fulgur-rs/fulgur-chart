@@ -79,6 +79,97 @@ fn line_has_polyline_and_markers() {
 }
 
 #[test]
+fn chartjs_value_axis_stacked_accumulates_line_datasets() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[10,20],"borderColor":"#0000ff"},
+      {"data":[5,15],"borderColor":"#ff0000"}
+    ]},"options":{"scales":{"y":{"stacked":true}}}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let frame = fulgur_chart::layout::common::compute(&spec, &measurer);
+    let scene = line::build(&spec, &measurer);
+    let top_line = line_points_by_color(&scene, (255, 0, 0));
+
+    assert_eq!(
+        top_line.iter().map(|(_, y)| *y).collect::<Vec<_>>(),
+        vec![frame.ys.map(15.0), frame.ys.map(35.0)]
+    );
+}
+
+#[test]
+fn chartjs_stacked_line_preserves_null_gaps_and_accumulates_later_series() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C"],"datasets":[
+      {"data":[10,null,30],"borderColor":"#0000ff"},
+      {"data":[5,5,5],"borderColor":"#ff0000"}
+    ]},"options":{"scales":{"y":{"stacked":true}}}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let frame = fulgur_chart::layout::common::compute(&spec, &measurer);
+    let scene = line::build(&spec, &measurer);
+    let points = line::line_points(&spec, &frame);
+
+    let blue_hit_categories = points
+        .iter()
+        .filter(|point| point.series == 0)
+        .map(|point| point.index)
+        .collect::<Vec<_>>();
+    let red_hit_categories = points
+        .iter()
+        .filter(|point| point.series == 1)
+        .map(|point| point.index)
+        .collect::<Vec<_>>();
+    let blue_markers = scene
+        .items
+        .iter()
+        .filter(|item| matches!(item, Prim::Circle { fill, .. } if (fill.r, fill.g, fill.b) == (0, 0, 255)))
+        .count();
+    let blue_lines = scene
+        .items
+        .iter()
+        .filter(|item| matches!(item, Prim::Polyline { stroke, .. } if (stroke.r, stroke.g, stroke.b) == (0, 0, 255)))
+        .count();
+    let red_line = line_points_by_color(&scene, (255, 0, 0));
+
+    assert_eq!(blue_hit_categories, vec![0, 2]);
+    assert_eq!(red_hit_categories, vec![0, 1, 2]);
+    assert_eq!(blue_markers, 2);
+    assert_eq!(blue_lines, 0);
+    assert_eq!(
+        red_line.iter().map(|(_, y)| *y).collect::<Vec<_>>(),
+        vec![frame.ys.map(15.0), frame.ys.map(5.0), frame.ys.map(35.0)]
+    );
+}
+
+#[test]
+fn stacked_log_line_skips_nonpositive_source_values() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C"],"datasets":[
+      {"data":[10,10,10],"borderColor":"#0000ff"},
+      {"data":[5,0,-5],"borderColor":"#ff0000"}
+    ]},"options":{"scales":{"y":{"stacked":true,"type":"logarithmic","beginAtZero":false}}}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let scene = line::build(&spec, &measurer);
+    let points = line::line_points(
+        &spec,
+        &fulgur_chart::layout::common::compute(&spec, &measurer),
+    );
+
+    let red_markers = scene
+        .items
+        .iter()
+        .filter(|item| matches!(item, Prim::Circle { fill, .. } if (fill.r, fill.g, fill.b) == (255, 0, 0)))
+        .count();
+    let red_hit_categories = points
+        .iter()
+        .filter(|point| point.series == 1)
+        .map(|point| point.index)
+        .collect::<Vec<_>>();
+
+    assert_eq!(red_markers, 1);
+    assert_eq!(red_hit_categories, vec![0]);
+}
+
+#[test]
 fn area_emits_filled_path_with_opacity() {
     let svg = render(
         r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[1,2],"fill":true}]}}"#,
@@ -272,6 +363,32 @@ fn fill_to_dataset_does_not_bridge_a_target_gap() {
     let scene = line_scene(json);
 
     assert!(area_paths(&scene).is_empty(), "fill crossed a target gap");
+}
+
+#[test]
+fn chartjs_stacked_fill_to_dataset_preserves_target_gaps() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C","D"],"datasets":[
+      {"data":[1,null,3,4],"borderColor":"#0000ff","fill":false},
+      {"data":[2,2,2,2],"borderColor":"#ff0000","fill":0}
+    ]},"options":{"scales":{"y":{"stacked":true}}}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let frame = fulgur_chart::layout::common::compute(&spec, &measurer);
+    let scene = line::build(&spec, &measurer);
+    let target_points: Vec<_> = line::line_points(&spec, &frame)
+        .into_iter()
+        .filter(|point| point.series == 0 && point.index >= 2)
+        .map(|point| (point.cx, point.cy))
+        .collect();
+    let areas = area_paths(&scene);
+
+    assert_eq!(target_points.len(), 2);
+    assert_eq!(
+        areas.len(),
+        1,
+        "only the continuous target segment can be filled"
+    );
+    assert_area_tracks_target(areas[0].0, &target_points);
 }
 
 #[test]

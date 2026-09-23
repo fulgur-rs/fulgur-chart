@@ -897,17 +897,29 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         }
     }
 
+    // Line layout は常に index 軸=X、値軸=Y として描く。水平 line で値軸=X の
+    // stacked を受理すると、IR の value_stacked と実際の描画軸が食い違うため拒否する。
+    if is_mixable_base && has_line && !has_bar && index_axis == "y" && value_stacked {
+        return Err("積み上げ line chart は横向き(indexAxis:y)に未対応です".to_string());
+    }
+
     let kind = if is_mixable_base && has_bar && has_line {
         ChartKind::Mixed
     } else if is_mixable_base && has_line && !has_bar {
-        ChartKind::Line { stacked: false }
+        ChartKind::Line {
+            stacked: value_stacked,
+            stacked_missing_values_are_gaps: true,
+        }
     } else if is_mixable_base && has_bar && !has_line {
         bar_kind()
     } else {
         // dataset 空(種別未確定)、または mixable でない型。基本 type で決める。
         match raw.chart_type.as_str() {
             "bar" => bar_kind(),
-            "line" => ChartKind::Line { stacked: false },
+            "line" => ChartKind::Line {
+                stacked: value_stacked,
+                stacked_missing_values_are_gaps: true,
+            },
             "pie" => ChartKind::Pie {
                 cutout: PieCutout::Percent(0.0),
                 dataset_options: vec![],
