@@ -961,29 +961,18 @@ fn render_prim(
                 cache,
             );
         }
-        Prim::StyledText {
-            x,
-            y,
-            size,
-            anchor,
-            fill,
-            content,
-            rotate_deg,
-            font_weight,
-            font_style,
-            ..
-        } => {
+        Prim::StyledText(text) => {
             render_text(
                 pixmap,
-                *x,
-                *y,
-                *size,
-                *anchor,
-                *fill,
-                content,
-                *rotate_deg,
-                font_weight.as_deref(),
-                font_style.as_deref(),
+                text.x,
+                text.y,
+                text.size,
+                text.anchor,
+                text.fill,
+                &text.content,
+                text.rotate_deg,
+                text.font_weight.as_deref(),
+                text.font_style.as_deref(),
                 face,
                 transform,
                 cache,

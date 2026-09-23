@@ -130,9 +130,9 @@ fn legend_visual_options_change_alignment_markers_and_text_style() {
         .iter()
         .enumerate()
         .filter_map(|(index, item)| match item {
-            Prim::StyledText {
-                x, fill, content, ..
-            } if content == "First" || content == "Second" => Some((index, *x, *fill)),
+            Prim::StyledText(text) if text.content == "First" || text.content == "Second" => {
+                Some((index, text.x, text.fill))
+            }
             _ => None,
         })
         .collect();
@@ -146,9 +146,15 @@ fn legend_visual_options_change_alignment_markers_and_text_style() {
         "reverse keeps dataset order reversed"
     );
     assert!(matches!(scene.items[labels[0].0 - 1], Prim::Path { .. }));
-    assert!(scene.items.iter().any(|item| matches!(item, Prim::StyledText {
-        content, fill, size, ..
-    } if content == "Keys" && *fill == fulgur_chart::color::parse_color("#abcdef").unwrap() && *size == 18.0)));
+    assert!(
+        scene
+            .items
+            .iter()
+            .any(|item| matches!(item, Prim::StyledText(text)
+        if text.content == "Keys"
+            && text.fill == fulgur_chart::color::parse_color("#abcdef").unwrap()
+            && text.size == 18.0))
+    );
 }
 
 #[test]
@@ -172,11 +178,11 @@ fn vertical_legend_options_apply_order_row_spacing_and_title() {
             Prim::Text { y, content, .. } if content == "First" || content == "Second" => {
                 Some((index, 0.0, *y))
             }
-            Prim::StyledText { y, content, .. } if content == "First" || content == "Second" => {
-                Some((index, 0.0, *y))
+            Prim::StyledText(text) if text.content == "First" || text.content == "Second" => {
+                Some((index, 0.0, text.y))
             }
             Prim::Text { x, y, content, .. } if content == "Series" => Some((index, *x, *y)),
-            Prim::StyledText { x, y, content, .. } if content == "Series" => Some((index, *x, *y)),
+            Prim::StyledText(text) if text.content == "Series" => Some((index, text.x, text.y)),
             _ => None,
         })
         .collect();
@@ -184,7 +190,8 @@ fn vertical_legend_options_apply_order_row_spacing_and_title() {
         .iter()
         .filter_map(|(index, _, y)| {
             let content = match &scene.items[*index] {
-                Prim::Text { content, .. } | Prim::StyledText { content, .. } => content,
+                Prim::Text { content, .. } => content,
+                Prim::StyledText(text) => &text.content,
                 _ => return None,
             };
             (content == "First" || content == "Second").then_some((*index, *y))
@@ -202,11 +209,8 @@ fn vertical_legend_options_apply_order_row_spacing_and_title() {
     let title_y = labels
         .iter()
         .find_map(|(index, _, y)| match &scene.items[*index] {
-            Prim::Text { content, .. } | Prim::StyledText { content, .. }
-                if content == "Series" =>
-            {
-                Some(*y)
-            }
+            Prim::Text { content, .. } if content == "Series" => Some(*y),
+            Prim::StyledText(text) if text.content == "Series" => Some(text.y),
             _ => None,
         })
         .unwrap();

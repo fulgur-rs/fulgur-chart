@@ -6,7 +6,7 @@ use crate::ir::{
 };
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, ValueScale, nice_ticks, vega_nice_ticks};
-use crate::scene::{Anchor, Prim};
+use crate::scene::{Anchor, Prim, StyledText};
 use crate::temporal::{TemporalTick, temporal_ticks};
 use crate::text::TextMeasurer;
 
@@ -1558,7 +1558,7 @@ fn legend_text_prim(
 ) -> Prim {
     let (font_family, font_weight, font_style) = legend_font_attrs(options, title);
     if font_family.is_some() || font_weight.is_some() || font_style.is_some() {
-        Prim::StyledText {
+        Prim::StyledText(Box::new(StyledText {
             x,
             y,
             size,
@@ -1569,7 +1569,7 @@ fn legend_text_prim(
             font_family,
             font_weight,
             font_style,
-        }
+        }))
     } else {
         Prim::Text {
             x,
