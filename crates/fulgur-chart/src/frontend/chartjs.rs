@@ -3,7 +3,7 @@
 use crate::color::parse_color;
 use crate::ir::*;
 use crate::schema::chartjs::{
-    BarThickness as SchemaBarThickness, BorderRadius as SchemaBorderRadius,
+    BarThickness as SchemaBarThickness, BorderRadius as SchemaBorderRadius, SchemaArcBorderRadius,
 };
 use crate::schema::common::{
     AxisBorderOptions, AxisOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions,
@@ -46,6 +46,9 @@ struct RawSpec {
 struct RawOptions {
     #[serde(rename = "indexAxis")]
     index_axis: Option<String>,
+    /// Pie-only; retain raw JSON until the chart type is known so other kinds stay tolerant.
+    #[serde(default)]
+    cutout: Option<serde_json::Value>,
     // Accept an explicit `options.plugins: null` as the default (schemas render it nullable).
     #[serde(default, deserialize_with = "null_or_default")]
     plugins: RawPlugins,
@@ -202,6 +205,107 @@ fn default_true() -> bool {
     true
 }
 
+fn parse_pie_cutout(value: &serde_json::Value) -> Result<PieCutout, String> {
+    match value {
+        serde_json::Value::Number(number) => number
+            .as_f64()
+            .filter(|number| number.is_finite())
+            .map(PieCutout::Pixels)
+            .ok_or_else(|| "options.cutout must be a finite number or a percentage string".into()),
+        serde_json::Value::String(value) => value
+            .strip_suffix('%')
+            .and_then(|number| number.parse::<f64>().ok())
+            .filter(|percent| percent.is_finite())
+            .map(PieCutout::Percent)
+            .ok_or_else(|| {
+                "options.cutout must be a finite number or a percentage string ending in '%'".into()
+            }),
+        _ => Err("options.cutout must be a finite number or a percentage string".into()),
+    }
+}
+
+fn parse_pie_dataset_options(datasets: &[RawDataset]) -> Result<Vec<PieGeometryOptions>, String> {
+    // オプション未指定は layout 側でも既定値になるため、配列を確保しない。
+    if datasets.iter().all(|dataset| {
+        dataset.spacing.is_none() && dataset.offset.is_none() && dataset.border_radius.is_none()
+    }) {
+        return Ok(Vec::new());
+    }
+
+    datasets
+        .iter()
+        .enumerate()
+        .map(|(index, dataset)| {
+            let prefix = format!("data.datasets[{index}]");
+            let spacing = dataset
+                .spacing
+                .as_deref()
+                .map(|value| finite_json_number(value, &format!("{prefix}.spacing")))
+                .transpose()?
+                .unwrap_or(0.0);
+            let offsets = dataset
+                .offset
+                .as_deref()
+                .map(|value| pie_number_values(value, &format!("{prefix}.offset")))
+                .transpose()?
+                .unwrap_or_default();
+            let border_radii = dataset
+                .border_radius
+                .as_ref()
+                .map(|value| {
+                    serde_json::from_value::<ScalarOrArray<SchemaArcBorderRadius>>(value.clone())
+                        .map_err(|error| format!("{prefix}.borderRadius: {error}"))
+                        .map(|radii| {
+                            radii
+                                .into_vec()
+                                .into_iter()
+                                .map(|radius| match radius {
+                                    SchemaArcBorderRadius::Pixels(value) => {
+                                        ArcBorderRadius::Uniform(value)
+                                    }
+                                    SchemaArcBorderRadius::Corners(corners) => {
+                                        ArcBorderRadius::Corners {
+                                            outer_start: corners.outer_start.unwrap_or(0.0),
+                                            outer_end: corners.outer_end.unwrap_or(0.0),
+                                            inner_start: corners.inner_start.unwrap_or(0.0),
+                                            inner_end: corners.inner_end.unwrap_or(0.0),
+                                        }
+                                    }
+                                })
+                                .collect()
+                        })
+                })
+                .transpose()?
+                .unwrap_or_default();
+
+            Ok(PieGeometryOptions {
+                spacing,
+                offsets,
+                border_radii,
+            })
+        })
+        .collect()
+}
+
+fn finite_json_number(value: &serde_json::Value, path: &str) -> Result<f64, String> {
+    value
+        .as_f64()
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| format!("{path} must be a finite number"))
+}
+
+fn pie_number_values(value: &serde_json::Value, path: &str) -> Result<Vec<f64>, String> {
+    match value {
+        serde_json::Value::Number(_) => Ok(vec![finite_json_number(value, path)?]),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .enumerate()
+            .map(|(index, number)| finite_json_number(number, &format!("{path}[{index}]")))
+            .collect(),
+        _ => Err(format!("{path} must be a number or an array of numbers")),
+    }
+}
+
 #[derive(Deserialize)]
 struct RawData {
     #[serde(default)]
@@ -230,6 +334,12 @@ struct RawDataset {
     max_bar_thickness: Option<f64>,
     #[serde(rename = "minBarLength", default)]
     min_bar_length: Option<f64>,
+    // RawDataset は全 chart type で共有するため、pie 専用の生 JSON は Box 化して
+    // Vec<RawDataset> の要素サイズ増加を抑える。
+    #[serde(default)]
+    spacing: Option<Box<serde_json::Value>>,
+    #[serde(default)]
+    offset: Option<Box<serde_json::Value>>,
     #[serde(rename = "borderRadius", default)]
     border_radius: Option<serde_json::Value>,
     data: DataField,
@@ -687,7 +797,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             );
             let allow_radial_scale =
                 matches!(chart_type.as_deref(), Some("radar") | Some("polarArea"));
-            check_unknown_keys(json, allow_outlabels, allow_radial_scale)?;
+            let allow_pie = matches!(chart_type.as_deref(), Some("pie") | Some("doughnut"));
+            check_unknown_keys(json, allow_outlabels, allow_radial_scale, allow_pie)?;
         }
     }
 
@@ -797,8 +908,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         match raw.chart_type.as_str() {
             "bar" => bar_kind(),
             "line" => ChartKind::Line { stacked: false },
-            "pie" => ChartKind::Pie { donut_ratio: 0.0 },
-            "doughnut" => ChartKind::Pie { donut_ratio: 0.5 },
+            "pie" => ChartKind::Pie {
+                cutout: PieCutout::Percent(0.0),
+                dataset_options: vec![],
+            },
+            "doughnut" => ChartKind::Pie {
+                cutout: PieCutout::Percent(50.0),
+                dataset_options: vec![],
+            },
             "scatter" => ChartKind::Scatter,
             "bubble" => ChartKind::Bubble,
             "radar" => ChartKind::Radar,
@@ -817,6 +934,20 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             },
             other => return Err(format!("未対応の type: {other}")),
         }
+    };
+
+    let kind = match kind {
+        ChartKind::Pie { cutout, .. } => ChartKind::Pie {
+            cutout: raw
+                .options
+                .cutout
+                .as_ref()
+                .map(parse_pie_cutout)
+                .transpose()?
+                .unwrap_or(cutout),
+            dataset_options: parse_pie_dataset_options(&raw.data.datasets)?,
+        },
+        other => other,
     };
 
     // datalabels: 既存は「キーが存在し display!=false なら有効」。
@@ -1588,6 +1719,7 @@ fn check_unknown_keys(
     json: &str,
     allow_outlabels: bool,
     allow_radial_scale: bool,
+    allow_pie: bool,
 ) -> Result<(), String> {
     let value: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
@@ -1601,6 +1733,7 @@ fn check_unknown_keys(
     let chart_type = top.get("type").and_then(|value| value.as_str());
     let line_root = chart_type == Some("line");
     let bar_root = chart_type == Some("bar");
+    let pie_root = matches!(chart_type, Some("pie") | Some("doughnut"));
 
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
         check_object(data, &["labels", "datasets"], "data")?;
@@ -1649,6 +1782,21 @@ fn check_unknown_keys(
                             "tension",
                             "pointRadius",
                         ]
+                    } else if pie_root {
+                        &[
+                            "label",
+                            "type",
+                            "data",
+                            "backgroundColor",
+                            "borderColor",
+                            "borderWidth",
+                            "spacing",
+                            "offset",
+                            "borderRadius",
+                            "fill",
+                            "tension",
+                            "pointRadius",
+                        ]
                     } else {
                         &[
                             "label",
@@ -1682,11 +1830,12 @@ fn check_unknown_keys(
     }
 
     if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
-        check_object(
-            options,
-            &["indexAxis", "plugins", "scales", "theme"],
-            "options",
-        )?;
+        let allowed_options: &[&str] = if allow_pie {
+            &["indexAxis", "plugins", "scales", "theme", "cutout"]
+        } else {
+            &["indexAxis", "plugins", "scales", "theme"]
+        };
+        check_object(options, allowed_options, "options")?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             let allowed_plugins: &[&str] = if allow_outlabels {
                 &["title", "legend", "datalabels", "outlabels", "decimation"]
@@ -3609,6 +3758,141 @@ mod tests {
             (fill_alpha - 1.0).abs() < 1e-6,
             "pie の fill alpha は 1.0 であるべき、実際は {}",
             fill_alpha
+        );
+    }
+
+    #[test]
+    fn pie_cutout_accepts_pixels_and_percentage() {
+        let pixels = parse(
+            r#"{"type":"doughnut","data":{"datasets":[{"data":[1,1]}]},"options":{"cutout":40}}"#,
+            false,
+        )
+        .unwrap();
+        let percent = parse(
+            r#"{"type":"pie","data":{"datasets":[{"data":[1,1]}]},"options":{"cutout":"25%"}}"#,
+            false,
+        )
+        .unwrap();
+        assert!(matches!(
+            pixels.kind,
+            ChartKind::Pie {
+                cutout: PieCutout::Pixels(40.0),
+                ..
+            }
+        ));
+        assert!(matches!(
+            percent.kind,
+            ChartKind::Pie {
+                cutout: PieCutout::Percent(25.0),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn pie_cutout_rejects_invalid_percent_strings() {
+        let error = parse(
+            r#"{"type":"pie","data":{"datasets":[{"data":[1,1]}]},"options":{"cutout":"half"}}"#,
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("options.cutout"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn pie_cutout_and_offsets_reject_wrong_json_types() {
+        for json in [
+            r#"{"type":"pie","data":{"datasets":[{"data":[1]}]},"options":{"cutout":true}}"#,
+            r#"{"type":"pie","data":{"datasets":[{"data":[1],"offset":"7"}]}}"#,
+        ] {
+            assert!(parse(json, false).is_err(), "should reject {json}");
+        }
+    }
+
+    #[test]
+    fn pie_dataset_arc_options_parse_in_strict_mode() {
+        let spec = parse(
+            r#"{"type":"pie","data":{"datasets":[
+              {"data":[1,2,3],"spacing":2,"offset":5,"borderRadius":4},
+              {"data":[3,2,1],"spacing":3,"offset":[1,2],"borderRadius":[1,{"outerStart":2,"outerEnd":3,"innerStart":4,"innerEnd":5}]},
+              {"data":[1]}
+            ]}}"#,
+            true,
+        )
+        .unwrap();
+        assert!(matches!(&spec.kind, ChartKind::Pie { .. }));
+        if let ChartKind::Pie {
+            dataset_options, ..
+        } = spec.kind
+        {
+            assert_eq!(dataset_options.len(), 3);
+            assert_eq!(dataset_options[0].spacing, 2.0);
+            assert_eq!(dataset_options[0].offset_at(2), 5.0);
+            assert!(matches!(
+                dataset_options[0].border_radius_at(0),
+                ArcBorderRadius::Uniform(4.0)
+            ));
+            assert_eq!(dataset_options[1].spacing, 3.0);
+            assert_eq!(dataset_options[1].offset_at(0), 1.0);
+            assert_eq!(dataset_options[1].offset_at(1), 2.0);
+            assert_eq!(dataset_options[1].offset_at(2), 1.0);
+            assert!(matches!(
+                dataset_options[1].border_radius_at(0),
+                ArcBorderRadius::Uniform(1.0)
+            ));
+            assert_eq!(
+                dataset_options[1].border_radius_at(1),
+                ArcBorderRadius::Corners {
+                    outer_start: 2.0,
+                    outer_end: 3.0,
+                    inner_start: 4.0,
+                    inner_end: 5.0,
+                }
+            );
+            assert_eq!(dataset_options[2].spacing, 0.0);
+            assert_eq!(dataset_options[2].offset_at(1), 0.0);
+            assert_eq!(
+                dataset_options[2].border_radius_at(1),
+                ArcBorderRadius::Uniform(0.0)
+            );
+        }
+    }
+
+    #[test]
+    fn pie_without_dataset_arc_options_keeps_implicit_defaults() {
+        let spec = parse(
+            r#"{"type":"pie","data":{"datasets":[{"data":[1,2,3]}]}}"#,
+            false,
+        )
+        .unwrap();
+        assert!(matches!(
+            spec.kind,
+            ChartKind::Pie {
+                dataset_options,
+                ..
+            } if dataset_options.is_empty()
+        ));
+    }
+
+    #[test]
+    fn non_pie_arc_options_are_not_validated() {
+        let spec = parse(
+            r#"{"type":"line","data":{"labels":["A"],"datasets":[{"data":[1],"spacing":{"bad":1},"offset":{"bad":1},"borderRadius":{"outerStart":"bad"}}]},"options":{"cutout":{"bad":1}}}"#,
+            false,
+        );
+        assert!(spec.is_ok(), "non-pie options should be ignored: {spec:?}");
+    }
+
+    #[test]
+    fn pie_dataset_arc_options_report_dataset_path_on_invalid_values() {
+        let json = r#"{"type":"pie","data":{"datasets":[{"data":[1],"borderRadius":{"outerStart":"bad"}}]}}"#;
+        let error = parse(json, false).unwrap_err();
+        assert!(
+            error.contains("data.datasets[0]"),
+            "unexpected error: {error}"
         );
     }
 

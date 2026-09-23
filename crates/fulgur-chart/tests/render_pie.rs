@@ -1,7 +1,52 @@
+use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::chartjs;
+use fulgur_chart::raster_direct::render_chart_to_png;
 use fulgur_chart::render::render_chart;
+use tiny_skia::Pixmap;
 fn render(json: &str) -> String {
     render_chart(&chartjs::parse(json, false).unwrap())
+}
+
+fn render_png(json: &str) -> Vec<u8> {
+    render_chart_to_png(&chartjs::parse(json, false).unwrap(), 1.0, DEFAULT_FONT).unwrap()
+}
+
+fn png_diff_pixels(first: &[u8], second: &[u8]) -> usize {
+    let first = Pixmap::decode_png(first).expect("first PNG should decode");
+    let second = Pixmap::decode_png(second).expect("second PNG should decode");
+    assert_eq!(
+        (first.width(), first.height()),
+        (second.width(), second.height())
+    );
+    first
+        .data()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(second.data().as_chunks::<4>().0.iter())
+        .filter(|(left, right)| left != right)
+        .count()
+}
+
+fn donut_radii(path: &str) -> (f64, f64) {
+    let tokens: Vec<&str> = path.split_whitespace().collect();
+    let outer = tokens[4].parse().expect("outer radius");
+    let inner = tokens[15].parse().expect("inner radius");
+    (outer, inner)
+}
+
+fn path_center(path: &str) -> (f64, f64) {
+    let tokens: Vec<&str> = path.split_whitespace().collect();
+    (
+        tokens[1].parse().expect("center x"),
+        tokens[2].parse().expect("center y"),
+    )
+}
+
+fn pie_outer_radius(path: &str) -> f64 {
+    let tokens: Vec<&str> = path.split_whitespace().collect();
+    let radius_index = if tokens[3] == "A" { 4 } else { 7 };
+    tokens[radius_index].parse().expect("pie outer radius")
 }
 
 #[test]
@@ -57,6 +102,127 @@ fn pie_legend_shows_categories() {
 fn pie_deterministic() {
     let j = r#"{"type":"pie","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}}"#;
     assert_eq!(render(j), render(j));
+}
+
+#[test]
+fn pie_numeric_cutout_uses_pixels() {
+    let json = r#"{"type":"pie","data":{"labels":["A","B"],"datasets":[{"data":[1,1]}]},"options":{"cutout":24}}"#;
+    let svg = render(json);
+    let (outer, inner) = donut_radii(&nth_path_d(&svg, 0));
+    assert!((inner - 24.0).abs() < 0.01, "expected 24px, got {inner}");
+    assert!(inner < outer);
+    let plain = r#"{"type":"pie","data":{"labels":["A","B"],"datasets":[{"data":[1,1]}]}}"#;
+    assert!(png_diff_pixels(&render_png(plain), &render_png(json)) > 0);
+}
+
+#[test]
+fn doughnut_percentage_cutout_scales_with_radius() {
+    let json = r#"{"type":"doughnut","data":{"labels":["A","B"],"datasets":[{"data":[1,1]}]},"options":{"cutout":"25%"}}"#;
+    let svg = render(json);
+    let (outer, inner) = donut_radii(&nth_path_d(&svg, 0));
+    assert!(
+        (inner / outer - 0.25).abs() < 0.001,
+        "outer={outer}, inner={inner}"
+    );
+    let default = r#"{"type":"doughnut","data":{"labels":["A","B"],"datasets":[{"data":[1,1]}]}}"#;
+    assert!(png_diff_pixels(&render_png(default), &render_png(json)) > 0);
+}
+
+#[test]
+fn pie_dataset_options_draw_concentric_rings() {
+    let json = r#"{"type":"doughnut","data":{"labels":["A","B"],"datasets":[{"data":[1,1]},{"data":[2,1]}]},"options":{"cutout":"40%"}}"#;
+    let svg = render(json);
+    assert_eq!(
+        svg.matches("<path").count(),
+        4,
+        "each dataset should draw two arcs"
+    );
+    let (outer_ring_radius, _) = donut_radii(&nth_path_d(&svg, 0));
+    let (inner_ring_radius, _) = donut_radii(&nth_path_d(&svg, 2));
+    assert!(outer_ring_radius > inner_ring_radius);
+    let one_dataset = r#"{"type":"doughnut","data":{"labels":["A","B"],"datasets":[{"data":[1,1]}]},"options":{"cutout":"40%"}}"#;
+    assert!(png_diff_pixels(&render_png(one_dataset), &render_png(json)) > 0);
+}
+
+#[test]
+fn pie_spacing_separates_adjacent_arcs() {
+    let spaced =
+        r#"{"type":"pie","data":{"labels":["A","B"],"datasets":[{"data":[1,1],"spacing":8} ]}}"#;
+    let adjacent = r#"{"type":"pie","data":{"labels":["A","B"],"datasets":[{"data":[1,1]}]}}"#;
+    let svg = render(spaced);
+    let first_end = nth_path_d(&svg, 0);
+    let second_start = nth_path_d(&svg, 1);
+    let first_tokens: Vec<&str> = first_end.split_whitespace().collect();
+    let second_tokens: Vec<&str> = second_start.split_whitespace().collect();
+    let end_x: f64 = first_tokens[12].parse().unwrap();
+    let end_y: f64 = first_tokens[13].parse().unwrap();
+    let start_x: f64 = second_tokens[1].parse().unwrap();
+    let start_y: f64 = second_tokens[2].parse().unwrap();
+    let gap = (end_x - start_x).hypot(end_y - start_y);
+    assert!(
+        (8.0..24.0).contains(&gap),
+        "spacing 8 should make a bounded gap, got {gap}"
+    );
+    let adjacent_radius = pie_outer_radius(&nth_path_d(&render(adjacent), 0));
+    let spaced_radius = pie_outer_radius(&nth_path_d(&svg, 0));
+    assert!(
+        (adjacent_radius - spaced_radius).abs() < 0.05,
+        "Chart.js spacing reserves half its value, then adds that half back to the arc: {adjacent_radius} vs {spaced_radius}"
+    );
+    assert!(png_diff_pixels(&render_png(adjacent), &render_png(spaced)) > 0);
+}
+
+#[test]
+fn pie_offset_moves_only_selected_arcs() {
+    let json =
+        r#"{"type":"pie","data":{"labels":["A","B"],"datasets":[{"data":[1,1],"offset":[0,12]}]}}"#;
+    let svg = render(json);
+    let first = path_center(&nth_path_d(&svg, 0));
+    let second = path_center(&nth_path_d(&svg, 1));
+    let displacement = (first.0 - second.0).hypot(first.1 - second.1);
+    assert!(
+        (displacement - 3.0).abs() < 0.05,
+        "Chart.js translates an offset arc by offset / 4, got {displacement}px"
+    );
+    let first_radius = pie_outer_radius(&nth_path_d(&svg, 0));
+    let second_radius = pie_outer_radius(&nth_path_d(&svg, 1));
+    assert!(
+        ((second_radius - first_radius) - 3.0).abs() < 0.05,
+        "Chart.js applies one quarter of offset 12 as radial correction for a half-circle: {first_radius} vs {second_radius}"
+    );
+    let default = r#"{"type":"pie","data":{"labels":["A","B"],"datasets":[{"data":[1,1]}]}}"#;
+    let default_radius = pie_outer_radius(&nth_path_d(&render(default), 0));
+    assert!(
+        ((default_radius - first_radius) - 6.0).abs() < 0.05,
+        "Chart.js reserves half the maximum offset from the chart radius: {default_radius} vs {first_radius}"
+    );
+    assert!(png_diff_pixels(&render_png(default), &render_png(json)) > 0);
+}
+
+#[test]
+fn pie_unused_offsets_do_not_shrink_chart_radius() {
+    let oversized =
+        r#"{"type":"pie","data":{"labels":["A"],"datasets":[{"data":[1],"offset":[0,1000]}]}}"#;
+    let default = r#"{"type":"pie","data":{"labels":["A"],"datasets":[{"data":[1]}]}}"#;
+    let oversized_radius = pie_outer_radius(&nth_path_d(&render(oversized), 0));
+    let default_radius = pie_outer_radius(&nth_path_d(&render(default), 0));
+    assert!(
+        (oversized_radius - default_radius).abs() < 0.05,
+        "an offset value beyond the dataset length is unused: {default_radius} vs {oversized_radius}"
+    );
+}
+
+#[test]
+fn pie_border_radius_rounds_named_arc_corners() {
+    let rounded = r#"{"type":"doughnut","data":{"labels":["A","B"],"datasets":[{"data":[1,1],"borderRadius":{"outerStart":12,"outerEnd":10,"innerStart":8,"innerEnd":6}}]}}"#;
+    let plain = r#"{"type":"doughnut","data":{"labels":["A","B"],"datasets":[{"data":[1,1]}]}}"#;
+    let rounded_svg = render(rounded);
+    let plain_svg = render(plain);
+    assert!(
+        nth_path_d(&rounded_svg, 0).matches(" A ").count()
+            > nth_path_d(&plain_svg, 0).matches(" A ").count()
+    );
+    assert!(png_diff_pixels(&render_png(plain), &render_png(rounded)) > 0);
 }
 
 /// SVG 中の n 番目(0始まり)の `<path d="...">` の d 属性を取り出す。

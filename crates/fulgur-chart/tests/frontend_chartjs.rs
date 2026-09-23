@@ -2004,3 +2004,83 @@ fn horizontal_bar_border_radius_matches_svg_and_png_corners() {
         "negative bar base-side bottom-right corner stays square"
     );
 }
+
+#[test]
+fn pie_schema_roundtrip_preserves_cutout_and_dataset_arc_options() {
+    use fulgur_chart::schema::ChartJsSpec;
+
+    let cases = [
+        r#"{"type":"pie","data":{"datasets":[{"data":[1.0,2.0],"spacing":2.0,"offset":5.0,"borderRadius":4.0}]},"options":{"cutout":24.0}}"#,
+        r#"{"type":"doughnut","data":{"datasets":[{"data":[1.0,2.0],"spacing":3.0,"offset":[1.0,3.0],"borderRadius":[2.0,{"outerStart":4.0,"outerEnd":3.0,"innerStart":2.0,"innerEnd":1.0}]}]},"options":{"cutout":"25%"}}"#,
+    ];
+
+    for json in cases {
+        let expected: serde_json::Value = serde_json::from_str(json).unwrap();
+        let spec: ChartJsSpec = serde_json::from_value(expected.clone()).unwrap();
+        let actual = serde_json::to_value(spec).unwrap();
+        assert_eq!(actual, expected);
+        assert!(chartjs::parse(json, true).is_ok());
+    }
+
+    let invalid_cutout =
+        r#"{"type":"pie","data":{"datasets":[{"data":[1]}]},"options":{"cutout":"half"}}"#;
+    assert!(serde_json::from_str::<ChartJsSpec>(invalid_cutout).is_err());
+}
+
+#[test]
+fn pie_arc_options_are_rejected_by_schema_and_strict_parser_on_other_arc_charts() {
+    use fulgur_chart::schema::ChartJsSpec;
+
+    let invalid = [
+        r#"{"type":"polarArea","data":{"datasets":[{"data":[1,2],"spacing":2} ]}}"#,
+        r#"{"type":"outlabeledPie","data":{"datasets":[{"data":[1,2],"spacing":2}]}}"#,
+        r#"{"type":"outlabeledDoughnut","data":{"datasets":[{"data":[1,2],"spacing":2}]}}"#,
+    ];
+    for json in invalid {
+        assert!(
+            serde_json::from_str::<ChartJsSpec>(json).is_err(),
+            "schema should reject pie-only arc options for {json}"
+        );
+        assert!(
+            chartjs::parse(json, true).is_err(),
+            "strict parser should reject pie-only arc options for {json}"
+        );
+    }
+}
+
+#[test]
+fn strict_rejects_pie_only_cutout_and_arc_options_on_bar() {
+    let cases = [
+        r#"{"type":"bar","data":{"datasets":[{"data":[1]}]},"options":{"cutout":20}}"#,
+        r#"{"type":"bar","data":{"datasets":[{"data":[1],"spacing":2}]}}"#,
+        r#"{"type":"bar","data":{"datasets":[{"data":[1],"offset":2}]}}"#,
+    ];
+    for json in cases {
+        assert!(chartjs::parse(json, true).is_err(), "should reject {json}");
+    }
+}
+
+#[test]
+fn pie_arc_geometry_is_deterministic_in_svg_and_png() {
+    let json = r#"{"type":"doughnut","data":{"labels":["A","B"],"datasets":[{"data":[2,1],"spacing":4,"offset":[0,7],"borderRadius":[{"outerStart":12,"outerEnd":10,"innerStart":8,"innerEnd":6},5]}]},"options":{"cutout":"35%"}}"#;
+    let spec = chartjs::parse(json, true).unwrap();
+    let svg_first = fulgur_chart::render::render_chart(&spec);
+    let svg_second = fulgur_chart::render::render_chart(&spec);
+    assert_eq!(svg_first, svg_second);
+    assert!(svg_first.contains("<path") && !svg_first.contains("NaN"));
+
+    let png_first = fulgur_chart::raster_direct::render_chart_to_png(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .unwrap();
+    let png_second = fulgur_chart::raster_direct::render_chart_to_png(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .unwrap();
+    assert_eq!(png_first, png_second);
+    tiny_skia::Pixmap::decode_png(&png_first).expect("pie PNG should decode");
+}

@@ -260,7 +260,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         } => "bar-horizontal",
         ChartKind::Bar { .. } => "bar",
         ChartKind::Line { .. } => "line",
-        ChartKind::Pie { donut_ratio } if *donut_ratio > 0.0 => "doughnut",
+        ChartKind::Pie { cutout, .. } if cutout.is_doughnut() => "doughnut",
         ChartKind::Pie { .. } => "pie",
         ChartKind::Scatter => "scatter",
         ChartKind::Bubble => "bubble",
