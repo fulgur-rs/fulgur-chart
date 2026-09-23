@@ -30,6 +30,7 @@ dhat-heap = ["dep:dhat"]
 
 [dev-dependencies]
 insta = { workspace = true }
+regex = "1"
 
 # criterion pulls in rayon, which refuses to compile for wasm32. The speed bench
 # never runs on wasm, so keep criterion off the wasm dev-dep graph — otherwise

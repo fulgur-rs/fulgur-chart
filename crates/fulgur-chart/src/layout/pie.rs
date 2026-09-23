@@ -378,13 +378,23 @@ fn rounded_sector_path(g: &Geom, start: f64, end: f64, radius: ArcBorderRadius) 
     } = *g;
     let sweep = end - start;
     let half_thickness = ((r_outer - r_inner) / 2.0).max(0.0);
-    let angle_sine = (sweep / 4.0).sin().max(0.0);
-    let outer_angle_limit = r_outer * angle_sine / (1.0 + angle_sine);
-    let inner_angle_limit = if r_inner > 0.0 && angle_sine < 1.0 {
-        r_inner * angle_sine / (1.0 - angle_sine)
-    } else {
-        0.0
+    let outer_angle_limit = |value: f64| {
+        let sweep = sweep.max(0.0);
+        let chartjs_limit = (r_outer - half_thickness.min(value.max(0.0))) * sweep / 2.0;
+        let non_crossing_limit = if sweep < PI {
+            let sin_half_sweep = (sweep / 2.0).sin();
+            r_outer * sin_half_sweep / (1.0 + sin_half_sweep)
+        } else {
+            half_thickness
+        };
+        half_thickness
+            .min(chartjs_limit)
+            .min(non_crossing_limit)
+            .max(0.0)
     };
+    let inner_angle_limit = (sweep.max(0.0) * r_inner / 2.0)
+        .min(half_thickness)
+        .max(0.0);
     let requested = match radius {
         ArcBorderRadius::Uniform(value) => (value, value, value, value),
         ArcBorderRadius::Corners {
@@ -401,8 +411,8 @@ fn rounded_sector_path(g: &Geom, start: f64, end: f64, radius: ArcBorderRadius) 
             0.0
         }
     };
-    let outer_start = clean(requested.0, outer_angle_limit);
-    let outer_end = clean(requested.1, outer_angle_limit);
+    let outer_start = clean(requested.0, outer_angle_limit(requested.0));
+    let outer_end = clean(requested.1, outer_angle_limit(requested.1));
     let inner_start = clean(requested.2, inner_angle_limit);
     let inner_end = clean(requested.3, inner_angle_limit);
 
@@ -738,5 +748,51 @@ mod tests {
         );
         assert!(!path.contains("inf"));
         assert!(!path.contains("NaN"));
+    }
+
+    #[test]
+    fn narrow_sweep_outer_border_radius_matches_chartjs_limit() {
+        let geom = Geom {
+            cx: 0.0,
+            cy: 0.0,
+            r_outer: 100.0,
+            r_inner: 50.0,
+        };
+        let path = rounded_sector_path(&geom, 0.0, 0.2, ArcBorderRadius::Uniform(50.0));
+        let tokens: Vec<&str> = path.split_whitespace().collect();
+        let arc_radii: Vec<f64> = tokens
+            .iter()
+            .enumerate()
+            .filter(|(_, token)| **token == "A")
+            .map(|(index, _)| tokens[index + 1].parse().unwrap())
+            .collect();
+
+        // Chart.js parseBorderRadius: min(halfThickness,
+        // (outerRadius - min(halfThickness, requested)) * angleDelta / 2).
+        assert!((arc_radii[0] - 7.5).abs() < 1e-9, "path={path}");
+        // Inner corners use min(halfThickness, angleDelta * innerRadius / 2).
+        assert!((arc_radii[3] - 5.0).abs() < 1e-9, "path={path}");
+    }
+
+    #[test]
+    fn narrow_sweep_outer_corner_arcs_do_not_cross() {
+        let geom = Geom {
+            cx: 0.0,
+            cy: 0.0,
+            r_outer: 100.0,
+            r_inner: 50.0,
+        };
+        let sweep: f64 = 0.5;
+        let path = rounded_sector_path(&geom, 0.0, sweep, ArcBorderRadius::Uniform(20.0));
+        let tokens: Vec<&str> = path.split_whitespace().collect();
+        let first_arc = tokens.iter().position(|token| *token == "A").unwrap();
+        let corner_radius: f64 = tokens[first_arc + 1].parse().unwrap();
+
+        // The SVG outer-circle arc must have nonnegative angular width after both corners.
+        let corner_angle = (corner_radius / (geom.r_outer - corner_radius)).asin();
+        assert!(
+            2.0 * corner_angle <= sweep + 1e-9,
+            "outer corner arcs cross: radius={corner_radius}, sweep={sweep}, path={path}"
+        );
     }
 }
