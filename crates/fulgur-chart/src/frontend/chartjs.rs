@@ -225,6 +225,13 @@ fn parse_pie_cutout(value: &serde_json::Value) -> Result<PieCutout, String> {
 }
 
 fn parse_pie_dataset_options(datasets: &[RawDataset]) -> Result<Vec<PieGeometryOptions>, String> {
+    // オプション未指定は layout 側でも既定値になるため、配列を確保しない。
+    if datasets.iter().all(|dataset| {
+        dataset.spacing.is_none() && dataset.offset.is_none() && dataset.border_radius.is_none()
+    }) {
+        return Ok(Vec::new());
+    }
+
     datasets
         .iter()
         .enumerate()
@@ -232,13 +239,13 @@ fn parse_pie_dataset_options(datasets: &[RawDataset]) -> Result<Vec<PieGeometryO
             let prefix = format!("data.datasets[{index}]");
             let spacing = dataset
                 .spacing
-                .as_ref()
+                .as_deref()
                 .map(|value| finite_json_number(value, &format!("{prefix}.spacing")))
                 .transpose()?
                 .unwrap_or(0.0);
             let offsets = dataset
                 .offset
-                .as_ref()
+                .as_deref()
                 .map(|value| pie_number_values(value, &format!("{prefix}.offset")))
                 .transpose()?
                 .unwrap_or_default();
@@ -327,10 +334,12 @@ struct RawDataset {
     max_bar_thickness: Option<f64>,
     #[serde(rename = "minBarLength", default)]
     min_bar_length: Option<f64>,
+    // RawDataset は全 chart type で共有するため、pie 専用の生 JSON は Box 化して
+    // Vec<RawDataset> の要素サイズ増加を抑える。
     #[serde(default)]
-    spacing: Option<serde_json::Value>,
+    spacing: Option<Box<serde_json::Value>>,
     #[serde(default)]
-    offset: Option<serde_json::Value>,
+    offset: Option<Box<serde_json::Value>>,
     #[serde(rename = "borderRadius", default)]
     border_radius: Option<serde_json::Value>,
     data: DataField,
@@ -3850,6 +3859,22 @@ mod tests {
                 ArcBorderRadius::Uniform(0.0)
             );
         }
+    }
+
+    #[test]
+    fn pie_without_dataset_arc_options_keeps_implicit_defaults() {
+        let spec = parse(
+            r#"{"type":"pie","data":{"datasets":[{"data":[1,2,3]}]}}"#,
+            false,
+        )
+        .unwrap();
+        assert!(matches!(
+            spec.kind,
+            ChartKind::Pie {
+                dataset_options,
+                ..
+            } if dataset_options.is_empty()
+        ));
     }
 
     #[test]

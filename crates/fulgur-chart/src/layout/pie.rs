@@ -628,7 +628,7 @@ mod tests {
     #[test]
     fn non_finite_spacing_falls_back_to_unspaced_arcs() {
         let mut spec = chartjs::parse(
-            r#"{"type":"pie","data":{"datasets":[{"data":[1,1]}]}}"#,
+            r#"{"type":"pie","data":{"datasets":[{"data":[1,1],"spacing":1}]}}"#,
             false,
         )
         .unwrap();
