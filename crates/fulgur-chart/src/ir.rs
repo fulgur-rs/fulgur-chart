@@ -126,6 +126,22 @@ pub enum SizeMode {
     PlotArea,
 }
 
+/// Optional Chart.js per-dataset bar geometry overrides.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BarGeometryOptions {
+    pub category_percentage: Option<f64>,
+    pub bar_percentage: Option<f64>,
+    pub bar_thickness: Option<BarThickness>,
+    pub max_bar_thickness: Option<f64>,
+    pub min_bar_length: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BarThickness {
+    Pixels(f64),
+    Flex,
+}
+
 /// 色は**データ点ごと**に持てる（pie のスライス別色が標準形のため）。
 /// 長さ 1 のときは全点へブロードキャストする。`fill_at`/`stroke_at` で安全に参照する。
 #[derive(Clone, Debug, PartialEq)]
@@ -150,6 +166,8 @@ pub struct Series {
     /// Optional stack group id. Chart.js datasets normalize omitted ids to their type default;
     /// other frontends leave this unset to retain their historical single-stack behavior.
     pub stack: Option<String>,
+    /// Chart.js bar geometry controls, when supplied by that frontend.
+    pub bar_geometry: Option<BarGeometryOptions>,
     /// scatter のマーカー半径(chart.js pointRadius)。None なら既定値。
     /// bubble では point.r を優先し、欠落時のフォールバックに使う。
     pub point_radius: Option<f64>,
@@ -654,6 +672,7 @@ mod tests {
             span_gaps: false,
             step_mode: None,
             stack: None,
+            bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -679,6 +698,7 @@ mod tests {
             span_gaps: false,
             step_mode: None,
             stack: None,
+            bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],
@@ -705,6 +725,7 @@ mod tests {
             span_gaps: false,
             step_mode: None,
             stack: None,
+            bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
             box_points: vec![],

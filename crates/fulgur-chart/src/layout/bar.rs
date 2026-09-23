@@ -1,16 +1,14 @@
 //! bar チャートのレイアウト: ChartSpec → Scene。
 //! 縦棒・横棒に対応。決定的に組み立て、NaN/Inf/panic を出さない。
 
-use crate::ir::ChartSpec;
+use crate::ir::{BarGeometryOptions, BarThickness, ChartSpec};
 use crate::scene::{Prim, Scene};
 use crate::text::TextMeasurer;
 
-/// band 内のグループ幅比。
-const GROUP_RATIO: f64 = 0.8;
-/// band 左右パディング比。
-const BAND_PAD_RATIO: f64 = 0.1;
-/// bar 幅の塗り比。
-const BAR_FILL_RATIO: f64 = 0.9;
+const DEFAULT_CATEGORY_PERCENTAGE: f64 = 0.8;
+const DEFAULT_BAR_PERCENTAGE: f64 = 0.9;
+const DEFAULT_CATEGORY_PADDING: f64 = 0.1;
+const MAX_BAR_THICKNESS: f64 = 32768.0;
 /// 極端に長い目盛ラベルでも LinearScale のプロット幅を 0 にしない下限。
 const MIN_HORIZONTAL_PLOT_WIDTH: f64 = 1.0;
 
@@ -32,6 +30,124 @@ pub struct BarBox {
     pub h: f64,
 }
 
+/// Computes the pixel bounds for one dataset's category-axis bar slot.
+///
+/// Numeric `barThickness` defines a fixed slot and ignores both percentage options. `flex` uses
+/// the neighboring category interval; category positions in this renderer are evenly spaced, so
+/// that interval is the same as `category_size`.
+pub(crate) fn category_bar_bounds(
+    center: f64,
+    category_start: f64,
+    category_size: f64,
+    slot: usize,
+    slot_count: usize,
+    options: Option<BarGeometryOptions>,
+) -> (f64, f64) {
+    let options = options.unwrap_or_default();
+    let slot_count = slot_count.max(1) as f64;
+    let category_percentage = options
+        .category_percentage
+        .filter(|value| value.is_finite())
+        .unwrap_or(DEFAULT_CATEGORY_PERCENTAGE)
+        .max(0.0);
+    let bar_percentage = options
+        .bar_percentage
+        .filter(|value| value.is_finite())
+        .unwrap_or(DEFAULT_BAR_PERCENTAGE)
+        .max(0.0);
+    let max_bar_thickness = options
+        .max_bar_thickness
+        .filter(|value| value.is_finite())
+        .unwrap_or(f64::INFINITY)
+        .max(0.0);
+
+    let (slot_size, fill_ratio) = match options.bar_thickness {
+        Some(BarThickness::Pixels(value)) => (
+            if value.is_finite() {
+                value.clamp(0.0, MAX_BAR_THICKNESS)
+            } else {
+                0.0
+            },
+            1.0,
+        ),
+        Some(BarThickness::Flex) | None => (
+            (category_size.max(0.0) * category_percentage).min(MAX_BAR_THICKNESS) / slot_count,
+            bar_percentage,
+        ),
+    };
+    let slot_center = center - slot_size * slot_count / 2.0 + slot_size * (slot as f64 + 0.5);
+    let natural_width = (slot_size * fill_ratio).min(MAX_BAR_THICKNESS);
+    let width = natural_width.min(max_bar_thickness).max(0.0);
+    // Keep existing renderer output only when the dataset leaves every geometry option unset.
+    // Explicit settings, including values equal to the defaults, follow Chart.js's centered
+    // placement.
+    let legacy_default =
+        options == BarGeometryOptions::default() && natural_width <= max_bar_thickness;
+    let left = if legacy_default {
+        category_start + category_size * DEFAULT_CATEGORY_PADDING + slot_size * slot as f64
+    } else {
+        slot_center - width / 2.0
+    };
+    (left, width)
+}
+
+/// Applies Chart.js `minBarLength` in pixel space while keeping both endpoints inside the value
+/// axis span. `base` and `head` are ordered by data direction, including negative stacked bars.
+/// `positive_direction` is -1 for a vertical value axis and +1 for a horizontal one.
+pub(crate) fn enforce_min_bar_length(
+    mut base: f64,
+    mut head: f64,
+    value: f64,
+    minimum: Option<f64>,
+    positive_direction: f64,
+    pixel_start: f64,
+    pixel_end: f64,
+) -> (f64, f64) {
+    let Some(minimum) = minimum
+        .filter(|value| value.is_finite())
+        .map(|value| value.clamp(0.0, (pixel_end - pixel_start).abs()))
+    else {
+        return (base, head);
+    };
+    if (head - base).abs() >= minimum {
+        return (base, head);
+    }
+
+    let range_min = pixel_start.min(pixel_end);
+    let range_max = pixel_start.max(pixel_end);
+    let direction = positive_direction * if value >= 0.0 { 1.0 } else { -1.0 };
+    if value == 0.0 {
+        let length = minimum.min(range_max - range_min);
+        let anchor = base.clamp(range_min, range_max);
+        base = anchor - direction * length / 2.0;
+        head = anchor + direction * length / 2.0;
+
+        // Shift a centered zero bar into the plot at an edge without changing its length.
+        if base.min(head) < range_min {
+            let shift = range_min - base.min(head);
+            base += shift;
+            head += shift;
+        }
+        if base.max(head) > range_max {
+            let shift = base.max(head) - range_max;
+            base -= shift;
+            head -= shift;
+        }
+        return (base, head);
+    }
+
+    base = base.clamp(range_min, range_max);
+    let available = if direction > 0.0 {
+        range_max - base
+    } else {
+        base - range_min
+    }
+    .max(0.0);
+    let length = minimum.min(available);
+    head = base + direction * length;
+    (base, head)
+}
+
 /// 縦棒の全データ矩形を build_vertical と同一の式で算出する単一の真実源。
 /// レンダラ(`build_vertical`)とモデル(`model::Geometry`)の両方がこれを呼ぶ。
 /// 非積み上げ (dodge): category 外側 × series 内側で有限値のみ box を生成する。
@@ -42,15 +158,8 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     let n = spec.categories.len().max(1);
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let band_w = super::common::band_width(frame, n);
-    let s = spec.series.len().max(1);
-    let group_w = band_w * GROUP_RATIO;
-    let bar_w = group_w / s as f64;
     let (stack_groups, stack_group_count) = super::common::stack_group_indices(&spec.series);
-    let stack_slot_count = stack_group_count.max(1);
-    let stack_slot_w = group_w / stack_slot_count as f64;
-    let stack_bar_w = (stack_slot_w * BAR_FILL_RATIO).max(0.0);
-    let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
-    let baseline_y = frame.ys.map(base_v);
+    let s = spec.series.len().max(1);
     let placement_stacked = matches!(
         spec.kind,
         crate::ir::ChartKind::Bar {
@@ -58,6 +167,13 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
             ..
         }
     );
+    let slot_count = if placement_stacked {
+        stack_group_count.max(1)
+    } else {
+        s
+    };
+    let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
+    let baseline_y = frame.ys.map(base_v);
     let value_stacked = matches!(
         spec.kind,
         crate::ir::ChartKind::Bar {
@@ -70,8 +186,8 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     if placement_stacked && value_stacked {
         // stack ID ごとに並列の列を置き、各列の中で値を正負別に累積する。
         for i in 0..spec.categories.len() {
-            let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
-            let bx = band_left + band_w * BAND_PAD_RATIO;
+            let center = super::common::category_center(frame, i, n);
+            let band_left = center - band_w / 2.0;
             let mut pos_acc = vec![0.0_f64; stack_group_count];
             let mut neg_acc = vec![0.0_f64; stack_group_count];
             for (sidx, ser) in spec.series.iter().enumerate() {
@@ -82,6 +198,14 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     continue;
                 }
                 let stack_group = stack_groups[sidx];
+                let (bx, bar_width) = category_bar_bounds(
+                    center,
+                    band_left,
+                    band_w,
+                    stack_group,
+                    slot_count,
+                    ser.bar_geometry,
+                );
                 let (v0, v1) = if v >= 0.0 {
                     let lo = pos_acc[stack_group];
                     pos_acc[stack_group] += v;
@@ -92,21 +216,32 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     neg_acc[stack_group] += v;
                     (neg_acc[stack_group], hi)
                 };
-                let y0 = frame
+                let (base_v, head_v) = if v >= 0.0 { (v0, v1) } else { (v1, v0) };
+                let base = frame
                     .ys
-                    .map(super::common::clip_axis_value(v0, &frame.ticks));
-                let y1 = frame
+                    .map(super::common::clip_axis_value(base_v, &frame.ticks));
+                let head = frame
                     .ys
-                    .map(super::common::clip_axis_value(v1, &frame.ticks));
-                let y_top = y0.min(y1);
-                let h = (y1 - y0).abs();
+                    .map(super::common::clip_axis_value(head_v, &frame.ticks));
+                let (base, head) = enforce_min_bar_length(
+                    base,
+                    head,
+                    v,
+                    ser.bar_geometry
+                        .and_then(|geometry| geometry.min_bar_length),
+                    -1.0,
+                    frame.plot_top,
+                    frame.plot_bottom,
+                );
+                let y_top = base.min(head);
+                let h = (head - base).abs();
                 boxes.push(BarBox {
                     series: sidx,
                     index: i,
                     value: v,
-                    x: bx + stack_group as f64 * stack_slot_w,
+                    x: bx,
                     y: y_top,
-                    w: stack_bar_w,
+                    w: bar_width,
                     h,
                 });
             }
@@ -115,10 +250,18 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
         // stack ID ごとのスロットに、各系列を baseline から重ねて描く。
         // 値域は dodge と同じ個別値(value_stacked=false)。
         for i in 0..spec.categories.len() {
-            let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
-            let bx = band_left + band_w * BAND_PAD_RATIO;
+            let center = super::common::category_center(frame, i, n);
+            let band_left = center - band_w / 2.0;
             for (sidx, ser) in spec.series.iter().enumerate() {
                 let stack_group = stack_groups[sidx];
+                let (bx, bar_width) = category_bar_bounds(
+                    center,
+                    band_left,
+                    band_w,
+                    stack_group,
+                    slot_count,
+                    ser.bar_geometry,
+                );
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
@@ -128,15 +271,25 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                 let vy = frame
                     .ys
                     .map(super::common::clip_axis_value(v, &frame.ticks));
-                let y_top = vy.min(baseline_y);
-                let h = (vy - baseline_y).abs();
+                let (base, head) = enforce_min_bar_length(
+                    baseline_y,
+                    vy,
+                    v,
+                    ser.bar_geometry
+                        .and_then(|geometry| geometry.min_bar_length),
+                    -1.0,
+                    frame.plot_top,
+                    frame.plot_bottom,
+                );
+                let y_top = base.min(head);
+                let h = (head - base).abs();
                 boxes.push(BarBox {
                     series: sidx,
                     index: i,
                     value: v,
-                    x: bx + stack_group as f64 * stack_slot_w,
+                    x: bx,
                     y: y_top,
-                    w: stack_bar_w,
+                    w: bar_width,
                     h,
                 });
             }
@@ -146,9 +299,17 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
         // value_stacked=true のとき値域は value_domain が担当するため geometry は変わらない。
         // 非有限値(null→NaN も含む)はギャップとしてスキップ。
         for i in 0..spec.categories.len() {
-            let band_left = super::common::category_center(frame, i, n) - band_w / 2.0;
+            let center = super::common::category_center(frame, i, n);
+            let band_left = center - band_w / 2.0;
             for (sidx, ser) in spec.series.iter().enumerate() {
-                let bx = band_left + band_w * BAND_PAD_RATIO + sidx as f64 * bar_w;
+                let (bx, bar_width) = category_bar_bounds(
+                    center,
+                    band_left,
+                    band_w,
+                    sidx,
+                    slot_count,
+                    ser.bar_geometry,
+                );
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
@@ -158,15 +319,25 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                 let vy = frame
                     .ys
                     .map(super::common::clip_axis_value(v, &frame.ticks));
-                let y_top = vy.min(baseline_y);
-                let h = (vy - baseline_y).abs();
+                let (base, head) = enforce_min_bar_length(
+                    baseline_y,
+                    vy,
+                    v,
+                    ser.bar_geometry
+                        .and_then(|geometry| geometry.min_bar_length),
+                    -1.0,
+                    frame.plot_top,
+                    frame.plot_bottom,
+                );
+                let y_top = base.min(head);
+                let h = (head - base).abs();
                 boxes.push(BarBox {
                     series: sidx,
                     index: i,
                     value: v,
                     x: bx,
                     y: y_top,
-                    w: (bar_w * BAR_FILL_RATIO).max(0.0),
+                    w: bar_width,
                     h,
                 });
             }
@@ -639,16 +810,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let n = spec.categories.len().max(1);
     let band_h = (plot_bottom - plot_top) / n as f64;
     let s = spec.series.len().max(1);
-    let group_h = band_h * GROUP_RATIO;
-    let bar_h = group_h / s as f64;
     let (stack_groups, stack_group_count) = stack_group_indices(&spec.series);
-    let stack_slot_count = stack_group_count.max(1);
-    let stack_slot_h = group_h / stack_slot_count as f64;
-    let stack_bar_h = (stack_slot_h * BAR_FILL_RATIO).max(0.0);
-
-    let base_v = 0.0_f64.clamp(ticks.min, ticks.max);
-    let baseline_x = xs.map(base_v);
-
     let placement_stacked = matches!(
         spec.kind,
         crate::ir::ChartKind::Bar {
@@ -656,6 +818,15 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             ..
         }
     );
+    let slot_count = if placement_stacked {
+        stack_group_count.max(1)
+    } else {
+        s
+    };
+
+    let base_v = 0.0_f64.clamp(ticks.min, ticks.max);
+    let baseline_x = xs.map(base_v);
+
     let value_stacked = matches!(
         spec.kind,
         crate::ir::ChartKind::Bar {
@@ -683,7 +854,6 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
         if placement_stacked && value_stacked {
             // stack ID ごとに平行なレーンを置き、各レーンの中で値を正負別に累積する。
-            let base_y = band_top + band_h * BAND_PAD_RATIO;
             let mut pos_acc = vec![0.0_f64; stack_group_count];
             let mut neg_acc = vec![0.0_f64; stack_group_count];
             for (series_index, ser) in spec.series.iter().enumerate() {
@@ -694,8 +864,15 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     continue;
                 }
                 let stack_group = stack_groups[series_index];
-                let by = base_y + stack_group as f64 * stack_slot_h;
-                let cy = by + stack_bar_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
+                let (by, bar_height) = category_bar_bounds(
+                    center_y,
+                    band_top,
+                    band_h,
+                    stack_group,
+                    slot_count,
+                    ser.bar_geometry,
+                );
+                let cy = by + bar_height / 2.0 + label_font * TEXT_BASELINE_RATIO;
                 let (v0, v1) = if v >= 0.0 {
                     let lo = pos_acc[stack_group];
                     pos_acc[stack_group] += v;
@@ -705,24 +882,35 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     neg_acc[stack_group] += v;
                     (neg_acc[stack_group], hi)
                 };
-                let x0 = xs.map(super::common::clip_axis_value(v0, &ticks));
-                let x1 = xs.map(super::common::clip_axis_value(v1, &ticks));
-                let x = x0.min(x1);
-                let w = (x1 - x0).abs();
+                let (base_v, head_v) = if v >= 0.0 { (v0, v1) } else { (v1, v0) };
+                let base = xs.map(super::common::clip_axis_value(base_v, &ticks));
+                let head = xs.map(super::common::clip_axis_value(head_v, &ticks));
+                let (base, head) = enforce_min_bar_length(
+                    base,
+                    head,
+                    v,
+                    ser.bar_geometry
+                        .and_then(|geometry| geometry.min_bar_length),
+                    1.0,
+                    plot_left,
+                    plot_right,
+                );
+                let x = base.min(head);
+                let w = (head - base).abs();
                 items.push(Prim::Rect {
                     x,
                     y: by,
                     w,
-                    h: stack_bar_h,
+                    h: bar_height,
                     fill: ser.fill_at(i),
                 });
                 if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
-                    // セグメント中央(box 中心)に値ラベルを置く。x0/x1 は既に xs で
+                    // セグメント中央(box 中心)に値ラベルを置く。base/head は既に xs で
                     // 写像済みのピクセル空間なので、ここで平均する(ピクセル空間の中点)。
                     // 値空間で (v0+v1)/2.0 を先に計算してから map すると、対数軸では
                     // log10 が非アフィンなためピクセル中点とズレる(線形軸ではアフィン
                     // 写像なので数学的に一致するが、対数軸では誤った位置になる)。
-                    let mid_x = (x0 + x1) / 2.0;
+                    let mid_x = (base + head) / 2.0;
                     items.push(value_label(
                         mid_x,
                         cy,
@@ -736,11 +924,17 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
         } else if placement_stacked {
             // stack ID ごとのレーンへ配置し、各系列を baseline から描画する。
-            let base_y = band_top + band_h * BAND_PAD_RATIO;
             for (series_index, ser) in spec.series.iter().enumerate() {
                 let stack_group = stack_groups[series_index];
-                let by = base_y + stack_group as f64 * stack_slot_h;
-                let cy = by + stack_bar_h / 2.0 + label_font * TEXT_BASELINE_RATIO;
+                let (by, bar_height) = category_bar_bounds(
+                    center_y,
+                    band_top,
+                    band_h,
+                    stack_group,
+                    slot_count,
+                    ser.bar_geometry,
+                );
+                let cy = by + bar_height / 2.0 + label_font * TEXT_BASELINE_RATIO;
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
@@ -748,20 +942,30 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     continue;
                 }
                 let vx = xs.map(super::common::clip_axis_value(v, &ticks));
-                let x = vx.min(baseline_x);
-                let w = (vx - baseline_x).abs();
+                let (base, head) = enforce_min_bar_length(
+                    baseline_x,
+                    vx,
+                    v,
+                    ser.bar_geometry
+                        .and_then(|geometry| geometry.min_bar_length),
+                    1.0,
+                    plot_left,
+                    plot_right,
+                );
+                let x = base.min(head);
+                let w = (head - base).abs();
                 items.push(Prim::Rect {
                     x,
                     y: by,
                     w,
-                    h: stack_bar_h,
+                    h: bar_height,
                     fill: ser.fill_at(i),
                 });
                 if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
                     let (cx, anchor) = if v >= base_v {
-                        (vx + LABEL_GAP, Anchor::Start)
+                        (head + LABEL_GAP, Anchor::Start)
                     } else {
-                        (vx - LABEL_GAP, Anchor::End)
+                        (head - LABEL_GAP, Anchor::End)
                     };
                     items.push(value_label(cx, cy, label_font, anchor, ink, v, is_log));
                 }
@@ -770,7 +974,14 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             // dodge 配置(従来の stacked=false 挙動)
             // 非有限値(null→NaN も含む)はギャップとしてスキップ。
             for (sidx, ser) in spec.series.iter().enumerate() {
-                let by = band_top + band_h * BAND_PAD_RATIO + sidx as f64 * bar_h;
+                let (by, bar_height) = category_bar_bounds(
+                    center_y,
+                    band_top,
+                    band_h,
+                    sidx,
+                    slot_count,
+                    ser.bar_geometry,
+                );
                 let Some(&v) = ser.values.get(i) else {
                     continue;
                 };
@@ -778,22 +989,32 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     continue;
                 }
                 let vx = xs.map(super::common::clip_axis_value(v, &ticks));
-                let x = vx.min(baseline_x);
-                let w = (vx - baseline_x).abs();
+                let (base, head) = enforce_min_bar_length(
+                    baseline_x,
+                    vx,
+                    v,
+                    ser.bar_geometry
+                        .and_then(|geometry| geometry.min_bar_length),
+                    1.0,
+                    plot_left,
+                    plot_right,
+                );
+                let x = base.min(head);
+                let w = (head - base).abs();
                 items.push(Prim::Rect {
                     x,
                     y: by,
                     w,
-                    h: (bar_h * BAR_FILL_RATIO).max(0.0),
+                    h: bar_height,
                     fill: ser.fill_at(i),
                 });
                 if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) {
-                    let cy = by + (bar_h * BAR_FILL_RATIO) / 2.0 + label_font * TEXT_BASELINE_RATIO;
+                    let cy = by + bar_height / 2.0 + label_font * TEXT_BASELINE_RATIO;
                     // 正は棒右端の右(Start)、負は左端の左(End)に LABEL_GAP 分離す。
                     let (lx, anchor) = if v >= base_v {
-                        (vx + LABEL_GAP, Anchor::Start)
+                        (head + LABEL_GAP, Anchor::Start)
                     } else {
-                        (vx - LABEL_GAP, Anchor::End)
+                        (head - LABEL_GAP, Anchor::End)
                     };
                     items.push(value_label(lx, cy, label_font, anchor, ink, v, is_log));
                 }
@@ -963,6 +1184,365 @@ mod geom_tests {
             r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,100]}]}}"#,
         );
         assert!(bs[1].h > bs[0].h);
+    }
+
+    #[test]
+    fn per_dataset_thickness_overrides_percentages_and_honors_maximum() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[1],"barThickness":20,"barPercentage":0.1,"categoryPercentage":0.1,"maxBarThickness":12},
+              {"data":[1],"barPercentage":0.5,"categoryPercentage":0.6}
+            ]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        assert_eq!(boxes.len(), 2);
+        assert!((boxes[0].w - 12.0).abs() < 1e-9);
+        let band = super::super::common::band_width(&frame, 1);
+        assert!((boxes[1].w - band * 0.6 / 2.0 * 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn min_bar_length_applies_to_positive_negative_and_zero_values() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["positive","zero","negative"],"datasets":[
+              {"data":[1,0,-1],"minBarLength":12}
+            ]},"options":{"scales":{"y":{"min":-100,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        assert_eq!(boxes.len(), 3);
+        assert!(boxes.iter().all(|bar| (bar.h - 12.0).abs() < 1e-9));
+        let baseline = frame.ys.map(0.0);
+        let zero = boxes.iter().find(|bar| bar.index == 1).unwrap();
+        assert!((zero.y + zero.h / 2.0 - baseline).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stacked_datasets_keep_geometry_inside_their_stack_slot() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+            {"stack":"first","data":[1],"barThickness":10,"minBarLength":8},
+            {"stack":"first","data":[1],"barThickness":10,"minBarLength":8},
+            {"stack":"second","data":[1],"barThickness":6,"minBarLength":8}
+            ]},"options":{"scales":{"x":{"stacked":true},"y":{"stacked":true,"min":0,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        assert_eq!(boxes.len(), 3);
+        assert!((boxes[0].w - 10.0).abs() < 1e-9);
+        assert!((boxes[1].w - 10.0).abs() < 1e-9);
+        assert!((boxes[2].w - 6.0).abs() < 1e-9);
+        assert!((boxes[0].x - boxes[1].x).abs() < 1e-9);
+        assert_ne!(boxes[0].x, boxes[2].x);
+        assert!(boxes.iter().all(|bar| (bar.h - 8.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn flex_thickness_uses_category_intervals_and_dataset_percentages() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[
+              {"data":[1,2,3],"barThickness":"flex","categoryPercentage":0.5,"barPercentage":0.4}
+            ]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        let expected = super::super::common::band_width(&frame, 3) * 0.5 * 0.4;
+        assert_eq!(boxes.len(), 3);
+        assert!(boxes.iter().all(|bar| (bar.w - expected).abs() < 1e-9));
+    }
+
+    #[test]
+    fn explicitly_configured_flex_bars_are_centered_in_their_slots() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[1],"barThickness":"flex"},
+              {"data":[1],"categoryPercentage":0.8,"barPercentage":0.9}
+            ]}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        let center = super::super::common::category_center(&frame, 0, 1);
+        let band = super::super::common::band_width(&frame, 1);
+        let slot_size = band * DEFAULT_CATEGORY_PERCENTAGE / 2.0;
+
+        assert_eq!(boxes.len(), 2);
+        for (slot, bar) in boxes.iter().enumerate() {
+            let slot_center = center - slot_size + slot_size * (slot as f64 + 0.5);
+            assert!(
+                (bar.x + bar.w / 2.0 - slot_center).abs() < 1e-9,
+                "explicit geometry should be centered in its slot: {bar:?}, slot_center={slot_center}"
+            );
+        }
+    }
+
+    #[test]
+    fn min_bar_length_keeps_negative_vertical_stack_base() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[-40],"minBarLength":15},
+              {"data":[-1],"minBarLength":15}
+            ]},"options":{"scales":{"x":{"stacked":true},
+              "y":{"stacked":true,"min":-100,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        let second = boxes.iter().find(|bar| bar.series == 1).unwrap();
+        let stack_base = frame.ys.map(-40.0);
+
+        assert!((second.y - stack_base).abs() < 1e-9);
+        assert!((second.h - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn min_bar_length_does_not_extend_vertical_stacks_past_hard_bounds() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[99],"minBarLength":20},
+              {"data":[1],"minBarLength":20},
+              {"data":[-99],"minBarLength":20},
+              {"data":[-1],"minBarLength":20}
+            ]},"options":{"scales":{"x":{"stacked":true},
+              "y":{"stacked":true,"min":-100,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+
+        for bar in boxes {
+            assert!(bar.y >= frame.plot_top, "bar top escaped plot: {bar:?}");
+            assert!(
+                bar.y + bar.h <= frame.plot_bottom,
+                "bar bottom escaped plot: {bar:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn horizontal_min_bar_length_preserves_direction_and_centers_zero() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["positive","zero","negative"],"datasets":[
+              {"data":[1,0,-1],"minBarLength":12}
+            ]},"options":{"indexAxis":"y","scales":{"x":{"min":-100,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let bars: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { x, w, fill, .. } if *fill == spec.series[0].fill_at(0) => {
+                    Some((*x, *w))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bars.len(), 3);
+        assert!(bars.iter().all(|(_, width)| (*width - 12.0).abs() < 1e-9));
+        let baseline = bars[0].0;
+        assert!((bars[1].0 + bars[1].1 / 2.0 - baseline).abs() < 1e-9);
+        assert!((bars[2].0 + bars[2].1 - baseline).abs() < 1e-9);
+    }
+
+    #[test]
+    fn horizontal_min_bar_length_datalabels_follow_adjusted_bar_endpoints() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["positive","negative"],"datasets":[
+              {"data":[0.1,-0.1],"minBarLength":15}
+            ]},"options":{"indexAxis":"y","scales":{"x":{"min":-100,"max":100}},
+              "plugins":{"datalabels":{"display":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rects: Vec<(f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { x, w, fill, .. } if *fill == spec.series[0].fill_at(0) => {
+                    Some((*x, *w))
+                }
+                _ => None,
+            })
+            .collect();
+        let label_x = |value: &str| {
+            scene
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Text { x, content, .. } if content == value => Some(*x),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing data label {value}"))
+        };
+
+        assert_eq!(rects.len(), 2);
+        assert!((label_x("0.1") - (rects[0].0 + rects[0].1 + 4.0)).abs() < 1e-9);
+        assert!((label_x("-0.1") - (rects[1].0 - 4.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn horizontal_placement_stacked_min_bar_length_datalabels_follow_adjusted_endpoints() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["positive","negative"],"datasets":[
+              {"data":[0.1,-0.1],"minBarLength":15},
+              {"data":[0.2,-0.2],"minBarLength":15}
+            ]},"options":{"indexAxis":"y","scales":{"x":{"min":-100,"max":100},
+              "y":{"stacked":true}},"plugins":{"datalabels":{"display":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        for (series_index, values) in [(0, ["0.1", "-0.1"]), (1, ["0.2", "-0.2"])] {
+            let rects: Vec<(f64, f64)> = scene
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Prim::Rect { x, w, fill, .. }
+                        if *fill == spec.series[series_index].fill_at(0) =>
+                    {
+                        Some((*x, *w))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(rects.len(), 2);
+
+            for (index, value) in values.into_iter().enumerate() {
+                let label_x = scene
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        Prim::Text { x, content, .. } if content == value => Some(*x),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing data label {value}"));
+                let expected = if value.starts_with('-') {
+                    rects[index].0 - 4.0
+                } else {
+                    rects[index].0 + rects[index].1 + 4.0
+                };
+                assert!(
+                    (label_x - expected).abs() < 1e-9,
+                    "label {value} at {label_x}, expected {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn min_bar_length_keeps_negative_horizontal_stack_base() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[-40],"minBarLength":15},
+              {"data":[-1],"minBarLength":15}
+            ]},"options":{"indexAxis":"y","scales":{"y":{"stacked":true},
+              "x":{"stacked":true,"min":-100,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let rects: Vec<(f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { x, w, fill, .. } if *fill == spec.series[1].fill_at(0) => {
+                    Some((*x, *w))
+                }
+                _ => None,
+            })
+            .collect();
+        let previous = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Rect { x, fill, .. } if *fill == spec.series[0].fill_at(0) => Some(*x),
+                _ => None,
+            })
+            .unwrap();
+
+        assert_eq!(rects.len(), 1);
+        assert!((rects[0].0 + rects[0].1 - previous).abs() < 1e-9);
+        assert!((rects[0].1 - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn min_bar_length_does_not_extend_horizontal_stacks_past_hard_bounds() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[
+              {"data":[99],"minBarLength":20},
+              {"data":[1],"minBarLength":20},
+              {"data":[-99],"minBarLength":20},
+              {"data":[-1],"minBarLength":20}
+            ]},"options":{"indexAxis":"y","scales":{"y":{"stacked":true},
+              "x":{"stacked":true,"min":-100,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let left = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Text { x, content, .. } if content == "-100" => Some(*x),
+                _ => None,
+            })
+            .unwrap();
+        let right = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Text { x, content, .. } if content == "100" => Some(*x),
+                _ => None,
+            })
+            .unwrap();
+        let rects: Vec<(f64, f64)> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { x, w, fill, .. }
+                    if spec.series.iter().any(|series| series.fill_at(0) == *fill) =>
+                {
+                    Some((*x, *w))
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(rects.len(), 4);
+        for (x, width) in rects {
+            assert!(x >= left, "bar left escaped plot: x={x}, left={left}");
+            assert!(
+                x + width <= right,
+                "bar right escaped plot: x={x}, width={width}, right={right}"
+            );
+        }
     }
 
     #[test]

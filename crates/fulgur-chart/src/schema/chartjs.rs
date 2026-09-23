@@ -92,6 +92,26 @@ pub struct BarDataset {
     /// Stack group id. Datasets with the same id share a stack.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack: Option<String>,
+    /// Fraction of the category slot occupied by the group of bars (default: 0.8).
+    #[serde(rename = "categoryPercentage", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub category_percentage: Option<f64>,
+    /// Fraction of each bar slot occupied by the bar (default: 0.9).
+    #[serde(rename = "barPercentage", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub bar_percentage: Option<f64>,
+    /// Fixed bar thickness in pixels, or `"flex"` for category-derived sizing.
+    #[serde(rename = "barThickness", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub bar_thickness: Option<BarThickness>,
+    /// Upper bound for this dataset's bar thickness in pixels.
+    #[serde(rename = "maxBarThickness", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub max_bar_thickness: Option<f64>,
+    /// Minimum rendered length along the value axis in pixels.
+    #[serde(rename = "minBarLength", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub min_bar_length: Option<f64>,
     pub data: Vec<Option<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,
@@ -123,6 +143,19 @@ pub struct BarOptions {
     pub scales: Option<BarScales>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOptions>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq)]
+#[serde(untagged)]
+pub enum BarThickness {
+    Pixels(f64),
+    Mode(BarThicknessMode),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BarThicknessMode {
+    Flex,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -193,6 +226,29 @@ pub struct LineDataset {
     /// Stack group id. Datasets with the same id share a stack.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stack: Option<String>,
+    /// Per-dataset chart type for mixed bar+line charts. Only "bar" or "line" are valid.
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub dataset_type: Option<BarOrLine>,
+    /// Fraction of the category slot occupied by the group of bars (default: 0.8).
+    #[serde(rename = "categoryPercentage", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub category_percentage: Option<f64>,
+    /// Fraction of each bar slot occupied by the bar (default: 0.9).
+    #[serde(rename = "barPercentage", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub bar_percentage: Option<f64>,
+    /// Fixed bar thickness in pixels, or "flex" for category-derived sizing.
+    #[serde(rename = "barThickness", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub bar_thickness: Option<BarThickness>,
+    /// Upper bound for this dataset's bar thickness in pixels.
+    #[serde(rename = "maxBarThickness", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub max_bar_thickness: Option<f64>,
+    /// Minimum rendered length along the value axis in pixels.
+    #[serde(rename = "minBarLength", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub min_bar_length: Option<f64>,
     pub data: Vec<Option<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background_color: Option<ScalarOrArray<ColorString>>,
@@ -1471,6 +1527,50 @@ mod tests {
     fn bar_and_line_datasets_accept_stack_group_ids() {
         assert!(serde_json::from_str::<BarDataset>(r#"{"data":[1],"stack":"sales"}"#).is_ok());
         assert!(serde_json::from_str::<LineDataset>(r#"{"data":[1],"stack":"sales"}"#).is_ok());
+    }
+
+    #[test]
+    fn bar_datasets_accept_bar_geometry_controls() {
+        let json = r#"{
+          "data":[1],
+          "barPercentage":0.5,
+          "categoryPercentage":0.7,
+          "barThickness":"flex",
+          "maxBarThickness":18,
+          "minBarLength":3
+        }"#;
+        assert!(
+            serde_json::from_str::<BarDataset>(json).is_ok(),
+            "bar geometry settings are per-dataset Chart.js options"
+        );
+        assert!(
+            serde_json::from_str::<BarDataset>(
+                r#"{"data":[1],"categoryPercentage":1.25,"barPercentage":1.5}"#
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn bar_thickness_accepts_pixels_or_flex_only() {
+        for value in ["12", "\"flex\""] {
+            let json = format!(r#"{{"data":[1],"barThickness":{value}}}"#);
+            assert!(serde_json::from_str::<BarDataset>(&json).is_ok(), "{value}");
+        }
+
+        let json = r#"{"data":[1],"barThickness":"auto"}"#;
+        assert!(serde_json::from_str::<BarDataset>(json).is_err());
+    }
+
+    #[test]
+    fn line_root_can_describe_a_bar_dataset_override() {
+        let json = r#"{
+          "type":"line",
+          "data":{"datasets":[{
+            "type":"bar","data":[1],"barThickness":12,"minBarLength":2
+          }]}
+        }"#;
+        assert!(serde_json::from_str::<ChartJsSpec>(json).is_ok());
     }
 
     #[test]

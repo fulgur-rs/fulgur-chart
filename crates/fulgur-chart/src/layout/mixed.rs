@@ -9,14 +9,6 @@ use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 use std::fmt::Write;
 
-// --- bar.rs から複製した縦棒の幾何定数 ---
-/// band 内のグループ幅比。
-const GROUP_RATIO: f64 = 0.8;
-/// band 左右パディング比。
-const BAND_PAD_RATIO: f64 = 0.1;
-/// bar 幅の塗り比。
-const BAR_FILL_RATIO: f64 = 0.9;
-
 // --- line.rs から複製した折れ線の定数 ---
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
@@ -71,14 +63,10 @@ fn draw_bar_dataset(
     bar_count: usize,
 ) {
     let band_w = common::band_width(frame, n);
-    let group_w = band_w * GROUP_RATIO;
-    let bar_w = group_w / bar_count as f64;
     let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
     let baseline_y = frame.ys.map(base_v);
 
     for i in 0..spec.categories.len() {
-        let band_left = common::category_center(frame, i, n) - band_w / 2.0;
-        let bx = band_left + band_w * BAND_PAD_RATIO + bar_slot as f64 * bar_w;
         // 欠損 / 非有限値はスロットを空けて次系列へ(dodge の色・位置整合を保つ)。
         let Some(&v) = ser.values.get(i) else {
             continue;
@@ -86,18 +74,37 @@ fn draw_bar_dataset(
         if !v.is_finite() {
             continue;
         }
+        let center = common::category_center(frame, i, n);
+        let (bx, bar_w) = super::bar::category_bar_bounds(
+            center,
+            center - band_w / 2.0,
+            band_w,
+            bar_slot,
+            bar_count,
+            ser.bar_geometry,
+        );
         let vy = frame.ys.map(common::clip_axis_value(v, &frame.ticks));
-        let y_top = vy.min(baseline_y);
-        let h = (vy - baseline_y).abs();
+        let (base, head) = super::bar::enforce_min_bar_length(
+            baseline_y,
+            vy,
+            v,
+            ser.bar_geometry
+                .and_then(|geometry| geometry.min_bar_length),
+            -1.0,
+            frame.plot_top,
+            frame.plot_bottom,
+        );
+        let y_top = base.min(head);
+        let h = (head - base).abs();
         items.push(Prim::Rect {
             x: bx,
             y: y_top,
-            w: (bar_w * BAR_FILL_RATIO).max(0.0),
+            w: bar_w,
             h,
             fill: ser.fill_at(i),
         });
         if spec.data_labels && h > 0.0 && common::axis_value_in_bounds(v, &frame.ticks) {
-            let cx = bx + (bar_w * BAR_FILL_RATIO) / 2.0;
+            let cx = bx + bar_w / 2.0;
             let label_y = if v >= base_v {
                 y_top - common::LABEL_GAP
             } else {
@@ -377,6 +384,30 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    #[test]
+    fn line_root_bar_override_uses_its_dataset_thickness() {
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b"],"datasets":[
+                {"type":"bar","data":[1,2],"barThickness":12},
+                {"data":[2,1]}
+            ]}}"#,
+            true,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let bars: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { w, fill, .. } if *fill == spec.series[0].fill_at(0) => Some(*w),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(bars.len(), 2);
+        assert!(bars.iter().all(|width| (*width - 12.0).abs() < 1e-9));
     }
 
     #[test]
