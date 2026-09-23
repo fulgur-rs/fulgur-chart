@@ -249,6 +249,8 @@ pub(crate) fn chartjs_area_fill_primitives(
     let Some(area_fill) = source.area_fill.as_ref() else {
         return Vec::new();
     };
+    let span_gap_targets =
+        span_gap_target_y_cache(spec, frame, source_index, area_fill.target, offsets);
     let base_color = source.fill_at(0);
     let above = area_fill.above.unwrap_or(base_color);
     let below = area_fill.below.unwrap_or(base_color);
@@ -285,7 +287,14 @@ pub(crate) fn chartjs_area_fill_primitives(
         let mut source_run = Vec::new();
         let mut target_run = Vec::new();
         for &(x, source_y, category) in segment {
-            if let Some(target_y) = area_target_y(spec, frame, source_index, category, offsets) {
+            if let Some(target_y) = area_target_y(
+                spec,
+                frame,
+                source_index,
+                category,
+                offsets,
+                &span_gap_targets,
+            ) {
                 source_run.push((x, source_y));
                 target_run.push((x, target_y));
             } else {
@@ -306,6 +315,7 @@ fn area_target_y(
     source_index: usize,
     category: usize,
     offsets: Option<&[Vec<(f64, f64)>]>,
+    span_gap_targets: &[Option<Vec<Option<f64>>>],
 ) -> Option<f64> {
     let source = spec.series.get(source_index)?;
     let fill = source.area_fill.as_ref()?;
@@ -326,18 +336,76 @@ fn area_target_y(
             }
         }
         AreaFillTarget::Dataset(target_index) => {
-            series_y_at(spec, frame, target_index, category, offsets)
-                .or_else(|| series_span_gap_y_at(spec, frame, target_index, category, offsets))
+            cached_series_y_at(span_gap_targets, target_index, category)
+                .or_else(|| series_y_at(spec, frame, target_index, category, offsets))
         }
         AreaFillTarget::Stack => {
             if let Some(offsets) = offsets {
                 let near = offsets.get(source_index)?.get(category)?.0;
                 Some(frame.ys.map(common::clip_axis_value(near, &frame.ticks)))
             } else {
-                stack_target_y(spec, frame, source_index, category)
+                stack_target_y(spec, frame, source_index, category, span_gap_targets)
             }
         }
     }
+}
+
+fn span_gap_target_y_cache(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    source_index: usize,
+    target: AreaFillTarget,
+    offsets: Option<&[Vec<(f64, f64)>]>,
+) -> Vec<Option<Vec<Option<f64>>>> {
+    let mut cache = vec![None; spec.series.len()];
+    match target {
+        AreaFillTarget::Dataset(target_index) => {
+            cache_span_gap_target(spec, frame, target_index, offsets, &mut cache);
+        }
+        AreaFillTarget::Stack if offsets.is_none() => {
+            for index in 0..source_index {
+                if spec.series[index].series_type == crate::ir::SeriesType::Line {
+                    cache_span_gap_target(spec, frame, index, None, &mut cache);
+                }
+            }
+        }
+        _ => {}
+    }
+    cache
+}
+
+fn cache_span_gap_target(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    series_index: usize,
+    offsets: Option<&[Vec<(f64, f64)>]>,
+    cache: &mut [Option<Vec<Option<f64>>>],
+) {
+    let Some(series) = spec.series.get(series_index) else {
+        return;
+    };
+    if !series.span_gaps {
+        return;
+    }
+
+    let mut values: Vec<Option<f64>> = (0..spec.categories.len())
+        .map(|category| series_y_at(spec, frame, series_index, category, offsets))
+        .collect();
+    interpolate_span_gap_values(&mut values);
+    cache[series_index] = Some(values);
+}
+
+fn cached_series_y_at(
+    cache: &[Option<Vec<Option<f64>>>],
+    series_index: usize,
+    category: usize,
+) -> Option<f64> {
+    cache
+        .get(series_index)?
+        .as_ref()?
+        .get(category)
+        .copied()
+        .flatten()
 }
 
 fn stack_target_y(
@@ -345,6 +413,7 @@ fn stack_target_y(
     frame: &common::Frame,
     source_index: usize,
     category: usize,
+    span_gap_targets: &[Option<Vec<Option<f64>>>],
 ) -> Option<f64> {
     spec.series.get(source_index)?;
     let find_target = |index: usize| {
@@ -352,8 +421,8 @@ fn stack_target_y(
         if series.series_type != crate::ir::SeriesType::Line {
             return None;
         }
-        series_y_at(spec, frame, index, category, None)
-            .or_else(|| series_span_gap_y_at(spec, frame, index, category, None))
+        cached_series_y_at(span_gap_targets, index, category)
+            .or_else(|| series_y_at(spec, frame, index, category, None))
     };
     for index in (0..source_index).rev() {
         if let Some(y) = find_target(index) {
@@ -387,25 +456,22 @@ fn series_y_at(
     Some(frame.ys.map(common::clip_axis_value(value, &frame.ticks)))
 }
 
-fn series_span_gap_y_at(
-    spec: &ChartSpec,
-    frame: &common::Frame,
-    series_index: usize,
-    category: usize,
-    offsets: Option<&[Vec<(f64, f64)>]>,
-) -> Option<f64> {
-    let series = spec.series.get(series_index)?;
-    if !series.span_gaps {
-        return None;
+fn interpolate_span_gap_values(values: &mut [Option<f64>]) {
+    let mut previous = None;
+    for index in 0..values.len() {
+        let Some(current_y) = values[index] else {
+            continue;
+        };
+        if let Some((previous_index, previous_y)) = previous {
+            let span = (index - previous_index) as f64;
+            for (offset, value) in values[previous_index + 1..index].iter_mut().enumerate() {
+                let gap_index = previous_index + 1 + offset;
+                let ratio = (gap_index - previous_index) as f64 / span;
+                *value = Some(previous_y + (current_y - previous_y) * ratio);
+            }
+        }
+        previous = Some((index, current_y));
     }
-    let previous = (0..category).rev().find_map(|index| {
-        series_y_at(spec, frame, series_index, index, offsets).map(|y| (index, y))
-    })?;
-    let next = (category + 1..spec.categories.len()).find_map(|index| {
-        series_y_at(spec, frame, series_index, index, offsets).map(|y| (index, y))
-    })?;
-    let ratio = (category - previous.0) as f64 / (next.0 - previous.0) as f64;
-    Some(previous.1 + (next.1 - previous.1) * ratio)
 }
 
 fn emit_area_run(
@@ -1404,6 +1470,25 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, Prim::Polyline { points, .. } if points.len() == 2)),
             "spanGaps must join the two valid points"
+        );
+    }
+
+    #[test]
+    fn span_gap_y_cache_interpolates_only_internal_missing_runs() {
+        let mut values = vec![None, Some(10.0), None, None, Some(50.0), None];
+
+        interpolate_span_gap_values(&mut values);
+
+        assert_eq!(
+            values,
+            vec![
+                None,
+                Some(10.0),
+                Some(23.333333333333332),
+                Some(36.666666666666664),
+                Some(50.0),
+                None
+            ]
         );
     }
 
