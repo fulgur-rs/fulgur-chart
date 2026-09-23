@@ -542,6 +542,49 @@ fn cubic_point(p0: AreaPoint, cp1: AreaPoint, cp2: AreaPoint, p1: AreaPoint, t: 
 }
 
 fn area_intervals(source: &[AreaPoint], target: &[AreaPoint]) -> Vec<AreaInterval> {
+    if !area_points_have_monotonic_x(source) || !area_points_have_monotonic_x(target) {
+        return area_intervals_for_unordered_x(source, target);
+    }
+
+    let mut source_index = 0;
+    let mut target_index = 0;
+    let mut source_segment = next_area_segment(source, &mut source_index);
+    let mut target_segment = next_area_segment(target, &mut target_index);
+    let mut intervals = Vec::new();
+
+    while let (Some(source_edge), Some(target_edge)) = (source_segment, target_segment) {
+        let x0 = source_edge[0].0.max(target_edge[0].0);
+        let x1 = source_edge[1].0.min(target_edge[1].0);
+        if x0 < x1 {
+            intervals.push(AreaInterval {
+                source: [
+                    point_on_segment(source_edge, x0),
+                    point_on_segment(source_edge, x1),
+                ],
+                target: [
+                    point_on_segment(target_edge, x0),
+                    point_on_segment(target_edge, x1),
+                ],
+            });
+        }
+
+        let source_end = source_edge[1].0;
+        let target_end = target_edge[1].0;
+        if source_end <= target_end {
+            source_segment = next_area_segment(source, &mut source_index);
+        }
+        if target_end <= source_end {
+            target_segment = next_area_segment(target, &mut target_index);
+        }
+    }
+    intervals
+}
+
+fn area_points_have_monotonic_x(points: &[AreaPoint]) -> bool {
+    points.windows(2).all(|pair| pair[0].0 <= pair[1].0)
+}
+
+fn area_intervals_for_unordered_x(source: &[AreaPoint], target: &[AreaPoint]) -> Vec<AreaInterval> {
     let mut xs: Vec<f64> = source
         .windows(2)
         .chain(target.windows(2))
@@ -554,12 +597,9 @@ fn area_intervals(source: &[AreaPoint], target: &[AreaPoint]) -> Vec<AreaInterva
     xs.windows(2)
         .filter_map(|pair| {
             let [x0, x1] = [pair[0], pair[1]];
-            if x0 == x1 {
-                return None;
-            }
             let midpoint = x0 + (x1 - x0) / 2.0;
-            let source_segment = covering_segment(source, midpoint)?;
-            let target_segment = covering_segment(target, midpoint)?;
+            let source_segment = unordered_segment_covering_x(source, midpoint)?;
+            let target_segment = unordered_segment_covering_x(target, midpoint)?;
             Some(AreaInterval {
                 source: [
                     point_on_segment(source_segment, x0),
@@ -574,11 +614,22 @@ fn area_intervals(source: &[AreaPoint], target: &[AreaPoint]) -> Vec<AreaInterva
         .collect()
 }
 
-fn covering_segment(points: &[AreaPoint], x: f64) -> Option<[AreaPoint; 2]> {
+fn unordered_segment_covering_x(points: &[AreaPoint], x: f64) -> Option<[AreaPoint; 2]> {
     points.windows(2).find_map(|pair| {
         let [a, b] = [pair[0], pair[1]];
         (a.0 != b.0 && x >= a.0.min(b.0) && x <= a.0.max(b.0)).then_some([a, b])
     })
+}
+
+fn next_area_segment(points: &[AreaPoint], index: &mut usize) -> Option<[AreaPoint; 2]> {
+    while *index + 1 < points.len() {
+        let segment = [points[*index], points[*index + 1]];
+        *index += 1;
+        if segment[0].0 < segment[1].0 {
+            return Some(segment);
+        }
+    }
+    None
 }
 
 fn point_on_segment(segment: [AreaPoint; 2], x: f64) -> AreaPoint {
