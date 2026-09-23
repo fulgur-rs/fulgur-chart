@@ -29,6 +29,16 @@ pub(crate) struct BarBounds {
     pub(crate) h: f64,
 }
 
+#[derive(Clone, Copy)]
+struct StackedHorizontalSegment {
+    series_index: usize,
+    stack_group: usize,
+    value: f64,
+    base: f64,
+    head: f64,
+    bounds: BarBounds,
+}
+
 /// Builds a bar rectangle or a path with Chart.js-style rounded corners.
 /// `base_side` names the edge touching the bar's base; uniform radii only round the opposite edge.
 pub(crate) fn bar_primitive(
@@ -789,7 +799,8 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let positive_moves_up = frame.ys.map(frame.ticks.max) < frame.ys.map(frame.ticks.min);
     let (stack_groups, _) = super::common::stack_group_indices(&spec.series);
-    for b in vertical_bar_boxes(spec, &frame) {
+    let bar_boxes = vertical_bar_boxes(spec, &frame);
+    for b in &bar_boxes {
         let ser = &spec.series[b.series];
         let base_side = if (b.value >= 0.0) == positive_moves_up {
             BarSide::Bottom
@@ -797,14 +808,13 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             BarSide::Top
         };
         let has_later_same_sign = stacked
-            && spec.series.iter().enumerate().any(|(next, series)| {
-                next > b.series
-                    && stack_groups[next] == stack_groups[b.series]
-                    && series.values.get(b.index).is_some_and(|value| {
-                        *value != 0.0
-                            && is_renderable_value(*value, is_log)
-                            && value.signum() == b.value.signum()
-                    })
+            && bar_boxes.iter().any(|next| {
+                next.series > b.series
+                    && next.index == b.index
+                    && next.h > 0.0
+                    && stack_groups[next.series] == stack_groups[b.series]
+                    && is_renderable_value(next.value, is_log)
+                    && next.value.signum() == b.value.signum()
             });
         items.push(bar_primitive(
             BarBounds {
@@ -1180,6 +1190,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             let mut neg_acc = vec![0.0_f64; stack_group_count];
             let mut pos_visual_offsets = vec![0.0_f64; stack_group_count];
             let mut neg_visual_offsets = vec![0.0_f64; stack_group_count];
+            let mut stacked_segments = Vec::new();
             for (series_index, ser) in spec.series.iter().enumerate() {
                 let Some(&v) = ser.values.get(i) else {
                     continue;
@@ -1197,7 +1208,6 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     ser.bar_geometry,
                     legacy_geometry,
                 );
-                let cy = by + bar_height / 2.0 + label_font * TEXT_BASELINE_RATIO;
                 let (v0, v1) = if v > 0.0 {
                     let lo = pos_acc[stack_group];
                     pos_acc[stack_group] += v;
@@ -1261,45 +1271,60 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 }
                 let x = base.min(head);
                 let w = (head - base).abs();
-                let has_later_same_sign = spec.series.iter().enumerate().any(|(next, series)| {
-                    next > series_index
-                        && stack_groups[next] == stack_group
-                        && series.values.get(i).is_some_and(|value| {
-                            *value != 0.0
-                                && is_renderable_value(*value, is_log)
-                                && value.signum() == v.signum()
-                        })
-                });
-                items.push(bar_primitive(
-                    BarBounds {
+                stacked_segments.push(StackedHorizontalSegment {
+                    series_index,
+                    stack_group,
+                    value: v,
+                    base,
+                    head,
+                    bounds: BarBounds {
                         x,
                         y: by,
                         w,
                         h: bar_height,
                     },
+                });
+            }
+
+            for segment in &stacked_segments {
+                let ser = &spec.series[segment.series_index];
+                let has_later_same_sign = stacked_segments.iter().any(|next| {
+                    next.series_index > segment.series_index
+                        && next.stack_group == segment.stack_group
+                        && next.bounds.w > 0.0
+                        && next.value.signum() == segment.value.signum()
+                });
+                items.push(bar_primitive(
+                    segment.bounds,
                     ser.fill_at(i),
                     ser.bar_geometry.and_then(|geometry| geometry.border_radius),
-                    if base <= head {
+                    if segment.base <= segment.head {
                         BarSide::Left
                     } else {
                         BarSide::Right
                     },
                     !has_later_same_sign,
                 ));
-                if spec.data_labels && super::common::axis_value_in_bounds(v, &ticks) && w > 0.0 {
+                if spec.data_labels
+                    && super::common::axis_value_in_bounds(segment.value, &ticks)
+                    && segment.bounds.w > 0.0
+                {
                     // セグメント中央(box 中心)に値ラベルを置く。base/head は既に xs で
                     // 写像済みのピクセル空間なので、ここで平均する(ピクセル空間の中点)。
                     // 値空間で (v0+v1)/2.0 を先に計算してから map すると、対数軸では
                     // log10 が非アフィンなためピクセル中点とズレる(線形軸ではアフィン
                     // 写像なので数学的に一致するが、対数軸では誤った位置になる)。
-                    let mid_x = (base + head) / 2.0;
+                    let mid_x = (segment.base + segment.head) / 2.0;
+                    let label_y = segment.bounds.y
+                        + segment.bounds.h / 2.0
+                        + label_font * TEXT_BASELINE_RATIO;
                     items.push(value_label(
                         mid_x,
-                        cy,
+                        label_y,
                         label_font,
                         Anchor::Middle,
                         ink,
-                        v,
+                        segment.value,
                         is_log,
                     ));
                 }
@@ -1783,6 +1808,21 @@ mod geom_tests {
     }
 
     #[test]
+    fn vertical_clipped_stack_segment_does_not_hide_visible_endpoint() {
+        let (spec, scene) = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"stack":"s","data":[2],"borderRadius":4},{"stack":"s","data":[3],"borderRadius":4}]},"options":{"scales":{"x":{"stacked":true},"y":{"stacked":true,"min":0,"max":2}}}}"#,
+        );
+        let first_fill = spec.series[0].fill_at(0);
+        assert!(
+            scene.items.iter().any(|prim| matches!(
+                prim,
+                Prim::Path { fill: Some(fill), .. } if *fill == first_fill
+            )),
+            "fully clipped later stack segment must not hide the visible endpoint"
+        );
+    }
+
+    #[test]
     fn horizontal_zero_stack_value_does_not_hide_rounded_endpoint() {
         let (spec, scene) = scene_for(
             r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"stack":"s","data":[5],"borderRadius":4},{"stack":"s","data":[0],"borderRadius":4}]},"options":{"indexAxis":"y","scales":{"x":{"stacked":true},"y":{"stacked":true}}}}"#,
@@ -1794,6 +1834,21 @@ mod geom_tests {
                 Prim::Path { fill: Some(fill), .. } if *fill == first_fill
             )),
             "zero-length later segment must not hide the visible stack endpoint"
+        );
+    }
+
+    #[test]
+    fn horizontal_clipped_stack_segment_does_not_hide_visible_endpoint() {
+        let (spec, scene) = scene_for(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"stack":"s","data":[2],"borderRadius":4},{"stack":"s","data":[3],"borderRadius":4}]},"options":{"indexAxis":"y","scales":{"x":{"stacked":true,"min":0,"max":2},"y":{"stacked":true}}}}"#,
+        );
+        let first_fill = spec.series[0].fill_at(0);
+        assert!(
+            scene.items.iter().any(|prim| matches!(
+                prim,
+                Prim::Path { fill: Some(fill), .. } if *fill == first_fill
+            )),
+            "fully clipped later stack segment must not hide the visible endpoint"
         );
     }
 
