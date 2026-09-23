@@ -1715,16 +1715,10 @@ fn unknown_scale_type_value_is_accepted_in_strict_mode_and_defaults_to_linear() 
 }
 
 #[test]
-fn scatter_logarithmic_type_is_ignored_v1_scope() {
-    // scatter/bubble は v1 スコープ外(別issue: fulgur-chart-rwe)。scatter は
-    // point-based(is_point_based)で values 経路自体を通らないため、bar/line の
-    // カテゴリ軸スコープ判定(x_axis_is_log/y_axis_is_log)とは異なるコードパスを
-    // 通る。"log-log scatter" は実運用でも典型的な要求なので、この意図的な
-    // スコープ外挙動を公開 API 経由で固定しておく(型としてはログを要求しても
-    // 常に Linear のまま描画されることを保証)。
+fn scatter_logarithmic_axes_are_accepted() {
     let json = r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2},{"x":3,"y":4}]}]},
       "options":{"scales":{"x":{"type":"logarithmic"},"y":{"type":"logarithmic"}}}}"#;
-    let spec = chartjs::parse(json, false).expect("parse ok");
-    assert_eq!(spec.x_axis.scale_kind, ScaleKind::Linear);
-    assert_eq!(spec.y_axis.scale_kind, ScaleKind::Linear);
+    let spec = chartjs::parse(json, true).expect("strict mode should accept logarithmic axes");
+    assert_eq!(spec.x_axis.scale_kind, ScaleKind::Logarithmic);
+    assert_eq!(spec.y_axis.scale_kind, ScaleKind::Logarithmic);
 }
