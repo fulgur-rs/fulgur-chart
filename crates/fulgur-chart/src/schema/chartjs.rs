@@ -410,7 +410,7 @@ pub struct ProgressPlugins {
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PieSpec {
-    pub data: PieData,
+    pub data: PieArcData,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<PieOptions>,
     /// Canvas width in px. Defaults to fulgur's built-in size when omitted.
@@ -434,6 +434,28 @@ pub struct PieData {
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PieDataset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub data: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<ScalarOrArray<ColorString>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<ScalarOrArray<ColorString>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_width: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PieArcData {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    pub datasets: Vec<PieArcDataset>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PieArcDataset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub data: Vec<f64>,

@@ -2028,6 +2028,27 @@ fn pie_schema_roundtrip_preserves_cutout_and_dataset_arc_options() {
 }
 
 #[test]
+fn pie_arc_options_are_rejected_by_schema_and_strict_parser_on_other_arc_charts() {
+    use fulgur_chart::schema::ChartJsSpec;
+
+    let invalid = [
+        r#"{"type":"polarArea","data":{"datasets":[{"data":[1,2],"spacing":2} ]}}"#,
+        r#"{"type":"outlabeledPie","data":{"datasets":[{"data":[1,2],"spacing":2}]}}"#,
+        r#"{"type":"outlabeledDoughnut","data":{"datasets":[{"data":[1,2],"spacing":2}]}}"#,
+    ];
+    for json in invalid {
+        assert!(
+            serde_json::from_str::<ChartJsSpec>(json).is_err(),
+            "schema should reject pie-only arc options for {json}"
+        );
+        assert!(
+            chartjs::parse(json, true).is_err(),
+            "strict parser should reject pie-only arc options for {json}"
+        );
+    }
+}
+
+#[test]
 fn strict_rejects_pie_only_cutout_and_arc_options_on_bar() {
     let cases = [
         r#"{"type":"bar","data":{"datasets":[{"data":[1]}]},"options":{"cutout":20}}"#,
