@@ -115,3 +115,54 @@ fn mixed_dataset_order_controls_front_to_back_painting() {
         "higher order bar should paint behind lower order line"
     );
 }
+
+#[test]
+fn mixed_fill_index_uses_original_dataset_order_after_order_sorting() {
+    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let json = r##"{"type":"bar","data":{"labels":["A","B"],"datasets":[
+      {"type":"line","label":"target","order":5,"data":[1,3],"borderColor":"#0000ff","fill":false},
+      {"type":"bar","label":"bar","order":0,"data":[2,2]},
+      {"type":"line","label":"source","order":1,"data":[3,1],"borderColor":"#ff0000","fill":"-2"}
+    ]}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let scene = build_scene(&spec, &m);
+    let target = scene
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Prim::Polyline { points, stroke, .. }
+                if (stroke.r, stroke.g, stroke.b) == (0, 0, 255) =>
+            {
+                Some(points)
+            }
+            _ => None,
+        })
+        .expect("referenced mixed line");
+    let area = scene
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Prim::Path {
+                d, fill: Some(_), ..
+            } => Some(d),
+            _ => None,
+        })
+        .expect("source area polygon");
+    let target_edge = target
+        .iter()
+        .rev()
+        .map(|(x, y)| {
+            format!(
+                "L {} {}",
+                fulgur_chart::num::fmt_num(*x),
+                fulgur_chart::num::fmt_num(*y)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    assert!(
+        area.contains(&target_edge),
+        "fill index was shifted by mixed order sorting: {area}"
+    );
+}

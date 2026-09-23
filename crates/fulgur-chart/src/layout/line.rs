@@ -1,11 +1,14 @@
 //! line / area チャート。共有フレーム(common)の上に折れ線・面・マーカーを重ねる。
 
 use super::{common, monotone::monotone_path};
-use crate::ir::{ChartKind, ChartSpec, StepMode};
+use crate::ir::{AreaFillTarget, ChartKind, ChartSpec, StepMode};
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 use std::fmt::Write;
+
+type AreaPoint = (f64, f64);
+type AreaPair = (AreaPoint, AreaPoint);
 
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
@@ -206,6 +209,337 @@ fn stack_offsets(spec: &ChartSpec) -> Vec<Vec<(f64, f64)>> {
         .collect()
 }
 
+/// Builds Chart.js area fills to another dataset or axis boundary.
+pub(crate) fn chartjs_area_fill_primitives(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    source_index: usize,
+    source_segments: &[Vec<(f64, f64, usize)>],
+    offsets: Option<&[Vec<(f64, f64)>]>,
+) -> Vec<Prim> {
+    let Some(source) = spec.series.get(source_index) else {
+        return Vec::new();
+    };
+    let Some(area_fill) = source.area_fill.as_ref() else {
+        return Vec::new();
+    };
+    let base_color = source.fill_at(0);
+    let above = area_fill.above.unwrap_or(base_color);
+    let below = area_fill.below.unwrap_or(base_color);
+    let preserve_singleton = matches!(area_fill.target, AreaFillTarget::Origin);
+    let target_step_mode = match area_fill.target {
+        AreaFillTarget::Dataset(target_index) => spec
+            .series
+            .get(target_index)
+            .and_then(|target| target.step_mode),
+        _ => source.step_mode,
+    };
+    let mut output = Vec::new();
+
+    for segment in source_segments {
+        let mut run = Vec::new();
+        for &(x, source_y, category) in segment {
+            if let Some(target_y) = area_target_y(spec, frame, source_index, category, offsets) {
+                run.push(((x, source_y), (x, target_y)));
+            } else {
+                emit_area_run(
+                    &mut output,
+                    &run,
+                    source.step_mode,
+                    target_step_mode,
+                    above,
+                    below,
+                    preserve_singleton,
+                );
+                run.clear();
+            }
+        }
+        emit_area_run(
+            &mut output,
+            &run,
+            source.step_mode,
+            target_step_mode,
+            above,
+            below,
+            preserve_singleton,
+        );
+    }
+
+    output
+}
+
+fn area_target_y(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    source_index: usize,
+    category: usize,
+    offsets: Option<&[Vec<(f64, f64)>]>,
+) -> Option<f64> {
+    let source = spec.series.get(source_index)?;
+    let fill = source.area_fill.as_ref()?;
+    match fill.target {
+        AreaFillTarget::Origin => {
+            let value = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
+            Some(frame.ys.map(value))
+        }
+        AreaFillTarget::Start => Some(frame.plot_bottom),
+        AreaFillTarget::End => Some(frame.plot_top),
+        AreaFillTarget::Value(value) => {
+            if !value.is_finite()
+                || (spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic && value <= 0.0)
+            {
+                None
+            } else {
+                Some(frame.ys.map(common::clip_axis_value(value, &frame.ticks)))
+            }
+        }
+        AreaFillTarget::Dataset(target_index) => {
+            series_y_at(spec, frame, target_index, category, offsets)
+                .or_else(|| series_span_gap_y_at(spec, frame, target_index, category, offsets))
+        }
+        AreaFillTarget::Stack => {
+            if let Some(offsets) = offsets {
+                let near = offsets.get(source_index)?.get(category)?.0;
+                Some(frame.ys.map(common::clip_axis_value(near, &frame.ticks)))
+            } else {
+                stack_target_y(spec, frame, source_index, category)
+            }
+        }
+    }
+}
+
+fn stack_target_y(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    source_index: usize,
+    category: usize,
+) -> Option<f64> {
+    spec.series.get(source_index)?;
+    let find_target = |index: usize| {
+        let series = spec.series.get(index)?;
+        if series.series_type != crate::ir::SeriesType::Line {
+            return None;
+        }
+        series_y_at(spec, frame, index, category, None)
+            .or_else(|| series_span_gap_y_at(spec, frame, index, category, None))
+    };
+    if matches!(spec.kind, ChartKind::Mixed) {
+        for index in source_index + 1..spec.series.len() {
+            if let Some(y) = find_target(index) {
+                return Some(y);
+            }
+        }
+    } else {
+        for index in (0..source_index).rev() {
+            if let Some(y) = find_target(index) {
+                return Some(y);
+            }
+        }
+    }
+    Some(frame.plot_bottom)
+}
+
+fn series_y_at(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    series_index: usize,
+    category: usize,
+    offsets: Option<&[Vec<(f64, f64)>]>,
+) -> Option<f64> {
+    let series = spec.series.get(series_index)?;
+    if series.series_type != crate::ir::SeriesType::Line {
+        return None;
+    }
+    let value = if let Some(offsets) = offsets {
+        offsets.get(series_index)?.get(category)?.1
+    } else {
+        series.values.get(category).copied()?
+    };
+    if !value.is_finite()
+        || (spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic && value <= 0.0)
+    {
+        return None;
+    }
+    Some(frame.ys.map(common::clip_axis_value(value, &frame.ticks)))
+}
+
+fn series_span_gap_y_at(
+    spec: &ChartSpec,
+    frame: &common::Frame,
+    series_index: usize,
+    category: usize,
+    offsets: Option<&[Vec<(f64, f64)>]>,
+) -> Option<f64> {
+    let series = spec.series.get(series_index)?;
+    if !series.span_gaps {
+        return None;
+    }
+    let previous = (0..category).rev().find_map(|index| {
+        series_y_at(spec, frame, series_index, index, offsets).map(|y| (index, y))
+    })?;
+    let next = (category + 1..spec.categories.len()).find_map(|index| {
+        series_y_at(spec, frame, series_index, index, offsets).map(|y| (index, y))
+    })?;
+    let ratio = (category - previous.0) as f64 / (next.0 - previous.0) as f64;
+    Some(previous.1 + (next.1 - previous.1) * ratio)
+}
+
+fn emit_area_run(
+    output: &mut Vec<Prim>,
+    run: &[AreaPair],
+    source_step: Option<StepMode>,
+    target_step: Option<StepMode>,
+    above: crate::ir::Color,
+    below: crate::ir::Color,
+    preserve_singleton: bool,
+) {
+    if preserve_singleton && run.len() == 1 && above == below {
+        let ((x, source_y), (_, target_y)) = run[0];
+        let d = format!(
+            "M {} {} L {} {} L {} {} Z",
+            fmt_num(x),
+            fmt_num(source_y),
+            fmt_num(x),
+            fmt_num(target_y),
+            fmt_num(x),
+            fmt_num(target_y)
+        );
+        output.push(Prim::Path {
+            d,
+            fill: Some(above),
+            stroke: None,
+            stroke_width: 0.0,
+        });
+        return;
+    }
+    if run.len() < 2 {
+        return;
+    }
+    let source_points: Vec<_> = run.iter().map(|(source, _)| *source).collect();
+    let target_points: Vec<_> = run.iter().map(|(_, target)| *target).collect();
+    if above == below {
+        let source_points = source_step
+            .map(|mode| step_points(source_points.iter().copied(), mode))
+            .unwrap_or(source_points);
+        let target_points = target_step
+            .map(|mode| step_points(target_points.iter().copied(), mode))
+            .unwrap_or(target_points);
+        if let Some(d) = area_path_between(&source_points, &target_points) {
+            output.push(Prim::Path {
+                d,
+                fill: Some(above),
+                stroke: None,
+                stroke_width: 0.0,
+            });
+        }
+        return;
+    }
+
+    // Colored fills are divided per interval, with a shared interpolated vertex where the
+    // source and target lines cross.
+    let paired_points: Vec<AreaPair> = match (source_step, target_step) {
+        (Some(source_mode), Some(target_mode)) if source_mode == target_mode => {
+            step_points(source_points.iter().copied(), source_mode)
+                .into_iter()
+                .zip(step_points(target_points.iter().copied(), target_mode))
+                .collect()
+        }
+        _ => source_points
+            .iter()
+            .copied()
+            .zip(target_points.iter().copied())
+            .collect(),
+    };
+    for pair in paired_points.windows(2) {
+        let ((sx0, sy0), (tx0, ty0)) = pair[0];
+        let ((sx1, sy1), (tx1, ty1)) = pair[1];
+        if sx0 == sx1 || tx0 == tx1 {
+            continue;
+        }
+        let delta0 = sy0 - ty0;
+        let delta1 = sy1 - ty1;
+        let crossed = delta0.is_sign_positive() != delta1.is_sign_positive()
+            && delta0 != 0.0
+            && delta1 != 0.0;
+        if crossed {
+            let ratio = delta0 / (delta0 - delta1);
+            let crossing = (sx0 + (sx1 - sx0) * ratio, sy0 + (sy1 - sy0) * ratio);
+            let first_color = if delta0 < 0.0 { above } else { below };
+            let second_color = if delta1 < 0.0 { above } else { below };
+            push_area_polygon(
+                output,
+                &[(sx0, sy0), crossing],
+                &[(tx0, ty0), crossing],
+                first_color,
+            );
+            push_area_polygon(
+                output,
+                &[crossing, (sx1, sy1)],
+                &[crossing, (tx1, ty1)],
+                second_color,
+            );
+        } else {
+            let color = if (delta0 + delta1) / 2.0 < 0.0 {
+                above
+            } else {
+                below
+            };
+            push_area_polygon(
+                output,
+                &[(sx0, sy0), (sx1, sy1)],
+                &[(tx0, ty0), (tx1, ty1)],
+                color,
+            );
+        }
+    }
+}
+
+fn area_path_between(source: &[(f64, f64)], target: &[(f64, f64)]) -> Option<String> {
+    if source.len() < 2 || target.len() < 2 {
+        return None;
+    }
+    let mut d = String::new();
+    for (index, &(x, y)) in source.iter().enumerate() {
+        let command = if index == 0 { 'M' } else { 'L' };
+        write!(d, "{command} {} {} ", fmt_num(x), fmt_num(y)).unwrap();
+    }
+    if target.iter().all(|(_, y)| *y == target[0].1) {
+        let (last_x, last_y) = target[target.len() - 1];
+        let (first_x, first_y) = target[0];
+        write!(
+            d,
+            "L {} {} L {} {} ",
+            fmt_num(last_x),
+            fmt_num(last_y),
+            fmt_num(first_x),
+            fmt_num(first_y)
+        )
+        .unwrap();
+    } else {
+        for &(x, y) in target.iter().rev() {
+            write!(d, "L {} {} ", fmt_num(x), fmt_num(y)).unwrap();
+        }
+    }
+    write!(d, "Z").unwrap();
+    Some(d)
+}
+
+fn push_area_polygon(
+    output: &mut Vec<Prim>,
+    source: &[AreaPoint],
+    target: &[AreaPoint],
+    color: crate::ir::Color,
+) {
+    if let Some(d) = area_path_between(source, target) {
+        output.push(Prim::Path {
+            d,
+            fill: Some(color),
+            stroke: None,
+            stroke_width: 0.0,
+        });
+    }
+}
+
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let frame = common::compute(spec, m);
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
@@ -283,61 +617,72 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // 非 null / 非 gap 系列では segments が 1 本のため、旧「valid 全体で 1 多角形」
         // 経路と同一のパスデータを出力する(バイト不変)。
         if ser.area {
-            let baseline_y = frame
-                .ys
-                .map(0.0_f64.clamp(frame.ticks.min, frame.ticks.max));
-            for seg in &segments {
-                if seg.is_empty() {
-                    continue;
-                }
-                let mut d = String::new();
-                let (first_x, last_x) = match area_points(seg, ser.step_mode) {
-                    AreaPoints::Borrowed(points) => {
-                        append_area_points(&mut d, points.iter().map(|&(x, y, _)| (x, y)))
+            if ser.area_fill.is_some() {
+                items.extend(chartjs_area_fill_primitives(
+                    spec,
+                    &frame,
+                    si,
+                    &segments,
+                    offsets.as_deref(),
+                ));
+            } else {
+                let baseline_y = frame
+                    .ys
+                    .map(0.0_f64.clamp(frame.ticks.min, frame.ticks.max));
+                for seg in &segments {
+                    if seg.is_empty() {
+                        continue;
                     }
-                    AreaPoints::Stepped(points) => append_area_points(&mut d, points),
-                };
-                if let Some(offsets) = &offsets {
-                    // far 辺(area_points 経由)と同じ step_mode を near 辺にも適用する。
-                    // 揃えないと Before/After/Middle で上下辺の形状が食い違う
-                    // (現行 parser は stacked area に step_mode を設定しないため到達不能だが、
-                    // 公開 IR は Line{stacked:true} と Series::step_mode を併用できる)。
-                    let near_points: Vec<(f64, f64)> = seg
-                        .iter()
-                        .map(|&(_, _, cat)| {
-                            (
-                                common::line_x(spec, &frame, cat),
-                                frame
-                                    .ys
-                                    .map(common::clip_axis_value(offsets[si][cat].0, &frame.ticks)),
-                            )
-                        })
-                        .collect();
-                    let near_points = match ser.step_mode {
-                        Some(step_mode) => step_points(near_points.into_iter(), step_mode),
-                        None => near_points,
+                    let mut d = String::new();
+                    let (first_x, last_x) = match area_points(seg, ser.step_mode) {
+                        AreaPoints::Borrowed(points) => {
+                            append_area_points(&mut d, points.iter().map(|&(x, y, _)| (x, y)))
+                        }
+                        AreaPoints::Stepped(points) => append_area_points(&mut d, points),
                     };
-                    for &(near_x, near_y) in near_points.iter().rev() {
-                        write!(d, "L {} {} ", fmt_num(near_x), fmt_num(near_y)).unwrap();
+                    if let Some(offsets) = &offsets {
+                        // far 辺(area_points 経由)と同じ step_mode を near 辺にも適用する。
+                        // 揃えないと Before/After/Middle で上下辺の形状が食い違う
+                        // (現行 parser は stacked area に step_mode を設定しないため到達不能だが、
+                        // 公開 IR は Line{stacked:true} と Series::step_mode を併用できる)。
+                        let near_points: Vec<(f64, f64)> = seg
+                            .iter()
+                            .map(|&(_, _, cat)| {
+                                (
+                                    common::line_x(spec, &frame, cat),
+                                    frame.ys.map(common::clip_axis_value(
+                                        offsets[si][cat].0,
+                                        &frame.ticks,
+                                    )),
+                                )
+                            })
+                            .collect();
+                        let near_points = match ser.step_mode {
+                            Some(step_mode) => step_points(near_points.into_iter(), step_mode),
+                            None => near_points,
+                        };
+                        for &(near_x, near_y) in near_points.iter().rev() {
+                            write!(d, "L {} {} ", fmt_num(near_x), fmt_num(near_y)).unwrap();
+                        }
+                        write!(d, "Z").unwrap();
+                    } else {
+                        write!(
+                            d,
+                            "L {} {} L {} {} Z",
+                            fmt_num(last_x),
+                            fmt_num(baseline_y),
+                            fmt_num(first_x),
+                            fmt_num(baseline_y)
+                        )
+                        .unwrap();
                     }
-                    write!(d, "Z").unwrap();
-                } else {
-                    write!(
+                    items.push(Prim::Path {
                         d,
-                        "L {} {} L {} {} Z",
-                        fmt_num(last_x),
-                        fmt_num(baseline_y),
-                        fmt_num(first_x),
-                        fmt_num(baseline_y)
-                    )
-                    .unwrap();
+                        fill: Some(ser.fill_at(0)),
+                        stroke: None,
+                        stroke_width: 0.0,
+                    });
                 }
-                items.push(Prim::Path {
-                    d,
-                    fill: Some(ser.fill_at(0)),
-                    stroke: None,
-                    stroke_width: 0.0,
-                });
             }
         }
 
@@ -1237,6 +1582,7 @@ mod tests {
                         stroke: vec![color],
                         stroke_width: 2.0,
                         area: true,
+                        area_fill: None,
                         interpolation: crate::ir::LineInterpolation::Linear,
                         span_gaps: false,
                         step_mode: None,

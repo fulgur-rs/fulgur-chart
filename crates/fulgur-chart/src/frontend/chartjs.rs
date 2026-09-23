@@ -223,7 +223,7 @@ struct RawDataset {
     #[serde(rename = "borderWidth")]
     border_width: Option<f64>,
     #[serde(default)]
-    fill: FillSpec,
+    fill: RawFillSpec,
     #[serde(default)]
     tension: f64,
     #[serde(rename = "spanGaps", default)]
@@ -484,26 +484,132 @@ fn axis_border_from(opts: Option<&AxisBorderOptions>) -> AxisBorder {
     }
 }
 
-/// `fill`: bool / 文字列("origin"等) を受ける。v1 は「塗るか否か」だけ解釈。
+/// Private parser counterpart of the public line fill target schema.
 #[derive(Deserialize, Default)]
 #[serde(untagged)]
-enum FillSpec {
+enum RawFillSpec {
     Bool(bool),
-    // v1 はモード文字列("origin"等)の中身を解釈せず「塗る」とだけ扱う。
-    // 文字列を bool と区別して受理するためにペイロードは必要だが、値は未使用。
-    Mode(#[allow(dead_code)] String),
+    Number(f64),
+    Mode(String),
+    Value(RawFillValue),
+    Colors(RawFillColors),
     #[default]
     Absent,
 }
 
-impl FillSpec {
-    fn is_filled(&self) -> bool {
-        match self {
-            FillSpec::Bool(b) => *b,
-            FillSpec::Mode(_) => true,
-            FillSpec::Absent => false,
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawFillValue {
+    value: f64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawFillColors {
+    target: RawFillTarget,
+    above: Option<String>,
+    below: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RawFillTarget {
+    Bool(bool),
+    Number(f64),
+    Mode(String),
+    Value(RawFillValue),
+}
+
+impl RawFillSpec {
+    fn to_area_fill(&self, source_index: usize, dataset_count: usize) -> Option<AreaFill> {
+        let (target, above, below) = match self {
+            Self::Bool(true) => (AreaFillTarget::Origin, None, None),
+            Self::Bool(false) | Self::Absent => return None,
+            Self::Number(value) => (
+                decode_fill_index(*value, false, source_index, dataset_count)?,
+                None,
+                None,
+            ),
+            Self::Mode(mode) => (
+                decode_fill_mode(mode, source_index, dataset_count)?,
+                None,
+                None,
+            ),
+            Self::Value(value) if value.value.is_finite() => {
+                (AreaFillTarget::Value(value.value), None, None)
+            }
+            Self::Value(_) => return None,
+            Self::Colors(colors) => (
+                decode_fill_target(&colors.target, source_index, dataset_count)?,
+                colors.above.as_deref().and_then(parse_color),
+                colors.below.as_deref().and_then(parse_color),
+            ),
+        };
+        Some(AreaFill {
+            target,
+            above,
+            below,
+        })
+    }
+}
+
+fn decode_fill_target(
+    target: &RawFillTarget,
+    source_index: usize,
+    dataset_count: usize,
+) -> Option<AreaFillTarget> {
+    match target {
+        RawFillTarget::Bool(true) => Some(AreaFillTarget::Origin),
+        RawFillTarget::Bool(false) => None,
+        RawFillTarget::Number(value) => {
+            decode_fill_index(*value, false, source_index, dataset_count)
+        }
+        RawFillTarget::Mode(mode) => decode_fill_mode(mode, source_index, dataset_count),
+        RawFillTarget::Value(value) if value.value.is_finite() => {
+            Some(AreaFillTarget::Value(value.value))
+        }
+        RawFillTarget::Value(_) => None,
+    }
+}
+
+fn decode_fill_mode(
+    mode: &str,
+    source_index: usize,
+    dataset_count: usize,
+) -> Option<AreaFillTarget> {
+    match mode {
+        "origin" => Some(AreaFillTarget::Origin),
+        "start" => Some(AreaFillTarget::Start),
+        "end" => Some(AreaFillTarget::End),
+        "stack" => Some(AreaFillTarget::Stack),
+        _ => {
+            let relative = mode.starts_with('+') || mode.starts_with('-');
+            let value = mode.parse::<f64>().ok()?;
+            decode_fill_index(value, relative, source_index, dataset_count)
         }
     }
+}
+
+fn decode_fill_index(
+    value: f64,
+    relative: bool,
+    source_index: usize,
+    dataset_count: usize,
+) -> Option<AreaFillTarget> {
+    if !value.is_finite() || value.fract() != 0.0 {
+        return None;
+    }
+    let target = if relative {
+        i128::try_from(source_index)
+            .ok()?
+            .checked_add(value as i128)?
+    } else if value >= 0.0 {
+        value as i128
+    } else {
+        return None;
+    };
+    let target = usize::try_from(target).ok()?;
+    (target < dataset_count && target != source_index).then_some(AreaFillTarget::Dataset(target))
 }
 
 pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
@@ -844,6 +950,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             | ChartKind::Bubble
     ) && is_logarithmic(y_opts);
     let is_mixed = matches!(kind, ChartKind::Mixed);
+    let dataset_count = raw.data.datasets.len();
     let mut dataset_orders = is_mixed.then(|| Vec::with_capacity(raw.data.datasets.len()));
     let series: Vec<Series> = raw
         .data
@@ -854,6 +961,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             if let Some(orders) = dataset_orders.as_mut() {
                 orders.push(ds.order.unwrap_or(0.0));
             }
+            let area_fill = ds.fill.to_area_fill(i, dataset_count);
             // 点ベースは点データ、boxplot はボックスデータ、それ以外は数値配列を採る。`data` は一度だけ消費する。
             let (values, points, box_points) = if is_point_based {
                 (vec![], ds.data.into_points(), vec![])
@@ -930,7 +1038,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 fill,
                 stroke,
                 stroke_width: ds.border_width.unwrap_or(default_border_width(series_type)),
-                area: ds.fill.is_filled(),
+                area: area_fill.is_some(),
+                area_fill,
                 interpolation: line_interpolation(normalize_tension(ds.tension)),
                 span_gaps: line_dataset_options[i].0,
                 step_mode: line_dataset_options[i].1,
@@ -958,6 +1067,17 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.1.cmp(&b.1))
         });
+        let mut original_to_sorted = vec![0; ordered_series.len()];
+        for (sorted_index, (_, original_index, _)) in ordered_series.iter().enumerate() {
+            original_to_sorted[*original_index] = sorted_index;
+        }
+        for (_, _, series) in &mut ordered_series {
+            if let Some(area_fill) = series.area_fill.as_mut()
+                && let AreaFillTarget::Dataset(original_index) = &mut area_fill.target
+            {
+                *original_index = original_to_sorted[*original_index];
+            }
+        }
         ordered_series
             .into_iter()
             .map(|(_, _, series)| series)
@@ -2075,6 +2195,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         stroke: vec![],
         stroke_width: 0.0,
         area: false,
+        area_fill: None,
         interpolation: LineInterpolation::Linear,
         span_gaps: false,
         step_mode: None,
@@ -2421,6 +2542,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             stroke: stroke_color.clone(),
             stroke_width: ds.border_width.unwrap_or(0.0),
             area: false,
+            area_fill: None,
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
@@ -2784,6 +2906,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         stroke: vec![],
         stroke_width: 0.0,
         area: false,
+        area_fill: None,
         interpolation: LineInterpolation::Linear,
         span_gaps: false,
         step_mode: None,
@@ -3034,6 +3157,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         stroke: vec![],
         stroke_width: 0.0,
         area: false,
+        area_fill: None,
         interpolation: LineInterpolation::Linear,
         span_gaps: false,
         step_mode: None,

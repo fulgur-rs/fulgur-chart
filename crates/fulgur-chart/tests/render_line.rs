@@ -14,6 +14,59 @@ fn render_png(json: &str) -> Vec<u8> {
     render_chart_to_png(&chartjs::parse(json, false).unwrap(), 1.0, DEFAULT_FONT).unwrap()
 }
 
+fn line_scene(json: &str) -> fulgur_chart::scene::Scene {
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    line::build(&spec, &measurer)
+}
+
+fn area_paths(scene: &fulgur_chart::scene::Scene) -> Vec<(&str, fulgur_chart::ir::Color)> {
+    scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::Path {
+                d,
+                fill: Some(fill),
+                ..
+            } => Some((d.as_str(), *fill)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn line_points_by_color(scene: &fulgur_chart::scene::Scene, rgb: (u8, u8, u8)) -> Vec<(f64, f64)> {
+    scene
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Prim::Polyline { points, stroke, .. } if (stroke.r, stroke.g, stroke.b) == rgb => {
+                Some(points.clone())
+            }
+            _ => None,
+        })
+        .expect("line polyline")
+}
+
+fn assert_area_tracks_target(area: &str, target: &[(f64, f64)]) {
+    let target_edge = target
+        .iter()
+        .rev()
+        .map(|(x, y)| {
+            format!(
+                "L {} {}",
+                fulgur_chart::num::fmt_num(*x),
+                fulgur_chart::num::fmt_num(*y)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        area.contains(&target_edge),
+        "area path does not follow target: {area}"
+    );
+}
+
 #[test]
 fn line_has_polyline_and_markers() {
     let svg = render(
@@ -33,6 +86,217 @@ fn area_emits_filled_path_with_opacity() {
     assert!(svg.contains("<path"));
     assert!(svg.contains("fill-opacity=")); // 半透明 area
     assert!(svg.contains("Z\"")); // 閉じたパス
+}
+
+#[test]
+fn relative_area_fill_closes_to_the_referenced_dataset() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[1,3],"borderColor":"#0000ff","fill":false},
+      {"data":[3,1],"borderColor":"#ff0000","fill":"-1"}
+    ]}}"##;
+    let scene = line_scene(json);
+    let target = line_points_by_color(&scene, (0, 0, 255));
+    let area = area_paths(&scene).first().expect("area polygon").0;
+    assert_area_tracks_target(area, &target);
+}
+
+#[test]
+fn absolute_area_fill_index_closes_to_that_dataset() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[1,3],"borderColor":"#0000ff","fill":false},
+      {"data":[2,2],"borderColor":"#00aa00","fill":false},
+      {"data":[3,1],"borderColor":"#ff0000","fill":0}
+    ]}}"##;
+    let scene = line_scene(json);
+    let target = line_points_by_color(&scene, (0, 0, 255));
+    let area = area_paths(&scene).first().expect("area polygon").0;
+
+    assert_area_tracks_target(area, &target);
+}
+
+#[test]
+fn positive_relative_area_fill_closes_to_the_next_dataset() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[3,1],"borderColor":"#ff0000","fill":"+1"},
+      {"data":[1,3],"borderColor":"#0000ff","fill":false}
+    ]}}"##;
+    let scene = line_scene(json);
+    let target = line_points_by_color(&scene, (0, 0, 255));
+    let area = area_paths(&scene).first().expect("area polygon").0;
+
+    assert_area_tracks_target(area, &target);
+}
+
+#[test]
+fn stack_area_fill_closes_to_the_line_below() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[1,3],"borderColor":"#0000ff","fill":false},
+      {"data":[3,1],"borderColor":"#ff0000","fill":"stack"}
+    ]}}"##;
+    let scene = line_scene(json);
+    let target = line_points_by_color(&scene, (0, 0, 255));
+    let area = area_paths(&scene).first().expect("area polygon").0;
+
+    assert_area_tracks_target(area, &target);
+}
+
+#[test]
+fn value_area_fill_closes_at_the_requested_axis_value() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[1,3],"borderColor":"#ff0000","fill":{"value":2}}
+    ]}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let frame = fulgur_chart::layout::common::compute(&spec, &measurer);
+    let scene = line::build(&spec, &measurer);
+    let source = line_points_by_color(&scene, (255, 0, 0));
+    let area = area_paths(&scene).first().expect("area polygon").0;
+    let target_y = fulgur_chart::num::fmt_num(frame.ys.map(2.0));
+    let first_x = fulgur_chart::num::fmt_num(source[0].0);
+    let last_x = fulgur_chart::num::fmt_num(source[source.len() - 1].0);
+    let target_edge = format!("L {last_x} {target_y} L {first_x} {target_y} Z");
+
+    assert!(area.contains(&target_edge), "value target not used: {area}");
+}
+
+#[test]
+fn start_and_end_area_targets_follow_plot_bounds() {
+    for (mode, use_plot_bottom) in [("start", true), ("end", false)] {
+        let json = format!(
+            r##"{{"type":"line","data":{{"labels":["A","B"],"datasets":[
+              {{"data":[1,3],"borderColor":"#ff0000","fill":"{mode}"}}
+            ]}}}}"##
+        );
+        let spec = chartjs::parse(&json, false).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = fulgur_chart::layout::common::compute(&spec, &measurer);
+        let scene = line::build(&spec, &measurer);
+        let source = line_points_by_color(&scene, (255, 0, 0));
+        let area = area_paths(&scene).first().expect("area polygon").0;
+        let target_y = if use_plot_bottom {
+            frame.plot_bottom
+        } else {
+            frame.plot_top
+        };
+        let target_y = fulgur_chart::num::fmt_num(target_y);
+        let first_x = fulgur_chart::num::fmt_num(source[0].0);
+        let last_x = fulgur_chart::num::fmt_num(source[source.len() - 1].0);
+        let target_edge = format!("L {last_x} {target_y} L {first_x} {target_y} Z");
+
+        assert!(
+            area.contains(&target_edge),
+            "{mode} target not used: {area}"
+        );
+    }
+}
+
+#[test]
+fn stacked_stack_fill_closes_to_the_current_series_stack_base() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[1,3],"borderColor":"#0000ff","fill":false},
+      {"data":[3,1],"borderColor":"#ff0000","fill":"stack"}
+    ]},"options":{"scales":{"y":{"stacked":true}}}}"##;
+    let scene = line_scene(json);
+    let target = line_points_by_color(&scene, (0, 0, 255));
+    let area = area_paths(&scene).first().expect("area polygon").0;
+
+    assert_area_tracks_target(area, &target);
+}
+
+#[test]
+fn invalid_area_target_disables_the_fill() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[1,3],"fill":"+1"}
+    ]}}"##;
+    let scene = line_scene(json);
+
+    assert!(
+        area_paths(&scene).is_empty(),
+        "invalid target produced a fill"
+    );
+}
+
+#[test]
+fn above_and_below_colors_split_a_crossing_fill() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[3,1],"borderColor":"#ff0000","fill":false},
+      {"data":[1,3],"borderColor":"#00aa00","fill":{
+        "target":0,"above":"#ff0000","below":"#0000ff"
+      }}
+    ]}}"##;
+    let scene = line_scene(json);
+    let colors: Vec<_> = area_paths(&scene)
+        .iter()
+        .map(|(_, color)| (color.r, color.g, color.b))
+        .collect();
+
+    assert!(
+        colors.contains(&(255, 0, 0)),
+        "missing above color: {colors:?}"
+    );
+    assert!(
+        colors.contains(&(0, 0, 255)),
+        "missing below color: {colors:?}"
+    );
+}
+
+#[test]
+fn colored_fill_accepts_a_value_object_as_its_target() {
+    let json = r##"{"type":"line","data":{"labels":["A","B"],"datasets":[
+      {"data":[1,3],"borderColor":"#00aa00","fill":{
+        "target":{"value":2},"above":"#ff0000","below":"#0000ff"
+      }}
+    ]}}"##;
+    let scene = line_scene(json);
+    let colors: Vec<_> = area_paths(&scene)
+        .iter()
+        .map(|(_, color)| (color.r, color.g, color.b))
+        .collect();
+
+    assert!(
+        colors.contains(&(255, 0, 0)),
+        "missing above color: {colors:?}"
+    );
+    assert!(
+        colors.contains(&(0, 0, 255)),
+        "missing below color: {colors:?}"
+    );
+}
+
+#[test]
+fn fill_to_dataset_does_not_bridge_a_target_gap() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C","D"],"datasets":[
+      {"data":[0,1,null,0],"borderColor":"#0000ff","fill":false},
+      {"data":[1,null,3,2],"borderColor":"#ff0000","fill":0}
+    ]}}"##;
+    let scene = line_scene(json);
+
+    assert!(area_paths(&scene).is_empty(), "fill crossed a target gap");
+}
+
+#[test]
+fn fill_to_span_gaps_target_interpolates_through_missing_values() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C"],"datasets":[
+      {"data":[1,null,3],"spanGaps":true,"borderColor":"#0000ff","fill":false},
+      {"data":[3,2,1],"borderColor":"#ff0000","fill":0}
+    ]}}"##;
+    let scene = line_scene(json);
+    let target = line_points_by_color(&scene, (0, 0, 255));
+    let area = area_paths(&scene).first().expect("area polygon").0;
+    let middle = (
+        (target[0].0 + target[1].0) / 2.0,
+        (target[0].1 + target[1].1) / 2.0,
+    );
+    let expected_target_point = format!(
+        "L {} {}",
+        fulgur_chart::num::fmt_num(middle.0),
+        fulgur_chart::num::fmt_num(middle.1)
+    );
+
+    assert!(
+        area.contains(&expected_target_point),
+        "spanGaps target was not interpolated: {area}"
+    );
 }
 
 #[test]

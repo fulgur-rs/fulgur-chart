@@ -642,6 +642,7 @@ mod tests {
                 stroke: vec![],
                 stroke_width: 1.0,
                 area: false,
+                area_fill: None,
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
