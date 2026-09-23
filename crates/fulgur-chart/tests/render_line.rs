@@ -366,6 +366,32 @@ fn fill_to_dataset_does_not_bridge_a_target_gap() {
 }
 
 #[test]
+fn chartjs_stacked_fill_to_dataset_preserves_target_gaps() {
+    let json = r##"{"type":"line","data":{"labels":["A","B","C","D"],"datasets":[
+      {"data":[1,null,3,4],"borderColor":"#0000ff","fill":false},
+      {"data":[2,2,2,2],"borderColor":"#ff0000","fill":0}
+    ]},"options":{"scales":{"y":{"stacked":true}}}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let frame = fulgur_chart::layout::common::compute(&spec, &measurer);
+    let scene = line::build(&spec, &measurer);
+    let target_points: Vec<_> = line::line_points(&spec, &frame)
+        .into_iter()
+        .filter(|point| point.series == 0 && point.index >= 2)
+        .map(|point| (point.cx, point.cy))
+        .collect();
+    let areas = area_paths(&scene);
+
+    assert_eq!(target_points.len(), 2);
+    assert_eq!(
+        areas.len(),
+        1,
+        "only the continuous target segment can be filled"
+    );
+    assert_area_tracks_target(areas[0].0, &target_points);
+}
+
+#[test]
 fn fill_to_span_gaps_target_interpolates_through_missing_values() {
     let json = r##"{"type":"line","data":{"labels":["A","B","C"],"datasets":[
       {"data":[1,null,3],"spanGaps":true,"borderColor":"#0000ff","fill":false},

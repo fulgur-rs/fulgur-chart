@@ -1732,6 +1732,24 @@ mod tests {
     }
 
     #[test]
+    fn series_y_at_skips_invalid_stacked_source_values() {
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b","c"],
+               "datasets":[{"data":[10,null,-5]}]},
+               "options":{"scales":{"y":{"type":"logarithmic","stacked":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &m);
+        let offsets = stack_offsets(&spec);
+
+        assert!(series_y_at(&spec, &frame, 0, 0, Some(&offsets)).is_some());
+        assert!(series_y_at(&spec, &frame, 0, 1, Some(&offsets)).is_none());
+        assert!(series_y_at(&spec, &frame, 0, 2, Some(&offsets)).is_none());
+    }
+
+    #[test]
     fn line_points_x_is_edge_to_edge() {
         // chart.js offset:false: n=3 の点は plot_left / 中点 / plot_right に並ぶ。
         let spec = chartjs::parse(
