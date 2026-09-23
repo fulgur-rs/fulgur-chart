@@ -102,8 +102,13 @@ fn draw_bar_dataset(
             baseline_y,
             vy,
             v,
-            ser.bar_geometry
-                .and_then(|geometry| geometry.min_bar_length),
+            super::bar::min_bar_length_for_visible_interval(
+                ser.bar_geometry
+                    .and_then(|geometry| geometry.min_bar_length),
+                0.0,
+                v,
+                &frame.ticks,
+            ),
             -1.0,
             frame.plot_top,
             frame.plot_bottom,
@@ -545,6 +550,31 @@ mod tests {
             1,
             "only the in-range line value should have a marker"
         );
+    }
+
+    #[test]
+    fn mixed_min_bar_length_skips_values_outside_hard_bounds() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["below","inside"],"datasets":[
+                {"type":"bar","data":[5,11],"minBarLength":20},
+                {"type":"line","data":[5,11]}]},
+                "options":{"scales":{"y":{"min":10,"max":100}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let fills = [spec.series[0].fill_at(0), spec.series[0].fill_at(1)];
+        let scene = build(&spec, &m);
+        let heights: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { h, fill, .. } if fills.contains(fill) => Some(*h),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(heights, [0.0, 20.0]);
     }
 
     #[test]

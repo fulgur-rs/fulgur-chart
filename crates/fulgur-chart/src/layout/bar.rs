@@ -148,6 +148,17 @@ pub(crate) fn enforce_min_bar_length(
     (base, head)
 }
 
+pub(crate) fn min_bar_length_for_visible_interval(
+    minimum: Option<f64>,
+    start: f64,
+    end: f64,
+    ticks: &crate::scale::NiceTicks,
+) -> Option<f64> {
+    super::common::axis_interval_intersects_range(start, end, ticks)
+        .then_some(minimum)
+        .flatten()
+}
+
 struct StackedMinBarLength<'a> {
     minimum: Option<f64>,
     positive_direction: f64,
@@ -275,6 +286,12 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                         + neg_visual_offsets[stack_group];
                     (total, total)
                 };
+                let (visible_start, visible_end) = if v == 0.0 {
+                    let raw_total = pos_acc[stack_group] + neg_acc[stack_group];
+                    (raw_total, raw_total)
+                } else {
+                    (v0, v1)
+                };
                 let (mut base_v, mut head_v) = if v > 0.0 { (v0, v1) } else { (v1, v0) };
                 let visual_offset = if v > 0.0 {
                     pos_visual_offsets[stack_group]
@@ -296,9 +313,13 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     head,
                     v,
                     StackedMinBarLength {
-                        minimum: ser
-                            .bar_geometry
-                            .and_then(|geometry| geometry.min_bar_length),
+                        minimum: min_bar_length_for_visible_interval(
+                            ser.bar_geometry
+                                .and_then(|geometry| geometry.min_bar_length),
+                            visible_start,
+                            visible_end,
+                            &frame.ticks,
+                        ),
                         positive_direction: -1.0,
                         zero_direction: if frame.ticks.min >= 0.0 { -1.0 } else { 1.0 },
                         pixel_start: frame.plot_top,
@@ -358,8 +379,13 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     baseline_y,
                     vy,
                     v,
-                    ser.bar_geometry
-                        .and_then(|geometry| geometry.min_bar_length),
+                    min_bar_length_for_visible_interval(
+                        ser.bar_geometry
+                            .and_then(|geometry| geometry.min_bar_length),
+                        0.0,
+                        v,
+                        &frame.ticks,
+                    ),
                     -1.0,
                     frame.plot_top,
                     frame.plot_bottom,
@@ -407,8 +433,13 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
                     baseline_y,
                     vy,
                     v,
-                    ser.bar_geometry
-                        .and_then(|geometry| geometry.min_bar_length),
+                    min_bar_length_for_visible_interval(
+                        ser.bar_geometry
+                            .and_then(|geometry| geometry.min_bar_length),
+                        0.0,
+                        v,
+                        &frame.ticks,
+                    ),
                     -1.0,
                     frame.plot_top,
                     frame.plot_bottom,
@@ -980,6 +1011,12 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                         + neg_visual_offsets[stack_group];
                     (total, total)
                 };
+                let (visible_start, visible_end) = if v == 0.0 {
+                    let raw_total = pos_acc[stack_group] + neg_acc[stack_group];
+                    (raw_total, raw_total)
+                } else {
+                    (v0, v1)
+                };
                 let (mut base_v, mut head_v) = if v > 0.0 { (v0, v1) } else { (v1, v0) };
                 let visual_offset = if v > 0.0 {
                     pos_visual_offsets[stack_group]
@@ -997,9 +1034,13 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     head,
                     v,
                     StackedMinBarLength {
-                        minimum: ser
-                            .bar_geometry
-                            .and_then(|geometry| geometry.min_bar_length),
+                        minimum: min_bar_length_for_visible_interval(
+                            ser.bar_geometry
+                                .and_then(|geometry| geometry.min_bar_length),
+                            visible_start,
+                            visible_end,
+                            &ticks,
+                        ),
                         positive_direction: 1.0,
                         zero_direction: if ticks.min >= 0.0 { 1.0 } else { -1.0 },
                         pixel_start: plot_left,
@@ -1068,8 +1109,13 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     baseline_x,
                     vx,
                     v,
-                    ser.bar_geometry
-                        .and_then(|geometry| geometry.min_bar_length),
+                    min_bar_length_for_visible_interval(
+                        ser.bar_geometry
+                            .and_then(|geometry| geometry.min_bar_length),
+                        0.0,
+                        v,
+                        &ticks,
+                    ),
                     1.0,
                     plot_left,
                     plot_right,
@@ -1116,8 +1162,13 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     baseline_x,
                     vx,
                     v,
-                    ser.bar_geometry
-                        .and_then(|geometry| geometry.min_bar_length),
+                    min_bar_length_for_visible_interval(
+                        ser.bar_geometry
+                            .and_then(|geometry| geometry.min_bar_length),
+                        0.0,
+                        v,
+                        &ticks,
+                    ),
                     1.0,
                     plot_left,
                     plot_right,
@@ -1367,6 +1418,45 @@ mod geom_tests {
     }
 
     #[test]
+    fn min_bar_length_skips_vertical_intervals_outside_hard_bounds() {
+        let assert_heights = |json: &str| {
+            let boxes = boxes_for(json);
+            assert_eq!(boxes.len(), 2);
+            assert_eq!(boxes[0].h, 0.0, "fully out-of-range value: {boxes:?}");
+            assert_eq!(boxes[1].h, 20.0, "boundary-intersecting value: {boxes:?}");
+        };
+
+        assert_heights(
+            r#"{"type":"bar","data":{"labels":["below","inside"],"datasets":[
+              {"data":[5,11],"minBarLength":20}
+            ]},"options":{"scales":{"y":{"min":10,"max":100}}}}"#,
+        );
+        assert_heights(
+            r#"{"type":"bar","data":{"labels":["below","inside"],"datasets":[
+              {"data":[5,11],"minBarLength":20}
+            ]},"options":{"scales":{"x":{"stacked":true},
+              "y":{"stacked":true,"min":10,"max":100}}}}"#,
+        );
+    }
+
+    #[test]
+    fn stacked_min_bar_visibility_uses_raw_value_intervals() {
+        let boxes = boxes_for(
+            r#"{"type":"bar","data":{"labels":["stacked"],"datasets":[
+              {"data":[11],"minBarLength":20},
+              {"data":[1],"minBarLength":20}
+            ]},"options":{"scales":{"x":{"stacked":true},
+              "y":{"stacked":true,"min":10,"max":100}}}}"#,
+        );
+
+        assert_eq!(boxes.len(), 2);
+        assert!(
+            boxes.iter().all(|bar| (bar.h - 20.0).abs() < 1e-9),
+            "{boxes:?}"
+        );
+    }
+
+    #[test]
     fn stacked_datasets_keep_geometry_inside_their_stack_slot() {
         let spec = chartjs::parse(
             r#"{"type":"bar","data":{"labels":["A"],"datasets":[
@@ -1613,6 +1703,65 @@ mod geom_tests {
         let baseline = bars[0].0;
         assert!((bars[1].0 + bars[1].1 / 2.0 - baseline).abs() < 1e-9);
         assert!((bars[2].0 + bars[2].1 - baseline).abs() < 1e-9);
+    }
+
+    #[test]
+    fn min_bar_length_skips_horizontal_intervals_outside_hard_bounds() {
+        let assert_widths = |json: &str| {
+            let spec = chartjs::parse(json, false).unwrap();
+            let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+            let scene = build(&spec, &m);
+            let fills = [spec.series[0].fill_at(0), spec.series[0].fill_at(1)];
+            let widths: Vec<_> = scene
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Prim::Rect { w, fill, .. } if fills.contains(fill) => Some(*w),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(widths.len(), 2);
+            assert_eq!(widths[0], 0.0, "fully out-of-range value: {widths:?}");
+            assert_eq!(widths[1], 20.0, "boundary-intersecting value: {widths:?}");
+        };
+
+        assert_widths(
+            r#"{"type":"bar","data":{"labels":["below","inside"],"datasets":[
+              {"data":[5,11],"minBarLength":20}
+            ]},"options":{"indexAxis":"y","scales":{"x":{"min":10,"max":100}}}}"#,
+        );
+        assert_widths(
+            r#"{"type":"bar","data":{"labels":["below","inside"],"datasets":[
+              {"data":[5,11],"minBarLength":20}
+            ]},"options":{"indexAxis":"y","scales":{"x":{"stacked":true,"min":10,"max":100},
+              "y":{"stacked":true}}}}"#,
+        );
+    }
+
+    #[test]
+    fn horizontal_stacked_min_bar_visibility_uses_raw_value_intervals() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["stacked"],"datasets":[
+              {"data":[11],"minBarLength":20},
+              {"data":[1],"minBarLength":20}
+            ]},"options":{"indexAxis":"y","scales":{"x":{"stacked":true,
+              "min":10,"max":100},"y":{"stacked":true}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let fills = [spec.series[0].fill_at(0), spec.series[1].fill_at(0)];
+        let scene = build(&spec, &m);
+        let widths: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { w, fill, .. } if fills.contains(fill) => Some(*w),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(widths, [20.0, 20.0]);
     }
 
     #[test]

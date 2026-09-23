@@ -474,6 +474,11 @@ pub(crate) fn axis_value_in_bounds(value: f64, ticks: &NiceTicks) -> bool {
     value.is_finite() && value >= ticks.min && value <= ticks.max
 }
 
+/// Returns whether the value interval intersects the visible axis domain before clipping.
+pub(crate) fn axis_interval_intersects_range(start: f64, end: f64, ticks: &NiceTicks) -> bool {
+    !start.is_nan() && !end.is_nan() && start.min(end) <= ticks.max && start.max(end) >= ticks.min
+}
+
 /// 範囲外の値を軸端へ制限し、描画座標がプロット領域から出ないようにする。
 pub(crate) fn clip_axis_value(value: f64, ticks: &NiceTicks) -> f64 {
     value.clamp(ticks.min, ticks.max)
