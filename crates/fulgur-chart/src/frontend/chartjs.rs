@@ -1256,7 +1256,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             let is_line_dataset = is_mixable_base && series_types[index] == SeriesType::Line;
             let is_scatter_dataset = raw.chart_type == "scatter";
             if is_line_dataset || is_scatter_dataset {
-                parse_dataset_line_style(dataset, index, is_line_dataset).map(Some)
+                parse_dataset_line_style(dataset, index, is_line_dataset)
+                    .map(|style| Some(Box::new(style)))
             } else {
                 Ok(None)
             }
@@ -1338,7 +1339,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .datasets
         .into_iter()
         .enumerate()
-        .map(|(i, ds)| {
+        .zip(dataset_line_styles)
+        .map(|((i, ds), line_style)| {
             if let Some(orders) = dataset_orders.as_mut() {
                 orders.push(ds.order.unwrap_or(0.0));
             }
@@ -1462,7 +1464,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 },
                 span_gaps: line_dataset_options[i].0,
                 step_mode: line_dataset_options[i].1,
-                line_style: dataset_line_styles[i].clone(),
+                line_style,
                 series_type,
                 stack: if is_mixable_base {
                     Some(ds.stack.unwrap_or_else(|| match series_type {

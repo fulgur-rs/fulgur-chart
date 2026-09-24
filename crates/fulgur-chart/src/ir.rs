@@ -289,7 +289,7 @@ pub struct Series {
     /// Optional stepped-line mode. Layout applies it in preference to interpolation.
     pub step_mode: Option<StepMode>,
     /// Chart.js-only line, dash, and point style controls for this dataset.
-    pub line_style: Option<DatasetLineStyle>,
+    pub line_style: Option<Box<DatasetLineStyle>>,
     /// 描画種別。混合チャートでのみ意味を持つ(単一種別では未使用)。
     pub series_type: SeriesType,
     /// Optional stack group id. Chart.js datasets normalize omitted ids to their type default;
