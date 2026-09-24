@@ -1541,8 +1541,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
 
         // マーカー。threshold 超過で間引いた場合、線として描かれる(≥2点)セグメントの帯マーカーは
-        // 既定で抑制する。ただし単点セグメント(gap で孤立し線にならない点)はマーカーが唯一の
-        // 表現なので描画し、空チャート化を防ぐ。pointRadius 明示時は全点描画(エスケープハッチ)。
+        // 既定で抑制する。ただし showLine=false では点が唯一の表現なので間引き後の点を描画する。
+        // 単点セグメント(gap で孤立し線にならない点)もマーカーが唯一の表現なので描画し、空チャート化を防ぐ。
+        // pointRadius 明示時は全ての間引き後の点を描画する。
         // 非間引き時は従来どおり全点を MARKER_R で描画(バイト不変。segments を平坦化すると valid と
         // 同順・同内容)。
         for seg in &segments {
@@ -1550,6 +1551,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 (_, Some(r)) if r > 0.0 => Some(r),
                 (_, Some(_)) => None,
                 (false, None) => Some(MARKER_R),
+                (true, None) if !show_line => Some(MARKER_R),
                 // 間引き既定: 線になる(≥2点)なら帯を抑制、単点(孤立点)は描画。
                 (true, None) if seg.len() < 2 => Some(MARKER_R),
                 (true, None) => None,

@@ -302,6 +302,34 @@ fn line_dataset_style_controls_line_markers_and_dash_rendering() {
 }
 
 #[test]
+fn show_line_false_keeps_markers_when_default_decimation_is_active() {
+    let values: Vec<usize> = (0..2_000).map(|index| index % 73).collect();
+    let labels = vec![""; values.len()];
+    let json = serde_json::json!({
+        "type": "line",
+        "data": {
+            "labels": labels,
+            "datasets": [{ "data": values, "showLine": false }]
+        },
+        "width": 240,
+        "height": 180,
+        "options": { "plugins": { "legend": { "display": false } } }
+    })
+    .to_string();
+    let spec = chartjs::parse(&json, true).unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+
+    assert!(
+        !svg.contains("<polyline"),
+        "showLine=false must suppress lines"
+    );
+    assert!(
+        svg.contains("<circle"),
+        "default decimation must not suppress every marker when showLine=false"
+    );
+}
+
+#[test]
 fn scatter_line_style_keeps_default_line_hidden_and_supports_opt_in() {
     let default = chartjs::parse(
         r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2},{"x":3,"y":4}]}]}}"#,
