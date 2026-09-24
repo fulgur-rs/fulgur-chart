@@ -756,4 +756,14 @@ mod roundtrip_tests {
         assert_eq!(parsed.bkg, None);
         assert_eq!(parsed.f, OutputFormat::Svg);
     }
+
+    #[test]
+    fn build_query_distinguishes_none_and_empty_background_color() {
+        let spec = r#"{"type":"bar"}"#;
+        let without_background = build_query(spec, None, None, None, OutputFormat::Svg);
+        let with_empty_background = build_query(spec, None, None, Some(""), OutputFormat::Svg);
+
+        assert!(!without_background.contains("&bkg="));
+        assert_eq!(with_empty_background, format!("{without_background}&bkg="));
+    }
 }
