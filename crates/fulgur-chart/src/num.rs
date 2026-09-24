@@ -73,9 +73,13 @@ pub fn fmt_axis_tick(v: f64, options: Option<&AxisTickFormat>) -> String {
 
     // Keep automatic compact labels bounded without rounding tiny non-zero values to zero.
     // If a plain decimal needs more digits than this limit, show it in scientific notation.
+    let automatic_compact_fraction_digits = compact_fraction_digits(coefficient);
     let compact_scientific_fallback = notation == AxisTickNotation::Compact
         && maximum_digits.is_none()
-        && compact_fraction_digits(coefficient) > MAX_COMPACT_FRACTION_DIGITS;
+        && automatic_compact_fraction_digits > MAX_COMPACT_FRACTION_DIGITS
+        && !fixed_fraction(coefficient, MAX_COMPACT_FRACTION_DIGITS, 0)
+            .parse::<f64>()
+            .is_ok_and(|rounded| rounded == coefficient);
     if compact_scientific_fallback {
         (coefficient, exponent) = scientific_parts(v);
         suffix = "";
@@ -84,7 +88,7 @@ pub fn fmt_axis_tick(v: f64, options: Option<&AxisTickFormat>) -> String {
 
     let fraction_digits = maximum_digits.unwrap_or_else(|| {
         if notation == AxisTickNotation::Compact && !compact_scientific_fallback {
-            compact_fraction_digits(coefficient)
+            automatic_compact_fraction_digits.min(MAX_COMPACT_FRACTION_DIGITS)
         } else {
             3
         }
@@ -316,7 +320,10 @@ mod tests {
         assert_eq!(fmt_axis_tick(999.999, Some(&format)), "1K");
         assert_eq!(fmt_axis_tick(1e15, Some(&format)), "1000T");
         assert_eq!(compact_fraction_digits(1e-20), 21);
-        assert_eq!(fmt_axis_tick(1e-20, Some(&format)), "1E-20");
+        assert_eq!(
+            fmt_axis_tick(1e-20, Some(&format)),
+            "0.00000000000000000001"
+        );
         assert_eq!(fmt_axis_tick(1e-21, Some(&format)), "1E-21");
         assert_eq!(fmt_axis_tick(1.234e-21, Some(&format)), "1.234E-21");
         assert_eq!(fmt_axis_tick(9.9996e-21, Some(&format)), "1E-20");
