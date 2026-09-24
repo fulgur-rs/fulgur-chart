@@ -1452,19 +1452,66 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
 
         // 線: セグメントごとに描く(gap で線が途切れる)。間引き済みセグメントから直接描画する。
+        let line_style = ser.line_style.as_ref();
+        let show_line = line_style.is_none_or(|style| style.show_line);
+        let border_dash = line_style.map_or(&[][..], |style| style.border_dash.as_slice());
+        let border_dash_offset = line_style.map_or(0.0, |style| style.border_dash_offset);
         for seg in &segments {
-            if seg.len() < 2 {
+            if !show_line || seg.len() < 2 {
                 continue;
             }
             if let Some(step_mode) = ser.step_mode {
+                let points = step_points(seg.iter().map(|&(x, y, _)| (x, y)), step_mode);
+                if !border_dash.is_empty() {
+                    items.push(Prim::StyledPolyline {
+                        points,
+                        stroke: ser.stroke_at(0),
+                        stroke_width: ser.stroke_width,
+                        dash: border_dash.to_vec(),
+                        dash_offset: border_dash_offset,
+                    });
+                    continue;
+                }
                 items.push(Prim::Polyline {
-                    points: step_points(seg.iter().map(|&(x, y, _)| (x, y)), step_mode),
+                    points,
                     stroke: ser.stroke_at(0),
                     stroke_width: ser.stroke_width,
                 });
                 continue;
             }
             let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
+            if !border_dash.is_empty() {
+                match ser.interpolation {
+                    crate::ir::LineInterpolation::Linear => {
+                        items.push(Prim::StyledPolyline {
+                            points: xy,
+                            stroke: ser.stroke_at(0),
+                            stroke_width: ser.stroke_width,
+                            dash: border_dash.to_vec(),
+                            dash_offset: border_dash_offset,
+                        });
+                    }
+                    crate::ir::LineInterpolation::CatmullRom { tension } => {
+                        items.push(Prim::StyledPath {
+                            d: catmull_rom_path(&xy, tension, frame.plot_top, frame.plot_bottom),
+                            stroke: ser.stroke_at(0),
+                            stroke_width: ser.stroke_width,
+                            dash: border_dash.to_vec(),
+                            dash_offset: border_dash_offset,
+                        });
+                    }
+                    crate::ir::LineInterpolation::Monotone => {
+                        items.push(Prim::StyledPath {
+                            d: monotone_path(&xy),
+                            stroke: ser.stroke_at(0),
+                            stroke_width: ser.stroke_width,
+                            dash: border_dash.to_vec(),
+                            dash_offset: border_dash_offset,
+                        });
+                    }
+                }
+                continue;
+            }
             match ser.interpolation {
                 crate::ir::LineInterpolation::Linear => {
                     items.push(Prim::Polyline {
@@ -1518,14 +1565,16 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     {
                         continue;
                     }
-                    items.push(Prim::Circle {
+                    common::dataset_point_marker(
+                        &mut items,
                         cx,
                         cy,
                         r,
-                        fill: ser.stroke_at(0),
-                        stroke: ser.stroke_at(0),
-                        stroke_width: 0.0,
-                    });
+                        ser.stroke_at(0),
+                        ser.stroke_at(0),
+                        0.0,
+                        line_style.and_then(|style| style.point_style),
+                    );
                 }
             }
         }
@@ -2440,6 +2489,7 @@ mod tests {
                         interpolation: crate::ir::LineInterpolation::Linear,
                         span_gaps: false,
                         step_mode: None,
+                        line_style: None,
                         stack: None,
                         bar_geometry: None,
                         series_type: crate::ir::SeriesType::Line,

@@ -158,6 +158,273 @@ fn line_schema_accepts_fill_target_with_above_and_below_colors() {
 }
 
 #[test]
+fn line_and_scatter_dataset_line_style_options_are_schema_and_strict_parseable() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+
+    let line = r#"{
+      "type":"line",
+      "data":{"datasets":[{
+        "data":[1,2],"pointStyle":"triangle","showLine":false,
+        "borderDash":[5,3],"borderDashOffset":-2
+      }]}
+    }"#;
+    let scatter = r#"{
+      "type":"scatter",
+      "data":{"datasets":[{
+        "data":[{"x":1,"y":2},{"x":3,"y":4}],"pointStyle":false,
+        "showLine":true,"borderDash":[2,1],"borderDashOffset":1
+      }]}
+    }"#;
+
+    assert!(serde_json::from_str::<ChartJsSpec>(line).is_ok());
+    assert!(chartjs::parse(line, true).is_ok());
+    assert!(serde_json::from_str::<ChartJsSpec>(scatter).is_ok());
+    assert!(chartjs::parse(scatter, true).is_ok());
+}
+
+#[test]
+fn line_dataset_accepts_each_documented_point_style_and_rejects_invalid_values() {
+    use fulgur_chart::ir::DatasetPointStyle;
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+
+    let cases = [
+        ("circle", DatasetPointStyle::Circle),
+        ("triangle", DatasetPointStyle::Triangle),
+        ("rect", DatasetPointStyle::Rect),
+        ("rectRounded", DatasetPointStyle::RectRounded),
+        ("rectRot", DatasetPointStyle::RectRot),
+        ("cross", DatasetPointStyle::Cross),
+        ("crossRot", DatasetPointStyle::CrossRot),
+        ("star", DatasetPointStyle::Star),
+        ("line", DatasetPointStyle::Line),
+        ("dash", DatasetPointStyle::Dash),
+    ];
+    let circle = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2],"pointStyle":"circle"}]}}"#,
+        true,
+    )
+    .unwrap();
+    let circle_png =
+        fulgur_chart::raster_direct::render_chart_to_png_default(&circle, 1.0).unwrap();
+    let hidden = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2],"pointStyle":false}]}}"#,
+        true,
+    )
+    .unwrap();
+    let hidden_png =
+        fulgur_chart::raster_direct::render_chart_to_png_default(&hidden, 1.0).unwrap();
+    for (name, expected) in cases {
+        let json = format!(
+            r#"{{"type":"line","data":{{"labels":["a","b"],"datasets":[{{"data":[1,2],"pointStyle":"{name}"}}]}}}}"#
+        );
+        assert!(
+            serde_json::from_str::<ChartJsSpec>(&json).is_ok(),
+            "schema rejected {name}"
+        );
+        let spec = chartjs::parse(&json, true).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(
+            spec.series[0].line_style.as_ref().unwrap().point_style,
+            Some(expected)
+        );
+        let png = fulgur_chart::raster_direct::render_chart_to_png_default(&spec, 1.0).unwrap();
+        assert!(
+            hidden_png != png,
+            "pointStyle {name} should render a raster marker"
+        );
+        if name != "circle" {
+            assert!(
+                circle_png != png,
+                "pointStyle {name} should change raster output"
+            );
+        }
+    }
+
+    for invalid in [
+        r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"pointStyle":true}]}}"#,
+        r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"pointStyle":"image.png"}]}}"#,
+        r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"showLine":"false"}]}}"#,
+        r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"borderDash":"5 2"}]}}"#,
+        r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"borderDash":[5,-2]}]}}"#,
+        r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1],"borderDashOffset":"2"}]}}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<ChartJsSpec>(invalid).is_err(),
+            "schema accepted {invalid}"
+        );
+        assert!(chartjs::parse(invalid, false).is_err());
+    }
+
+    let bar_dataset = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"type":"bar","data":[1],"showLine":false}]}}"#;
+    assert!(serde_json::from_str::<ChartJsSpec>(bar_dataset).is_ok());
+    assert!(chartjs::parse(bar_dataset, false).is_err());
+}
+
+#[test]
+fn line_dataset_style_controls_line_markers_and_dash_rendering() {
+    let styled = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{
+          "data":[1,3],"pointStyle":"triangle","showLine":true,
+          "borderDash":[5,3],"borderDashOffset":-2
+        }]}}"#,
+        true,
+    )
+    .unwrap();
+    let style = styled.series[0].line_style.as_ref().unwrap();
+    assert!(style.show_line);
+    assert_eq!(
+        style.point_style,
+        Some(fulgur_chart::ir::DatasetPointStyle::Triangle)
+    );
+    assert_eq!(style.border_dash, vec![5.0, 3.0]);
+    assert_eq!(style.border_dash_offset, -2.0);
+    let svg = fulgur_chart::render::render_chart(&styled);
+    assert!(svg.contains("stroke-dasharray=\"5 3\""), "{svg}");
+    assert!(svg.contains("stroke-dashoffset=\"-2\""));
+    assert!(!svg.contains("<circle"));
+
+    let hidden_line = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,3],"showLine":false}]}}"#,
+        true,
+    )
+    .unwrap();
+    let hidden_line_svg = fulgur_chart::render::render_chart(&hidden_line);
+    assert!(!hidden_line_svg.contains("<polyline"));
+    assert_eq!(hidden_line_svg.matches("<circle").count(), 2);
+
+    let hidden_points = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,3],"pointStyle":false}]}}"#,
+        true,
+    )
+    .unwrap();
+    let hidden_points_svg = fulgur_chart::render::render_chart(&hidden_points);
+    assert!(hidden_points_svg.contains("<polyline"));
+    assert!(!hidden_points_svg.contains("<circle"));
+}
+
+#[test]
+fn scatter_line_style_keeps_default_line_hidden_and_supports_opt_in() {
+    let default = chartjs::parse(
+        r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2},{"x":3,"y":4}]}]}}"#,
+        true,
+    )
+    .unwrap();
+    assert!(!default.series[0].line_style.as_ref().unwrap().show_line);
+    let default_svg = fulgur_chart::render::render_chart(&default);
+    assert!(!default_svg.contains("<polyline"));
+
+    let enabled = chartjs::parse(
+        r#"{"type":"scatter","data":{"datasets":[{
+          "data":[{"x":1,"y":2},{"x":3,"y":4}],"showLine":true,
+          "pointStyle":false,"borderDash":[2,1],"borderDashOffset":1
+        }]}}"#,
+        true,
+    )
+    .unwrap();
+    let enabled_svg = fulgur_chart::render::render_chart(&enabled);
+    assert!(enabled_svg.contains("<polyline"));
+    assert!(enabled_svg.contains("stroke-dasharray=\"2 1\""));
+    assert!(enabled_svg.contains("stroke-dashoffset=\"1\""));
+    assert!(!enabled_svg.contains("<circle"));
+
+    let clipped = chartjs::parse(
+        r##"{"type":"scatter","data":{"datasets":[{"data":[{"x":-1,"y":0.2},{"x":0.5,"y":0.5},{"x":2,"y":0.8}],"showLine":true,"pointStyle":"triangle","backgroundColor":"#0000ff","borderColor":"#ff0000","borderWidth":2}]},"options":{"scales":{"x":{"min":0,"max":1},"y":{"min":0,"max":1}}}}"##,
+        true,
+    )
+    .unwrap();
+    let clipped_svg = fulgur_chart::render::render_chart(&clipped);
+    assert!(
+        clipped_svg.contains("<polyline"),
+        "visible portions of out-of-range segments should remain drawn"
+    );
+    assert!(clipped_svg.contains("fill=\"#0000ff\" stroke=\"#ff0000\" stroke-width=\"2\""));
+}
+
+#[test]
+fn scatter_show_line_clips_segments_to_the_plot_rectangle() {
+    let spec = chartjs::parse(
+        r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":-1,"y":0.2},{"x":0.5,"y":0.5}],"showLine":true}]},"options":{"scales":{"x":{"min":0,"max":1},"y":{"min":0,"max":1}}}}"#,
+        true,
+    )
+    .unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+    let measurer = fulgur_chart::text::TextMeasurer::new(fulgur_chart::font::DEFAULT_FONT).unwrap();
+    let layout = fulgur_chart::layout::scatter::compute_scatter_layout(&spec, &measurer);
+    let clipped_intersection_x = fulgur_chart::num::fmt_num(layout.plot_left);
+    // The segment from (-1, 0.2) to (0.5, 0.5) intersects x=0 at y=0.4.
+    let clipped_intersection_y = fulgur_chart::num::fmt_num(layout.ys.map(0.4));
+    assert!(svg.contains(&format!(
+        "points=\"{clipped_intersection_x},{clipped_intersection_y} "
+    )));
+
+    let outside = chartjs::parse(
+        r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":-2,"y":0.2},{"x":-1,"y":0.8}],"showLine":true}]},"options":{"scales":{"x":{"min":0,"max":1},"y":{"min":0,"max":1}}}}"#,
+        true,
+    )
+    .unwrap();
+    let outside_svg = fulgur_chart::render::render_chart(&outside);
+    assert!(
+        !outside_svg.contains("<polyline"),
+        "a segment wholly outside the plot must not be clamped into view"
+    );
+}
+
+#[test]
+fn line_style_options_apply_to_line_datasets_in_line_root_mixed_charts() {
+    let spec = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a","b"],"datasets":[
+          {"type":"bar","data":[1,2]},
+          {"type":"line","data":[2,3],"showLine":true,"borderDash":[4,2]}
+        ]}}"#,
+        true,
+    )
+    .unwrap();
+    assert!(spec.series[0].line_style.is_none());
+    assert!(spec.series[1].line_style.as_ref().unwrap().show_line);
+    let svg = fulgur_chart::render::render_chart(&spec);
+    assert!(svg.contains("stroke-dasharray=\"4 2\""));
+
+    let hidden = chartjs::parse(
+        r#"{"type":"line","data":{"labels":["a","b"],"datasets":[
+          {"type":"bar","data":[1,2]},
+          {"type":"line","data":[2,3],"showLine":false}
+        ]}}"#,
+        true,
+    )
+    .unwrap();
+    assert!(!fulgur_chart::render::render_chart(&hidden).contains("<polyline"));
+}
+
+#[test]
+fn line_style_options_apply_to_bar_root_mixed_line_datasets() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+
+    let json = r##"{"type":"bar","data":{"labels":["a","b"],"datasets":[
+      {"data":[1,2]},
+      {"type":"line","data":[2,3],"pointStyle":"triangle","showLine":true,"borderDash":[4,2],"borderDashOffset":1}
+    ]}}"##;
+    assert!(serde_json::from_str::<ChartJsSpec>(json).is_ok());
+    let spec = chartjs::parse(json, true).unwrap();
+    let line_style = spec.series[1].line_style.as_ref().unwrap();
+    assert_eq!(
+        line_style.point_style,
+        Some(fulgur_chart::ir::DatasetPointStyle::Triangle)
+    );
+    assert!(line_style.show_line);
+    assert_eq!(line_style.border_dash, vec![4.0, 2.0]);
+    assert_eq!(line_style.border_dash_offset, 1.0);
+    let svg = fulgur_chart::render::render_chart(&spec);
+    assert!(svg.contains("stroke-dasharray=\"4 2\""));
+    assert!(svg.contains("stroke-dashoffset=\"1\""));
+
+    let hidden = r##"{"type":"bar","data":{"labels":["a","b"],"datasets":[
+      {"data":[1,2]},
+      {"type":"line","data":[2,3],"pointStyle":false,"showLine":false,"borderDash":[4,2]}
+    ]}}"##;
+    let hidden = chartjs::parse(hidden, true).unwrap();
+    assert!(!fulgur_chart::render::render_chart(&hidden).contains("<polyline"));
+}
+
+#[test]
 fn mixed_line_dataset_schema_accepts_advanced_fill_targets() {
     use fulgur_chart::schema::chartjs::ChartJsSpec;
 

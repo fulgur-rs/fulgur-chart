@@ -165,6 +165,135 @@ fn axis_scale(axis: &AxisSpec, ticks: &NiceTicks, pixel_min: f64, pixel_max: f64
     }
 }
 
+fn map_scatter_line_axis(scale: &ValueScale, value: f64) -> Option<f64> {
+    let pixel = match scale {
+        ValueScale::Linear(inner) => inner.map(value),
+        ValueScale::Log { inner, .. } if value > 0.0 => inner.map(value.log10()),
+        ValueScale::Log { .. } => return None,
+    };
+    pixel.is_finite().then_some(pixel)
+}
+
+/// Clip a pixel-space line segment to the scatter plot rectangle using Liang–Barsky.
+fn clip_segment_to_plot(
+    start: (f64, f64),
+    end: (f64, f64),
+    left: f64,
+    right: f64,
+    top: f64,
+    bottom: f64,
+) -> Option<((f64, f64), (f64, f64))> {
+    if ![start.0, start.1, end.0, end.1, left, right, top, bottom]
+        .iter()
+        .all(|value| value.is_finite())
+        || left > right
+        || top > bottom
+    {
+        return None;
+    }
+
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    if !dx.is_finite() || !dy.is_finite() {
+        return None;
+    }
+
+    let mut entering = 0.0_f64;
+    let mut leaving = 1.0_f64;
+    for (p, q) in [
+        (-dx, start.0 - left),
+        (dx, right - start.0),
+        (-dy, start.1 - top),
+        (dy, bottom - start.1),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let ratio = q / p;
+        if !ratio.is_finite() {
+            return None;
+        }
+        if p < 0.0 {
+            if ratio > leaving {
+                return None;
+            }
+            entering = entering.max(ratio);
+        } else {
+            if ratio < entering {
+                return None;
+            }
+            leaving = leaving.min(ratio);
+        }
+    }
+
+    if entering > leaving {
+        return None;
+    }
+    Some((
+        (start.0 + entering * dx, start.1 + entering * dy),
+        (start.0 + leaving * dx, start.1 + leaving * dy),
+    ))
+}
+
+fn finish_scatter_line_segment(segments: &mut Vec<Vec<(f64, f64)>>, current: &mut Vec<(f64, f64)>) {
+    if current.len() >= 2 {
+        segments.push(std::mem::take(current));
+    } else {
+        current.clear();
+    }
+}
+
+fn scatter_line_segments(points: &[Point], layout: &ScatterLayout) -> Vec<Vec<(f64, f64)>> {
+    let mut segments = Vec::new();
+    let mut current = Vec::new();
+    let mut previous = None;
+
+    for point in points {
+        let pixel = if point.x.is_finite() && point.y.is_finite() {
+            map_scatter_line_axis(&layout.xs, point.x)
+                .zip(map_scatter_line_axis(&layout.ys, point.y))
+        } else {
+            None
+        };
+        let Some(pixel) = pixel else {
+            finish_scatter_line_segment(&mut segments, &mut current);
+            previous = None;
+            continue;
+        };
+
+        if let Some(previous_pixel) = previous {
+            if let Some((clipped_start, clipped_end)) = clip_segment_to_plot(
+                previous_pixel,
+                pixel,
+                layout.plot_left,
+                layout.plot_right,
+                layout.plot_top,
+                layout.plot_bottom,
+            ) {
+                if current.last() == Some(&clipped_start) {
+                    if current.last() != Some(&clipped_end) {
+                        current.push(clipped_end);
+                    }
+                } else {
+                    finish_scatter_line_segment(&mut segments, &mut current);
+                    current.push(clipped_start);
+                    if clipped_start != clipped_end {
+                        current.push(clipped_end);
+                    }
+                }
+            } else {
+                finish_scatter_line_segment(&mut segments, &mut current);
+            }
+        }
+        previous = Some(pixel);
+    }
+    finish_scatter_line_segment(&mut segments, &mut current);
+    segments
+}
+
 fn format_axis_tick(axis: &AxisSpec, tick: f64) -> String {
     if axis.scale_kind == ScaleKind::Logarithmic {
         fmt_num_log(tick)
@@ -498,20 +627,51 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
     }
 
-    // 5. 点(円)。共有 scatter_points(単一真実源)から描画。
-    for b in scatter_points(spec, &layout) {
-        let ser = &spec.series[b.series];
-        items.push(Prim::Circle {
-            cx: b.cx,
-            cy: b.cy,
-            r: b.r,
-            fill: ser.fill_at(b.index),
-            stroke: ser.stroke_at(b.index),
-            stroke_width: ser.stroke_width,
-        });
+    // 5. showLine=true の scatter dataset は入力順に点をつなぐ。
+    for ser in &spec.series {
+        let Some(line_style) = ser.line_style.as_ref() else {
+            continue;
+        };
+        if !line_style.show_line {
+            continue;
+        }
+
+        let segments = scatter_line_segments(&ser.points, &layout);
+        for points in segments.into_iter().filter(|segment| segment.len() >= 2) {
+            if line_style.border_dash.is_empty() {
+                items.push(Prim::Polyline {
+                    points,
+                    stroke: ser.stroke_at(0),
+                    stroke_width: ser.stroke_width,
+                });
+            } else {
+                items.push(Prim::StyledPolyline {
+                    points,
+                    stroke: ser.stroke_at(0),
+                    stroke_width: ser.stroke_width,
+                    dash: line_style.border_dash.clone(),
+                    dash_offset: line_style.border_dash_offset,
+                });
+            }
+        }
     }
 
-    // 6. 凡例(Top/Bottom: 横並び。draw_frame と同じ配置)。
+    // 6. 点。共有 scatter_points(単一真実源)から描画。
+    for b in scatter_points(spec, &layout) {
+        let ser = &spec.series[b.series];
+        super::common::dataset_point_marker(
+            &mut items,
+            b.cx,
+            b.cy,
+            b.r,
+            ser.fill_at(b.index),
+            ser.stroke_at(b.index),
+            ser.stroke_width,
+            ser.line_style.as_ref().and_then(|style| style.point_style),
+        );
+    }
+
+    // 7. 凡例(Top/Bottom: 横並び。draw_frame と同じ配置)。
     if legend && matches!(spec.legend, LegendPos::Top | LegendPos::Bottom) {
         let entries: Vec<(String, Color)> = spec
             .series
@@ -646,6 +806,7 @@ mod tests {
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
+                line_style: None,
                 stack: None,
                 bar_geometry: None,
                 series_type: SeriesType::Bar,

@@ -37,6 +37,14 @@ pub enum Prim {
         stroke: Color,
         stroke_width: f64,
     },
+    /// Dashed version of a polyline used for dataset line styling.
+    StyledPolyline {
+        points: Vec<(f64, f64)>,
+        stroke: Color,
+        stroke_width: f64,
+        dash: Vec<f64>,
+        dash_offset: f64,
+    },
     /// 任意パス。area塗り・pie扇形・曲線に使う。fill/strokeは任意。
     Path {
         /// SVG path data。`fmt_num` 整形済みのトークンとパスコマンドのみを含むこと。
@@ -45,6 +53,15 @@ pub enum Prim {
         fill: Option<Color>,
         stroke: Option<Color>,
         stroke_width: f64,
+    },
+    /// Dashed version of a path used for dataset line styling.
+    StyledPath {
+        /// SVG path data using the same restricted commands as `Prim::Path`.
+        d: String,
+        stroke: Color,
+        stroke_width: f64,
+        dash: Vec<f64>,
+        dash_offset: f64,
     },
     /// 水平リニアグラデーションで塗る任意パス。sankey のリボンに使う。
     /// グラデーションは userSpace の x0→x1 で stop0→stop1 に補間する(y 方向は一定)。
