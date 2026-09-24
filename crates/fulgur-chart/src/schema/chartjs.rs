@@ -144,8 +144,22 @@ pub struct BarDataset {
     pub border_color: Option<ScalarOrArray<ColorString>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_width: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "f64")]
     pub tension: Option<f64>,
+    /// Cubic interpolation mode for line overrides in mixed charts.
+    #[serde(
+        rename = "cubicInterpolationMode",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "CubicMode")]
+    pub cubic_interpolation_mode: Option<CubicMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fill: Option<LineFillSpec>,
 }
@@ -284,8 +298,22 @@ pub struct LineDataset {
     pub border_color: Option<ScalarOrArray<ColorString>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_width: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "f64")]
     pub tension: Option<f64>,
+    /// Cubic interpolation mode. `monotone` preserves the direction of adjacent segments.
+    #[serde(
+        rename = "cubicInterpolationMode",
+        default,
+        deserialize_with = "deserialize_optional_non_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "CubicMode")]
+    pub cubic_interpolation_mode: Option<CubicMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub span_gaps: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -294,6 +322,22 @@ pub struct LineDataset {
     pub fill: Option<LineFillSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub point_radius: Option<f64>,
+}
+
+/// Cubic line interpolation algorithm from Chart.js.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CubicMode {
+    Default,
+    Monotone,
+}
+
+fn deserialize_optional_non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 /// Line stepping setting: a boolean or one of Chart.js's named step modes.
@@ -1586,7 +1630,8 @@ pub enum SankeySizeOption {
 #[cfg(test)]
 mod tests {
     use super::{
-        BarDataset, BoxplotDataset, ChartJsSpec, LineDataset, RadarOptions, Stepped, SteppedMode,
+        BarDataset, BoxplotDataset, ChartJsSpec, CubicMode, LineDataset, RadarOptions, Stepped,
+        SteppedMode,
     };
 
     #[test]
@@ -1594,6 +1639,84 @@ mod tests {
         let json = r#"{"data":[1,null,3]}"#;
         let d: LineDataset = serde_json::from_str(json).unwrap();
         assert_eq!(d.data, vec![Some(1.0), None, Some(3.0)]);
+    }
+
+    #[test]
+    fn line_dataset_accepts_cubic_interpolation_modes() {
+        let default: LineDataset =
+            serde_json::from_str(r#"{"data":[1,2],"cubicInterpolationMode":"default"}"#).unwrap();
+        let monotone: LineDataset =
+            serde_json::from_str(r#"{"data":[1,2],"cubicInterpolationMode":"monotone"}"#).unwrap();
+
+        assert_eq!(default.cubic_interpolation_mode, Some(CubicMode::Default));
+        assert_eq!(monotone.cubic_interpolation_mode, Some(CubicMode::Monotone));
+    }
+
+    #[test]
+    fn line_dataset_rejects_unknown_cubic_interpolation_mode() {
+        assert!(
+            serde_json::from_str::<LineDataset>(
+                r#"{"data":[1,2],"cubicInterpolationMode":"smooth"}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn cubic_interpolation_mode_fields_reject_explicit_null() {
+        assert!(
+            serde_json::from_str::<LineDataset>(r#"{"data":[1,2],"cubicInterpolationMode":null}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<BarDataset>(r#"{"data":[1,2],"cubicInterpolationMode":null}"#)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn tension_fields_reject_explicit_null() {
+        assert!(serde_json::from_str::<LineDataset>(r#"{"data":[1,2],"tension":null}"#).is_err());
+        assert!(serde_json::from_str::<BarDataset>(r#"{"data":[1,2],"tension":null}"#).is_err());
+    }
+
+    #[test]
+    fn cubic_interpolation_mode_fields_are_optional_but_not_nullable_in_schema() {
+        fn contains_null_type(value: &serde_json::Value) -> bool {
+            match value {
+                serde_json::Value::Object(object) => {
+                    object.get("type").is_some_and(|ty| {
+                        ty == "null"
+                            || ty
+                                .as_array()
+                                .is_some_and(|types| types.iter().any(|kind| kind == "null"))
+                    }) || object.values().any(contains_null_type)
+                }
+                serde_json::Value::Array(values) => values.iter().any(contains_null_type),
+                _ => false,
+            }
+        }
+
+        let line_schema = serde_json::to_value(schemars::schema_for!(LineDataset)).unwrap();
+        let bar_schema = serde_json::to_value(schemars::schema_for!(BarDataset)).unwrap();
+        for schema in [&line_schema, &bar_schema] {
+            let properties = schema["properties"]
+                .as_object()
+                .expect("dataset schema properties");
+            for field in ["cubicInterpolationMode", "tension"] {
+                let property = properties.get(field).expect("line option property");
+                let is_required = schema["required"].as_array().is_some_and(|required| {
+                    required
+                        .iter()
+                        .any(|required_field| required_field == field)
+                });
+                assert!(!is_required, "{field} must remain optional");
+                assert!(
+                    !contains_null_type(property),
+                    "{field} must exclude null: {property}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1644,6 +1767,16 @@ mod tests {
         let json = r#"{"data":[10,null,30]}"#;
         let d: BarDataset = serde_json::from_str(json).unwrap();
         assert_eq!(d.data, vec![Some(10.0), None, Some(30.0)]);
+    }
+
+    #[test]
+    fn bar_dataset_accepts_cubic_mode_for_line_overrides() {
+        assert!(
+            serde_json::from_str::<BarDataset>(
+                r#"{"type":"line","data":[1,2],"cubicInterpolationMode":"monotone"}"#
+            )
+            .is_ok()
+        );
     }
 
     #[test]

@@ -51,6 +51,47 @@ fn mixed_has_bars_line_and_markers() {
 }
 
 #[test]
+fn mixed_line_cubic_interpolation_mode_uses_monotone_geometry() {
+    let monotone_spec = chartjs::parse(
+        r##"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[
+          {"type":"line","data":[0,2,7],"tension":0.8,"cubicInterpolationMode":"monotone","borderColor":"#0000ff"},
+          {"data":[1,2,3]}
+        ]}}"##,
+        false,
+    )
+    .unwrap();
+    let catmull_spec = chartjs::parse(
+        r##"{"type":"bar","data":{"labels":["A","B","C"],"datasets":[
+          {"type":"line","data":[0,2,7],"tension":0.8,"borderColor":"#0000ff"},
+          {"data":[1,2,3]}
+        ]}}"##,
+        false,
+    )
+    .unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let stroke_path = |scene: &fulgur_chart::scene::Scene| {
+        scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Path {
+                    d,
+                    fill: None,
+                    stroke: Some(stroke),
+                    ..
+                } if (stroke.r, stroke.g, stroke.b) == (0, 0, 255) => Some(d.clone()),
+                _ => None,
+            })
+            .expect("mixed line cubic interpolation must create a stroke path")
+    };
+    let monotone_path = stroke_path(&build_scene(&monotone_spec, &measurer));
+    let catmull_path = stroke_path(&build_scene(&catmull_spec, &measurer));
+
+    assert!(monotone_path.contains(" C "));
+    assert_ne!(monotone_path, catmull_path);
+}
+
+#[test]
 fn mixed_deterministic() {
     assert_eq!(render(MIXED_JSON), render(MIXED_JSON));
 }
