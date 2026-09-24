@@ -1,7 +1,12 @@
 //! 同梱フォントの提供。計測と描画で同一バイト列を使い、三者一致を保証する。
 
 /// バイナリに埋め込んだ既定フォント（Noto Sans JP Regular, static OTF/CFF）。
+#[cfg(feature = "default-font")]
 pub static DEFAULT_FONT: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-Regular.otf");
+
+/// 既定フォントを無効にしたビルドでは、呼び出し元がフォントを渡す必要がある。
+#[cfg(not(feature = "default-font"))]
+pub static DEFAULT_FONT: &[u8] = &[];
 
 /// 既定フォントのファミリ名(font-family の主名)。
 pub const DEFAULT_FAMILY: &str = "Noto Sans JP";
@@ -40,12 +45,14 @@ pub fn family_name(bytes: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "default-font")]
     #[test]
     fn default_font_parses() {
         let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
         assert!(face.number_of_glyphs() > 0);
     }
 
+    #[cfg(feature = "default-font")]
     #[test]
     fn family_name_of_default_font() {
         let fam = family_name(DEFAULT_FONT).expect("family name");
@@ -57,11 +64,18 @@ mod tests {
         assert!(family_name(b"not a font").is_none());
     }
 
+    #[cfg(feature = "default-font")]
     #[test]
     fn default_font_covers_ascii_kana_and_kanji() {
         let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
         assert!(face.glyph_index('A').is_some());
         assert!(face.glyph_index('あ').is_some());
         assert!(face.glyph_index('売').is_some());
+    }
+
+    #[cfg(not(feature = "default-font"))]
+    #[test]
+    fn default_font_is_not_embedded_when_feature_is_disabled() {
+        assert!(DEFAULT_FONT.is_empty());
     }
 }

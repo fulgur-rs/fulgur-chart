@@ -432,6 +432,9 @@ jobs:
       - name: Browser smoke test (Chromium headless)
         run: npm run test:browser
 
+      - name: Test no-default-font build
+        run: npm run test:no-default-font
+
   perf:
     name: Perf (memory gate + speed report)
     runs-on: ubuntu-latest

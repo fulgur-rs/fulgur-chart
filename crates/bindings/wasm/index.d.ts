@@ -4,7 +4,9 @@
 export type Dsl = 'chartjs' | 'vegalite'
 export type Format = 'svg' | 'png' | 'webp'
 
-/** Render options. All fields optional; omitted fields use the spec / core defaults. */
+/**
+ * Render options. The no-default-font build requires `font`; other fields use core defaults.
+ */
 export interface RenderOptions {
   /** Chart width (px). Overrides the spec value. */
   width?: number
@@ -16,7 +18,10 @@ export interface RenderOptions {
   strict?: boolean
   /** Force the input DSL. Omit to auto-detect (`mark` -> vegalite, `type` -> chartjs). */
   dsl?: Dsl
-  /** TrueType/OpenType font bytes. Omit to use the bundled Noto Sans JP. */
+  /**
+   * TrueType/OpenType font bytes. Omit for bundled Noto Sans JP in the default build;
+   * required in a no-default-font build.
+   */
   font?: Uint8Array
 }
 

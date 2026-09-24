@@ -1,5 +1,10 @@
-use fulgur_chart::guard::{InputLimits, validate_spec};
+use fulgur_chart::guard::InputLimits;
 use wasm_bindgen::prelude::*;
+
+#[cfg(all(feature = "bundled-font", feature = "no-default-font"))]
+compile_error!(
+    "features `bundled-font` and `no-default-font` are mutually exclusive; disable defaults for a slim build"
+);
 
 // --- error classification (by CALL SITE, never by parsing the message) ---
 //
@@ -176,8 +181,31 @@ fn render_inner(
         ir.height = h;
     }
 
-    // 5. Guard (failure -> ParseError).
-    validate_spec(&ir, &InputLimits::default()).map_err(|e| (PARSE_ERROR, e))?;
+    // 5. Guard (failure -> ParseError). The slim build measures plot-area
+    // line charts with the caller's font because the default font is absent.
+    #[cfg(feature = "bundled-font")]
+    fulgur_chart::guard::validate_spec(&ir, &InputLimits::default())
+        .map_err(|e| (PARSE_ERROR, e))?;
+
+    #[cfg(not(feature = "bundled-font"))]
+    {
+        let font_bytes = font.ok_or_else(|| {
+            (
+                PARSE_ERROR,
+                "font bytes are required in a no-default-font build".to_string(),
+            )
+        })?;
+        let measurer = fulgur_chart::text::TextMeasurer::new(font_bytes).map_err(|e| {
+            let code = if format == "svg" {
+                PARSE_ERROR
+            } else {
+                RENDER_ERROR
+            };
+            (code, e)
+        })?;
+        fulgur_chart::guard::validate_spec_with_measurer(&ir, &InputLimits::default(), &measurer)
+            .map_err(|e| (PARSE_ERROR, e))?;
+    }
 
     // 6. Render by format.
     match format {

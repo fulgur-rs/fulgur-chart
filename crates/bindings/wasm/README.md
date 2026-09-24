@@ -45,6 +45,25 @@ Errors: `FulgurParseError`, `FulgurStrictError` (`< FulgurParseError`), `FulgurR
 Behavior (DSL auto-detection, options, error classification, determinism, font asymmetry)
 follows `docs/binding-api-contract.md`.
 
+## Slim build without the bundled font
+
+The default build includes Noto Sans JP. To build a smaller WASM binary for applications
+that supply their own TrueType/OpenType font, run:
+
+```sh
+npm run build:no-default-font
+```
+
+In this build, pass `font` to each low-level `render(...)` call or set it on a builder;
+omitting it raises `FulgurParseError`:
+
+```js
+const svg = build(spec).font(fontBytes).render('svg')
+```
+
+Run `npm run test:no-default-font` to build this variant and verify that explicit fonts
+work for SVG, PNG, and WebP.
+
 ## npm Package Distribution
 
 Releases are triggered automatically when a `fulgur-chart-v*` GitHub Release is published,

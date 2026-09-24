@@ -25,6 +25,10 @@ time = { workspace = true }
 dhat = { version = "0.3.3", optional = true }
 
 [features]
+default = ["default-font"]
+# Includes the Noto Sans JP font bytes in the binary. Disable this for
+# bindings that require callers to supply their own font.
+default-font = []
 # Enables the dhat global allocator for the `membench` bench target only.
 dhat-heap = ["dep:dhat"]
 
