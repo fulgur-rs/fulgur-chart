@@ -1222,6 +1222,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     }
 
     if is_mixable_base
+        && (strict || raw.chart_type == "line")
         && raw
             .data
             .datasets
@@ -4723,6 +4724,31 @@ mod tests {
                     "strict {name} root accepted {option}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn bar_roots_ignore_line_style_options_on_bar_datasets_but_strict_rejects_them() {
+        let plain = r#"{"type":"bar","data":{"datasets":[{"data":[3,4]}]}}"#;
+        for (name, option) in [
+            ("pointStyle", r#""pointStyle":"triangle""#),
+            ("showLine", r#""showLine":false"#),
+            ("borderDash", r#""borderDash":[4,2]"#),
+            ("borderDashOffset", r#""borderDashOffset":2"#),
+        ] {
+            let with_option =
+                plain.replace(r#""data":[3,4]"#, &format!(r#""data":[3,4],{option}"#));
+            let parsed_with_option = parse(&with_option, false)
+                .unwrap_or_else(|error| panic!("{name}: {error} in {with_option}"));
+            assert_eq!(
+                parsed_with_option,
+                parse(plain, false).unwrap(),
+                "non-strict bar root must ignore {name} on a bar dataset"
+            );
+            assert!(
+                parse(&with_option, true).is_err(),
+                "strict bar root must reject {name} on a bar dataset"
+            );
         }
     }
 
