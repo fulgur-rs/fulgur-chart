@@ -189,8 +189,6 @@ fn draw_line_dataset(
     } else {
         segments
     };
-    // area / marker / label 用の点列も線と同じ間引き後のセグメントから作る。
-    let valid: Vec<(f64, f64, usize)> = segments.iter().flatten().copied().collect();
 
     // area(背面): 線と同じくセグメント単位で 1 つずつ閉多角形を描く(line.rs と同挙動)。
     // gap を跨いだ塗りを防ぐ。非 null / 非 gap 系列では 1 セグメントで従来と同一のパス
@@ -309,14 +307,17 @@ fn draw_line_dataset(
     }
 
     // 間引いた長い線は既定マーカーを抑制し、点が唯一の表現となる線なし / 単点区間は残す。
-    for seg in &segments {
-        let marker_radius = match (decimated, ser.point_radius) {
+    let marker_radii: Vec<Option<f64>> = segments
+        .iter()
+        .map(|seg| match (decimated, ser.point_radius) {
             (true, Some(radius)) if radius > 0.0 => Some(radius),
             (true, Some(_)) => None,
             (false, _) => Some(MARKER_R),
             (true, None) if !show_line || seg.len() < 2 => Some(MARKER_R),
             (true, None) => None,
-        };
+        })
+        .collect();
+    for (seg, marker_radius) in segments.iter().zip(&marker_radii) {
         let Some(radius) = marker_radius else {
             continue;
         };
@@ -328,7 +329,7 @@ fn draw_line_dataset(
                 items,
                 cx,
                 cy,
-                radius,
+                *radius,
                 ser.stroke_at(0),
                 ser.stroke_at(0),
                 0.0,
@@ -340,19 +341,23 @@ fn draw_line_dataset(
     // データラベル(点の上、マーカー半径ぶん+余白だけ上)。
     // 元カテゴリインデックスで ser.values を引くことで filter 後のずれを防ぐ。
     if spec.data_labels {
-        for &(x, y, cat) in &valid {
-            if !common::axis_value_in_bounds(ser.values[cat], &frame.ticks) {
-                continue;
+        for (seg, marker_radius) in segments.iter().zip(&marker_radii) {
+            // マーカーを抑制した区間では従来の余白を保ち、描画する区間では実際の半径を使う。
+            let label_radius = marker_radius.unwrap_or(MARKER_R);
+            for &(x, y, cat) in seg {
+                if !common::axis_value_in_bounds(ser.values[cat], &frame.ticks) {
+                    continue;
+                }
+                items.push(common::value_label(
+                    x,
+                    y - label_radius - common::LABEL_GAP,
+                    spec.theme.font_size,
+                    Anchor::Middle,
+                    spec.theme.text_color,
+                    ser.values[cat],
+                    false, // Mixed は対数軸をとりえない(frontend でスコープ外)
+                ));
             }
-            items.push(common::value_label(
-                x,
-                y - MARKER_R - common::LABEL_GAP,
-                spec.theme.font_size,
-                Anchor::Middle,
-                spec.theme.text_color,
-                ser.values[cat],
-                false, // Mixed は対数軸をとりえない(frontend でスコープ外)
-            ));
         }
     }
 }
@@ -789,22 +794,45 @@ mod tests {
         );
 
         let mut explicit_radius_spec = spec.clone();
-        explicit_radius_spec.series[1].point_radius = Some(2.0);
+        let explicit_radius = 20.0;
+        explicit_radius_spec.series[1].point_radius = Some(explicit_radius);
         let explicit_radius_scene = build(&explicit_radius_spec, &m);
-        let explicit_radii: Vec<_> = explicit_radius_scene
+        let explicit_markers: Vec<_> = explicit_radius_scene
             .items
             .iter()
             .filter_map(|item| match item {
-                Prim::Circle { r, fill, .. } if *fill == line_stroke => Some(*r),
+                Prim::Circle {
+                    cx, cy, r, fill, ..
+                } if *fill == line_stroke => Some((*cx, *cy, *r)),
                 _ => None,
             })
             .collect();
-        assert_eq!(explicit_radii.len(), line_points);
+        assert_eq!(explicit_markers.len(), line_points);
         assert!(
-            explicit_radii
+            explicit_markers
                 .iter()
-                .all(|radius| (*radius - 2.0).abs() < 1e-9)
+                .all(|(_, _, radius)| (*radius - explicit_radius).abs() < 1e-9)
         );
+        for &(cx, cy, _) in explicit_markers.iter().skip(1) {
+            let label_y = explicit_radius_scene
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Text {
+                        x,
+                        y,
+                        anchor: Anchor::Middle,
+                        content,
+                        ..
+                    } if (*x - cx).abs() < 1e-9 && content.parse::<f64>().is_ok() => Some(*y),
+                    _ => None,
+                });
+            assert_eq!(
+                label_y,
+                Some(cy - explicit_radius - common::LABEL_GAP),
+                "line labels should use the explicit marker radius"
+            );
+        }
 
         let mut zero_radius_spec = spec.clone();
         zero_radius_spec.series[1].point_radius = Some(0.0);
