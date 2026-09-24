@@ -1,6 +1,8 @@
 //! 線形スケールと nice ticks（1-2-5 ステップ）。すべて決定的な純関数。
 
-const MAX_TICK_INTERVALS: usize = 1_000;
+use crate::ir::AxisTickOptions;
+
+pub(crate) const MAX_TICK_INTERVALS: usize = 1_000;
 
 /// 値→ピクセルの線形写像。px_min>px_max（y軸の上下反転）も許容。
 #[derive(Debug, Clone)]
@@ -104,18 +106,7 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
 
     // 3-5. 1-2-5 ステップを選ぶ。
     let raw_step = range / count as f64;
-    let magnitude = 10f64.powf(raw_step.log10().floor());
-    let norm = raw_step / magnitude; // 1.0〜10.0
-    let step = magnitude
-        * if norm <= 1.0 {
-            1.0
-        } else if norm <= 2.0 {
-            2.0
-        } else if norm <= 5.0 {
-            5.0
-        } else {
-            10.0
-        };
+    let step = nice_step(raw_step);
 
     // 6. データ範囲を step グリッドに合わせて外側に丸める。
     let nice_min = (data_min / step).floor() * step;
@@ -150,6 +141,167 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
         min: nice_min,
         max: nice_max,
         step,
+        ticks,
+    }
+}
+
+/// Chart.js 線形軸の `ticks` 設定を反映した目盛りを生成する。
+///
+/// `maxTicksLimit` の既定値は `stepSize` がない場合だけ Chart.js と同じ 11。指定された
+/// `stepSize` は明示上限か生成安全上限に達しない限り維持する。両端 bounds と `stepSize`
+/// が整数個の間隔を作れる場合は `count` より優先し、それ以外は `count` を使う。
+/// `precision` は `stepSize` がない場合だけ間隔を切り上げる。
+pub fn configured_ticks(
+    data_min: f64,
+    data_max: f64,
+    options: &AxisTickOptions,
+    hard_min: Option<f64>,
+    hard_max: Option<f64>,
+) -> NiceTicks {
+    let requested_step = options
+        .step_size
+        .filter(|step| step.is_finite() && *step > 0.0);
+    let max_ticks = options
+        .max_ticks_limit
+        .unwrap_or_else(|| {
+            if requested_step.is_some() {
+                MAX_TICK_INTERVALS + 1
+            } else {
+                11
+            }
+        })
+        .clamp(2, MAX_TICK_INTERVALS + 1);
+    let base = nice_ticks(data_min, data_max, max_ticks - 1);
+    let min_bound = hard_min.filter(|value| value.is_finite());
+    let max_bound =
+        hard_max.filter(|value| value.is_finite() && min_bound.is_none_or(|min| *value > min));
+    let fixed_hard_bounds = requested_step.is_some_and(|requested| {
+        if let (Some(min), Some(max)) = (min_bound, max_bound) {
+            let spaces = (max - min) / requested;
+            spaces.is_finite() && (spaces - spaces.round()).abs() <= spaces.abs().max(1.0) * 1e-9
+        } else {
+            false
+        }
+    });
+
+    if !fixed_hard_bounds && let Some(count) = options.count.filter(|count| *count >= 1) {
+        let count = count.clamp(1, MAX_TICK_INTERVALS + 1);
+        let min = min_bound.unwrap_or(base.min);
+        let max = max_bound.unwrap_or(base.max);
+        if count == 1 {
+            return NiceTicks {
+                min,
+                max,
+                step: base.step,
+                ticks: vec![max],
+            };
+        }
+        let span = max - min;
+        let step = span / (count - 1) as f64;
+        if span.is_finite() && span > 0.0 && step.is_finite() && step > 0.0 {
+            let ticks = (0..count)
+                .map(|index| {
+                    if index + 1 == count {
+                        max
+                    } else {
+                        min + index as f64 * step
+                    }
+                })
+                .collect();
+            return NiceTicks {
+                min,
+                max,
+                step,
+                ticks,
+            };
+        }
+        return base;
+    }
+
+    let mut step = if let Some(unit) = requested_step {
+        let multiples = (base.step / unit).ceil().max(1.0);
+        let scaled = unit * multiples;
+        if scaled.is_finite() && scaled > 0.0 {
+            scaled
+        } else {
+            base.step
+        }
+    } else {
+        base.step
+    };
+    if requested_step.is_none()
+        && let Some(precision) = options.precision
+    {
+        let factor = 10f64.powi(precision.min(100) as i32);
+        let scaled = step * factor;
+        if factor.is_finite() && scaled.is_finite() {
+            let rounded = scaled.ceil() / factor;
+            if rounded.is_finite() && rounded > 0.0 {
+                step = rounded;
+            }
+        }
+    }
+
+    let mut min = if fixed_hard_bounds {
+        min_bound.unwrap_or(data_min)
+    } else {
+        (data_min / step).floor() * step
+    };
+    let mut max = if fixed_hard_bounds {
+        max_bound.unwrap_or(data_max)
+    } else {
+        (data_max / step).ceil() * step
+    };
+    if !min.is_finite() || !max.is_finite() || !step.is_finite() || max <= min {
+        return base;
+    }
+
+    let max_intervals = max_ticks.saturating_sub(1).max(1);
+    let intervals = ((max - min) / step).ceil();
+    if !intervals.is_finite() {
+        return base;
+    }
+    if intervals > max_intervals as f64 {
+        let ideal = (max - min) / max_intervals as f64;
+        let adjusted = requested_step.map_or_else(
+            || nice_step(ideal),
+            |unit| nice_step(ideal / unit).max(1.0) * unit,
+        );
+        if !adjusted.is_finite() || adjusted <= 0.0 {
+            return base;
+        }
+        step = adjusted;
+        if min_bound.is_none() {
+            min = (data_min / step).floor() * step;
+        }
+        if max_bound.is_none() {
+            max = (data_max / step).ceil() * step;
+        }
+    }
+
+    configured_ticks_from_step(min, max, step, base)
+}
+
+fn configured_ticks_from_step(min: f64, max: f64, step: f64, base: NiceTicks) -> NiceTicks {
+    let intervals = ((max - min) / step).ceil();
+    if !intervals.is_finite() || intervals > MAX_TICK_INTERVALS as f64 {
+        return base;
+    }
+    let mut ticks = Vec::with_capacity(intervals as usize + 1);
+    for index in 0..=(intervals as usize) {
+        let value = min + index as f64 * step;
+        if !value.is_finite() || value > max {
+            break;
+        }
+        if ticks.last().is_none_or(|last| *last != value) {
+            ticks.push(value);
+        }
+    }
+    let actual_step = ticks.get(1).map_or(step, |next| *next - ticks[0]);
+    NiceTicks {
+        min,
+        max,
+        step: actual_step,
         ticks,
     }
 }
@@ -647,6 +799,145 @@ impl ValueScale {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_ticks_preserve_step_size_without_explicit_bounds() {
+        let options = AxisTickOptions {
+            step_size: Some(2.0),
+            ..AxisTickOptions::default()
+        };
+
+        let ticks = configured_ticks(1.0, 9.0, &options, None, None);
+
+        assert_eq!(ticks.step, 2.0);
+        assert_eq!(ticks.ticks, vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0]);
+    }
+
+    #[test]
+    fn configured_ticks_returns_base_for_count_outside_the_auto_domain() {
+        let options = AxisTickOptions {
+            count: Some(3),
+            ..AxisTickOptions::default()
+        };
+        let base = nice_ticks(0.0, 1.0, 10);
+
+        assert_eq!(
+            configured_ticks(0.0, 1.0, &options, Some(100.0), None),
+            base
+        );
+    }
+
+    #[test]
+    fn configured_ticks_falls_back_when_requested_step_overflows() {
+        let options = AxisTickOptions {
+            step_size: Some(f64::from_bits(1)),
+            ..AxisTickOptions::default()
+        };
+        let base = nice_ticks(0.0, 1e300, MAX_TICK_INTERVALS);
+
+        assert_eq!(
+            configured_ticks(0.0, 1e300, &options, None, None).step,
+            base.step
+        );
+    }
+
+    #[test]
+    fn configured_ticks_handles_precision_overflow() {
+        let options = AxisTickOptions {
+            precision: Some(100),
+            ..AxisTickOptions::default()
+        };
+
+        let ticks = configured_ticks(0.0, 1e300, &options, None, None);
+
+        assert!(ticks.step.is_finite() && ticks.step > 0.0);
+    }
+
+    #[test]
+    fn configured_ticks_returns_base_for_degenerate_step_domain() {
+        let options = AxisTickOptions {
+            step_size: Some(1.0),
+            ..AxisTickOptions::default()
+        };
+
+        assert_eq!(
+            configured_ticks(0.0, 0.0, &options, None, None),
+            nice_ticks(0.0, 0.0, MAX_TICK_INTERVALS)
+        );
+    }
+
+    #[test]
+    fn configured_ticks_returns_base_for_overflowing_span() {
+        let min = -f64::MAX;
+        let max = f64::MAX;
+        let options = AxisTickOptions::default();
+
+        assert_eq!(
+            configured_ticks(min, max, &options, None, None),
+            nice_ticks(min, max, 10)
+        );
+    }
+
+    #[test]
+    fn configured_ticks_adjusts_spacing_to_explicit_tick_limit() {
+        let options = AxisTickOptions {
+            step_size: Some(3.0),
+            max_ticks_limit: Some(3),
+            ..AxisTickOptions::default()
+        };
+
+        let ticks = configured_ticks(-1.0, 9.0, &options, None, None);
+
+        assert_eq!(ticks.ticks.len(), 3);
+        assert_eq!(ticks.step, 15.0);
+        assert_eq!(ticks.step % 3.0, 0.0);
+    }
+
+    #[test]
+    fn configured_ticks_uses_nice_spacing_when_default_limit_is_exceeded() {
+        let options = AxisTickOptions::default();
+
+        let ticks = configured_ticks(0.5, 10.4, &options, None, None);
+
+        assert_eq!(ticks.step, 2.0);
+        assert!(ticks.ticks.len() <= 11);
+    }
+
+    #[test]
+    fn configured_ticks_adjustment_rejects_infinite_step() {
+        let min = -1e300;
+        let max = 1e300;
+        let options = AxisTickOptions {
+            step_size: Some(f64::from_bits(1)),
+            max_ticks_limit: Some(2),
+            ..AxisTickOptions::default()
+        };
+        let base = nice_ticks(min, max, 1);
+
+        assert_eq!(configured_ticks(min, max, &options, None, None), base);
+    }
+
+    #[test]
+    fn configured_ticks_stops_at_non_divisible_maximum() {
+        let options = AxisTickOptions {
+            step_size: Some(0.1),
+            ..AxisTickOptions::default()
+        };
+
+        let ticks = configured_ticks(0.0, 0.3, &options, None, None);
+
+        assert!(ticks.ticks.iter().all(|tick| *tick <= ticks.max));
+    }
+
+    #[test]
+    fn configured_ticks_from_step_falls_back_above_safety_limit() {
+        let base = nice_ticks(0.0, 1.0, 10);
+
+        assert_eq!(
+            configured_ticks_from_step(0.0, (MAX_TICK_INTERVALS + 1) as f64, 1.0, base.clone()),
+            base
+        );
+    }
 
     #[test]
     fn value_scale_map_and_unmap_round_trip_linear_and_log_values() {

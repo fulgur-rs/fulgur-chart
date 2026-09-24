@@ -259,10 +259,48 @@ pub struct AxisBorderOptions {
     pub z: Option<serde_json::Value>,
 }
 
+/// Numeric tick generation options for `options.scales.{x,y}.ticks`.
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ScaleTicksOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub step_size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_ticks_limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub precision: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<NumberFormatOptions>,
+}
+
+/// Supported subset of Intl.NumberFormat options for linear-axis labels.
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NumberFormatOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum_fraction_digits: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maximum_fraction_digits: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notation: Option<NumberFormatNotation>,
+}
+
+/// Intl.NumberFormat notation values supported for linear-axis labels.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NumberFormatNotation {
+    Standard,
+    Scientific,
+    Engineering,
+    Compact,
+}
+
 /// Axis options for options.scales.x / options.scales.y.
 ///
 /// `deny_unknown_fields` is intentionally NOT set here. Chart.js のスケールには
-/// v1 で未モデル化のフィールド(`ticks`/`time`/`position`/`reverse`/`grid.z`
+/// v1 で未モデル化のフィールド(`time`/`position`/`reverse`/`grid.z`
 /// など)が多数あり、これらを deserialize 段でハードエラーにすると non-strict
 /// モードでの Chart.js JSON 互換が壊れる。strict モードのタイポ検出は
 /// `frontend/chartjs.rs::check_unknown_keys` の allow-list が担い、
@@ -294,6 +332,9 @@ pub struct AxisOptions {
     /// Axis border/base-line configuration (parsed but not yet mapped to IR).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border: Option<AxisBorderOptions>,
+    /// Linear numeric tick generation and number formatting options.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticks: Option<ScaleTicksOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub begin_at_zero: Option<bool>,
     /// When true, category points/bands are centered (band center) instead of edge-to-edge.

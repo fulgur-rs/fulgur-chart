@@ -1012,6 +1012,62 @@ fn strict_rejects_scales_typo() {
 }
 
 #[test]
+fn linear_tick_options_roundtrip_in_schema_and_parse_in_strict_mode() {
+    let json = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[10]}]},
+      "options":{"scales":{"y":{"ticks":{"stepSize":2,"maxTicksLimit":4,"count":3,
+        "precision":1,"format":{"minimumFractionDigits":2,"maximumFractionDigits":3,
+          "notation":"scientific"}}}}}}"#;
+
+    let schema_spec: fulgur_chart::schema::chartjs::ChartJsSpec =
+        serde_json::from_str(json).expect("schema should accept supported linear tick options");
+    let roundtrip = serde_json::to_value(schema_spec).expect("schema should serialize");
+    assert_eq!(
+        roundtrip["options"]["scales"]["y"]["ticks"],
+        serde_json::json!({
+            "stepSize": 2.0,
+            "maxTicksLimit": 4,
+            "count": 3,
+            "precision": 1,
+            "format": {
+                "minimumFractionDigits": 2,
+                "maximumFractionDigits": 3,
+                "notation": "scientific"
+            }
+        })
+    );
+    assert!(chartjs::parse(json, true).is_ok());
+}
+
+#[test]
+fn linear_ticks_default_max_ticks_limit_matches_chartjs() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#;
+    let spec = chartjs::parse(json, true).expect("parse default axis ticks");
+
+    assert_eq!(spec.y_axis.ticks.max_ticks_limit, Some(11));
+}
+
+#[test]
+fn strict_mode_rejects_unknown_linear_tick_and_format_options() {
+    let unknown_tick = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"y":{"ticks":{"stepSzie":2}}}}}"#;
+    assert!(chartjs::parse(unknown_tick, true).is_err());
+
+    let unknown_format = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"y":{"ticks":{"format":{"maximumFractionDigts":2}}}}}}"#;
+    assert!(chartjs::parse(unknown_format, true).is_err());
+}
+
+#[test]
+fn non_strict_mode_ignores_unimplemented_chartjs_tick_options() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"y":{"ticks":{"display":false,"autoSkip":false,
+        "format":{"useGrouping":false}}}}}}"#;
+
+    assert!(chartjs::parse(json, false).is_ok());
+    assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
 fn matrix_parses_categories_and_series() {
     let json = r#"{
         "type": "matrix",

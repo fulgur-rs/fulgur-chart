@@ -1,5 +1,7 @@
 //! 決定的な数値フォーマット。SVG 座標・寸法はすべてこれを通す。
 
+use crate::ir::{AxisTickFormat, AxisTickNotation};
+
 /// 小数2桁に丸め、末尾の不要な 0 と小数点を除去する。
 /// 負ゼロは "0" に正規化。ロケール非依存。
 /// 非有限値（NaN / ±Infinity）は不正な SVG トークンになるため "0" に落とす。
@@ -28,6 +30,167 @@ pub fn fmt_num(v: f64) -> String {
     }
     s
 }
+
+/// 線形軸のラベルを `ticks.format` の対応 subset で整形する。
+/// format 未指定時は既存チャートの表示を保つ。
+pub fn fmt_axis_tick(v: f64, options: Option<&AxisTickFormat>) -> String {
+    if !v.is_finite() {
+        return "0".to_string();
+    }
+    let Some(options) = options else {
+        return fmt_num(v);
+    };
+
+    let minimum_digits = options.minimum_fraction_digits.unwrap_or(0).min(100) as usize;
+    let maximum_digits = options
+        .maximum_fraction_digits
+        .map(|digits| digits.min(100) as usize)
+        .map(|digits| digits.max(minimum_digits))
+        .or_else(|| {
+            options
+                .minimum_fraction_digits
+                .map(|_| minimum_digits.max(3))
+        });
+    let notation = options.notation.unwrap_or_default();
+    let has_explicit_format = options.minimum_fraction_digits.is_some()
+        || options.maximum_fraction_digits.is_some()
+        || options.notation.is_some();
+
+    let (mut coefficient, mut exponent, mut suffix, mut is_exponential) = match notation {
+        AxisTickNotation::Standard => (v, 0, "", false),
+        AxisTickNotation::Scientific => {
+            let (coefficient, exponent) = scientific_parts(v);
+            (coefficient, exponent, "", true)
+        }
+        AxisTickNotation::Engineering => {
+            let (coefficient, exponent) = scientific_parts(v);
+            let engineering_exponent = exponent.div_euclid(3) * 3;
+            let adjusted = coefficient * 10f64.powi(exponent - engineering_exponent);
+            (adjusted, engineering_exponent, "", true)
+        }
+        AxisTickNotation::Compact => compact_parts(v),
+    };
+
+    // Keep automatic compact labels bounded without rounding tiny non-zero values to zero.
+    // If a plain decimal needs more digits than this limit, show it in scientific notation.
+    let automatic_compact_fraction_digits = compact_fraction_digits(coefficient);
+    let compact_scientific_fallback = notation == AxisTickNotation::Compact
+        && maximum_digits.is_none()
+        && automatic_compact_fraction_digits > MAX_COMPACT_FRACTION_DIGITS
+        && !fixed_fraction(coefficient, MAX_COMPACT_FRACTION_DIGITS, 0)
+            .parse::<f64>()
+            .is_ok_and(|rounded| rounded == coefficient);
+    if compact_scientific_fallback {
+        (coefficient, exponent) = scientific_parts(v);
+        suffix = "";
+        is_exponential = true;
+    }
+
+    let fraction_digits = maximum_digits.unwrap_or_else(|| {
+        if notation == AxisTickNotation::Compact && !compact_scientific_fallback {
+            automatic_compact_fraction_digits.min(MAX_COMPACT_FRACTION_DIGITS)
+        } else {
+            3
+        }
+    });
+    let mut number = if has_explicit_format || notation != AxisTickNotation::Standard {
+        fixed_fraction(coefficient, fraction_digits, minimum_digits)
+    } else {
+        fmt_num(coefficient)
+    };
+
+    // Rounding a scientific coefficient such as 9.9996 to three fraction digits can carry
+    // into the next decade. Normalize that result so it renders as 1E-20, not 10E-21.
+    if compact_scientific_fallback
+        && number
+            .parse::<f64>()
+            .is_ok_and(|rounded| rounded.abs() >= 10.0)
+    {
+        coefficient /= 10.0;
+        exponent += 1;
+        number = fixed_fraction(coefficient, fraction_digits, minimum_digits);
+    }
+
+    if notation == AxisTickNotation::Compact
+        && !is_exponential
+        && number
+            .parse::<f64>()
+            .is_ok_and(|rounded| rounded.abs() >= 1_000.0)
+        && exponent < 12
+    {
+        exponent += 3;
+        coefficient = v / 10f64.powi(exponent);
+        suffix = ["K", "M", "B", "T"][(exponent / 3 - 1) as usize];
+        number = fixed_fraction(coefficient, fraction_digits, minimum_digits);
+    }
+
+    if is_exponential {
+        number.push('E');
+        number.push_str(&exponent.to_string());
+    }
+    number.push_str(suffix);
+    number
+}
+
+fn fixed_fraction(value: f64, maximum_digits: usize, minimum_digits: usize) -> String {
+    let mut text = format!("{value:.maximum_digits$}");
+    if text.starts_with("-0") && text.parse::<f64>().is_ok_and(|rounded| rounded == 0.0) {
+        text.remove(0);
+    }
+    if minimum_digits > 0 {
+        let fraction_length = text
+            .split_once('.')
+            .map_or(0, |(_, fraction)| fraction.len());
+        if fraction_length == 0 {
+            text.push('.');
+        }
+        for _ in fraction_length..minimum_digits {
+            text.push('0');
+        }
+    } else if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    text
+}
+
+fn scientific_parts(value: f64) -> (f64, i32) {
+    let text = format!("{value:e}");
+    let Some((coefficient, exponent)) = text.split_once('e') else {
+        return (value, 0);
+    };
+    (
+        coefficient.parse().unwrap_or(value),
+        exponent.parse().unwrap_or(0),
+    )
+}
+
+fn compact_parts(value: f64) -> (f64, i32, &'static str, bool) {
+    let magnitude = value.abs();
+    if magnitude < 1_000.0 {
+        return (value, 0, "", false);
+    }
+    const UNITS: [&str; 4] = ["K", "M", "B", "T"];
+    let exponent = ((magnitude.log10() / 3.0).floor() as i32 * 3).clamp(3, 12);
+    let coefficient = value / 10f64.powi(exponent);
+    let suffix = UNITS[(exponent / 3 - 1) as usize];
+    (coefficient, exponent, suffix, false)
+}
+
+/// Intl compact short notation uses precision that depends on the displayed value:
+/// 1.2K, 12K, 123K, and 988M. Keep that behavior locale-independent for deterministic output.
+fn compact_fraction_digits(value: f64) -> usize {
+    if !value.is_finite() || value == 0.0 {
+        return 0;
+    }
+    (1.0 - value.abs().log10().floor()).max(0.0) as usize
+}
+
+const MAX_COMPACT_FRACTION_DIGITS: usize = 20;
 
 /// 対数軸の目盛ラベル用。`fmt_num` と違い小数点以下を2桁に丸めない
 /// (log軸は 0.0001 のような広いレンジの値を扱うため)。
@@ -61,8 +224,8 @@ pub fn fmt_num(v: f64) -> String {
 /// `f64` の全表現域)まで、`mantissa` を `1..=9` まで総当たりして
 /// この2種の不具合が再現しないことを確認済み(このモジュールのテスト参照)。
 ///
-/// ticks.format(fulgur-chart-pof、別issue)が実装されたら、明示指定時は
-/// そちらを優先し、未指定時のデフォルトとしてこの関数を使い続ける想定。
+/// 線形軸の明示的な `ticks.format` は [`fmt_axis_tick`] が処理する。
+/// この関数は対数軸の目盛りラベル用に維持する。
 pub fn fmt_num_log(v: f64) -> String {
     if !v.is_finite() {
         return "0".to_string();
@@ -143,6 +306,49 @@ mod tests {
         assert_eq!(fmt_num(1.234), "1.23");
         assert_eq!(fmt_num(-0.0), "0"); // 負ゼロを正規化
         assert_eq!(fmt_num(100.0), "100");
+    }
+
+    #[test]
+    fn compact_tick_format_uses_compact_precision_and_carries_units() {
+        let format = AxisTickFormat {
+            notation: Some(AxisTickNotation::Compact),
+            ..AxisTickFormat::default()
+        };
+        assert_eq!(fmt_axis_tick(987_654_321.0, Some(&format)), "988M");
+        assert_eq!(fmt_axis_tick(999_999.0, Some(&format)), "1M");
+        assert_eq!(fmt_axis_tick(999.9, Some(&format)), "1K");
+        assert_eq!(fmt_axis_tick(999.999, Some(&format)), "1K");
+        assert_eq!(fmt_axis_tick(1e15, Some(&format)), "1000T");
+        assert_eq!(compact_fraction_digits(1e-20), 21);
+        assert_eq!(
+            fmt_axis_tick(1e-20, Some(&format)),
+            "0.00000000000000000001"
+        );
+        assert_eq!(fmt_axis_tick(1e-21, Some(&format)), "1E-21");
+        assert_eq!(fmt_axis_tick(1.234e-21, Some(&format)), "1.234E-21");
+        assert_eq!(fmt_axis_tick(9.9996e-21, Some(&format)), "1E-20");
+    }
+
+    #[test]
+    fn axis_tick_format_handles_non_finite_and_empty_format() {
+        assert_eq!(fmt_axis_tick(f64::NAN, None), "0");
+        assert_eq!(
+            fmt_axis_tick(1.2345, Some(&AxisTickFormat::default())),
+            fmt_num(1.2345)
+        );
+    }
+
+    #[test]
+    fn fixed_fraction_normalizes_negative_zero_and_pads_minimum_digits() {
+        assert_eq!(fixed_fraction(-0.0004, 3, 0), "0");
+        assert_eq!(fixed_fraction(1.0, 0, 2), "1.00");
+    }
+
+    #[test]
+    fn scientific_parts_falls_back_for_non_exponential_display() {
+        let (coefficient, exponent) = scientific_parts(f64::NAN);
+        assert!(coefficient.is_nan());
+        assert_eq!(exponent, 0);
     }
 
     #[test]

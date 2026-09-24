@@ -12,6 +12,16 @@ fn render(json: &str) -> String {
     render_chart(&spec)
 }
 
+fn numeric_texts(svg: &str) -> Vec<f64> {
+    let mut values: Vec<f64> = svg
+        .split("</text>")
+        .filter_map(|part| part.rsplit_once('>').map(|(_, text)| text))
+        .filter_map(|text| text.parse().ok())
+        .collect();
+    values.sort_by(f64::total_cmp);
+    values
+}
+
 #[test]
 fn axis_title_basic_snapshot() {
     // bar: options.scales.{x,y}.title.text + Y title は color / font.size 付き。
@@ -64,4 +74,128 @@ fn axis_border_dashed_snapshot() {
         "border.color should reach SVG (#666 は #666666 に正規化); svg={svg}"
     );
     insta::assert_snapshot!(svg);
+}
+
+#[test]
+fn linear_axis_step_size_generates_fixed_ticks() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,10]}]},
+      "options":{"scales":{"y":{"min":0,"max":10,"ticks":{"stepSize":5}}}}}"#;
+    let svg = render(json);
+
+    assert_eq!(numeric_texts(&svg), vec![0.0, 5.0, 10.0]);
+}
+
+#[test]
+fn linear_axis_step_size_without_max_ticks_limit_preserves_requested_spacing() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,100]}]},
+      "options":{"scales":{"y":{"min":0,"max":100,"ticks":{"stepSize":1}}}}}"#;
+    let ticks = numeric_texts(&render(json));
+
+    assert_eq!(ticks.len(), 101);
+    assert_eq!(ticks.first(), Some(&0.0));
+    assert_eq!(ticks.last(), Some(&100.0));
+    assert!(ticks.windows(2).all(|pair| pair[1] - pair[0] == 1.0));
+}
+
+#[test]
+fn linear_axis_max_ticks_limit_caps_generated_tick_count() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,100]}]},
+      "options":{"scales":{"y":{"min":0,"max":100,"ticks":{"stepSize":1,"maxTicksLimit":3}}}}}"#;
+    let svg = render(json);
+
+    assert_eq!(numeric_texts(&svg), vec![0.0, 50.0, 100.0]);
+}
+
+#[test]
+fn linear_axis_count_sets_tick_count_and_precision_rounds_step() {
+    let counted = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,10]}]},
+      "options":{"scales":{"y":{"min":0,"max":10,"ticks":{"count":5}}}}}"#;
+    assert_eq!(
+        numeric_texts(&render(counted)),
+        vec![0.0, 2.5, 5.0, 7.5, 10.0]
+    );
+
+    let precise = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,0.3]}]},
+      "options":{"scales":{"y":{"min":0,"max":0.3,"ticks":{"precision":0}}}}}"#;
+    assert_eq!(numeric_texts(&render(precise)), vec![0.0, 0.3]);
+}
+
+#[test]
+fn linear_axis_step_size_takes_precedence_over_count_for_matching_hard_bounds() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,10]}]},
+      "options":{"scales":{"y":{"min":0,"max":10,"ticks":{"stepSize":2,"count":3}}}}}"#;
+    let svg = render(json);
+
+    assert_eq!(numeric_texts(&svg), vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0]);
+}
+
+#[test]
+fn linear_axis_count_one_generates_one_tick() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,10]}]},
+      "options":{"scales":{"y":{"min":0,"max":10,"ticks":{"count":1}}}}}"#;
+    let svg = render(json);
+
+    assert_eq!(numeric_texts(&svg), vec![10.0]);
+}
+
+#[test]
+fn linear_axis_count_one_keeps_valid_domain_for_conflicting_bounds() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,10]}]},
+      "options":{"scales":{"y":{"min":10,"max":0,"ticks":{"count":1}}}}}"#;
+
+    assert_eq!(numeric_texts(&render(json)), vec![10.5]);
+}
+
+#[test]
+fn linear_axis_format_sets_fraction_digits_and_notation() {
+    let fixed = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,2]}]},
+      "options":{"scales":{"y":{"min":0,"max":2,"ticks":{"stepSize":2,
+        "format":{"minimumFractionDigits":2,"maximumFractionDigits":2}}}}}}"#;
+    let fixed_svg = render(fixed);
+    assert!(fixed_svg.contains(">0.00</text>"), "svg={fixed_svg}");
+    assert!(fixed_svg.contains(">2.00</text>"), "svg={fixed_svg}");
+
+    let scientific = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,10000]}]},
+      "options":{"scales":{"y":{"min":0,"max":10000,"ticks":{"stepSize":10000,
+        "format":{"notation":"scientific"}}}}}}"#;
+    let scientific_svg = render(scientific);
+    assert!(
+        scientific_svg.contains(">1E4</text>"),
+        "svg={scientific_svg}"
+    );
+
+    let engineering = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,10000]}]},
+      "options":{"scales":{"y":{"min":0,"max":10000,"ticks":{"stepSize":10000,
+        "format":{"notation":"engineering"}}}}}}"#;
+    assert!(render(engineering).contains(">10E3</text>"));
+
+    let compact = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,5000]}]},
+      "options":{"scales":{"y":{"min":0,"max":5000,"ticks":{"stepSize":5000,
+        "format":{"notation":"compact"}}}}}}"#;
+    assert!(render(compact).contains(">5K</text>"));
+
+    let compact_rounding = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,987654321]}]},
+      "options":{"scales":{"y":{"min":0,"max":987654321,"ticks":{"stepSize":987654321,
+        "format":{"notation":"compact"}}}}}}"#;
+    assert!(render(compact_rounding).contains(">988M</text>"));
+
+    let standard = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,2]}]},
+      "options":{"scales":{"y":{"min":0,"max":2,"ticks":{"stepSize":2,
+        "format":{"notation":"standard"}}}}}}"#;
+    assert_eq!(numeric_texts(&render(standard)), vec![0.0, 2.0]);
+}
+
+#[test]
+fn linear_x_axis_tick_options_apply_to_scatter_and_horizontal_bar() {
+    let scatter = r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":0,"y":0},{"x":10,"y":10}]}]},
+      "options":{"scales":{"x":{"min":0,"max":10,"ticks":{"stepSize":5}},
+        "y":{"min":0,"max":10,"ticks":{"count":3}}}}}"#;
+    assert_eq!(
+        numeric_texts(&render(scatter)),
+        vec![0.0, 0.0, 5.0, 5.0, 10.0, 10.0]
+    );
+
+    let horizontal_bar = r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[0,10]}]},
+      "options":{"indexAxis":"y","scales":{"x":{"min":0,"max":10,"ticks":{"stepSize":5}}}}}"#;
+    assert_eq!(numeric_texts(&render(horizontal_bar)), vec![0.0, 5.0, 10.0]);
 }

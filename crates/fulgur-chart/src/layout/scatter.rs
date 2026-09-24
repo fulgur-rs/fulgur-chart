@@ -10,8 +10,7 @@ use super::common::{
 use crate::ir::{
     AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, Point, ScaleKind,
 };
-use crate::num::{fmt_num, fmt_num_log};
-use crate::scale::{LinearScale, NiceTicks, ValueScale, log_ticks_within, nice_ticks};
+use crate::scale::{LinearScale, NiceTicks, ValueScale, log_ticks_within};
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 
@@ -59,7 +58,10 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     let (y_ticks, y_minor_ticks) = axis_ticks(&spec.y_axis, ymin, ymax);
     let mut max_y_w = 0.0_f32;
     for &t in &y_ticks.ticks {
-        let w = m.width(&format_axis_tick(&spec.y_axis, t), label_font as f32);
+        let w = m.width(
+            &super::common::format_axis_tick(&spec.y_axis, t),
+            label_font as f32,
+        );
         if w > max_y_w {
             max_y_w = w;
         }
@@ -148,7 +150,7 @@ fn axis_ticks(axis: &AxisSpec, data_min: f64, data_max: f64) -> (NiceTicks, Vec<
         )
     } else {
         (
-            super::common::apply_hard_axis_bounds(nice_ticks(data_min, data_max, 10), axis),
+            super::common::configured_axis_ticks(data_min, data_max, axis),
             Vec::new(),
         )
     }
@@ -292,14 +294,6 @@ fn scatter_line_segments(points: &[Point], layout: &ScatterLayout) -> Vec<Vec<(f
     }
     finish_scatter_line_segment(&mut segments, &mut current);
     segments
-}
-
-fn format_axis_tick(axis: &AxisSpec, tick: f64) -> String {
-    if axis.scale_kind == ScaleKind::Logarithmic {
-        fmt_num_log(tick)
-    } else {
-        fmt_num(tick)
-    }
 }
 
 /// scatter/bubble の全点を返す（renderer とモデルの単一の真実源）。
@@ -514,7 +508,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             size: label_font,
             anchor: Anchor::End,
             fill: ink,
-            content: format_axis_tick(&spec.y_axis, t),
+            content: super::common::format_axis_tick(&spec.y_axis, t),
             rotate_deg: None,
         });
     }
@@ -560,7 +554,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             size: label_font,
             anchor: Anchor::Middle,
             fill: ink,
-            content: format_axis_tick(&spec.x_axis, t),
+            content: super::common::format_axis_tick(&spec.x_axis, t),
             rotate_deg: None,
         });
     }
@@ -826,6 +820,7 @@ mod tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                ticks: crate::ir::AxisTickOptions::default(),
             },
             y_axis: AxisSpec {
                 title: None,
@@ -838,6 +833,7 @@ mod tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                ticks: crate::ir::AxisTickOptions::default(),
             },
             legend: LegendPos::None,
             legend_options: crate::ir::LegendOptions::default(),

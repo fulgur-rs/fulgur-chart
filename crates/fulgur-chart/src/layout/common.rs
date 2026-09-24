@@ -5,7 +5,7 @@ use crate::ir::{
     LegendOptions, LegendPointStyle, LegendPos, RadialAxis, ScaleKind, SizeMode, XPositions,
 };
 use crate::num::fmt_num;
-use crate::scale::{LinearScale, NiceTicks, ValueScale, nice_ticks, vega_nice_ticks};
+use crate::scale::{LinearScale, NiceTicks, ValueScale, vega_nice_ticks};
 use crate::scene::{Anchor, Prim, StyledText};
 use crate::temporal::{TemporalTick, temporal_ticks};
 use crate::text::TextMeasurer;
@@ -454,19 +454,58 @@ pub(crate) fn apply_hard_axis_bounds(mut ticks: NiceTicks, axis: &AxisSpec) -> N
     ticks
         .ticks
         .retain(|&tick| tick >= ticks.min && tick <= ticks.max);
+    let single_count_tick = axis.ticks.count == Some(1) && ticks.ticks.len() == 1;
     if let Some(min) = hard_min
         && !ticks.ticks.contains(&min)
+        && !single_count_tick
     {
         ticks.ticks.push(min);
     }
     if let Some(max) = hard_max
         && !ticks.ticks.contains(&max)
+        && !single_count_tick
     {
         ticks.ticks.push(max);
     }
     ticks.ticks.sort_by(f64::total_cmp);
     ticks.ticks.dedup_by(|left, right| *left == *right);
+    if axis.ticks.count.is_none()
+        && let Some(configured_limit) = axis.ticks.max_ticks_limit
+    {
+        let limit = configured_limit.clamp(2, crate::scale::MAX_TICK_INTERVALS + 1);
+        if ticks.ticks.len() > limit {
+            let source = std::mem::take(&mut ticks.ticks);
+            let last = source.len() - 1;
+            ticks.ticks = (0..limit)
+                .map(|index| (index * last + (limit - 1) / 2) / (limit - 1))
+                .map(|index| source[index])
+                .collect();
+            if ticks.ticks.len() >= 2 {
+                ticks.step = ticks.ticks[1] - ticks.ticks[0];
+            }
+        }
+    }
     ticks
+}
+
+/// options.scales.{x,y}.ticks を適用した線形軸目盛り。
+pub(crate) fn configured_axis_ticks(
+    domain_min: f64,
+    domain_max: f64,
+    axis: &AxisSpec,
+) -> NiceTicks {
+    let ticks =
+        crate::scale::configured_ticks(domain_min, domain_max, &axis.ticks, axis.min, axis.max);
+    apply_hard_axis_bounds(ticks, axis)
+}
+
+/// 数値軸の目盛ラベル。対数軸は従来形式、線形軸は ticks.format を使う。
+pub(crate) fn format_axis_tick(axis: &AxisSpec, tick: f64) -> String {
+    if axis.scale_kind == ScaleKind::Logarithmic {
+        crate::num::fmt_num_log(tick)
+    } else {
+        crate::num::fmt_axis_tick(tick, axis.ticks.format.as_ref())
+    }
 }
 
 /// 値が線形/対数軸の可視 domain 内にあるかを返す。
@@ -773,7 +812,16 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             Vec::new(),
         )
     } else {
-        (nice_ticks(domain_min, domain_max, 10), Vec::new())
+        (
+            crate::scale::configured_ticks(
+                domain_min,
+                domain_max,
+                &spec.y_axis.ticks,
+                spec.y_axis.min,
+                spec.y_axis.max,
+            ),
+            Vec::new(),
+        )
     };
     if !is_log {
         ticks = apply_hard_axis_bounds(ticks, &spec.y_axis);
@@ -782,11 +830,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y 軸ラベル幅。対数軸は fmt_num_log を使う(幅の広いラベルでクリップさせない)。
     let mut max_w = 0.0_f32;
     for &t in &ticks.ticks {
-        let s = if is_log {
-            crate::num::fmt_num_log(t)
-        } else {
-            fmt_num(t)
-        };
+        let s = format_axis_tick(&spec.y_axis, t);
         let w = m.width(&s, spec.theme.font_size as f32);
         if w > max_w {
             max_w = w;
@@ -1175,7 +1219,6 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
     // 2. 横グリッド + y 軸ラベル(主目盛)。対数軸は fmt_num_log でラベルを描く。
     let grid_cfg = &spec.y_axis.grid;
     let grid_color = grid_cfg.color.unwrap_or(spec.theme.grid_color);
-    let is_log = spec.y_axis.scale_kind == ScaleKind::Logarithmic;
     for &t in &frame.ticks.ticks {
         let y = frame.ys.map(t);
         if grid_cfg.display {
@@ -1195,11 +1238,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             size: label_font,
             anchor: Anchor::End,
             fill: ink,
-            content: if is_log {
-                crate::num::fmt_num_log(t)
-            } else {
-                fmt_num(t)
-            },
+            content: format_axis_tick(&spec.y_axis, t),
             rotate_deg: None,
         });
     }
@@ -2234,6 +2273,7 @@ mod tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                ticks: crate::ir::AxisTickOptions::default(),
             },
             y_axis: AxisSpec {
                 title: None,
@@ -2246,6 +2286,7 @@ mod tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                ticks: crate::ir::AxisTickOptions::default(),
             },
             legend: LegendPos::None,
             legend_options: crate::ir::LegendOptions::default(),
@@ -2259,6 +2300,39 @@ mod tests {
             decimation: crate::ir::Decimation::default(),
             radial_axis: None,
         }
+    }
+
+    #[test]
+    fn apply_hard_axis_bounds_does_not_apply_chartjs_default_limit_to_other_frontends() {
+        let mut spec = make_bar_spec(1, 100.0);
+        spec.x_axis.ticks = crate::ir::AxisTickOptions::default();
+        let ticks = NiceTicks {
+            min: 0.0,
+            max: 11.0,
+            step: 1.0,
+            ticks: (0..=11).map(f64::from).collect(),
+        };
+
+        let bounded = apply_hard_axis_bounds(ticks, &spec.x_axis);
+
+        assert_eq!(bounded.ticks.len(), 12);
+    }
+
+    #[test]
+    fn apply_hard_axis_bounds_caps_ticks_when_limit_is_explicit() {
+        let mut spec = make_bar_spec(1, 100.0);
+        spec.x_axis.ticks.max_ticks_limit = Some(3);
+        let ticks = NiceTicks {
+            min: 0.0,
+            max: 11.0,
+            step: 1.0,
+            ticks: (0..=11).map(f64::from).collect(),
+        };
+
+        let bounded = apply_hard_axis_bounds(ticks, &spec.x_axis);
+
+        assert_eq!(bounded.ticks, vec![0.0, 6.0, 11.0]);
+        assert_eq!(bounded.step, 6.0);
     }
 
     fn temporal_spec(unix_millis: Vec<i64>) -> ChartSpec {

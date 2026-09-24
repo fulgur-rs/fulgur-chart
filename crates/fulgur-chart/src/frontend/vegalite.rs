@@ -369,6 +369,7 @@ pub fn parse_with_limits(
             },
             border: AxisBorder::default(),
             scale_kind: ScaleKind::Linear,
+            ticks: AxisTickOptions::default(),
         },
         y_axis: AxisSpec {
             title: y_axis_title.map(|text| AxisTitle {
@@ -386,6 +387,7 @@ pub fn parse_with_limits(
             grid: grid.unwrap_or_default(),
             border: AxisBorder::default(),
             scale_kind: ScaleKind::Linear,
+            ticks: AxisTickOptions::default(),
         },
         legend: if temporal_line && color_field.is_some() {
             LegendPos::Right
