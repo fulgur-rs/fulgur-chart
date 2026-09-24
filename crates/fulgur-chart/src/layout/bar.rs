@@ -698,10 +698,8 @@ fn horizontal_legend_band_width(
 /// tick の幅だけを使い、左端はラベルが canvas の左端を越える場合にだけ補う。
 /// 基準境界は canvas 内へ正規化し、余白が大きすぎる有限値では比例縮小する。
 /// LinearScale が全値を同一点へ写すのを防ぐため、最低限のプロット幅を残す。
-/// `is_log` が true のときは `fmt_num_log`(有効数字ベース、広レンジ対応)で
-/// ラベル幅を測る。`fmt_num`(小数2桁丸め)のままだと 1e-15 のような極端な
-/// 桁の対数軸端ラベルが実際の描画幅より大幅に短く見積もられ、はみ出す
-/// (自動レビュー指摘)。
+/// 軸の実際のラベル形式で幅を測る。とくに log 軸を `fmt_num`(小数2桁丸め)で
+/// 測ると、1e-15 のような端ラベルが実際より短く見積もられ、はみ出す。
 fn horizontal_plot_bounds(
     base_left: f64,
     base_right: f64,
@@ -709,8 +707,7 @@ fn horizontal_plot_bounds(
     ticks: &[f64],
     m: &TextMeasurer,
     label_font: f64,
-    is_log: bool,
-    format: Option<&crate::ir::AxisTickFormat>,
+    axis: &crate::ir::AxisSpec,
 ) -> (f64, f64) {
     let canvas_width = if canvas_width.is_finite() {
         canvas_width.max(MIN_HORIZONTAL_PLOT_WIDTH)
@@ -741,11 +738,7 @@ fn horizontal_plot_bounds(
         }
     }
     let half_tick_width = |tick: f64| {
-        let label = if is_log {
-            crate::num::fmt_num_log(tick)
-        } else {
-            crate::num::fmt_axis_tick(tick, format)
-        };
+        let label = crate::layout::common::format_axis_tick(axis, tick);
         finite_text_width(m, &label, label_font) / 2.0
     };
     let left_pad = ticks
@@ -993,8 +986,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         &ticks.ticks,
         m,
         label_font,
-        is_log,
-        spec.x_axis.ticks.format.as_ref(),
+        &spec.x_axis,
     );
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
@@ -2951,7 +2943,7 @@ mod horizontal_axis_style_tests {
 
     fn horizontal_plot_right(spec: &ChartSpec, m: &TextMeasurer<'_>) -> f64 {
         let (dmin, dmax) = value_domain(spec, &spec.x_axis);
-        let ticks = nice_ticks(dmin, dmax, 10);
+        let ticks = crate::layout::common::configured_axis_ticks(dmin, dmax, &spec.x_axis);
         let max_cat_w = spec
             .categories
             .iter()
@@ -2999,8 +2991,7 @@ mod horizontal_axis_style_tests {
             &ticks.ticks,
             m,
             spec.theme.font_size,
-            false,
-            None,
+            &spec.x_axis,
         )
         .1
     }
@@ -3010,20 +3001,26 @@ mod horizontal_axis_style_tests {
     /// を使っていた。1e-15 のような極端な桁の tick は `fmt_num` だと "0" に潰れて
     /// ほぼ幅ゼロと見積もられ、実際に `fmt_num_log` で描画されるラベル
     /// ("1e-15" 相当)がプロット外へはみ出す(自動レビュー指摘)。
-    /// `is_log=true` を渡すと `fmt_num_log` の(より長い)ラベル幅を反映し、
+    /// log 軸 spec を渡すと `fmt_num_log` の(より長い)ラベル幅を反映し、
     /// 同じ tick・同じ base_right でも右端の余白がより広く確保される
     /// (=plot_right がより小さくなる)ことを固定する。
     #[test]
     fn horizontal_plot_bounds_reserves_more_space_for_extreme_log_labels() {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let ticks = [1e-15];
+        let linear = parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]},"options":{"indexAxis":"y"}}"#,
+        );
+        let logarithmic = parse(
+            r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]},"options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic"}}}}"#,
+        );
         let (_, plot_right_linear) =
-            horizontal_plot_bounds(50.0, 700.0, 800.0, &ticks, &m, 12.0, false, None);
+            horizontal_plot_bounds(50.0, 700.0, 800.0, &ticks, &m, 12.0, &linear.x_axis);
         let (_, plot_right_log) =
-            horizontal_plot_bounds(50.0, 700.0, 800.0, &ticks, &m, 12.0, true, None);
+            horizontal_plot_bounds(50.0, 700.0, 800.0, &ticks, &m, 12.0, &logarithmic.x_axis);
         assert!(
             plot_right_log < plot_right_linear,
-            "is_log=true では fmt_num_log の長いラベル分だけ右余白が広く \
+            "log 軸では fmt_num_log の長いラベル分だけ右余白が広く \
              (plot_right が小さく)なるはず: log={plot_right_log} linear={plot_right_linear}"
         );
     }

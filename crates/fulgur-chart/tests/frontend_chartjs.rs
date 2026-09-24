@@ -1039,6 +1039,14 @@ fn linear_tick_options_roundtrip_in_schema_and_parse_in_strict_mode() {
 }
 
 #[test]
+fn linear_ticks_default_max_ticks_limit_matches_chartjs() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#;
+    let spec = chartjs::parse(json, true).expect("parse default axis ticks");
+
+    assert_eq!(spec.y_axis.ticks.max_ticks_limit, Some(11));
+}
+
+#[test]
 fn strict_mode_rejects_unknown_linear_tick_and_format_options() {
     let unknown_tick = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"y":{"ticks":{"stepSzie":2}}}}}"#;

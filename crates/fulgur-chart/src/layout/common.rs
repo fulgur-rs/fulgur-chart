@@ -466,12 +466,10 @@ pub(crate) fn apply_hard_axis_bounds(mut ticks: NiceTicks, axis: &AxisSpec) -> N
     }
     ticks.ticks.sort_by(f64::total_cmp);
     ticks.ticks.dedup_by(|left, right| *left == *right);
-    if axis.ticks.count.is_none() {
-        let limit = axis
-            .ticks
-            .max_ticks_limit
-            .unwrap_or(11)
-            .clamp(2, crate::scale::MAX_TICK_INTERVALS + 1);
+    if axis.ticks.count.is_none()
+        && let Some(configured_limit) = axis.ticks.max_ticks_limit
+    {
+        let limit = configured_limit.clamp(2, crate::scale::MAX_TICK_INTERVALS + 1);
         if ticks.ticks.len() > limit {
             let source = std::mem::take(&mut ticks.ticks);
             let last = source.len() - 1;
@@ -2299,6 +2297,22 @@ mod tests {
             decimation: crate::ir::Decimation::default(),
             radial_axis: None,
         }
+    }
+
+    #[test]
+    fn apply_hard_axis_bounds_does_not_apply_chartjs_default_limit_to_other_frontends() {
+        let mut spec = make_bar_spec(1, 100.0);
+        spec.x_axis.ticks = crate::ir::AxisTickOptions::default();
+        let ticks = NiceTicks {
+            min: 0.0,
+            max: 11.0,
+            step: 1.0,
+            ticks: (0..=11).map(f64::from).collect(),
+        };
+
+        let bounded = apply_hard_axis_bounds(ticks, &spec.x_axis);
+
+        assert_eq!(bounded.ticks.len(), 12);
     }
 
     fn temporal_spec(unix_millis: Vec<i64>) -> ChartSpec {

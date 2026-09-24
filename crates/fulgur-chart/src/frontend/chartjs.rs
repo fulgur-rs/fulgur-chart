@@ -761,7 +761,10 @@ fn axis_border_from(opts: Option<&AxisBorderOptions>) -> AxisBorder {
 /// `axis.ticks` の線形数値目盛オプションを IR に変換する。
 fn axis_ticks_from(opts: Option<&ScaleTicksOptions>) -> AxisTickOptions {
     let Some(ticks) = opts else {
-        return AxisTickOptions::default();
+        return AxisTickOptions {
+            max_ticks_limit: Some(11),
+            ..AxisTickOptions::default()
+        };
     };
     let format = ticks
         .format
@@ -783,7 +786,8 @@ fn axis_ticks_from(opts: Option<&ScaleTicksOptions>) -> AxisTickOptions {
         max_ticks_limit: ticks
             .max_ticks_limit
             .map(|limit| limit as usize)
-            .filter(|limit| *limit > 0),
+            .filter(|limit| *limit > 0)
+            .or(Some(11)),
         count: ticks
             .count
             .map(|count| count as usize)
