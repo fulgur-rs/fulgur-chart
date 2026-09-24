@@ -175,23 +175,19 @@ fn draw_line_dataset(
         })
         .collect();
 
-    // 元インデックスが連続しない箇所でセグメントを分割する
-    // (chart.js の spanGaps=false 既定と同じ「欠損で線が途切れる」挙動)。
-    let segments: Vec<Vec<(f64, f64, usize)>> = {
-        let mut segs: Vec<Vec<(f64, f64, usize)>> = Vec::new();
-        let mut cur: Vec<(f64, f64, usize)> = Vec::new();
-        let mut prev_cat: Option<usize> = None;
-        for &(x, y, cat) in &valid {
-            if prev_cat.is_some_and(|pc| cat != pc + 1) && !cur.is_empty() {
-                segs.push(std::mem::take(&mut cur));
-            }
-            cur.push((x, y, cat));
-            prev_cat = Some(cat);
-        }
-        if !cur.is_empty() {
-            segs.push(cur);
-        }
-        segs
+    // 元インデックスで欠損区間を先に分割し、各区間を個別に間引く。
+    // Mixed は従来どおり spanGaps を無視し、欠損で線を途切れさせる。
+    let segments = super::line::segments_for_valid_points(&valid, false);
+    let decimation = crate::layout::decimate::resolve(
+        &spec.decimation,
+        frame.plot_right - frame.plot_left,
+        valid.len(),
+    );
+    let decimated = decimation.is_some();
+    let segments = if let Some((algorithm, samples)) = decimation {
+        crate::layout::decimate::decimate_segments(&segments, algorithm, samples)
+    } else {
+        segments
     };
 
     // area(背面): 線と同じくセグメント単位で 1 つずつ閉多角形を描く(line.rs と同挙動)。
@@ -310,39 +306,58 @@ fn draw_line_dataset(
         }
     }
 
-    // マーカー: 有効点のみ。
-    for &(cx, cy, cat) in &valid {
-        if !common::axis_value_in_bounds(ser.values[cat], &frame.ticks) {
+    // 間引いた長い線は既定マーカーを抑制し、点が唯一の表現となる線なし / 単点区間は残す。
+    let marker_radii: Vec<Option<f64>> = segments
+        .iter()
+        .map(|seg| match (decimated, ser.point_radius) {
+            (true, Some(radius)) if radius > 0.0 => Some(radius),
+            (true, Some(_)) => None,
+            (false, _) => Some(MARKER_R),
+            (true, None) if !show_line || seg.len() < 2 => Some(MARKER_R),
+            (true, None) => None,
+        })
+        .collect();
+    for (seg, marker_radius) in segments.iter().zip(&marker_radii) {
+        let Some(radius) = marker_radius else {
             continue;
+        };
+        for &(cx, cy, cat) in seg {
+            if !common::axis_value_in_bounds(ser.values[cat], &frame.ticks) {
+                continue;
+            }
+            common::dataset_point_marker(
+                items,
+                cx,
+                cy,
+                *radius,
+                ser.stroke_at(0),
+                ser.stroke_at(0),
+                0.0,
+                line_style.and_then(|style| style.point_style),
+            );
         }
-        common::dataset_point_marker(
-            items,
-            cx,
-            cy,
-            MARKER_R,
-            ser.stroke_at(0),
-            ser.stroke_at(0),
-            0.0,
-            line_style.and_then(|style| style.point_style),
-        );
     }
 
     // データラベル(点の上、マーカー半径ぶん+余白だけ上)。
     // 元カテゴリインデックスで ser.values を引くことで filter 後のずれを防ぐ。
     if spec.data_labels {
-        for &(x, y, cat) in &valid {
-            if !common::axis_value_in_bounds(ser.values[cat], &frame.ticks) {
-                continue;
+        for (seg, marker_radius) in segments.iter().zip(&marker_radii) {
+            // マーカーを抑制した区間では従来の余白を保ち、描画する区間では実際の半径を使う。
+            let label_radius = marker_radius.unwrap_or(MARKER_R);
+            for &(x, y, cat) in seg {
+                if !common::axis_value_in_bounds(ser.values[cat], &frame.ticks) {
+                    continue;
+                }
+                items.push(common::value_label(
+                    x,
+                    y - label_radius - common::LABEL_GAP,
+                    spec.theme.font_size,
+                    Anchor::Middle,
+                    spec.theme.text_color,
+                    ser.values[cat],
+                    false, // Mixed は対数軸をとりえない(frontend でスコープ外)
+                ));
             }
-            items.push(common::value_label(
-                x,
-                y - MARKER_R - common::LABEL_GAP,
-                spec.theme.font_size,
-                Anchor::Middle,
-                spec.theme.text_color,
-                ser.values[cat],
-                false, // Mixed は対数軸をとりえない(frontend でスコープ外)
-            ));
         }
     }
 }
@@ -690,5 +705,179 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn mixed_line_decimation_is_segment_first_and_preserves_bar_geometry() {
+        let n = 4000;
+        let labels = (0..n)
+            .map(|i| format!("\"c{i}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let values = (0..n)
+            .map(|i| {
+                if i == n / 2 {
+                    "null".to_owned()
+                } else {
+                    (i % 17 + 1).to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let input = format!(
+            r#"{{"type":"bar","data":{{"labels":[{labels}],"datasets":[
+                {{"type":"bar","data":[3]}},
+                {{"type":"line","data":[{values}],"fill":true}}
+            ]}},"options":{{"plugins":{{"decimation":{{"algorithm":"lttb","samples":100,"threshold":10}},
+                "datalabels":{{"display":true}}}}}}}}"#
+        );
+        let spec = chartjs::parse(&input, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+
+        let line_stroke = spec.series[1].stroke_at(0);
+        let line_segments: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Polyline { points, stroke, .. } if *stroke == line_stroke => Some(points),
+                _ => None,
+            })
+            .collect();
+        let line_points: usize = line_segments.iter().map(|segment| segment.len()).sum();
+        let area_paths = scene
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    Prim::Path {
+                        fill: Some(_),
+                        stroke: None,
+                        ..
+                    }
+                )
+            })
+            .count();
+        let bar_rects = scene
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(item, Prim::Rect { fill, .. } if *fill == spec.series[0].fill_at(0))
+            })
+            .count();
+        let line_markers = scene
+            .items
+            .iter()
+            .filter(|item| matches!(item, Prim::Circle { fill, .. } if *fill == line_stroke))
+            .count();
+
+        assert_eq!(line_segments.len(), 2, "decimation must preserve the gap");
+        assert!(line_points < n - 1, "line points should be decimated");
+        assert_eq!(area_paths, 2, "area fill must preserve the gap");
+        assert_eq!(bar_rects, 1, "bar geometry should stay unchanged");
+        assert_eq!(line_markers, 0, "decimated lines suppress default markers");
+
+        let text_count = |scene: &Scene| {
+            scene
+                .items
+                .iter()
+                .filter(|item| matches!(item, Prim::Text { .. }))
+                .count()
+        };
+        let mut undecimated_spec = spec.clone();
+        undecimated_spec.decimation.enabled = false;
+        let undecimated_scene = build(&undecimated_spec, &m);
+        assert!(
+            text_count(&scene) < text_count(&undecimated_scene),
+            "data labels should use the decimated line points"
+        );
+
+        let mut explicit_radius_spec = spec.clone();
+        let explicit_radius = 20.0;
+        explicit_radius_spec.series[1].point_radius = Some(explicit_radius);
+        let explicit_radius_scene = build(&explicit_radius_spec, &m);
+        let explicit_markers: Vec<_> = explicit_radius_scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Circle {
+                    cx, cy, r, fill, ..
+                } if *fill == line_stroke => Some((*cx, *cy, *r)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(explicit_markers.len(), line_points);
+        assert!(
+            explicit_markers
+                .iter()
+                .all(|(_, _, radius)| (*radius - explicit_radius).abs() < 1e-9)
+        );
+        for &(cx, cy, _) in explicit_markers.iter().skip(1) {
+            let label_y = explicit_radius_scene
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::Text {
+                        x,
+                        y,
+                        anchor: Anchor::Middle,
+                        content,
+                        ..
+                    } if (*x - cx).abs() < 1e-9 && content.parse::<f64>().is_ok() => Some(*y),
+                    _ => None,
+                });
+            assert_eq!(
+                label_y,
+                Some(cy - explicit_radius - common::LABEL_GAP),
+                "line labels should use the explicit marker radius"
+            );
+        }
+
+        let mut zero_radius_spec = spec.clone();
+        zero_radius_spec.series[1].point_radius = Some(0.0);
+        let zero_radius_scene = build(&zero_radius_spec, &m);
+        assert!(
+            zero_radius_scene
+                .items
+                .iter()
+                .all(|item| { !matches!(item, Prim::Circle { fill, .. } if *fill == line_stroke) }),
+            "an explicit zero radius should hide decimated markers"
+        );
+
+        let mut points_only_spec = spec.clone();
+        points_only_spec.series[1]
+            .line_style
+            .as_mut()
+            .expect("Chart.js line datasets have line styles")
+            .show_line = false;
+        let points_only_scene = build(&points_only_spec, &m);
+        assert!(points_only_scene.items.iter().all(|item| {
+            !matches!(item, Prim::Polyline { stroke, .. } if *stroke == line_stroke)
+        }));
+        assert_eq!(
+            points_only_scene
+                .items
+                .iter()
+                .filter(|item| matches!(item, Prim::Circle { fill, .. } if *fill == line_stroke))
+                .count(),
+            line_points,
+            "point-only series should keep its decimated markers"
+        );
+
+        let mut isolated_spec = spec.clone();
+        isolated_spec.series[1].values = (0..n)
+            .map(|i| if i % 2 == 0 { 1.0 } else { f64::NAN })
+            .collect();
+        let isolated_scene = build(&isolated_spec, &m);
+        assert_eq!(
+            isolated_scene
+                .items
+                .iter()
+                .filter(|item| matches!(item, Prim::Circle { fill, .. } if *fill == line_stroke))
+                .count(),
+            n / 2,
+            "isolated points should keep markers because no line represents them"
+        );
     }
 }
