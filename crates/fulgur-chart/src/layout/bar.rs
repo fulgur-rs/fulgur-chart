@@ -1081,6 +1081,18 @@ fn build_horizontal_with_geometry(
                     plot_bottom,
                 )
             });
+    let y_temporal_band_width =
+        y_temporal_positions
+            .zip(y_temporal_scale.as_ref())
+            .map(|(positions, scale)| {
+                temporal_position_band_width(
+                    positions,
+                    scale,
+                    spec.categories.len(),
+                    plot_top,
+                    plot_bottom,
+                )
+            });
 
     // 値→X(非反転)。対数軸は log10 空間の LinearScale を内側に持つ ValueScale::Log。
     // ticks.min/max は log_ticks_within(dmin, dmax) の戻り値で、渡した tight
@@ -1307,8 +1319,15 @@ fn build_horizontal_with_geometry(
     for i in 0..spec.categories.len() {
         let (band_top, center_y, band_h) =
             if let (Some(scale), Some(positions)) = (&y_temporal_scale, y_temporal_positions) {
-                let (center, top, height) =
-                    temporal_position_band(positions, scale, i, n, plot_top, plot_bottom);
+                let (center, top, height) = temporal_position_band(
+                    positions,
+                    scale,
+                    i,
+                    n,
+                    plot_top,
+                    plot_bottom,
+                    y_temporal_band_width.unwrap_or(band_h),
+                );
                 (top, center, height)
             } else {
                 let top = plot_top + i as f64 * band_h;

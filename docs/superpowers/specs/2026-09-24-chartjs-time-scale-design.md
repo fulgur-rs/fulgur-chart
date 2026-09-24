@@ -119,8 +119,8 @@ On a temporal axis, strings and JSON numbers are parsed as follows:
   `%Y-%m-%d` is the date-only form; omitted time fields default to midnight,
   and an omitted offset means UTC. `%z` accepts `Z`, `+HHMM`, or `+HH:MM`.
   `%Y` is a four-digit year and `%.f` accepts one through nine fractional
-  second digits; parsed sub-millisecond precision is truncated toward zero,
-  matching JavaScript date time clipping.
+  second digits; timestamp strings are floored to whole milliseconds, so a
+  pre-epoch sub-millisecond instant remains before the Unix epoch.
 - Finite JSON numbers are epoch milliseconds. Values outside the JavaScript
   date range (±8.64e15 milliseconds) are rejected; fractional milliseconds
   are truncated toward zero, matching JavaScript date time clipping.

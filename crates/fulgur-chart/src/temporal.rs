@@ -193,7 +193,7 @@ pub fn parse_rfc3339_millis(field: &str, raw: &str) -> Result<i64, String> {
         let shown = bounded_error_fragment(raw);
         format!("field {shown_field} contains invalid ISO 8601 timestamp: {shown:?}")
     })?;
-    i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000)
+    i64::try_from(parsed.unix_timestamp_nanos().div_euclid(1_000_000))
         .map_err(|_| format!("field {shown_field} timestamp is outside the supported range"))
 }
 
@@ -388,7 +388,7 @@ pub fn parse_custom_format_millis(field: &str, raw: &str, format: &str) -> Resul
     let millis = PrimitiveDateTime::new(date, time)
         .assume_offset(offset)
         .unix_timestamp_nanos()
-        / 1_000_000;
+        .div_euclid(1_000_000);
     i64::try_from(millis)
         .map_err(|_| format!("field {shown_field} timestamp is outside the supported range"))
 }
@@ -781,7 +781,12 @@ fn generate_ticks(start_ms: i64, stop_ms: i64, interval: TickInterval) -> Vec<i6
             0,
         ),
         // 1970-01-04T00:00:00Z is the first Sunday after the Unix epoch.
-        TickUnit::Week => generate_fixed(start_ms, stop_ms, MILLIS_PER_WEEK, 3 * MILLIS_PER_DAY),
+        TickUnit::Week => generate_fixed(
+            start_ms,
+            stop_ms,
+            i64::from(interval.step) * MILLIS_PER_WEEK,
+            3 * MILLIS_PER_DAY,
+        ),
         TickUnit::Month => generate_calendar(start_ms, stop_ms, TickUnit::Month, interval.step),
         TickUnit::Quarter => generate_calendar(start_ms, stop_ms, TickUnit::Quarter, interval.step),
         TickUnit::Year => generate_calendar(start_ms, stop_ms, TickUnit::Year, interval.step),
@@ -1253,6 +1258,30 @@ mod tests {
     }
 
     #[test]
+    fn configured_week_unit_respects_step_and_max_ticks_limit() {
+        let ticks = temporal_ticks_with_options(
+            millis("2026-01-01T00:00:00Z"),
+            millis("2027-01-01T00:00:00Z"),
+            1_200.0,
+            &TimeOptions {
+                unit: Some(TimeUnit::Week),
+                ..TimeOptions::default()
+            },
+            &AxisTickOptions {
+                step_size: Some(2.0),
+                max_ticks_limit: Some(2),
+                ..AxisTickOptions::default()
+            },
+        );
+
+        assert!(!ticks.is_empty());
+        assert!(ticks.len() <= 2);
+        assert!(ticks.windows(2).all(|pair| {
+            (pair[1].unix_millis - pair[0].unix_millis) % (2 * MILLIS_PER_WEEK) == 0
+        }));
+    }
+
+    #[test]
     fn time_scale_preserves_elapsed_spacing() {
         let scale = TemporalScale::new(
             crate::ir::ScaleKind::Time,
@@ -1275,10 +1304,10 @@ mod tests {
     }
 
     #[test]
-    fn pre_epoch_sub_millisecond_timestamps_truncate_toward_zero() {
+    fn pre_epoch_sub_millisecond_timestamps_floor_to_previous_millisecond() {
         assert_eq!(
             parse_rfc3339_millis("timestamp", "1969-12-31T23:59:59.999999999Z").unwrap(),
-            0
+            -1
         );
         assert_eq!(
             parse_custom_format_millis(
@@ -1287,7 +1316,7 @@ mod tests {
                 "%Y-%m-%dT%H:%M:%S%.f%z",
             )
             .unwrap(),
-            0
+            -1
         );
         assert_eq!(
             parse_rfc3339_millis("timestamp", "1970-01-01T00:00:00Z").unwrap(),

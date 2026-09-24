@@ -459,7 +459,10 @@ pub(crate) fn axis_domain(
     for s in &spec.series {
         for p in &s.points {
             let v = select(p);
-            if v.is_finite() {
+            if v.is_finite()
+                && (!super::common::is_temporal_scale(axis_spec)
+                    || super::common::temporal_value_is_valid(v))
+            {
                 if v < lo {
                     lo = v;
                 }
@@ -979,6 +982,22 @@ mod tests {
         assert!(((y0 - y1) / (y0 - y4) - 0.5).abs() < 1e-9);
         assert!(!layout.x_temporal_ticks.is_empty());
         assert!(!layout.y_temporal_ticks.is_empty());
+    }
+
+    #[test]
+    fn temporal_scatter_domain_ignores_values_outside_javascript_date_range() {
+        let mut spec = make_scatter_spec(&[
+            (1_000.0, 1_000.0),
+            (10_000.0, 10_000.0),
+            (8.64e15 + 1.0, 8.64e15 + 1.0),
+        ]);
+        spec.x_axis.scale_kind = ScaleKind::Time;
+        spec.x_axis.time = Some(TimeOptions::default());
+
+        assert_eq!(
+            axis_domain(&spec, &spec.x_axis, |point| point.x),
+            (1_000.0, 10_000.0)
+        );
     }
 
     #[test]
