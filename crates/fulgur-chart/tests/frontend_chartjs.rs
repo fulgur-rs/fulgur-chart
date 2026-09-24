@@ -1058,6 +1058,16 @@ fn strict_mode_rejects_unknown_linear_tick_and_format_options() {
 }
 
 #[test]
+fn non_strict_mode_ignores_unimplemented_chartjs_tick_options() {
+    let json = r#"{"type":"line","data":{"labels":["a"],"datasets":[{"data":[1]}]},
+      "options":{"scales":{"y":{"ticks":{"display":false,"autoSkip":false,
+        "format":{"useGrouping":false}}}}}}"#;
+
+    assert!(chartjs::parse(json, false).is_ok());
+    assert!(chartjs::parse(json, true).is_err());
+}
+
+#[test]
 fn matrix_parses_categories_and_series() {
     let json = r#"{
         "type": "matrix",

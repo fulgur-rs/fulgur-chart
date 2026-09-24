@@ -73,7 +73,7 @@ pub fn fmt_axis_tick(v: f64, options: Option<&AxisTickFormat>) -> String {
 
     let fraction_digits = maximum_digits.unwrap_or_else(|| {
         if notation == AxisTickNotation::Compact {
-            minimum_digits.max(1)
+            compact_fraction_digits(coefficient)
         } else {
             3
         }
@@ -147,15 +147,20 @@ fn compact_parts(value: f64) -> (f64, i32, &'static str, bool) {
     if magnitude < 1_000.0 {
         return (value, 0, "", false);
     }
-    if magnitude >= 1e15 {
-        let (coefficient, exponent) = scientific_parts(value);
-        return (coefficient, exponent, "", true);
-    }
     const UNITS: [&str; 4] = ["K", "M", "B", "T"];
     let exponent = ((magnitude.log10() / 3.0).floor() as i32 * 3).clamp(3, 12);
     let coefficient = value / 10f64.powi(exponent);
     let suffix = UNITS[(exponent / 3 - 1) as usize];
     (coefficient, exponent, suffix, false)
+}
+
+/// Intl compact short notation uses precision that depends on the displayed value:
+/// 1.2K, 12K, 123K, and 988M. Keep that behavior locale-independent for deterministic output.
+fn compact_fraction_digits(value: f64) -> usize {
+    if !value.is_finite() || value == 0.0 {
+        return 0;
+    }
+    (1.0 - value.abs().log10().floor()).clamp(0.0, 100.0) as usize
 }
 
 /// 対数軸の目盛ラベル用。`fmt_num` と違い小数点以下を2桁に丸めない
@@ -272,6 +277,18 @@ mod tests {
         assert_eq!(fmt_num(1.234), "1.23");
         assert_eq!(fmt_num(-0.0), "0"); // 負ゼロを正規化
         assert_eq!(fmt_num(100.0), "100");
+    }
+
+    #[test]
+    fn compact_tick_format_uses_compact_precision_and_carries_units() {
+        let format = AxisTickFormat {
+            notation: Some(AxisTickNotation::Compact),
+            ..AxisTickFormat::default()
+        };
+        assert_eq!(fmt_axis_tick(987_654_321.0, Some(&format)), "988M");
+        assert_eq!(fmt_axis_tick(999_999.0, Some(&format)), "1M");
+        assert_eq!(fmt_axis_tick(999.999, Some(&format)), "1K");
+        assert_eq!(fmt_axis_tick(1e15, Some(&format)), "1000T");
     }
 
     #[test]

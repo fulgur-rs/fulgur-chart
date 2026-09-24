@@ -261,7 +261,7 @@ pub struct AxisBorderOptions {
 
 /// Numeric tick generation options for `options.scales.{x,y}.ticks`.
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ScaleTicksOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub step_size: Option<f64>,
@@ -277,7 +277,7 @@ pub struct ScaleTicksOptions {
 
 /// Supported subset of Intl.NumberFormat options for linear-axis labels.
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct NumberFormatOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub minimum_fraction_digits: Option<u8>,

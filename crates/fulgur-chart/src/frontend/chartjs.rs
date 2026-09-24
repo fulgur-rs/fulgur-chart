@@ -791,7 +791,7 @@ fn axis_ticks_from(opts: Option<&ScaleTicksOptions>) -> AxisTickOptions {
         count: ticks
             .count
             .map(|count| count as usize)
-            .filter(|count| *count >= 2),
+            .filter(|count| *count >= 1),
         precision: ticks.precision.map(usize::from),
         format,
     }

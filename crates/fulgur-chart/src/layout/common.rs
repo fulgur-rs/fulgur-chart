@@ -454,13 +454,16 @@ pub(crate) fn apply_hard_axis_bounds(mut ticks: NiceTicks, axis: &AxisSpec) -> N
     ticks
         .ticks
         .retain(|&tick| tick >= ticks.min && tick <= ticks.max);
+    let single_count_tick = axis.ticks.count == Some(1) && ticks.ticks.len() == 1;
     if let Some(min) = hard_min
         && !ticks.ticks.contains(&min)
+        && !single_count_tick
     {
         ticks.ticks.push(min);
     }
     if let Some(max) = hard_max
         && !ticks.ticks.contains(&max)
+        && !single_count_tick
     {
         ticks.ticks.push(max);
     }

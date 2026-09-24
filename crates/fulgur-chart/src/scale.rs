@@ -158,9 +158,11 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
 
 /// Chart.js 線形軸の `ticks` 設定を反映した目盛りを生成する。
 ///
-/// `maxTicksLimit` の既定値は Chart.js と同じ 11。`count` が有効なら指定数を優先し、
-/// それ以外では `stepSize` を nice 間隔の単位として使い、必要なら `maxTicksLimit` に
-/// 収まるよう間隔を広げる。`precision` は `stepSize` がない場合だけ間隔を切り上げる。
+/// `maxTicksLimit` の既定値は Chart.js と同じ 11。両端 bounds と `stepSize` が
+/// 整数個の間隔を作れる場合は `count` より優先し、それ以外は `count` を使う。
+/// `count` がないときは `stepSize` を nice 間隔の単位として使い、必要なら
+/// `maxTicksLimit` に収まるよう間隔を広げる。`precision` は `stepSize` がない場合だけ
+/// 間隔を切り上げる。
 pub fn configured_ticks(
     data_min: f64,
     data_max: f64,
@@ -175,11 +177,30 @@ pub fn configured_ticks(
     let base = nice_ticks(data_min, data_max, max_ticks - 1);
     let min_bound = hard_min.filter(|value| value.is_finite());
     let max_bound = hard_max.filter(|value| value.is_finite());
+    let requested_step = options
+        .step_size
+        .filter(|step| step.is_finite() && *step > 0.0);
+    let fixed_hard_bounds = requested_step.is_some_and(|requested| {
+        if let (Some(min), Some(max)) = (min_bound, max_bound) {
+            let spaces = (max - min) / requested;
+            spaces.is_finite() && (spaces - spaces.round()).abs() <= spaces.abs().max(1.0) * 1e-9
+        } else {
+            false
+        }
+    });
 
-    if let Some(count) = options.count.filter(|count| *count >= 2) {
-        let count = count.clamp(2, MAX_TICK_INTERVALS + 1);
+    if !fixed_hard_bounds && let Some(count) = options.count.filter(|count| *count >= 1) {
+        let count = count.clamp(1, MAX_TICK_INTERVALS + 1);
         let min = min_bound.unwrap_or(base.min);
         let max = max_bound.unwrap_or(base.max);
+        if count == 1 {
+            return NiceTicks {
+                min,
+                max,
+                step: base.step,
+                ticks: vec![max],
+            };
+        }
         let span = max - min;
         let step = span / (count - 1) as f64;
         if span.is_finite() && span > 0.0 && step.is_finite() && step > 0.0 {
@@ -202,9 +223,6 @@ pub fn configured_ticks(
         return base;
     }
 
-    let requested_step = options
-        .step_size
-        .filter(|step| step.is_finite() && *step > 0.0);
     let mut step = if let Some(unit) = requested_step {
         let multiples = (base.step / unit).ceil().max(1.0);
         let scaled = unit * multiples;
@@ -229,14 +247,6 @@ pub fn configured_ticks(
         }
     }
 
-    let fixed_hard_bounds = requested_step.is_some_and(|requested| {
-        if let (Some(min), Some(max)) = (min_bound, max_bound) {
-            let spaces = (max - min) / requested;
-            spaces.is_finite() && (spaces - spaces.round()).abs() <= spaces.abs().max(1.0) * 1e-9
-        } else {
-            false
-        }
-    });
     let mut min = if fixed_hard_bounds {
         min_bound.unwrap_or(data_min)
     } else {

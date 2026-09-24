@@ -109,6 +109,24 @@ fn linear_axis_count_sets_tick_count_and_precision_rounds_step() {
 }
 
 #[test]
+fn linear_axis_step_size_takes_precedence_over_count_for_matching_hard_bounds() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,10]}]},
+      "options":{"scales":{"y":{"min":0,"max":10,"ticks":{"stepSize":2,"count":3}}}}}"#;
+    let svg = render(json);
+
+    assert_eq!(numeric_texts(&svg), vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0]);
+}
+
+#[test]
+fn linear_axis_count_one_generates_one_tick() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,10]}]},
+      "options":{"scales":{"y":{"min":0,"max":10,"ticks":{"count":1}}}}}"#;
+    let svg = render(json);
+
+    assert_eq!(numeric_texts(&svg), vec![10.0]);
+}
+
+#[test]
 fn linear_axis_format_sets_fraction_digits_and_notation() {
     let fixed = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,2]}]},
       "options":{"scales":{"y":{"min":0,"max":2,"ticks":{"stepSize":2,
@@ -135,6 +153,11 @@ fn linear_axis_format_sets_fraction_digits_and_notation() {
       "options":{"scales":{"y":{"min":0,"max":5000,"ticks":{"stepSize":5000,
         "format":{"notation":"compact"}}}}}}"#;
     assert!(render(compact).contains(">5K</text>"));
+
+    let compact_rounding = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,987654321]}]},
+      "options":{"scales":{"y":{"min":0,"max":987654321,"ticks":{"stepSize":987654321,
+        "format":{"notation":"compact"}}}}}}"#;
+    assert!(render(compact_rounding).contains(">988M</text>"));
 }
 
 #[test]
