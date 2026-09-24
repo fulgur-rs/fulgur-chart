@@ -96,6 +96,29 @@ fn no_store_cache_control() -> HeaderValue {
     HeaderValue::from_static("no-store")
 }
 
+#[utoipa::path(
+    get,
+    path = "/chart/s/{id}",
+    params(
+        ("id" = String, Path, description = "Short link ID"),
+    ),
+    responses(
+        (status = 200, description = "Chart rendered successfully", content(
+            ([u8] = "image/svg+xml"),
+            ([u8] = "image/png"),
+            ([u8] = "image/webp"),
+            (String = "text/plain"),
+        )),
+        (status = 304, description = "Not Modified (ETag match)"),
+        (status = 400, description = "Invalid chart spec or missing parameter"),
+        (status = 404, description = "Short link not found (NOT_FOUND)"),
+        (status = 415, description = "Requested output format is unsupported"),
+        (status = 500, description = "Internal error"),
+        (status = 503, description = "Shortlink store or renderer unavailable"),
+        (status = 504, description = "Render timeout"),
+    ),
+    tag = "chart"
+)]
 pub async fn get_shortlink(
     Path(id): Path<String>,
     headers: HeaderMap,
