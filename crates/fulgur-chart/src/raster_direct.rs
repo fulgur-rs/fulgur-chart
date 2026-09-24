@@ -17,7 +17,9 @@ use std::f64::consts::PI;
 
 use image::codecs::webp::WebPEncoder;
 use image::{ExtendedColorType, ImageEncoder};
-use tiny_skia::{self, FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
+use tiny_skia::{
+    self, FillRule, Paint, PathBuilder, PathSegment, Pixmap, Point, Rect, Stroke, Transform,
+};
 use ttf_parser::OutlineBuilder;
 
 use crate::font::DEFAULT_FONT;
@@ -791,29 +793,12 @@ fn render_prim(
             b.line_to(*x2 as f32, *y2 as f32);
             let Some(path) = b.finish() else { return };
             let mut stroke_style = make_stroke(*stroke_width);
-            // 空 Vec は実線。tiny-skia の StrokeDash::new は even 長 &全 >=0 の場合のみ Some を返す。
-            // 奇数長の dash は SVG 仕様(stroke-dasharray)に合わせて配列を 2 回繰り返して偶数長へ拡張し、
-            // SVG (生値をそのまま出す)と PNG の描画結果を一致させる。負値等の他の不正は実線にフォールバック。
-            // tiny-skia の内部 dashing は 1_000_000 セグメント超で silent abort(線が消える)するため、
-            // 極端に短い dash pattern(例: [0.001])は事前に見積もって上限直下(500k)を超えるなら
-            // 実線へフォールバックする。SVG も browser 側で潰されて見た目は近くなり、少なくとも「線が消える」
-            // 回帰を防げる。
-            if !dash.is_empty() {
-                let mut dash_f32: Vec<f32> = dash.iter().map(|v| *v as f32).collect();
-                if !dash_f32.len().is_multiple_of(2) {
-                    dash_f32.extend_from_within(..);
-                }
-                let period: f32 = dash_f32.iter().sum();
-                let dx = (*x2 - *x1) as f32;
-                let dy = (*y2 - *y1) as f32;
-                let seg_len = (dx * dx + dy * dy).sqrt();
-                const MAX_DASH_SEGMENTS: f32 = 500_000.0;
-                let too_many =
-                    period.is_finite() && period > 0.0 && seg_len / period > MAX_DASH_SEGMENTS;
-                if !too_many && let Some(sd) = tiny_skia::StrokeDash::new(dash_f32, 0.0) {
-                    stroke_style.dash = Some(sd);
-                }
-            }
+            apply_stroke_dash(
+                &mut stroke_style,
+                dash,
+                0.0,
+                distance((*x1, *y1), (*x2, *y2)),
+            );
             pixmap.stroke_path(&path, &solid_paint(*stroke), &stroke_style, transform, None);
         }
 
@@ -843,6 +828,34 @@ fn render_prim(
             );
         }
 
+        Prim::StyledPolyline {
+            points,
+            stroke,
+            stroke_width,
+            dash,
+            dash_offset,
+        } => {
+            if points.len() < 2 {
+                return;
+            }
+            let mut b = PathBuilder::new();
+            for (i, &(px, py)) in points.iter().enumerate() {
+                if i == 0 {
+                    b.move_to(px as f32, py as f32);
+                } else {
+                    b.line_to(px as f32, py as f32);
+                }
+            }
+            let Some(path) = b.finish() else { return };
+            let path_length = points
+                .windows(2)
+                .map(|pair| distance(pair[0], pair[1]))
+                .sum();
+            let mut stroke_style = make_stroke(*stroke_width);
+            apply_stroke_dash(&mut stroke_style, dash, *dash_offset, path_length);
+            pixmap.stroke_path(&path, &solid_paint(*stroke), &stroke_style, transform, None);
+        }
+
         Prim::Path {
             d,
             fill,
@@ -870,6 +883,26 @@ fn render_prim(
                     None,
                 );
             }
+        }
+
+        Prim::StyledPath {
+            d,
+            stroke,
+            stroke_width,
+            dash,
+            dash_offset,
+        } => {
+            let Some(path) = parse_path_data(d) else {
+                return;
+            };
+            let mut stroke_style = make_stroke(*stroke_width);
+            apply_stroke_dash(
+                &mut stroke_style,
+                dash,
+                *dash_offset,
+                path_length_upper_bound(&path),
+            );
+            pixmap.stroke_path(&path, &solid_paint(*stroke), &stroke_style, transform, None);
         }
 
         Prim::GradientPath {
@@ -1370,6 +1403,89 @@ fn make_stroke(width: f64) -> Stroke {
         width: width as f32,
         ..Stroke::default()
     }
+}
+
+fn distance(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let dx = b.0 - a.0;
+    let dy = b.1 - a.1;
+    (dx * dx + dy * dy).sqrt()
+}
+
+/// Apply an SVG/Chart.js dash pattern while bounding tiny-skia's internal dash expansion.
+fn apply_stroke_dash(stroke: &mut Stroke, dash: &[f64], offset: f64, path_length: f64) {
+    if dash.is_empty() || !offset.is_finite() || !(offset as f32).is_finite() {
+        return;
+    }
+
+    let mut dash_f32: Vec<f32> = dash.iter().map(|value| *value as f32).collect();
+    if dash_f32
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return;
+    }
+    if !dash_f32.len().is_multiple_of(2) {
+        dash_f32.extend_from_within(..);
+    }
+    let period: f64 = dash_f32.iter().map(|value| f64::from(*value)).sum();
+    if !period.is_finite() || period <= 0.0 || !path_length.is_finite() {
+        return;
+    }
+    const MAX_DASH_SEGMENTS: f64 = 500_000.0;
+    if path_length / period > MAX_DASH_SEGMENTS {
+        return;
+    }
+    if let Some(dash) = tiny_skia::StrokeDash::new(dash_f32, offset as f32) {
+        stroke.dash = Some(dash);
+    }
+}
+
+/// Control polygon length is an upper bound for each Bezier segment and protects
+/// tiny-skia from pathological dash arrays on curved dataset paths.
+fn path_length_upper_bound(path: &tiny_skia::Path) -> f64 {
+    let mut length = 0.0;
+    let mut current = None;
+    let mut contour_start = None;
+    for segment in path.segments() {
+        match segment {
+            PathSegment::MoveTo(point) => {
+                current = Some(point);
+                contour_start = Some(point);
+            }
+            PathSegment::LineTo(end) => {
+                if let Some(start) = current {
+                    length += distance(point_xy(start), point_xy(end));
+                }
+                current = Some(end);
+            }
+            PathSegment::QuadTo(control, end) => {
+                if let Some(start) = current {
+                    length += distance(point_xy(start), point_xy(control));
+                    length += distance(point_xy(control), point_xy(end));
+                }
+                current = Some(end);
+            }
+            PathSegment::CubicTo(control1, control2, end) => {
+                if let Some(start) = current {
+                    length += distance(point_xy(start), point_xy(control1));
+                    length += distance(point_xy(control1), point_xy(control2));
+                    length += distance(point_xy(control2), point_xy(end));
+                }
+                current = Some(end);
+            }
+            PathSegment::Close => {
+                if let (Some(start), Some(end)) = (current, contour_start) {
+                    length += distance(point_xy(start), point_xy(end));
+                    current = Some(end);
+                }
+            }
+        }
+    }
+    length
+}
+
+fn point_xy(point: Point) -> (f64, f64) {
+    (f64::from(point.x), f64::from(point.y))
 }
 
 // ---------------------------------------------------------------------------
@@ -2754,6 +2870,56 @@ mod tests {
             pm_dashed.data(),
             "dashed line は solid line と異なるピクセルを出力すべき (raster 側 dash の silent regression 防止)"
         );
+    }
+
+    #[test]
+    fn styled_polyline_and_path_apply_dash_patterns_and_offsets() {
+        let black = Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        };
+        let polyline_scene = |dash: Vec<f64>, dash_offset: f64| Scene {
+            width: 250.0,
+            height: 100.0,
+            items: vec![Prim::StyledPolyline {
+                points: vec![(10.0, 50.0), (200.0, 50.0)],
+                stroke: black,
+                stroke_width: 2.0,
+                dash,
+                dash_offset,
+            }],
+        };
+        let path_scene = |dash: Vec<f64>, dash_offset: f64| Scene {
+            width: 250.0,
+            height: 100.0,
+            items: vec![Prim::StyledPath {
+                d: "M 10 50 C 60 50 140 50 200 50".into(),
+                stroke: black,
+                stroke_width: 2.0,
+                dash,
+                dash_offset,
+            }],
+        };
+        let f = face();
+
+        let polyline_solid =
+            scene_to_pixmap(&polyline_scene(vec![], 0.0), 1.0, &f, &PNG_LIMITS).unwrap();
+        let polyline_dash =
+            scene_to_pixmap(&polyline_scene(vec![8.0, 8.0], 0.0), 1.0, &f, &PNG_LIMITS).unwrap();
+        let polyline_offset =
+            scene_to_pixmap(&polyline_scene(vec![8.0, 8.0], 4.0), 1.0, &f, &PNG_LIMITS).unwrap();
+        assert_ne!(polyline_solid.data(), polyline_dash.data());
+        assert_ne!(polyline_dash.data(), polyline_offset.data());
+
+        let path_solid = scene_to_pixmap(&path_scene(vec![], 0.0), 1.0, &f, &PNG_LIMITS).unwrap();
+        let path_dash =
+            scene_to_pixmap(&path_scene(vec![8.0, 8.0], 0.0), 1.0, &f, &PNG_LIMITS).unwrap();
+        let path_offset =
+            scene_to_pixmap(&path_scene(vec![8.0, 8.0], 4.0), 1.0, &f, &PNG_LIMITS).unwrap();
+        assert_ne!(path_solid.data(), path_dash.data());
+        assert_ne!(path_dash.data(), path_offset.data());
     }
 
     /// SVG 仕様: 奇数長の stroke-dasharray はパターンを 2 回繰り返して偶数長として扱う

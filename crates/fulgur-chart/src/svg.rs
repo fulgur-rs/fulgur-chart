@@ -154,6 +154,39 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str, grad_idx: &mut usi
             )
             .unwrap();
         }
+        Prim::StyledPolyline {
+            points,
+            stroke,
+            stroke_width,
+            dash,
+            dash_offset,
+        } => {
+            let mut pts = String::new();
+            for (i, (px, py)) in points.iter().enumerate() {
+                if i > 0 {
+                    pts.push(' ');
+                }
+                write!(pts, "{},{}", fmt_num(*px), fmt_num(*py)).unwrap();
+            }
+            let hex = color_hex(stroke);
+            let sw = fmt_num(*stroke_width);
+            let op = opacity_attr("stroke-opacity", stroke.a);
+            let joined = dash
+                .iter()
+                .map(|value| fmt_num(*value))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let offset = if *dash_offset == 0.0 {
+                String::new()
+            } else {
+                format!(r#" stroke-dashoffset="{}""#, fmt_num(*dash_offset))
+            };
+            write!(
+                s,
+                r#"<polyline points="{pts}" fill="none" stroke="{hex}" stroke-width="{sw}"{op} stroke-dasharray="{joined}"{offset}/>"#
+            )
+            .unwrap();
+        }
         Prim::Path {
             d,
             fill,
@@ -182,6 +215,32 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str, grad_idx: &mut usi
             write!(
                 s,
                 r#"<path d="{d}" fill="{fill_attr}" stroke="{stroke_attr}"{tail}/>"#
+            )
+            .unwrap();
+        }
+        Prim::StyledPath {
+            d,
+            stroke,
+            stroke_width,
+            dash,
+            dash_offset,
+        } => {
+            let hex = color_hex(stroke);
+            let sw = fmt_num(*stroke_width);
+            let op = opacity_attr("stroke-opacity", stroke.a);
+            let joined = dash
+                .iter()
+                .map(|value| fmt_num(*value))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let offset = if *dash_offset == 0.0 {
+                String::new()
+            } else {
+                format!(r#" stroke-dashoffset="{}""#, fmt_num(*dash_offset))
+            };
+            write!(
+                s,
+                r#"<path d="{d}" fill="none" stroke="{hex}" stroke-width="{sw}"{op} stroke-dasharray="{joined}"{offset}/>"#
             )
             .unwrap();
         }

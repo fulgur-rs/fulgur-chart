@@ -1,8 +1,8 @@
 //! bar/line が共有するプロット領域・軸・グリッド・凡例の構築。
 
 use crate::ir::{
-    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendAlign, LegendOptions,
-    LegendPointStyle, LegendPos, RadialAxis, ScaleKind, SizeMode, XPositions,
+    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, DatasetPointStyle, LegendAlign,
+    LegendOptions, LegendPointStyle, LegendPos, RadialAxis, ScaleKind, SizeMode, XPositions,
 };
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, ValueScale, nice_ticks, vega_nice_ticks};
@@ -1724,6 +1724,166 @@ fn legend_marker(items: &mut Vec<Prim>, x: f64, y: f64, color: Color, options: &
     }
 }
 
+/// Add one Chart.js dataset marker centered at `(cx, cy)` with radius `r`.
+#[allow(clippy::too_many_arguments)]
+pub fn dataset_point_marker(
+    items: &mut Vec<Prim>,
+    cx: f64,
+    cy: f64,
+    r: f64,
+    fill: Color,
+    stroke: Color,
+    stroke_width: f64,
+    style: Option<DatasetPointStyle>,
+) {
+    if !r.is_finite() || r <= 0.0 {
+        return;
+    }
+
+    let style = style.unwrap_or(DatasetPointStyle::Circle);
+    if style == DatasetPointStyle::Hidden {
+        return;
+    }
+    let line = |x1, y1, x2, y2| Prim::Line {
+        x1,
+        y1,
+        x2,
+        y2,
+        stroke,
+        stroke_width: if stroke_width > 0.0 {
+            stroke_width
+        } else {
+            1.0
+        },
+        dash: Vec::new(),
+    };
+    let polygon = |points: &[(f64, f64)]| {
+        let mut d = String::new();
+        for (index, (x, y)) in points.iter().enumerate() {
+            if index == 0 {
+                d.push_str(&format!("M {} {}", fmt_num(*x), fmt_num(*y)));
+            } else {
+                d.push_str(&format!(" L {} {}", fmt_num(*x), fmt_num(*y)));
+            }
+        }
+        d.push_str(" Z");
+        Prim::Path {
+            d,
+            fill: Some(fill),
+            stroke: (stroke_width > 0.0).then_some(stroke),
+            stroke_width,
+        }
+    };
+
+    match style {
+        DatasetPointStyle::Hidden => {}
+        DatasetPointStyle::Circle => items.push(Prim::Circle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+            stroke_width,
+        }),
+        DatasetPointStyle::Cross => {
+            items.push(line(cx - r, cy, cx + r, cy));
+            items.push(line(cx, cy - r, cx, cy + r));
+        }
+        DatasetPointStyle::CrossRot => {
+            items.push(line(cx - r, cy - r, cx + r, cy + r));
+            items.push(line(cx - r, cy + r, cx + r, cy - r));
+        }
+        DatasetPointStyle::Dash | DatasetPointStyle::Line => {
+            let half_length = if style == DatasetPointStyle::Dash {
+                r * 0.6
+            } else {
+                r
+            };
+            items.push(line(cx - half_length, cy, cx + half_length, cy));
+        }
+        DatasetPointStyle::Rect => items.push(polygon(&[
+            (cx - r, cy - r),
+            (cx + r, cy - r),
+            (cx + r, cy + r),
+            (cx - r, cy + r),
+        ])),
+        DatasetPointStyle::RectRounded => {
+            let x0 = cx - r;
+            let x1 = cx + r;
+            let y0 = cy - r;
+            let y1 = cy + r;
+            let radius = r * 0.25;
+            let curve = radius * 0.552_284_749_830_793_6;
+            let d = format!(
+                "M {} {} L {} {} C {} {} {} {} {} {} L {} {} C {} {} {} {} {} {} L {} {} C {} {} {} {} {} {} L {} {} C {} {} {} {} {} {} Z",
+                fmt_num(x0 + radius),
+                fmt_num(y0),
+                fmt_num(x1 - radius),
+                fmt_num(y0),
+                fmt_num(x1 - radius + curve),
+                fmt_num(y0),
+                fmt_num(x1),
+                fmt_num(y0 + radius - curve),
+                fmt_num(x1),
+                fmt_num(y0 + radius),
+                fmt_num(x1),
+                fmt_num(y1 - radius),
+                fmt_num(x1),
+                fmt_num(y1 - radius + curve),
+                fmt_num(x1 - radius + curve),
+                fmt_num(y1),
+                fmt_num(x1 - radius),
+                fmt_num(y1),
+                fmt_num(x0 + radius),
+                fmt_num(y1),
+                fmt_num(x0 + radius - curve),
+                fmt_num(y1),
+                fmt_num(x0),
+                fmt_num(y1 - radius + curve),
+                fmt_num(x0),
+                fmt_num(y1 - radius),
+                fmt_num(x0),
+                fmt_num(y0 + radius),
+                fmt_num(x0),
+                fmt_num(y0 + radius - curve),
+                fmt_num(x0 + radius - curve),
+                fmt_num(y0),
+                fmt_num(x0 + radius),
+                fmt_num(y0),
+            );
+            items.push(Prim::Path {
+                d,
+                fill: Some(fill),
+                stroke: (stroke_width > 0.0).then_some(stroke),
+                stroke_width,
+            });
+        }
+        DatasetPointStyle::RectRot => {
+            items.push(polygon(&[
+                (cx, cy - r),
+                (cx + r, cy),
+                (cx, cy + r),
+                (cx - r, cy),
+            ]));
+        }
+        DatasetPointStyle::Star => {
+            let inner_radius = r * 0.45;
+            let points: Vec<(f64, f64)> = (0..10)
+                .map(|index| {
+                    let angle =
+                        -std::f64::consts::FRAC_PI_2 + index as f64 * std::f64::consts::PI / 5.0;
+                    let radius = if index % 2 == 0 { r } else { inner_radius };
+                    (cx + angle.cos() * radius, cy + angle.sin() * radius)
+                })
+                .collect();
+            items.push(polygon(&points));
+        }
+        DatasetPointStyle::Triangle => {
+            items.push(polygon(&[(cx, cy - r), (cx + r, cy + r), (cx - r, cy + r)]));
+        }
+    }
+}
+
 pub fn legend_entry_width_styled(
     m: &TextMeasurer,
     name: &str,
@@ -2054,6 +2214,7 @@ mod tests {
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
+                line_style: None,
                 stack: None,
                 bar_geometry: None,
                 series_type: SeriesType::Bar,
@@ -2572,6 +2733,7 @@ mod tests {
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
+                line_style: None,
                 stack: None,
                 bar_geometry: None,
                 series_type: SeriesType::Line,
@@ -2592,6 +2754,7 @@ mod tests {
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
+                line_style: None,
                 stack: None,
                 bar_geometry: None,
                 series_type: SeriesType::Line,
@@ -2612,6 +2775,7 @@ mod tests {
                 interpolation: LineInterpolation::Linear,
                 span_gaps: false,
                 step_mode: None,
+                line_style: None,
                 stack: None,
                 bar_geometry: None,
                 series_type: SeriesType::Line,

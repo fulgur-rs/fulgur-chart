@@ -119,6 +119,32 @@ pub enum StepMode {
     Middle,
 }
 
+/// Shape for a dataset's data-point marker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DatasetPointStyle {
+    Circle,
+    Cross,
+    CrossRot,
+    Dash,
+    Line,
+    Rect,
+    RectRounded,
+    RectRot,
+    Star,
+    Triangle,
+    Hidden,
+}
+
+/// Chart.js line/point styling normalized for one dataset.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DatasetLineStyle {
+    pub show_line: bool,
+    /// `None` retains the default circle marker; `Hidden` represents `pointStyle: false`.
+    pub point_style: Option<DatasetPointStyle>,
+    pub border_dash: Vec<f64>,
+    pub border_dash_offset: f64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum SizeMode {
     #[default]
@@ -262,6 +288,8 @@ pub struct Series {
     pub span_gaps: bool,
     /// Optional stepped-line mode. Layout applies it in preference to interpolation.
     pub step_mode: Option<StepMode>,
+    /// Chart.js-only line, dash, and point style controls for this dataset.
+    pub line_style: Option<Box<DatasetLineStyle>>,
     /// 描画種別。混合チャートでのみ意味を持つ(単一種別では未使用)。
     pub series_type: SeriesType,
     /// Optional stack group id. Chart.js datasets normalize omitted ids to their type default;
@@ -775,6 +803,7 @@ mod tests {
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
+            line_style: None,
             stack: None,
             bar_geometry: None,
             series_type: SeriesType::Bar,
@@ -801,6 +830,7 @@ mod tests {
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
+            line_style: None,
             stack: None,
             bar_geometry: None,
             series_type: SeriesType::Bar,
@@ -842,6 +872,7 @@ mod tests {
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
+            line_style: None,
             stack: None,
             bar_geometry: None,
             series_type: SeriesType::Bar,

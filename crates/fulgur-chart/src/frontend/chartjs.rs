@@ -4,11 +4,11 @@ use crate::color::parse_color;
 use crate::ir::*;
 use crate::schema::chartjs::{
     BarThickness as SchemaBarThickness, BorderRadius as SchemaBorderRadius, CubicMode,
-    SchemaArcBorderRadius,
+    DatasetPointStyle as SchemaPointStyle, SchemaArcBorderRadius,
 };
 use crate::schema::common::{
     AxisBorderOptions, AxisOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions,
-    GridLineOptions,
+    GridLineOptions, LegendPointStyle as SchemaLegendPointStyle,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -367,6 +367,14 @@ struct RawDataset {
     // scatter のマーカー半径。Series.point_radius へマップする。
     #[serde(rename = "pointRadius", default)]
     point_radius: Option<f64>,
+    #[serde(rename = "pointStyle", default)]
+    point_style: Option<Box<serde_json::Value>>,
+    #[serde(rename = "showLine", default)]
+    show_line: Option<Box<serde_json::Value>>,
+    #[serde(rename = "borderDash", default)]
+    border_dash: Option<Box<serde_json::Value>>,
+    #[serde(rename = "borderDashOffset", default)]
+    border_dash_offset: Option<Box<serde_json::Value>>,
 }
 
 /// Private parser counterpart of the public schema's `Stepped` contract.
@@ -444,6 +452,96 @@ fn parse_line_dataset_options(ds: &RawDataset) -> Result<(bool, Option<StepMode>
         .map_err(|e| format!("stepped の値が不正です: {e}"))?
         .and_then(RawStepped::into_step_mode);
     Ok((span_gaps, step_mode))
+}
+
+fn parse_dataset_line_style(
+    ds: &RawDataset,
+    dataset_index: usize,
+    default_show_line: bool,
+) -> Result<DatasetLineStyle, String> {
+    let prefix = format!("data.datasets[{dataset_index}]");
+    let point_style = ds
+        .point_style
+        .as_deref()
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value::<SchemaPointStyle>(value.clone())
+                .map_err(|_| format!("{prefix}.pointStyle must be a supported style or false"))
+                .map(|style| match style {
+                    SchemaPointStyle::Disabled(_) => DatasetPointStyle::Hidden,
+                    SchemaPointStyle::Named(style) => match style {
+                        SchemaLegendPointStyle::Circle => DatasetPointStyle::Circle,
+                        SchemaLegendPointStyle::Cross => DatasetPointStyle::Cross,
+                        SchemaLegendPointStyle::CrossRot => DatasetPointStyle::CrossRot,
+                        SchemaLegendPointStyle::Dash => DatasetPointStyle::Dash,
+                        SchemaLegendPointStyle::Line => DatasetPointStyle::Line,
+                        SchemaLegendPointStyle::Rect => DatasetPointStyle::Rect,
+                        SchemaLegendPointStyle::RectRounded => DatasetPointStyle::RectRounded,
+                        SchemaLegendPointStyle::RectRot => DatasetPointStyle::RectRot,
+                        SchemaLegendPointStyle::Star => DatasetPointStyle::Star,
+                        SchemaLegendPointStyle::Triangle => DatasetPointStyle::Triangle,
+                    },
+                })
+        })
+        .transpose()?;
+    let show_line = ds
+        .show_line
+        .as_deref()
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value::<bool>(value.clone())
+                .map_err(|_| format!("{prefix}.showLine must be a boolean"))
+        })
+        .transpose()?
+        .unwrap_or(default_show_line);
+    let border_dash = ds
+        .border_dash
+        .as_deref()
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            let values = serde_json::from_value::<Vec<f64>>(value.clone()).map_err(|_| {
+                format!("{prefix}.borderDash must be an array of finite non-negative numbers")
+            })?;
+            if values
+                .iter()
+                .any(|value| !value.is_finite() || *value < 0.0)
+            {
+                return Err(format!(
+                    "{prefix}.borderDash must be an array of finite non-negative numbers"
+                ));
+            }
+            Ok(values)
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let border_dash_offset = ds
+        .border_dash_offset
+        .as_deref()
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            let offset = serde_json::from_value::<f64>(value.clone())
+                .map_err(|_| format!("{prefix}.borderDashOffset must be a finite number"))?;
+            if !offset.is_finite() {
+                return Err(format!("{prefix}.borderDashOffset must be a finite number"));
+            }
+            Ok(offset)
+        })
+        .transpose()?
+        .unwrap_or(0.0);
+
+    Ok(DatasetLineStyle {
+        show_line,
+        point_style,
+        border_dash,
+        border_dash_offset,
+    })
+}
+
+fn has_dataset_line_style_options(ds: &RawDataset) -> bool {
+    ds.point_style.is_some()
+        || ds.show_line.is_some()
+        || ds.border_dash.is_some()
+        || ds.border_dash_offset.is_some()
 }
 
 fn parse_cubic_interpolation_mode(ds: &RawDataset) -> Result<Option<CubicMode>, String> {
@@ -1123,6 +1221,23 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         return Err("spanGaps and stepped are only supported for line charts".to_string());
     }
 
+    if is_mixable_base
+        && (strict || raw.chart_type == "line")
+        && raw
+            .data
+            .datasets
+            .iter()
+            .zip(&series_types)
+            .any(|(dataset, series_type)| {
+                *series_type != SeriesType::Line && has_dataset_line_style_options(dataset)
+            })
+    {
+        return Err(
+            "pointStyle, showLine, borderDash, and borderDashOffset are only supported for line datasets"
+                .to_string(),
+        );
+    }
+
     let line_dataset_options = if raw.chart_type == "line" {
         raw.data
             .datasets
@@ -1132,6 +1247,23 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     } else {
         vec![(false, None); raw.data.datasets.len()]
     };
+
+    let dataset_line_styles = raw
+        .data
+        .datasets
+        .iter()
+        .enumerate()
+        .map(|(index, dataset)| {
+            let is_line_dataset = is_mixable_base && series_types[index] == SeriesType::Line;
+            let is_scatter_dataset = raw.chart_type == "scatter";
+            if is_line_dataset || is_scatter_dataset {
+                parse_dataset_line_style(dataset, index, is_line_dataset)
+                    .map(|style| Some(Box::new(style)))
+            } else {
+                Ok(None)
+            }
+        })
+        .collect::<Result<Vec<_>, String>>()?;
 
     let cubic_interpolation_modes = if is_mixable_base {
         raw.data
@@ -1208,7 +1340,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .datasets
         .into_iter()
         .enumerate()
-        .map(|(i, ds)| {
+        .zip(dataset_line_styles)
+        .map(|((i, ds), line_style)| {
             if let Some(orders) = dataset_orders.as_mut() {
                 orders.push(ds.order.unwrap_or(0.0));
             }
@@ -1332,6 +1465,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 },
                 span_gaps: line_dataset_options[i].0,
                 step_mode: line_dataset_options[i].1,
+                line_style,
                 series_type,
                 stack: if is_mixable_base {
                     Some(ds.stack.unwrap_or_else(|| match series_type {
@@ -1818,6 +1952,7 @@ fn check_unknown_keys(
     let chart_type = top.get("type").and_then(|value| value.as_str());
     let line_root = chart_type == Some("line");
     let bar_root = chart_type == Some("bar");
+    let scatter_root = chart_type == Some("scatter");
     let pie_root = matches!(chart_type, Some("pie") | Some("doughnut"));
 
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
@@ -1847,6 +1982,10 @@ fn check_unknown_keys(
                             "spanGaps",
                             "stepped",
                             "pointRadius",
+                            "pointStyle",
+                            "showLine",
+                            "borderDash",
+                            "borderDashOffset",
                         ]
                     } else if bar_root {
                         &[
@@ -1868,6 +2007,25 @@ fn check_unknown_keys(
                             "tension",
                             "cubicInterpolationMode",
                             "pointRadius",
+                            "pointStyle",
+                            "showLine",
+                            "borderDash",
+                            "borderDashOffset",
+                        ]
+                    } else if scatter_root {
+                        &[
+                            "label",
+                            "data",
+                            "backgroundColor",
+                            "borderColor",
+                            "borderWidth",
+                            "fill",
+                            "tension",
+                            "pointRadius",
+                            "pointStyle",
+                            "showLine",
+                            "borderDash",
+                            "borderDashOffset",
                         ]
                     } else if pie_root {
                         &[
@@ -2531,6 +2689,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         interpolation: LineInterpolation::Linear,
         span_gaps: false,
         step_mode: None,
+        line_style: None,
         stack: None,
         bar_geometry: None,
         series_type: SeriesType::Bar,
@@ -2880,6 +3039,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             interpolation: LineInterpolation::Linear,
             span_gaps: false,
             step_mode: None,
+            line_style: None,
             stack: None,
             bar_geometry: None,
             series_type: SeriesType::Bar,
@@ -3246,6 +3406,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         interpolation: LineInterpolation::Linear,
         span_gaps: false,
         step_mode: None,
+        line_style: None,
         stack: None,
         bar_geometry: None,
         series_type: SeriesType::Bar,
@@ -3499,6 +3660,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         interpolation: LineInterpolation::Linear,
         span_gaps: false,
         step_mode: None,
+        line_style: None,
         stack: None,
         bar_geometry: None,
         series_type: SeriesType::Bar,
@@ -4562,6 +4724,31 @@ mod tests {
                     "strict {name} root accepted {option}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn bar_roots_ignore_line_style_options_on_bar_datasets_but_strict_rejects_them() {
+        let plain = r#"{"type":"bar","data":{"datasets":[{"data":[3,4]}]}}"#;
+        for (name, option) in [
+            ("pointStyle", r#""pointStyle":"triangle""#),
+            ("showLine", r#""showLine":false"#),
+            ("borderDash", r#""borderDash":[4,2]"#),
+            ("borderDashOffset", r#""borderDashOffset":2"#),
+        ] {
+            let with_option =
+                plain.replace(r#""data":[3,4]"#, &format!(r#""data":[3,4],{option}"#));
+            let parsed_with_option = parse(&with_option, false)
+                .unwrap_or_else(|error| panic!("{name}: {error} in {with_option}"));
+            assert_eq!(
+                parsed_with_option,
+                parse(plain, false).unwrap(),
+                "non-strict bar root must ignore {name} on a bar dataset"
+            );
+            assert!(
+                parse(&with_option, true).is_err(),
+                "strict bar root must reject {name} on a bar dataset"
+            );
         }
     }
 

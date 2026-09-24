@@ -1452,19 +1452,66 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
 
         // 線: セグメントごとに描く(gap で線が途切れる)。間引き済みセグメントから直接描画する。
+        let line_style = ser.line_style.as_ref();
+        let show_line = line_style.is_none_or(|style| style.show_line);
+        let border_dash = line_style.map_or(&[][..], |style| style.border_dash.as_slice());
+        let border_dash_offset = line_style.map_or(0.0, |style| style.border_dash_offset);
         for seg in &segments {
-            if seg.len() < 2 {
+            if !show_line || seg.len() < 2 {
                 continue;
             }
             if let Some(step_mode) = ser.step_mode {
+                let points = step_points(seg.iter().map(|&(x, y, _)| (x, y)), step_mode);
+                if !border_dash.is_empty() {
+                    items.push(Prim::StyledPolyline {
+                        points,
+                        stroke: ser.stroke_at(0),
+                        stroke_width: ser.stroke_width,
+                        dash: border_dash.to_vec(),
+                        dash_offset: border_dash_offset,
+                    });
+                    continue;
+                }
                 items.push(Prim::Polyline {
-                    points: step_points(seg.iter().map(|&(x, y, _)| (x, y)), step_mode),
+                    points,
                     stroke: ser.stroke_at(0),
                     stroke_width: ser.stroke_width,
                 });
                 continue;
             }
             let xy: Vec<(f64, f64)> = seg.iter().map(|&(x, y, _)| (x, y)).collect();
+            if !border_dash.is_empty() {
+                match ser.interpolation {
+                    crate::ir::LineInterpolation::Linear => {
+                        items.push(Prim::StyledPolyline {
+                            points: xy,
+                            stroke: ser.stroke_at(0),
+                            stroke_width: ser.stroke_width,
+                            dash: border_dash.to_vec(),
+                            dash_offset: border_dash_offset,
+                        });
+                    }
+                    crate::ir::LineInterpolation::CatmullRom { tension } => {
+                        items.push(Prim::StyledPath {
+                            d: catmull_rom_path(&xy, tension, frame.plot_top, frame.plot_bottom),
+                            stroke: ser.stroke_at(0),
+                            stroke_width: ser.stroke_width,
+                            dash: border_dash.to_vec(),
+                            dash_offset: border_dash_offset,
+                        });
+                    }
+                    crate::ir::LineInterpolation::Monotone => {
+                        items.push(Prim::StyledPath {
+                            d: monotone_path(&xy),
+                            stroke: ser.stroke_at(0),
+                            stroke_width: ser.stroke_width,
+                            dash: border_dash.to_vec(),
+                            dash_offset: border_dash_offset,
+                        });
+                    }
+                }
+                continue;
+            }
             match ser.interpolation {
                 crate::ir::LineInterpolation::Linear => {
                     items.push(Prim::Polyline {
@@ -1494,8 +1541,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
 
         // マーカー。threshold 超過で間引いた場合、線として描かれる(≥2点)セグメントの帯マーカーは
-        // 既定で抑制する。ただし単点セグメント(gap で孤立し線にならない点)はマーカーが唯一の
-        // 表現なので描画し、空チャート化を防ぐ。pointRadius 明示時は全点描画(エスケープハッチ)。
+        // 既定で抑制する。ただし showLine=false では点が唯一の表現なので間引き後の点を描画する。
+        // 単点セグメント(gap で孤立し線にならない点)もマーカーが唯一の表現なので描画し、空チャート化を防ぐ。
+        // pointRadius 明示時は全ての間引き後の点を描画する。
         // 非間引き時は従来どおり全点を MARKER_R で描画(バイト不変。segments を平坦化すると valid と
         // 同順・同内容)。
         for seg in &segments {
@@ -1503,6 +1551,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 (_, Some(r)) if r > 0.0 => Some(r),
                 (_, Some(_)) => None,
                 (false, None) => Some(MARKER_R),
+                (true, None) if !show_line => Some(MARKER_R),
                 // 間引き既定: 線になる(≥2点)なら帯を抑制、単点(孤立点)は描画。
                 (true, None) if seg.len() < 2 => Some(MARKER_R),
                 (true, None) => None,
@@ -1518,14 +1567,16 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     {
                         continue;
                     }
-                    items.push(Prim::Circle {
+                    common::dataset_point_marker(
+                        &mut items,
                         cx,
                         cy,
                         r,
-                        fill: ser.stroke_at(0),
-                        stroke: ser.stroke_at(0),
-                        stroke_width: 0.0,
-                    });
+                        ser.stroke_at(0),
+                        ser.stroke_at(0),
+                        0.0,
+                        line_style.and_then(|style| style.point_style),
+                    );
                 }
             }
         }
@@ -2440,6 +2491,7 @@ mod tests {
                         interpolation: crate::ir::LineInterpolation::Linear,
                         span_gaps: false,
                         step_mode: None,
+                        line_style: None,
                         stack: None,
                         bar_geometry: None,
                         series_type: crate::ir::SeriesType::Line,

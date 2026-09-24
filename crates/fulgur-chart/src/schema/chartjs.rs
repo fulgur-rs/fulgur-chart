@@ -5,8 +5,8 @@
 //! exposes only the data and options fields that are valid for it.
 
 use super::common::{
-    AxisOptions, ColorString, DataLabelsPlugin, DecimationPlugin, LegendPlugin, ScalarOrArray,
-    ThemeOptions, TitlePlugin,
+    AxisOptions, ColorString, DataLabelsPlugin, DecimationPlugin, LegendPlugin, LegendPointStyle,
+    ScalarOrArray, ThemeOptions, TitlePlugin,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -162,6 +162,19 @@ pub struct BarDataset {
     pub cubic_interpolation_mode: Option<CubicMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fill: Option<LineFillSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub point_style: Option<DatasetPointStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_line: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_border_dash",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Vec<NonNegativeDashValue>")]
+    pub border_dash: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_dash_offset: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -322,6 +335,93 @@ pub struct LineDataset {
     pub fill: Option<LineFillSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub point_radius: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub point_style: Option<DatasetPointStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_line: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_border_dash",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Vec<NonNegativeDashValue>")]
+    pub border_dash: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_dash_offset: Option<f64>,
+}
+
+/// Dataset point style. `false` disables drawing point markers.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum DatasetPointStyle {
+    Named(LegendPointStyle),
+    Disabled(PointStyleDisabled),
+}
+
+/// Schema marker for Chart.js's `pointStyle: false` value.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(try_from = "bool", into = "bool")]
+pub struct PointStyleDisabled;
+
+impl TryFrom<bool> for PointStyleDisabled {
+    type Error = &'static str;
+
+    fn try_from(value: bool) -> Result<Self, Self::Error> {
+        if value {
+            Err("pointStyle only accepts false as a boolean")
+        } else {
+            Ok(Self)
+        }
+    }
+}
+
+impl From<PointStyleDisabled> for bool {
+    fn from(_: PointStyleDisabled) -> Self {
+        false
+    }
+}
+
+impl JsonSchema for PointStyleDisabled {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "PointStyleDisabled".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "boolean",
+            "const": false,
+            "description": "Explicit `false` disables dataset point markers."
+        })
+    }
+}
+
+struct NonNegativeDashValue;
+
+impl JsonSchema for NonNegativeDashValue {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "NonNegativeDashValue".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": "number", "minimum": 0.0 })
+    }
+}
+
+fn deserialize_optional_border_dash<'de, D>(deserializer: D) -> Result<Option<Vec<f64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Option::<Vec<f64>>::deserialize(deserializer)?;
+    if values.as_ref().is_some_and(|values| {
+        values
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+    }) {
+        return Err(serde::de::Error::custom(
+            "borderDash values must be finite and non-negative",
+        ));
+    }
+    Ok(values)
 }
 
 /// Cubic line interpolation algorithm from Chart.js.
@@ -667,6 +767,19 @@ pub struct ScatterDataset {
     pub border_width: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub point_radius: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub point_style: Option<DatasetPointStyle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_line: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_border_dash",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Vec<NonNegativeDashValue>")]
+    pub border_dash: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_dash_offset: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
