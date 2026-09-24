@@ -18,6 +18,19 @@ class TestBuilder < Minitest::Test
     assert out.start_with?(Fixtures::PNG_MAGIC), "expected PNG magic"
   end
 
+  def test_render_webp_returns_binary_string
+    outputs = [
+      FulgurChart.build(Fixtures::BAR).render(:webp),
+      FulgurChart.build(Fixtures::BAR).format(:webp).render,
+      FulgurChart.render(Fixtures::BAR, :webp),
+    ]
+    outputs.each do |out|
+      assert_equal Encoding::ASCII_8BIT, out.encoding
+      assert_equal "RIFF", out.byteslice(0, 4)
+      assert_equal "WEBP", out.byteslice(8, 4)
+    end
+  end
+
   def test_vegalite_autodetected
     assert FulgurChart.build(Fixtures::VEGALITE_BAR).render(:svg).start_with?("<svg")
   end
