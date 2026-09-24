@@ -45,6 +45,15 @@ test("build(spec).render('png') returns a PNG Uint8Array", () => {
   assert.ok(startsWithPngMagic(out), 'expected PNG magic bytes')
 })
 
+test('webp format returns a RIFF/WEBP Uint8Array', () => {
+  const outputs = [build(BAR).render('webp'), build(BAR).format('webp').render(), render(BAR, 'webp')]
+  for (const out of outputs) {
+    assert.ok(isU8(out), 'expected a Uint8Array')
+    assert.equal(String.fromCharCode(...out.subarray(0, 4)), 'RIFF')
+    assert.equal(String.fromCharCode(...out.subarray(8, 12)), 'WEBP')
+  }
+})
+
 test('vegalite is auto-detected', () => {
   assert.ok(build(VEGALITE_BAR).render('svg').startsWith('<svg'))
 })

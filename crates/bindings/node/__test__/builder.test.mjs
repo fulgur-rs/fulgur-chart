@@ -36,6 +36,15 @@ test("build(spec).render('png') returns a PNG Buffer", () => {
   assert.ok(startsWithPngMagic(out), 'expected PNG magic bytes')
 })
 
+test("webp format returns a RIFF/WEBP Buffer", () => {
+  const outputs = [build(BAR).render('webp'), build(BAR).format('webp').render(), render(BAR, 'webp')]
+  for (const out of outputs) {
+    assert.ok(Buffer.isBuffer(out), 'expected a Buffer')
+    assert.equal(out.toString('ascii', 0, 4), 'RIFF')
+    assert.equal(out.toString('ascii', 8, 12), 'WEBP')
+  }
+})
+
 test('vegalite is auto-detected', () => {
   assert.ok(build(VEGALITE_BAR).render('svg').startsWith('<svg'))
 })
