@@ -158,11 +158,10 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
 
 /// Chart.js 線形軸の `ticks` 設定を反映した目盛りを生成する。
 ///
-/// `maxTicksLimit` の既定値は Chart.js と同じ 11。両端 bounds と `stepSize` が
-/// 整数個の間隔を作れる場合は `count` より優先し、それ以外は `count` を使う。
-/// `count` がないときは `stepSize` を nice 間隔の単位として使い、必要なら
-/// `maxTicksLimit` に収まるよう間隔を広げる。`precision` は `stepSize` がない場合だけ
-/// 間隔を切り上げる。
+/// `maxTicksLimit` の既定値は `stepSize` がない場合だけ Chart.js と同じ 11。指定された
+/// `stepSize` は明示上限か生成安全上限に達しない限り維持する。両端 bounds と `stepSize`
+/// が整数個の間隔を作れる場合は `count` より優先し、それ以外は `count` を使う。
+/// `precision` は `stepSize` がない場合だけ間隔を切り上げる。
 pub fn configured_ticks(
     data_min: f64,
     data_max: f64,
@@ -170,16 +169,23 @@ pub fn configured_ticks(
     hard_min: Option<f64>,
     hard_max: Option<f64>,
 ) -> NiceTicks {
-    let max_ticks = options
-        .max_ticks_limit
-        .unwrap_or(11)
-        .clamp(2, MAX_TICK_INTERVALS + 1);
-    let base = nice_ticks(data_min, data_max, max_ticks - 1);
-    let min_bound = hard_min.filter(|value| value.is_finite());
-    let max_bound = hard_max.filter(|value| value.is_finite());
     let requested_step = options
         .step_size
         .filter(|step| step.is_finite() && *step > 0.0);
+    let max_ticks = options
+        .max_ticks_limit
+        .unwrap_or_else(|| {
+            if requested_step.is_some() {
+                MAX_TICK_INTERVALS + 1
+            } else {
+                11
+            }
+        })
+        .clamp(2, MAX_TICK_INTERVALS + 1);
+    let base = nice_ticks(data_min, data_max, max_ticks - 1);
+    let min_bound = hard_min.filter(|value| value.is_finite());
+    let max_bound =
+        hard_max.filter(|value| value.is_finite() && min_bound.is_none_or(|min| *value > min));
     let fixed_hard_bounds = requested_step.is_some_and(|requested| {
         if let (Some(min), Some(max)) = (min_bound, max_bound) {
             let spaces = (max - min) / requested;

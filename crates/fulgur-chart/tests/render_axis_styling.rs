@@ -86,9 +86,21 @@ fn linear_axis_step_size_generates_fixed_ticks() {
 }
 
 #[test]
+fn linear_axis_step_size_without_max_ticks_limit_preserves_requested_spacing() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,100]}]},
+      "options":{"scales":{"y":{"min":0,"max":100,"ticks":{"stepSize":1}}}}}"#;
+    let ticks = numeric_texts(&render(json));
+
+    assert_eq!(ticks.len(), 101);
+    assert_eq!(ticks.first(), Some(&0.0));
+    assert_eq!(ticks.last(), Some(&100.0));
+    assert!(ticks.windows(2).all(|pair| pair[1] - pair[0] == 1.0));
+}
+
+#[test]
 fn linear_axis_max_ticks_limit_caps_generated_tick_count() {
     let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,100]}]},
-      "options":{"scales":{"y":{"min":0,"max":100,"ticks":{"maxTicksLimit":3}}}}}"#;
+      "options":{"scales":{"y":{"min":0,"max":100,"ticks":{"stepSize":1,"maxTicksLimit":3}}}}}"#;
     let svg = render(json);
 
     assert_eq!(numeric_texts(&svg), vec![0.0, 50.0, 100.0]);
@@ -124,6 +136,14 @@ fn linear_axis_count_one_generates_one_tick() {
     let svg = render(json);
 
     assert_eq!(numeric_texts(&svg), vec![10.0]);
+}
+
+#[test]
+fn linear_axis_count_one_keeps_valid_domain_for_conflicting_bounds() {
+    let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,10]}]},
+      "options":{"scales":{"y":{"min":10,"max":0,"ticks":{"count":1}}}}}"#;
+
+    assert_eq!(numeric_texts(&render(json)), vec![10.5]);
 }
 
 #[test]

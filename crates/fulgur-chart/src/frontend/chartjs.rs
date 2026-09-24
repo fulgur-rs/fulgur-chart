@@ -766,6 +766,14 @@ fn axis_ticks_from(opts: Option<&ScaleTicksOptions>) -> AxisTickOptions {
             ..AxisTickOptions::default()
         };
     };
+    let step_size = ticks
+        .step_size
+        .filter(|step| step.is_finite() && *step > 0.0);
+    let max_ticks_limit = ticks
+        .max_ticks_limit
+        .map(|limit| limit as usize)
+        .filter(|limit| *limit > 0)
+        .or_else(|| step_size.is_none().then_some(11));
     let format = ticks
         .format
         .as_ref()
@@ -780,14 +788,8 @@ fn axis_ticks_from(opts: Option<&ScaleTicksOptions>) -> AxisTickOptions {
             }),
         });
     AxisTickOptions {
-        step_size: ticks
-            .step_size
-            .filter(|step| step.is_finite() && *step > 0.0),
-        max_ticks_limit: ticks
-            .max_ticks_limit
-            .map(|limit| limit as usize)
-            .filter(|limit| *limit > 0)
-            .or(Some(11)),
+        step_size,
+        max_ticks_limit,
         count: ticks
             .count
             .map(|count| count as usize)
