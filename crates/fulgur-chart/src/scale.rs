@@ -1,6 +1,7 @@
 //! 線形スケールと nice ticks（1-2-5 ステップ）。すべて決定的な純関数。
 
 use crate::ir::AxisTickOptions;
+use crate::temporal::TemporalScale;
 
 pub(crate) const MAX_TICK_INTERVALS: usize = 1_000;
 
@@ -767,6 +768,7 @@ fn bounded_ticks(data_min: f64, data_max: f64, count: usize) -> NiceTicks {
 #[derive(Debug, Clone)]
 pub enum ValueScale {
     Linear(LinearScale),
+    Temporal(TemporalScale),
     Log {
         /// ログ空間(log10(d0)..log10(d1))を写す内部スケール。
         inner: LinearScale,
@@ -784,6 +786,7 @@ impl ValueScale {
     pub fn map(&self, v: f64) -> f64 {
         match self {
             ValueScale::Linear(s) => s.map(v),
+            ValueScale::Temporal(scale) => scale.map_value(v),
             ValueScale::Log { inner, floor } => inner.map(v.max(*floor).log10()),
         }
     }
@@ -791,6 +794,7 @@ impl ValueScale {
     pub(crate) fn unmap(&self, p: f64) -> f64 {
         match self {
             ValueScale::Linear(scale) => scale.unmap(p),
+            ValueScale::Temporal(scale) => scale.unmap_pixel(p),
             ValueScale::Log { inner, floor } => 10.0_f64.powf(inner.unmap(p)).max(*floor),
         }
     }

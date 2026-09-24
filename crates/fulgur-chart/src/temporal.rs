@@ -1,4 +1,9 @@
-use time::{Month, OffsetDateTime, Weekday, format_description::well_known::Rfc3339};
+use crate::ir::{AxisTickOptions, ScaleKind, TimeOptions, TimeUnit};
+use std::fmt::Write as _;
+use time::{
+    Month, OffsetDateTime, PrimitiveDateTime, UtcOffset, Weekday,
+    format_description::well_known::Rfc3339,
+};
 
 const MILLIS_PER_SECOND: i64 = 1_000;
 const MILLIS_PER_MINUTE: i64 = 60 * MILLIS_PER_SECOND;
@@ -9,8 +14,10 @@ const APPROX_MILLIS_PER_MONTH: i64 = 30 * MILLIS_PER_DAY;
 const APPROX_MILLIS_PER_YEAR: i64 = 365 * MILLIS_PER_DAY;
 const MAX_ERROR_FRAGMENT_BYTES: usize = 80;
 const MAX_TEMPORAL_TICKS: usize = 1_000;
+const MAX_TIME_FORMAT_BYTES: usize = 256;
+const MAX_TIME_VALUE_BYTES: usize = 4_096;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum TickUnit {
     Millisecond,
     Second,
@@ -19,6 +26,7 @@ enum TickUnit {
     Day,
     Week,
     Month,
+    Quarter,
     Year,
 }
 
@@ -29,7 +37,7 @@ struct TickInterval {
     approximate_millis: i64,
 }
 
-const TICK_INTERVALS: [TickInterval; 18] = [
+const TICK_INTERVALS: [TickInterval; 19] = [
     TickInterval::new(TickUnit::Second, 1, MILLIS_PER_SECOND),
     TickInterval::new(TickUnit::Second, 5, 5 * MILLIS_PER_SECOND),
     TickInterval::new(TickUnit::Second, 15, 15 * MILLIS_PER_SECOND),
@@ -47,6 +55,7 @@ const TICK_INTERVALS: [TickInterval; 18] = [
     TickInterval::new(TickUnit::Week, 1, MILLIS_PER_WEEK),
     TickInterval::new(TickUnit::Month, 1, APPROX_MILLIS_PER_MONTH),
     TickInterval::new(TickUnit::Month, 3, 3 * APPROX_MILLIS_PER_MONTH),
+    TickInterval::new(TickUnit::Quarter, 1, 3 * APPROX_MILLIS_PER_MONTH),
     TickInterval::new(TickUnit::Year, 1, APPROX_MILLIS_PER_YEAR),
 ];
 
@@ -66,6 +75,100 @@ pub struct TemporalTick {
     pub label: String,
 }
 
+/// Pixel projection for a `time` or `timeseries` axis.
+#[derive(Clone, Debug)]
+pub struct TemporalScale {
+    kind: ScaleKind,
+    values: Vec<i64>,
+    min: i64,
+    max: i64,
+    pixel_start: f64,
+    pixel_end: f64,
+}
+
+impl TemporalScale {
+    pub fn new(kind: ScaleKind, values: &[i64], pixel_start: f64, pixel_end: f64) -> Self {
+        let min = values.iter().copied().min().unwrap_or(0);
+        let max = values.iter().copied().max().unwrap_or(min);
+        Self::with_domain(kind, values, min, max, pixel_start, pixel_end)
+    }
+
+    pub fn with_domain(
+        kind: ScaleKind,
+        values: &[i64],
+        min: i64,
+        max: i64,
+        pixel_start: f64,
+        pixel_end: f64,
+    ) -> Self {
+        let mut values = values.to_vec();
+        if kind == ScaleKind::Timeseries {
+            values.push(min);
+            values.push(max);
+        }
+        values.sort_unstable();
+        values.dedup();
+        Self {
+            kind,
+            values,
+            min,
+            max,
+            pixel_start,
+            pixel_end,
+        }
+    }
+
+    pub fn map_millis(&self, value: i64) -> f64 {
+        let ratio = if self.kind == ScaleKind::Timeseries && self.values.len() > 1 {
+            let right = self.values.partition_point(|&timestamp| timestamp < value);
+            if right == 0 {
+                0.0
+            } else if right >= self.values.len() {
+                1.0
+            } else if self.values[right] == value {
+                right as f64 / (self.values.len() - 1) as f64
+            } else {
+                let left = right - 1;
+                let span = i128::from(self.values[right]) - i128::from(self.values[left]);
+                let elapsed = i128::from(value) - i128::from(self.values[left]);
+                (left as f64 + elapsed as f64 / span as f64) / (self.values.len() - 1) as f64
+            }
+        } else if self.min == self.max {
+            0.5
+        } else {
+            (i128::from(value) - i128::from(self.min)) as f64
+                / (i128::from(self.max) - i128::from(self.min)) as f64
+        };
+        self.pixel_start + ratio * (self.pixel_end - self.pixel_start)
+    }
+
+    pub fn map_value(&self, value: f64) -> f64 {
+        if !value.is_finite() || value.abs() > 8.64e15 {
+            return f64::NAN;
+        }
+        self.map_millis(value.trunc() as i64)
+    }
+
+    pub fn unmap_pixel(&self, pixel: f64) -> f64 {
+        let pixel_span = self.pixel_end - self.pixel_start;
+        if pixel_span == 0.0 {
+            return self.min as f64;
+        }
+        let ratio = (pixel - self.pixel_start) / pixel_span;
+        if self.kind == ScaleKind::Timeseries && self.values.len() > 1 {
+            let position = ratio * (self.values.len() - 1) as f64;
+            let left = position.floor() as isize;
+            let fraction = position - left as f64;
+            let left_index = left.clamp(0, self.values.len() as isize - 2) as usize;
+            let low = i128::from(self.values[left_index]);
+            let high = i128::from(self.values[left_index + 1]);
+            low as f64 + fraction * (high - low) as f64
+        } else {
+            self.min as f64 + ratio * (self.max as f64 - self.min as f64)
+        }
+    }
+}
+
 /// User-controlled field names and values must not make parse errors unbounded.
 /// Truncation is byte-based and preserves UTF-8 boundaries.
 pub(crate) fn bounded_error_fragment(raw: &str) -> String {
@@ -81,12 +184,344 @@ pub(crate) fn bounded_error_fragment(raw: &str) -> String {
 
 pub fn parse_rfc3339_millis(field: &str, raw: &str) -> Result<i64, String> {
     let shown_field = bounded_error_fragment(field);
-    let parsed = OffsetDateTime::parse(raw, &Rfc3339).map_err(|_| {
+    if raw.len() > MAX_TIME_VALUE_BYTES {
+        return Err(format!(
+            "field {shown_field} timestamp exceeds {MAX_TIME_VALUE_BYTES} bytes"
+        ));
+    }
+    let parsed = parse_iso8601_utc(raw).ok_or_else(|| {
         let shown = bounded_error_fragment(raw);
-        format!("field {shown_field} contains invalid RFC 3339 timestamp: {shown:?}")
+        format!("field {shown_field} contains invalid ISO 8601 timestamp: {shown:?}")
     })?;
     i64::try_from(parsed.unix_timestamp_nanos().div_euclid(1_000_000))
         .map_err(|_| format!("field {shown_field} timestamp is outside the supported range"))
+}
+
+/// Validate the supported strftime-style subset for parser or display formats.
+pub fn validate_time_format(field: &str, format: &str, display: bool) -> Result<(), String> {
+    if format.len() > MAX_TIME_FORMAT_BYTES {
+        return Err(format!(
+            "{field} format exceeds {MAX_TIME_FORMAT_BYTES} bytes"
+        ));
+    }
+    let bytes = format.as_bytes();
+    let mut index = 0;
+    let mut has_year = false;
+    let mut has_month = false;
+    let mut has_day = false;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        if index >= bytes.len() {
+            return Err(format!("{field} format ends with an incomplete directive"));
+        }
+        let (directive, has_fraction_dot) = match bytes[index] {
+            b'.' if bytes.get(index + 1) == Some(&b'f') => {
+                index += 2;
+                (b'f', true)
+            }
+            directive => {
+                index += 1;
+                (directive, false)
+            }
+        };
+        let supported = (directive != b'f' || has_fraction_dot)
+            && if display {
+                matches!(
+                    directive,
+                    b'Y' | b'y'
+                        | b'm'
+                        | b'b'
+                        | b'B'
+                        | b'd'
+                        | b'a'
+                        | b'A'
+                        | b'H'
+                        | b'I'
+                        | b'M'
+                        | b'S'
+                        | b'f'
+                        | b'p'
+                        | b'z'
+                        | b'%'
+                )
+            } else {
+                matches!(
+                    directive,
+                    b'Y' | b'm' | b'd' | b'H' | b'M' | b'S' | b'f' | b'z' | b'%'
+                )
+            };
+        if !supported {
+            return Err(format!("{field} format contains an unsupported directive"));
+        }
+        has_year |= directive == b'Y';
+        has_month |= directive == b'm';
+        has_day |= directive == b'd';
+    }
+    if !display && !(has_year && has_month && has_day) {
+        return Err(format!("{field} parser format must include %Y, %m, and %d"));
+    }
+    Ok(())
+}
+
+/// Parse a timestamp string using the supported numeric strftime-style subset.
+pub fn parse_custom_format_millis(field: &str, raw: &str, format: &str) -> Result<i64, String> {
+    validate_time_format(field, format, false)?;
+    let shown_field = bounded_error_fragment(field);
+    if raw.len() > MAX_TIME_VALUE_BYTES {
+        return Err(format!(
+            "field {shown_field} timestamp exceeds {MAX_TIME_VALUE_BYTES} bytes"
+        ));
+    }
+
+    let input = raw.as_bytes();
+    let format_bytes = format.as_bytes();
+    let mut input_index = 0;
+    let mut format_index = 0;
+    let (mut year, mut month, mut day) = (None, None, None);
+    let (mut hour, mut minute, mut second) = (0_u32, 0_u32, 0_u32);
+    let mut nanosecond = 0_u32;
+    let mut offset = UtcOffset::UTC;
+    while format_index < format_bytes.len() {
+        if format_bytes[format_index] != b'%' {
+            if input.get(input_index) != format_bytes.get(format_index) {
+                return Err(invalid_custom_timestamp(&shown_field, raw));
+            }
+            input_index += 1;
+            format_index += 1;
+            continue;
+        }
+        format_index += 1;
+        let directive = if format_bytes.get(format_index) == Some(&b'.') {
+            if format_bytes.get(format_index + 1) != Some(&b'f') {
+                return Err(format!(
+                    "{shown_field} parser format contains an invalid directive"
+                ));
+            }
+            format_index += 2;
+            b'f'
+        } else {
+            let directive = *format_bytes.get(format_index).ok_or_else(|| {
+                format!("{shown_field} parser format ends with an incomplete directive")
+            })?;
+            format_index += 1;
+            directive
+        };
+        match directive {
+            b'Y' => year = Some(read_fixed_digits(input, &mut input_index, 4)),
+            b'm' => month = Some(read_fixed_digits(input, &mut input_index, 2)),
+            b'd' => day = Some(read_fixed_digits(input, &mut input_index, 2)),
+            b'H' => hour = read_fixed_digits(input, &mut input_index, 2).unwrap_or(u32::MAX),
+            b'M' => minute = read_fixed_digits(input, &mut input_index, 2).unwrap_or(u32::MAX),
+            b'S' => second = read_fixed_digits(input, &mut input_index, 2).unwrap_or(u32::MAX),
+            b'f' => {
+                if input.get(input_index) != Some(&b'.') {
+                    return Err(invalid_custom_timestamp(&shown_field, raw));
+                }
+                input_index += 1;
+                let start = input_index;
+                while input.get(input_index).is_some_and(u8::is_ascii_digit) {
+                    input_index += 1;
+                }
+                let digits = input.get(start..input_index).unwrap_or_default();
+                if digits.is_empty() || digits.len() > 9 {
+                    return Err(invalid_custom_timestamp(&shown_field, raw));
+                }
+                let fraction = std::str::from_utf8(digits)
+                    .ok()
+                    .and_then(|digits| digits.parse::<u32>().ok())
+                    .unwrap_or(u32::MAX);
+                nanosecond = fraction.saturating_mul(10_u32.pow((9 - digits.len()) as u32));
+            }
+            b'z' => match read_offset(input, &mut input_index) {
+                Some(value) => offset = value,
+                None => return Err(invalid_custom_timestamp(&shown_field, raw)),
+            },
+            b'%' => {
+                if input.get(input_index) != Some(&b'%') {
+                    return Err(invalid_custom_timestamp(&shown_field, raw));
+                }
+                input_index += 1;
+            }
+            _ => {
+                return Err(format!(
+                    "{shown_field} parser format contains an unsupported directive"
+                ));
+            }
+        }
+    }
+    if input_index != input.len() {
+        return Err(invalid_custom_timestamp(&shown_field, raw));
+    }
+    let (Some(year), Some(month), Some(day)) = (year.flatten(), month.flatten(), day.flatten())
+    else {
+        return Err(format!(
+            "{shown_field} parser format must include %Y, %m, and %d"
+        ));
+    };
+    let year = i32::try_from(year).ok();
+    let month = u8::try_from(month)
+        .ok()
+        .and_then(|value| Month::try_from(value).ok());
+    let day = u8::try_from(day).ok();
+    let Some(year) = year else {
+        return Err(invalid_custom_timestamp(&shown_field, raw));
+    };
+    let Some(month) = month else {
+        return Err(invalid_custom_timestamp(&shown_field, raw));
+    };
+    let Some(day) = day else {
+        return Err(invalid_custom_timestamp(&shown_field, raw));
+    };
+    let date = time::Date::from_calendar_date(year, month, day)
+        .map_err(|_| invalid_custom_timestamp(&shown_field, raw))?;
+    let time = time::Time::from_hms_nano(
+        u8::try_from(hour).map_err(|_| invalid_custom_timestamp(&shown_field, raw))?,
+        u8::try_from(minute).map_err(|_| invalid_custom_timestamp(&shown_field, raw))?,
+        u8::try_from(second).map_err(|_| invalid_custom_timestamp(&shown_field, raw))?,
+        nanosecond,
+    )
+    .map_err(|_| invalid_custom_timestamp(&shown_field, raw))?;
+    let millis = PrimitiveDateTime::new(date, time)
+        .assume_offset(offset)
+        .unix_timestamp_nanos()
+        .div_euclid(1_000_000);
+    i64::try_from(millis)
+        .map_err(|_| format!("field {shown_field} timestamp is outside the supported range"))
+}
+
+fn read_fixed_digits(input: &[u8], index: &mut usize, count: usize) -> Option<u32> {
+    let end = index.checked_add(count)?;
+    let digits = input.get(*index..end)?;
+    if !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    *index = end;
+    std::str::from_utf8(digits).ok()?.parse().ok()
+}
+
+fn read_offset(input: &[u8], index: &mut usize) -> Option<UtcOffset> {
+    if input.get(*index) == Some(&b'Z') {
+        *index += 1;
+        return Some(UtcOffset::UTC);
+    }
+    let sign = match input.get(*index)? {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    *index += 1;
+    let hours = i8::try_from(read_fixed_digits(input, index, 2)?).ok()?;
+    if input.get(*index) == Some(&b':') {
+        *index += 1;
+    }
+    let minutes = i8::try_from(read_fixed_digits(input, index, 2)?).ok()?;
+    UtcOffset::from_hms(hours * sign, minutes * sign, 0).ok()
+}
+
+fn invalid_custom_timestamp(field: &str, raw: &str) -> String {
+    format!(
+        "field {field} does not match its configured time parser: {:?}",
+        bounded_error_fragment(raw)
+    )
+}
+
+/// Round a timestamp down to the requested UTC calendar boundary.
+pub fn round_timestamp(unix_millis: i64, unit: TimeUnit) -> i64 {
+    let fixed_period = match unit {
+        TimeUnit::Millisecond => return unix_millis,
+        TimeUnit::Second => MILLIS_PER_SECOND,
+        TimeUnit::Minute => MILLIS_PER_MINUTE,
+        TimeUnit::Hour => MILLIS_PER_HOUR,
+        TimeUnit::Day => MILLIS_PER_DAY,
+        TimeUnit::Week => MILLIS_PER_WEEK,
+        TimeUnit::Month | TimeUnit::Quarter | TimeUnit::Year => 0,
+    };
+    if fixed_period > 0 {
+        let origin = if unit == TimeUnit::Week {
+            3 * MILLIS_PER_DAY
+        } else {
+            0
+        };
+        return (i128::from(unix_millis)
+            - (i128::from(unix_millis) - i128::from(origin)).rem_euclid(i128::from(fixed_period)))
+            as i64;
+    }
+
+    let Some(datetime) = datetime(unix_millis) else {
+        return unix_millis;
+    };
+    let year = datetime.year();
+    let month = datetime.month() as u8;
+    let first_month = match unit {
+        TimeUnit::Month => month,
+        TimeUnit::Quarter => ((month - 1) / 3) * 3 + 1,
+        TimeUnit::Year => 1,
+        _ => unreachable!("fixed units returned above"),
+    };
+    let Ok(month) = Month::try_from(first_month) else {
+        return unix_millis;
+    };
+    let Ok(date) = time::Date::from_calendar_date(year, month, 1) else {
+        return unix_millis;
+    };
+    i64::try_from(date.midnight().assume_utc().unix_timestamp_nanos() / 1_000_000)
+        .unwrap_or(unix_millis)
+}
+
+fn parse_iso8601_utc(raw: &str) -> Option<OffsetDateTime> {
+    if let Some(date) = parse_iso_calendar_date(raw) {
+        return Some(date.midnight().assume_utc());
+    }
+
+    let bytes = raw.as_bytes();
+    if bytes.len() < 19
+        || bytes
+            .get(10)
+            .is_none_or(|separator| !matches!(separator, b'T' | b' '))
+    {
+        return None;
+    }
+    let mut normalized = raw.to_owned();
+    if bytes[10] == b' ' {
+        normalized.replace_range(10..11, "T");
+    }
+    if normalized.ends_with('z') {
+        normalized.pop();
+        normalized.push('Z');
+    }
+
+    let zone_start = normalized
+        .as_bytes()
+        .iter()
+        .enumerate()
+        .skip(19)
+        .find_map(|(index, byte)| matches!(byte, b'+' | b'-').then_some(index));
+    if let Some(index) = zone_start {
+        let zone = &normalized[index..];
+        if zone.len() == 5 && zone.as_bytes()[3..].iter().all(u8::is_ascii_digit) {
+            normalized.insert(index + 3, ':');
+        }
+    } else if !normalized.ends_with('Z') {
+        normalized.push('Z');
+    }
+
+    OffsetDateTime::parse(&normalized, &Rfc3339).ok()
+}
+
+fn parse_iso_calendar_date(raw: &str) -> Option<time::Date> {
+    let bytes = raw.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return None;
+    }
+    let year = raw.get(..4)?.parse::<i32>().ok()?;
+    let month = raw.get(5..7)?.parse::<u8>().ok()?;
+    let day = raw.get(8..10)?.parse::<u8>().ok()?;
+    let month = Month::try_from(month).ok()?;
+    time::Date::from_calendar_date(year, month, day).ok()
 }
 
 /// D3-compatible UTC temporal ticks.
@@ -131,18 +566,159 @@ pub fn temporal_ticks(min_ms: i64, max_ms: i64, plot_width: f64) -> Vec<Temporal
         .collect()
 }
 
+/// Generate bounded ticks for a Chart.js temporal axis, applying its time unit,
+/// minimum unit, tick-count controls, and display-format override.
+pub fn temporal_ticks_with_options(
+    min_ms: i64,
+    max_ms: i64,
+    plot_width: f64,
+    time_options: &TimeOptions,
+    tick_options: &AxisTickOptions,
+) -> Vec<TemporalTick> {
+    let reverse = max_ms < min_ms;
+    let (start_ms, stop_ms) = if reverse {
+        (max_ms, min_ms)
+    } else {
+        (min_ms, max_ms)
+    };
+    let desired_count = tick_options
+        .count
+        .unwrap_or_else(|| desired_tick_count(plot_width))
+        .clamp(1, MAX_TEMPORAL_TICKS);
+    let max_count = tick_options
+        .max_ticks_limit
+        .unwrap_or(MAX_TEMPORAL_TICKS)
+        .clamp(1, MAX_TEMPORAL_TICKS);
+    let desired_count = desired_count.min(max_count);
+    let output_limit = tick_options
+        .count
+        .map(|count| count.clamp(1, MAX_TEMPORAL_TICKS).min(max_count))
+        .unwrap_or(max_count);
+
+    let mut interval = if let Some(unit) = time_options.unit {
+        interval_for_unit(unit, normalized_step(tick_options.step_size))
+    } else {
+        let mut interval = select_interval_with_min_unit(
+            start_ms,
+            stop_ms,
+            desired_count,
+            time_options.min_unit.unwrap_or(TimeUnit::Millisecond),
+        );
+        if let Some(step_size) = tick_options.step_size {
+            interval.step = interval
+                .step
+                .saturating_mul(normalized_step(Some(step_size)));
+            interval.approximate_millis = interval
+                .approximate_millis
+                .saturating_mul(i64::from(normalized_step(Some(step_size))));
+        }
+        interval
+    };
+
+    if start_ms == stop_ms {
+        return vec![TemporalTick {
+            unix_millis: start_ms,
+            label: format_time_tick(start_ms, interval.unit, time_options),
+        }];
+    }
+
+    let mut millis = generate_ticks(start_ms, stop_ms, interval);
+    while millis.len() > output_limit && interval.step < i32::MAX {
+        let stride = millis.len().div_ceil(output_limit).max(2);
+        interval.step = interval
+            .step
+            .saturating_mul(i32::try_from(stride).unwrap_or(i32::MAX));
+        interval.approximate_millis = interval
+            .approximate_millis
+            .saturating_mul(i64::from(i32::try_from(stride).unwrap_or(i32::MAX)));
+        millis = generate_ticks(start_ms, stop_ms, interval);
+    }
+    if reverse {
+        millis.reverse();
+    }
+    millis
+        .into_iter()
+        .map(|unix_millis| TemporalTick {
+            unix_millis,
+            label: format_time_tick(unix_millis, interval.unit, time_options),
+        })
+        .collect()
+}
+
+fn desired_tick_count(plot_width: f64) -> usize {
+    if plot_width.is_finite() && plot_width > 0.0 {
+        (plot_width / 40.0)
+            .ceil()
+            .clamp(1.0, MAX_TEMPORAL_TICKS as f64) as usize
+    } else {
+        1
+    }
+}
+
+fn normalized_step(value: Option<f64>) -> i32 {
+    value
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .map(|value| value.round().clamp(1.0, i32::MAX as f64) as i32)
+        .unwrap_or(1)
+}
+
+fn interval_for_unit(unit: TimeUnit, step: i32) -> TickInterval {
+    let unit = match unit {
+        TimeUnit::Millisecond => TickUnit::Millisecond,
+        TimeUnit::Second => TickUnit::Second,
+        TimeUnit::Minute => TickUnit::Minute,
+        TimeUnit::Hour => TickUnit::Hour,
+        TimeUnit::Day => TickUnit::Day,
+        TimeUnit::Week => TickUnit::Week,
+        TimeUnit::Month => TickUnit::Month,
+        TimeUnit::Quarter => TickUnit::Quarter,
+        TimeUnit::Year => TickUnit::Year,
+    };
+    let base = match unit {
+        TickUnit::Millisecond => 1,
+        TickUnit::Second => MILLIS_PER_SECOND,
+        TickUnit::Minute => MILLIS_PER_MINUTE,
+        TickUnit::Hour => MILLIS_PER_HOUR,
+        TickUnit::Day => MILLIS_PER_DAY,
+        TickUnit::Week => MILLIS_PER_WEEK,
+        TickUnit::Month => APPROX_MILLIS_PER_MONTH,
+        TickUnit::Quarter => 3 * APPROX_MILLIS_PER_MONTH,
+        TickUnit::Year => APPROX_MILLIS_PER_YEAR,
+    };
+    TickInterval::new(unit, step, base.saturating_mul(i64::from(step)))
+}
+
 fn select_interval(start_ms: i64, stop_ms: i64, desired_count: usize) -> TickInterval {
+    select_interval_with_min_unit(start_ms, stop_ms, desired_count, TimeUnit::Millisecond)
+}
+
+fn select_interval_with_min_unit(
+    start_ms: i64,
+    stop_ms: i64,
+    desired_count: usize,
+    min_unit: TimeUnit,
+) -> TickInterval {
     let target = (i128::from(stop_ms) - i128::from(start_ms)) as f64 / desired_count.max(1) as f64;
-    let upper =
-        TICK_INTERVALS.partition_point(|interval| interval.approximate_millis as f64 <= target);
+    let min_tick_unit = interval_for_unit(min_unit, 1).unit;
+    let eligible = TICK_INTERVALS
+        .iter()
+        .copied()
+        .filter(|interval| interval.unit >= min_tick_unit)
+        .collect::<Vec<_>>();
+    let upper = eligible.partition_point(|interval| interval.approximate_millis as f64 <= target);
     if upper == 0 {
+        if let Some(first) = eligible.first()
+            && min_tick_unit != TickUnit::Millisecond
+        {
+            return *first;
+        }
         let span_millis = (i128::from(stop_ms) - i128::from(start_ms)) as f64;
         let step = nice_tick_step(span_millis, desired_count)
             .round()
             .clamp(1.0, i32::MAX as f64) as i32;
         return TickInterval::new(TickUnit::Millisecond, step, i64::from(step));
     }
-    if upper == TICK_INTERVALS.len() {
+    if upper == eligible.len() {
         let span_years = target * desired_count as f64 / APPROX_MILLIS_PER_YEAR as f64;
         let step = nice_tick_step(span_years, desired_count).round().max(1.0) as i32;
         return TickInterval::new(
@@ -151,8 +727,8 @@ fn select_interval(start_ms: i64, stop_ms: i64, desired_count: usize) -> TickInt
             i64::from(step).saturating_mul(APPROX_MILLIS_PER_YEAR),
         );
     }
-    let previous = TICK_INTERVALS[upper - 1];
-    let next = TICK_INTERVALS[upper];
+    let previous = eligible[upper - 1];
+    let next = eligible[upper];
     if target / (previous.approximate_millis as f64) < next.approximate_millis as f64 / target {
         previous
     } else {
@@ -205,8 +781,14 @@ fn generate_ticks(start_ms: i64, stop_ms: i64, interval: TickInterval) -> Vec<i6
             0,
         ),
         // 1970-01-04T00:00:00Z is the first Sunday after the Unix epoch.
-        TickUnit::Week => generate_fixed(start_ms, stop_ms, MILLIS_PER_WEEK, 3 * MILLIS_PER_DAY),
+        TickUnit::Week => generate_fixed(
+            start_ms,
+            stop_ms,
+            i64::from(interval.step) * MILLIS_PER_WEEK,
+            3 * MILLIS_PER_DAY,
+        ),
         TickUnit::Month => generate_calendar(start_ms, stop_ms, TickUnit::Month, interval.step),
+        TickUnit::Quarter => generate_calendar(start_ms, stop_ms, TickUnit::Quarter, interval.step),
         TickUnit::Year => generate_calendar(start_ms, stop_ms, TickUnit::Year, interval.step),
     }
 }
@@ -276,6 +858,19 @@ fn generate_calendar(start_ms: i64, stop_ms: i64, unit: TickUnit, step: i32) -> 
                 i128::from(stop_date.year()) * 12 + i128::from(u8::from(stop_date.month())) - 1;
             (ceil_index, last_index)
         }
+        TickUnit::Quarter => {
+            let month_index = i128::from(u8::from(start.month())) - 1;
+            let index = i128::from(start.year()) * 4 + month_index.div_euclid(3);
+            let boundary = calendar_millis(TickUnit::Quarter, index);
+            let ceil_index = if boundary.is_some_and(|value| value < start_ms) {
+                index + 1
+            } else {
+                index
+            };
+            let last_month_index = i128::from(u8::from(stop_date.month())) - 1;
+            let last_index = i128::from(stop_date.year()) * 4 + last_month_index.div_euclid(3);
+            (ceil_index, last_index)
+        }
         TickUnit::Year => {
             let year = i128::from(start.year());
             let boundary = calendar_millis(TickUnit::Year, year);
@@ -330,6 +925,11 @@ fn calendar_millis(unit: TickUnit, index: i128) -> Option<i64> {
         TickUnit::Month => {
             let year = index.div_euclid(12);
             let month = Month::try_from((index.rem_euclid(12) + 1) as u8).ok()?;
+            (year, month)
+        }
+        TickUnit::Quarter => {
+            let year = index.div_euclid(4);
+            let month = Month::try_from((index.rem_euclid(4) * 3 + 1) as u8).ok()?;
             (year, month)
         }
         TickUnit::Year => (index, Month::January),
@@ -387,6 +987,67 @@ fn tick_label(unix_millis: i64) -> String {
     datetime.year().to_string()
 }
 
+fn format_time_tick(unix_millis: i64, unit: TickUnit, options: &TimeOptions) -> String {
+    let time_unit = match unit {
+        TickUnit::Millisecond => TimeUnit::Millisecond,
+        TickUnit::Second => TimeUnit::Second,
+        TickUnit::Minute => TimeUnit::Minute,
+        TickUnit::Hour => TimeUnit::Hour,
+        TickUnit::Day => TimeUnit::Day,
+        TickUnit::Week => TimeUnit::Week,
+        TickUnit::Month => TimeUnit::Month,
+        TickUnit::Quarter => TimeUnit::Quarter,
+        TickUnit::Year => TimeUnit::Year,
+    };
+    let Some(format) = options.display_formats.get(&time_unit) else {
+        return tick_label(unix_millis);
+    };
+    let Some(datetime) = datetime(unix_millis) else {
+        return unix_millis.to_string();
+    };
+    let mut chars = format.chars().peekable();
+    let mut label = String::with_capacity(format.len());
+    while let Some(character) = chars.next() {
+        if character != '%' {
+            label.push(character);
+            continue;
+        }
+        let Some(mut directive) = chars.next() else {
+            return tick_label(unix_millis);
+        };
+        let fractional_with_dot = directive == '.' && chars.peek() == Some(&'f');
+        if fractional_with_dot {
+            chars.next();
+            directive = 'f';
+        }
+        match directive {
+            'Y' => write!(label, "{:04}", datetime.year()).unwrap(),
+            'y' => write!(label, "{:02}", datetime.year().rem_euclid(100)).unwrap(),
+            'm' => write!(label, "{:02}", u8::from(datetime.month())).unwrap(),
+            'b' => write!(label, "{}", month_abbreviation(datetime.month())).unwrap(),
+            'B' => write!(label, "{}", month_name(datetime.month())).unwrap(),
+            'd' => write!(label, "{:02}", datetime.day()).unwrap(),
+            'a' => write!(label, "{}", weekday_abbreviation(datetime.weekday())).unwrap(),
+            'A' => write!(label, "{}", weekday_name(datetime.weekday())).unwrap(),
+            'H' => write!(label, "{:02}", datetime.hour()).unwrap(),
+            'I' => write!(label, "{:02}", hour12(datetime.hour())).unwrap(),
+            'M' => write!(label, "{:02}", datetime.minute()).unwrap(),
+            'S' => write!(label, "{:02}", datetime.second()).unwrap(),
+            'f' => {
+                if fractional_with_dot {
+                    label.push('.');
+                }
+                write!(label, "{:03}", datetime.millisecond()).unwrap();
+            }
+            'p' => write!(label, "{}", if datetime.hour() < 12 { "AM" } else { "PM" }).unwrap(),
+            'z' => label.push_str("+0000"),
+            '%' => label.push('%'),
+            _ => return tick_label(unix_millis),
+        }
+    }
+    label
+}
+
 fn hour12(hour: u8) -> u8 {
     match hour % 12 {
         0 => 12,
@@ -403,6 +1064,18 @@ fn weekday_abbreviation(weekday: Weekday) -> &'static str {
         Weekday::Friday => "Fri",
         Weekday::Saturday => "Sat",
         Weekday::Sunday => "Sun",
+    }
+}
+
+fn weekday_name(weekday: Weekday) -> &'static str {
+    match weekday {
+        Weekday::Monday => "Monday",
+        Weekday::Tuesday => "Tuesday",
+        Weekday::Wednesday => "Wednesday",
+        Weekday::Thursday => "Thursday",
+        Weekday::Friday => "Friday",
+        Weekday::Saturday => "Saturday",
+        Weekday::Sunday => "Sunday",
     }
 }
 
@@ -443,7 +1116,7 @@ fn month_name(month: Month) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, HashSet};
 
     fn millis(raw: &str) -> i64 {
         parse_rfc3339_millis("x", raw).unwrap()
@@ -457,9 +1130,192 @@ mod tests {
     }
 
     #[test]
-    fn pre_epoch_sub_millisecond_timestamp_floors_to_previous_millisecond() {
+    fn parse_iso_calendar_date_uses_utc_midnight() {
+        assert_eq!(
+            parse_rfc3339_millis("date", "1970-01-02").unwrap(),
+            MILLIS_PER_DAY
+        );
+    }
+
+    #[test]
+    fn fractional_format_directive_requires_the_documented_dot() {
+        assert!(validate_time_format("parser", "%Y-%m-%dT%H:%M:%S%.f", false).is_ok());
+        assert!(validate_time_format("parser", "%Y-%m-%dT%H:%M:%S%f", false).is_err());
+        assert!(validate_time_format("display", "%Y-%m-%d %.f", true).is_ok());
+        assert!(validate_time_format("display", "%Y-%m-%d %f", true).is_err());
+    }
+
+    #[test]
+    fn configured_ticks_honor_quarter_unit_and_custom_display_format() {
+        let time_options = TimeOptions {
+            unit: Some(TimeUnit::Quarter),
+            display_formats: BTreeMap::from([(TimeUnit::Quarter, "%Y-%m".to_owned())]),
+            ..TimeOptions::default()
+        };
+        let ticks = AxisTickOptions::default();
+
+        let actual = temporal_ticks_with_options(
+            millis("2026-01-01T00:00:00Z"),
+            millis("2026-10-01T00:00:00Z"),
+            720.0,
+            &time_options,
+            &ticks,
+        );
+
+        assert_eq!(
+            actual
+                .iter()
+                .map(|tick| (tick.unix_millis, tick.label.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (millis("2026-01-01T00:00:00Z"), "2026-01"),
+                (millis("2026-04-01T00:00:00Z"), "2026-04"),
+                (millis("2026-07-01T00:00:00Z"), "2026-07"),
+                (millis("2026-10-01T00:00:00Z"), "2026-10"),
+            ]
+        );
+    }
+
+    #[test]
+    fn configured_ticks_respect_min_unit_and_max_ticks_limit() {
+        let time_options = TimeOptions {
+            min_unit: Some(TimeUnit::Day),
+            ..TimeOptions::default()
+        };
+        let ticks = temporal_ticks_with_options(
+            millis("2026-01-01T12:00:00Z"),
+            millis("2026-01-04T12:00:00Z"),
+            2_400.0,
+            &time_options,
+            &AxisTickOptions::default(),
+        );
+
+        assert_eq!(ticks.len(), 3);
+        assert!(
+            ticks
+                .iter()
+                .all(|tick| tick.unix_millis % MILLIS_PER_DAY == 0)
+        );
+        assert!(
+            ticks
+                .windows(2)
+                .all(|pair| pair[1].unix_millis - pair[0].unix_millis == MILLIS_PER_DAY)
+        );
+
+        let capped = temporal_ticks_with_options(
+            millis("2026-01-01T00:00:00Z"),
+            millis("2026-01-10T00:00:00Z"),
+            720.0,
+            &TimeOptions {
+                unit: Some(TimeUnit::Day),
+                ..TimeOptions::default()
+            },
+            &AxisTickOptions {
+                max_ticks_limit: Some(2),
+                ..AxisTickOptions::default()
+            },
+        );
+        assert!(capped.len() <= 2);
+    }
+
+    #[test]
+    fn configured_unit_respects_count_and_max_ticks_limit() {
+        let start = millis("2026-01-01T00:00:00Z");
+        let stop = millis("2026-01-31T00:00:00Z");
+        let time_options = TimeOptions {
+            unit: Some(TimeUnit::Day),
+            ..TimeOptions::default()
+        };
+        let count_limited = temporal_ticks_with_options(
+            start,
+            stop,
+            1_200.0,
+            &time_options,
+            &AxisTickOptions {
+                count: Some(2),
+                ..AxisTickOptions::default()
+            },
+        );
+        assert_eq!(count_limited.len(), 2);
+        assert!(
+            count_limited
+                .windows(2)
+                .all(|pair| { (pair[1].unix_millis - pair[0].unix_millis) % MILLIS_PER_DAY == 0 })
+        );
+
+        let max_limited = temporal_ticks_with_options(
+            start,
+            stop,
+            1_200.0,
+            &time_options,
+            &AxisTickOptions {
+                count: Some(10),
+                max_ticks_limit: Some(2),
+                ..AxisTickOptions::default()
+            },
+        );
+        assert!(max_limited.len() <= 2);
+    }
+
+    #[test]
+    fn configured_week_unit_respects_step_and_max_ticks_limit() {
+        let ticks = temporal_ticks_with_options(
+            millis("2026-01-01T00:00:00Z"),
+            millis("2027-01-01T00:00:00Z"),
+            1_200.0,
+            &TimeOptions {
+                unit: Some(TimeUnit::Week),
+                ..TimeOptions::default()
+            },
+            &AxisTickOptions {
+                step_size: Some(2.0),
+                max_ticks_limit: Some(2),
+                ..AxisTickOptions::default()
+            },
+        );
+
+        assert!(!ticks.is_empty());
+        assert!(ticks.len() <= 2);
+        assert!(ticks.windows(2).all(|pair| {
+            (pair[1].unix_millis - pair[0].unix_millis) % (2 * MILLIS_PER_WEEK) == 0
+        }));
+    }
+
+    #[test]
+    fn time_scale_preserves_elapsed_spacing() {
+        let scale = TemporalScale::new(
+            crate::ir::ScaleKind::Time,
+            &[0, MILLIS_PER_DAY, 3 * MILLIS_PER_DAY],
+            0.0,
+            300.0,
+        );
+        assert!((scale.map_millis(MILLIS_PER_DAY) - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn timeseries_scale_spaces_unique_timestamps_equally() {
+        let scale = TemporalScale::new(
+            crate::ir::ScaleKind::Timeseries,
+            &[0, MILLIS_PER_DAY, 3 * MILLIS_PER_DAY],
+            0.0,
+            300.0,
+        );
+        assert!((scale.map_millis(MILLIS_PER_DAY) - 150.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pre_epoch_sub_millisecond_timestamps_floor_to_previous_millisecond() {
         assert_eq!(
             parse_rfc3339_millis("timestamp", "1969-12-31T23:59:59.999999999Z").unwrap(),
+            -1
+        );
+        assert_eq!(
+            parse_custom_format_millis(
+                "timestamp",
+                "1969-12-31T23:59:59.999999999Z",
+                "%Y-%m-%dT%H:%M:%S%.f%z",
+            )
+            .unwrap(),
             -1
         );
         assert_eq!(
@@ -473,6 +1329,14 @@ mod tests {
         let err = parse_rfc3339_millis("timestamp", "not-a-date").unwrap_err();
         assert!(err.contains("timestamp"));
         assert!(err.contains("not-a-date"));
+        assert!(err.len() < 160);
+    }
+
+    #[test]
+    fn iso_timestamp_length_is_bounded_before_parsing() {
+        let long_timestamp = format!("1970-01-01T00:00:00Z{}", "x".repeat(MAX_TIME_VALUE_BYTES));
+        let err = parse_rfc3339_millis("timestamp", &long_timestamp).unwrap_err();
+        assert!(err.contains("timestamp exceeds 4096 bytes"));
         assert!(err.len() < 160);
     }
 
@@ -716,6 +1580,34 @@ mod tests {
     #[test]
     fn calendar_ticks_reject_datetimes_outside_time_crate_range() {
         assert!(generate_calendar(i64::MIN, i64::MAX, TickUnit::Year, 1).is_empty());
+    }
+
+    #[test]
+    fn calendar_operations_cover_javascript_date_range() {
+        const JS_DATE_LIMIT_MILLIS: i64 = 8_640_000_000_000_000;
+        let rounded = round_timestamp(JS_DATE_LIMIT_MILLIS, TimeUnit::Year);
+        assert!(rounded < JS_DATE_LIMIT_MILLIS);
+        let rounded_date = datetime(rounded).expect("rounded year is representable");
+        assert_eq!(rounded_date.month(), Month::January);
+        assert_eq!(rounded_date.day(), 1);
+
+        let options = TimeOptions {
+            unit: Some(TimeUnit::Year),
+            ..TimeOptions::default()
+        };
+        let ticks = temporal_ticks_with_options(
+            -JS_DATE_LIMIT_MILLIS,
+            JS_DATE_LIMIT_MILLIS,
+            720.0,
+            &options,
+            &AxisTickOptions::default(),
+        );
+        assert!(!ticks.is_empty());
+        assert!(
+            ticks
+                .iter()
+                .all(|tick| datetime(tick.unix_millis).is_some())
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ use crate::ir::{
 };
 use crate::scale::{LinearScale, NiceTicks, ValueScale, log_ticks_within};
 use crate::scene::{Anchor, Prim, Scene};
+use crate::temporal::{TemporalScale, TemporalTick};
 use crate::text::TextMeasurer;
 
 /// scatter のマーカー既定半径。chart.js scatter の pointRadius 既定値 ~3.0。
@@ -42,6 +43,8 @@ pub struct ScatterLayout {
     /// 対数軸のラベルなし minor 目盛。線形軸では空。
     pub x_minor_ticks: Vec<f64>,
     pub y_minor_ticks: Vec<f64>,
+    pub x_temporal_ticks: Vec<TemporalTick>,
+    pub y_temporal_ticks: Vec<TemporalTick>,
     pub plot_left: f64,
     pub plot_right: f64,
     pub plot_top: f64,
@@ -54,14 +57,17 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     let label_font = spec.theme.font_size;
     let (xmin, xmax) = axis_domain(spec, &spec.x_axis, |p| p.x);
     let (ymin, ymax) = axis_domain(spec, &spec.y_axis, |p| p.y);
-    let (x_ticks, x_minor_ticks) = axis_ticks(&spec.x_axis, xmin, xmax);
-    let (y_ticks, y_minor_ticks) = axis_ticks(&spec.y_axis, ymin, ymax);
+    let x_values = axis_values(spec, |point| point.x);
+    let y_values = axis_values(spec, |point| point.y);
+    let (x_ticks, x_minor_ticks, x_temporal_ticks) =
+        axis_ticks(&spec.x_axis, xmin, xmax, spec.width);
+    let (y_ticks, y_minor_ticks, y_temporal_ticks) =
+        axis_ticks(&spec.y_axis, ymin, ymax, spec.height);
     let mut max_y_w = 0.0_f32;
-    for &t in &y_ticks.ticks {
-        let w = m.width(
-            &super::common::format_axis_tick(&spec.y_axis, t),
-            label_font as f32,
-        );
+    for (index, &t) in y_ticks.ticks.iter().enumerate() {
+        let label =
+            super::common::axis_temporal_tick_label(&spec.y_axis, &y_temporal_ticks, index, t);
+        let w = m.width(&label, label_font as f32);
         if w > max_y_w {
             max_y_w = w;
         }
@@ -123,12 +129,14 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
     ScatterLayout {
-        xs: axis_scale(&spec.x_axis, &x_ticks, plot_left, plot_right),
-        ys: axis_scale(&spec.y_axis, &y_ticks, plot_bottom, plot_top),
+        xs: axis_scale(&spec.x_axis, &x_ticks, &x_values, plot_left, plot_right),
+        ys: axis_scale(&spec.y_axis, &y_ticks, &y_values, plot_bottom, plot_top),
         x_ticks,
         y_ticks,
         x_minor_ticks,
         y_minor_ticks,
+        x_temporal_ticks,
+        y_temporal_ticks,
         plot_left,
         plot_right,
         plot_top,
@@ -136,7 +144,12 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     }
 }
 
-fn axis_ticks(axis: &AxisSpec, data_min: f64, data_max: f64) -> (NiceTicks, Vec<f64>) {
+fn axis_ticks(
+    axis: &AxisSpec,
+    data_min: f64,
+    data_max: f64,
+    pixel_extent: f64,
+) -> (NiceTicks, Vec<f64>, Vec<TemporalTick>) {
     if axis.scale_kind == ScaleKind::Logarithmic {
         let log = log_ticks_within(data_min, data_max);
         (
@@ -147,21 +160,68 @@ fn axis_ticks(axis: &AxisSpec, data_min: f64, data_max: f64) -> (NiceTicks, Vec<
                 ticks: log.major,
             },
             log.minor,
+            Vec::new(),
+        )
+    } else if super::common::is_temporal_scale(axis) {
+        let temporal_ticks = super::common::temporal_axis_ticks(
+            axis,
+            data_min as i64,
+            data_max as i64,
+            pixel_extent,
+        );
+        (
+            NiceTicks {
+                min: data_min,
+                max: data_max,
+                step: 0.0,
+                ticks: temporal_ticks
+                    .iter()
+                    .map(|tick| tick.unix_millis as f64)
+                    .collect(),
+            },
+            Vec::new(),
+            temporal_ticks,
         )
     } else {
         (
             super::common::configured_axis_ticks(data_min, data_max, axis),
             Vec::new(),
+            Vec::new(),
         )
     }
 }
 
-fn axis_scale(axis: &AxisSpec, ticks: &NiceTicks, pixel_min: f64, pixel_max: f64) -> ValueScale {
+fn axis_values(spec: &ChartSpec, select: impl Fn(&Point) -> f64) -> Vec<i64> {
+    spec.series
+        .iter()
+        .flat_map(|series| &series.points)
+        .map(select)
+        .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+        .map(|value| value.trunc() as i64)
+        .collect()
+}
+
+fn axis_scale(
+    axis: &AxisSpec,
+    ticks: &NiceTicks,
+    values: &[i64],
+    pixel_min: f64,
+    pixel_max: f64,
+) -> ValueScale {
     if axis.scale_kind == ScaleKind::Logarithmic {
         ValueScale::Log {
             inner: LinearScale::new(ticks.min.log10(), ticks.max.log10(), pixel_min, pixel_max),
             floor: ticks.min,
         }
+    } else if super::common::is_temporal_scale(axis) {
+        ValueScale::Temporal(TemporalScale::with_domain(
+            axis.scale_kind,
+            values,
+            ticks.min as i64,
+            ticks.max as i64,
+            pixel_min,
+            pixel_max,
+        ))
     } else {
         ValueScale::Linear(LinearScale::new(ticks.min, ticks.max, pixel_min, pixel_max))
     }
@@ -170,6 +230,7 @@ fn axis_scale(axis: &AxisSpec, ticks: &NiceTicks, pixel_min: f64, pixel_max: f64
 fn map_scatter_line_axis(scale: &ValueScale, value: f64) -> Option<f64> {
     let pixel = match scale {
         ValueScale::Linear(inner) => inner.map(value),
+        ValueScale::Temporal(inner) => inner.map_value(value),
         ValueScale::Log { inner, .. } if value > 0.0 => inner.map(value.log10()),
         ValueScale::Log { .. } => return None,
     };
@@ -398,7 +459,10 @@ pub(crate) fn axis_domain(
     for s in &spec.series {
         for p in &s.points {
             let v = select(p);
-            if v.is_finite() {
+            if v.is_finite()
+                && (!super::common::is_temporal_scale(axis_spec)
+                    || super::common::temporal_value_is_valid(v))
+            {
                 if v < lo {
                     lo = v;
                 }
@@ -407,6 +471,9 @@ pub(crate) fn axis_domain(
                 }
             }
         }
+    }
+    if super::common::is_temporal_scale(axis_spec) {
+        return super::common::resolve_temporal_domain(axis_spec, lo, hi);
     }
     super::common::resolve_axis_domain(axis_spec, lo, hi)
 }
@@ -489,7 +556,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             });
         }
     }
-    for &t in &y_ticks.ticks {
+    for (index, &t) in y_ticks.ticks.iter().enumerate() {
         let y = ys.map(t);
         if y_grid_cfg.display {
             items.push(Prim::Line {
@@ -508,7 +575,12 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             size: label_font,
             anchor: Anchor::End,
             fill: ink,
-            content: super::common::format_axis_tick(&spec.y_axis, t),
+            content: super::common::axis_temporal_tick_label(
+                &spec.y_axis,
+                &layout.y_temporal_ticks,
+                index,
+                t,
+            ),
             rotate_deg: None,
         });
     }
@@ -535,7 +607,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             });
         }
     }
-    for &t in &x_ticks.ticks {
+    for (index, &t) in x_ticks.ticks.iter().enumerate() {
         let x = xs.map(t);
         if x_grid_cfg.display {
             items.push(Prim::Line {
@@ -554,7 +626,12 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             size: label_font,
             anchor: Anchor::Middle,
             fill: ink,
-            content: super::common::format_axis_tick(&spec.x_axis, t),
+            content: super::common::axis_temporal_tick_label(
+                &spec.x_axis,
+                &layout.x_temporal_ticks,
+                index,
+                t,
+            ),
             rotate_deg: None,
         });
     }
@@ -775,7 +852,8 @@ mod tests {
     use crate::font::DEFAULT_FONT;
     use crate::ir::{
         AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, Color,
-        LegendPos, LineInterpolation, Point, ScaleKind, Series, SeriesType, SizeMode, XPositions,
+        LegendPos, LineInterpolation, Point, ScaleKind, Series, SeriesType, SizeMode, TimeOptions,
+        XPositions,
     };
     use crate::text::TextMeasurer;
 
@@ -785,6 +863,7 @@ mod tests {
             kind: ChartKind::Scatter,
             categories: vec![],
             x_positions: XPositions::Category,
+            y_positions: XPositions::Category,
             series: vec![Series {
                 name: String::new(),
                 values: vec![],
@@ -820,6 +899,7 @@ mod tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                time: None,
                 ticks: crate::ir::AxisTickOptions::default(),
             },
             y_axis: AxisSpec {
@@ -833,6 +913,7 @@ mod tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                time: None,
                 ticks: crate::ir::AxisTickOptions::default(),
             },
             legend: LegendPos::None,
@@ -873,6 +954,50 @@ mod tests {
 
         assert_eq!((layout.x_ticks.min, layout.x_ticks.max), (13.0, 87.0));
         assert_eq!((layout.y_ticks.min, layout.y_ticks.max), (25.0, 175.0));
+    }
+
+    #[test]
+    fn scatter_temporal_axes_use_time_and_timeseries_spacing() {
+        let day = 86_400_000_i64;
+        let mut spec = make_scatter_spec(&[
+            (0.0, 0.0),
+            (day as f64, day as f64),
+            ((4 * day) as f64, (4 * day) as f64),
+        ]);
+        spec.x_axis.scale_kind = ScaleKind::Time;
+        spec.x_axis.time = Some(TimeOptions::default());
+        spec.y_axis.scale_kind = ScaleKind::Timeseries;
+        spec.y_axis.time = Some(TimeOptions::default());
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        let layout = compute_scatter_layout(&spec, &measurer);
+        let x0 = layout.xs.map(0.0);
+        let x1 = layout.xs.map(day as f64);
+        let x4 = layout.xs.map((4 * day) as f64);
+        let y0 = layout.ys.map(0.0);
+        let y1 = layout.ys.map(day as f64);
+        let y4 = layout.ys.map((4 * day) as f64);
+
+        assert!(((x1 - x0) / (x4 - x0) - 0.25).abs() < 1e-9);
+        assert!(((y0 - y1) / (y0 - y4) - 0.5).abs() < 1e-9);
+        assert!(!layout.x_temporal_ticks.is_empty());
+        assert!(!layout.y_temporal_ticks.is_empty());
+    }
+
+    #[test]
+    fn temporal_scatter_domain_ignores_values_outside_javascript_date_range() {
+        let mut spec = make_scatter_spec(&[
+            (1_000.0, 1_000.0),
+            (10_000.0, 10_000.0),
+            (8.64e15 + 1.0, 8.64e15 + 1.0),
+        ]);
+        spec.x_axis.scale_kind = ScaleKind::Time;
+        spec.x_axis.time = Some(TimeOptions::default());
+
+        assert_eq!(
+            axis_domain(&spec, &spec.x_axis, |point| point.x),
+            (1_000.0, 10_000.0)
+        );
     }
 
     #[test]

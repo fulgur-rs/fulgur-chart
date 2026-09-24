@@ -2466,6 +2466,7 @@ mod tests {
             grid: AxisGrid::default(),
             border: AxisBorder::default(),
             scale_kind: ScaleKind::Linear,
+            time: None,
             ticks: crate::ir::AxisTickOptions::default(),
         };
         ChartSpec {
@@ -2475,6 +2476,7 @@ mod tests {
             },
             categories: categories.into_iter().map(str::to_string).collect(),
             x_positions: XPositions::Category,
+            y_positions: XPositions::Category,
             series: series
                 .into_iter()
                 .enumerate()

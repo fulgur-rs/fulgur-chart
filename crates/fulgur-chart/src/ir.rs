@@ -1,5 +1,7 @@
 //! IR: フロントエンド(DSL) と描画コアの安定境界。
 
+use std::collections::BTreeMap;
+
 /// 解決済みの色（不透明 RGB + アルファ）。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Color {
@@ -401,12 +403,38 @@ impl Default for AxisBorder {
 }
 
 /// cartesian 軸のスケール種別。カテゴリ軸(chart種別で暗黙決定)には適用しない。
-/// 数値軸(value axis)のみが Linear/Logarithmic を切り替える。
+/// 数値軸(value axis)のみが Linear/Logarithmic/Time/Timeseries を切り替える。
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum ScaleKind {
     #[default]
     Linear,
     Logarithmic,
+    Time,
+    Timeseries,
+}
+
+/// UTC temporal scale unit accepted by Chart.js `time` options.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TimeUnit {
+    Millisecond,
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Week,
+    Month,
+    Quarter,
+    Year,
+}
+
+/// Options shared by the Chart.js `time` and `timeseries` scales.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TimeOptions {
+    pub unit: Option<TimeUnit>,
+    pub min_unit: Option<TimeUnit>,
+    pub parser: Option<String>,
+    pub round: Option<TimeUnit>,
+    pub display_formats: BTreeMap<TimeUnit, String>,
 }
 
 /// Chart.js `options.scales.{x,y}.ticks` の数値軸設定。
@@ -455,6 +483,8 @@ pub struct AxisSpec {
     /// 意味を持たないが、AxisSpec は x/y 共通型のため常に存在する。`Bar{..}` / `Line`
     /// の値軸と `Scatter` / `Bubble` の数値軸が Logarithmic を消費する。
     pub scale_kind: ScaleKind,
+    /// `time` / `timeseries` 軸の parsing, rounding, ticks, and label options.
+    pub time: Option<TimeOptions>,
     /// 線形数値軸の目盛生成とラベル書式。
     pub ticks: AxisTickOptions,
 }
@@ -785,6 +815,7 @@ pub struct ChartSpec {
     pub series: Vec<Series>,
     pub categories: Vec<String>,
     pub x_positions: XPositions,
+    pub y_positions: XPositions,
     pub x_axis: AxisSpec,
     pub y_axis: AxisSpec,
     pub legend: LegendPos,
@@ -1004,6 +1035,7 @@ mod radial_axis_tests {
             series: vec![],
             categories: vec![],
             x_positions: XPositions::default(),
+            y_positions: XPositions::default(),
             x_axis: AxisSpec {
                 title: None,
                 min: None,
@@ -1015,6 +1047,7 @@ mod radial_axis_tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                time: None,
                 ticks: AxisTickOptions::default(),
             },
             y_axis: AxisSpec {
@@ -1028,6 +1061,7 @@ mod radial_axis_tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                time: None,
                 ticks: AxisTickOptions::default(),
             },
             legend: LegendPos::None,

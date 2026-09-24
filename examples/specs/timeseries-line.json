@@ -1,0 +1,21 @@
+{
+  "type": "line",
+  "data": {
+    "labels": ["2026-09-17", "2026-09-18", "2026-09-21", "2026-09-24"],
+    "datasets": [
+      { "label": "Requests", "data": [18, 25, 21, 34] }
+    ]
+  },
+  "options": {
+    "scales": {
+      "x": {
+        "type": "timeseries",
+        "time": {
+          "unit": "day",
+          "minUnit": "day",
+          "displayFormats": { "day": "%b %d" }
+        }
+      }
+    }
+  }
+}

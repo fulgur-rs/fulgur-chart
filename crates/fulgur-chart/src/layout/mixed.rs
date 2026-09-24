@@ -34,11 +34,12 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             bar_count += 1;
         }
     }
-    let legacy_geometry = spec.series.iter().all(|series| {
-        series
-            .bar_geometry
-            .is_none_or(|geometry| !geometry.has_geometry_controls())
-    });
+    let legacy_geometry = matches!(spec.x_positions, crate::ir::XPositions::Category)
+        && spec.series.iter().all(|series| {
+            series
+                .bar_geometry
+                .is_none_or(|geometry| !geometry.has_geometry_controls())
+        });
 
     for (series_index, ser) in spec.series.iter().enumerate().rev() {
         match ser.series_type {
@@ -77,7 +78,6 @@ fn draw_bar_dataset(
     legacy_geometry: bool,
 ) {
     let n = spec.categories.len().max(1);
-    let band_w = common::band_width(frame, n);
     let base_v = 0.0_f64.clamp(frame.ticks.min, frame.ticks.max);
     let baseline_y = frame.ys.map(base_v);
 
@@ -89,10 +89,10 @@ fn draw_bar_dataset(
         if !v.is_finite() {
             continue;
         }
-        let center = common::category_center(frame, i, n);
+        let (center, band_left, band_w) = common::x_index_band(spec, frame, i, n);
         let (bx, bar_w) = super::bar::category_bar_bounds(
             center,
-            center - band_w / 2.0,
+            band_left,
             band_w,
             bar_slot,
             bar_count,
@@ -170,7 +170,7 @@ fn draw_line_dataset(
             if !v.is_finite() {
                 return None;
             }
-            let x = common::category_center(frame, i, n);
+            let x = common::x_index_band(spec, frame, i, n).0;
             Some((x, frame.ys.map(common::clip_axis_value(v, &frame.ticks)), i))
         })
         .collect();
@@ -459,6 +459,44 @@ mod tests {
                 }
                 _ => {}
             }
+        }
+    }
+
+    #[test]
+    fn mixed_temporal_bar_and_line_share_irregular_time_positions() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["1970-01-01","1970-01-02","1970-01-05"],
+              "datasets":[{"type":"bar","data":[2,3,4]},{"type":"line","data":[1,2,3]}]},
+              "options":{"scales":{"x":{"type":"time"}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let bars = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Rect { x, w, .. } => Some(x + w / 2.0),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let line_points = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Circle { cx, .. } => Some(*cx),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(bars.len(), 3);
+        assert_eq!(line_points.len(), 3);
+        let first_gap = bars[1] - bars[0];
+        let second_gap = bars[2] - bars[1];
+        assert!((second_gap / first_gap - 3.0).abs() < 1e-9);
+        for (bar, line) in bars.iter().zip(line_points) {
+            assert!((bar - line).abs() < 1e-9);
         }
     }
 

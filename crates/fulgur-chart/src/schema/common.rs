@@ -297,6 +297,61 @@ pub enum NumberFormatNotation {
     Compact,
 }
 
+/// Calendar units accepted by Chart.js temporal scales.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TimeUnitOption {
+    Millisecond,
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Week,
+    Month,
+    Quarter,
+    Year,
+}
+
+/// Per-unit display format overrides for Chart.js time scales.
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TimeDisplayFormats {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub millisecond: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub second: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minute: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hour: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub day: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub week: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub month: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quarter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<String>,
+}
+
+/// Parsing, tick-unit, rounding, and display options for a temporal axis.
+#[derive(Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TimeScaleOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<TimeUnitOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_unit: Option<TimeUnitOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parser: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub round: Option<TimeUnitOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_formats: Option<TimeDisplayFormats>,
+}
+
 /// Axis options for options.scales.x / options.scales.y.
 ///
 /// `deny_unknown_fields` is intentionally NOT set here. Chart.js のスケールには
@@ -315,9 +370,9 @@ pub struct AxisOptions {
     pub min: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max: Option<f64>,
-    /// Chart.js scale type. `"logarithmic"` のみが振る舞いを変える。他の値
-    /// (`"category"`/`"time"`/`"linear"` やタイポ)は frontend 側で黙って
-    /// 既定(Linear)として扱う。`Option<String>` にして厳格な enum にしない
+    /// Chart.js scale type. `"logarithmic"`/`"time"`/`"timeseries"` は振る舞いを変える。
+    /// その他の値 (`"category"`/`"linear"` やタイポ)は従来どおり既定扱いする。
+    /// `Option<String>` にして厳格な enum にしない
     /// のは、既存の Chart.js JSON が(デフォルト値と同じでも)`"type":"category"`
     /// のように明示することが非常に多く、closed enum だと deserialize
     /// エラーで既存互換を壊すため。
@@ -332,6 +387,9 @@ pub struct AxisOptions {
     /// Axis border/base-line configuration (parsed but not yet mapped to IR).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border: Option<AxisBorderOptions>,
+    /// Parsing, tick, rounding, and label options for `time` / `timeseries` axes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time: Option<TimeScaleOptions>,
     /// Linear numeric tick generation and number formatting options.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ticks: Option<ScaleTicksOptions>,

@@ -239,6 +239,58 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         ));
     }
 
+    let x_is_temporal_scale = matches!(
+        spec.x_axis.scale_kind,
+        crate::ir::ScaleKind::Time | crate::ir::ScaleKind::Timeseries
+    );
+    let y_is_temporal_scale = matches!(
+        spec.y_axis.scale_kind,
+        crate::ir::ScaleKind::Time | crate::ir::ScaleKind::Timeseries
+    );
+    if x_is_temporal_scale != spec.x_axis.time.is_some() {
+        return Err("temporal x scale configuration is inconsistent".to_string());
+    }
+    if y_is_temporal_scale != spec.y_axis.time.is_some() {
+        return Err("temporal y scale configuration is inconsistent".to_string());
+    }
+    for (name, axis, temporal) in [
+        ("x", &spec.x_axis, x_is_temporal_scale),
+        ("y", &spec.y_axis, y_is_temporal_scale),
+    ] {
+        if !temporal {
+            continue;
+        }
+        for (bound_name, value) in [
+            ("min", axis.min),
+            ("max", axis.max),
+            ("suggestedMin", axis.suggested_min),
+            ("suggestedMax", axis.suggested_max),
+        ] {
+            if value.is_some_and(|value| !value.is_finite() || value.abs() > 8.64e15) {
+                return Err(format!(
+                    "temporal {name} axis {bound_name} is outside the supported date range"
+                ));
+            }
+        }
+    }
+    let temporal_value_stacked = match spec.kind {
+        ChartKind::Bar {
+            horizontal: true,
+            value_stacked: true,
+            ..
+        } => x_is_temporal_scale,
+        ChartKind::Bar {
+            horizontal: false,
+            value_stacked: true,
+            ..
+        } => y_is_temporal_scale,
+        ChartKind::Line { stacked: true, .. } => y_is_temporal_scale,
+        _ => false,
+    };
+    if temporal_value_stacked {
+        return Err("temporal value axes cannot be value-stacked".to_string());
+    }
+
     if let XPositions::Temporal { unix_millis } = &spec.x_positions {
         if unix_millis.len() != spec.categories.len() {
             return Err(format!(
@@ -254,11 +306,50 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         {
             return Err("temporal x position count does not match every line series".to_string());
         }
-        if unix_millis.windows(2).any(|pair| pair[0] >= pair[1]) {
+        if !x_is_temporal_scale && unix_millis.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err("temporal x positions must be strictly increasing".to_string());
         }
-        if !matches!(spec.kind, ChartKind::Line { .. }) {
-            return Err("temporal x positions are only supported for line charts".to_string());
+        let allowed = matches!(spec.kind, ChartKind::Line { .. } | ChartKind::Mixed)
+            || matches!(
+                spec.kind,
+                ChartKind::Bar {
+                    horizontal: false,
+                    ..
+                }
+            );
+        if !allowed {
+            return Err(
+                "temporal x positions are only supported on Cartesian index axes".to_string(),
+            );
+        }
+    }
+    if let XPositions::Temporal { unix_millis } = &spec.y_positions {
+        if unix_millis.len() != spec.categories.len() {
+            return Err(format!(
+                "temporal y position count {} does not match category count {}",
+                unix_millis.len(),
+                spec.categories.len()
+            ));
+        }
+        if spec
+            .series
+            .iter()
+            .any(|series| series.values.len() != unix_millis.len())
+        {
+            return Err("temporal y position count does not match every bar series".to_string());
+        }
+        if !y_is_temporal_scale
+            || !matches!(
+                spec.kind,
+                ChartKind::Bar {
+                    horizontal: true,
+                    ..
+                }
+            )
+        {
+            return Err(
+                "temporal y positions are only supported on horizontal bar index axes".to_string(),
+            );
         }
     }
 
@@ -850,13 +941,69 @@ mod tests {
     }
 
     #[test]
-    fn temporal_positions_require_line_chart() {
+    fn temporal_positions_require_cartesian_index_chart() {
         let mut spec = base_spec();
+        spec.kind = ChartKind::Pie {
+            cutout: crate::ir::PieCutout::Percent(0.0),
+            dataset_options: Vec::new(),
+        };
         spec.x_positions = XPositions::Temporal {
             unix_millis: vec![1],
         };
         let err = validate_spec(&spec, &default_limits()).unwrap_err();
-        assert!(err.contains("only supported for line charts"));
+        assert!(err.contains("only supported on Cartesian index axes"));
+    }
+
+    #[test]
+    fn chartjs_time_axis_preserves_unsorted_duplicate_input_positions() {
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["1970-01-02","1970-01-01","1970-01-01"],"datasets":[{"data":[1,2,3]}]},"options":{"scales":{"x":{"type":"time"}}}}"#,
+            false,
+        )
+        .unwrap();
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn temporal_value_axes_cannot_be_value_stacked() {
+        let mut spec = base_spec();
+        spec.kind = crate::ir::ChartKind::Bar {
+            horizontal: false,
+            placement_stacked: true,
+            value_stacked: true,
+        };
+        spec.y_axis.scale_kind = crate::ir::ScaleKind::Time;
+        spec.y_axis.time = Some(crate::ir::TimeOptions::default());
+
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("temporal value axes cannot be value-stacked"));
+    }
+
+    #[test]
+    fn temporal_line_value_axis_cannot_be_stacked() {
+        let spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":["1970-01-01","1970-01-02"]}]},
+              "options":{"scales":{"y":{"type":"time","stacked":true}}}}"#,
+            false,
+        )
+        .unwrap();
+
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("temporal value axes cannot be value-stacked"));
+    }
+
+    #[test]
+    fn temporal_axis_bounds_must_fit_the_supported_date_range() {
+        let mut spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["1970-01-01"],"datasets":[{"data":[1]}]},
+              "options":{"scales":{"x":{"type":"time"}}}}"#,
+            false,
+        )
+        .unwrap();
+        spec.x_axis.max = Some(8_640_000_000_000_001.0);
+
+        let err = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(err.contains("temporal x axis max is outside the supported date range"));
     }
 
     #[test]

@@ -13,6 +13,9 @@ features.
     - `bar-horizontal.json` … horizontal bar (`indexAxis: "y"`)
     - `stacked-bar.json` … stacked bar (`scales.x.stacked`; stacking follows the index axis)
     - `line.json` … line chart (two series, smoothed with `tension`)
+    - `time-line.json` … line chart with an elapsed-time x axis and a custom date parser
+    - `timeseries-line.json` … line chart with evenly spaced irregular timestamps
+    - `temporal-scatter.json` … scatter plot with timestamp strings and epoch milliseconds on x/y
     - `area.json` … area chart (line with `"fill": true`)
     - `pie.json` … pie chart (auto-colored per slice)
     - `doughnut.json` … doughnut chart (legend on the right)
@@ -48,8 +51,8 @@ deterministic (byte-identical for identical input), so regenerating produces no 
 The chart.js specs (everything except `vegalite`) can be generated together:
 
 ```sh
-for n in bar bar-horizontal stacked-bar line area pie doughnut \
-         scatter bubble radar mixed matrix datalabels theme; do
+  for n in bar bar-horizontal stacked-bar line time-line timeseries-line \
+         temporal-scatter area pie doughnut scatter bubble radar mixed matrix datalabels theme; do
   cargo run -q -p fulgur-chart-cli -- render "examples/specs/$n.json" -o "examples/out/$n.svg"
 done
 ```

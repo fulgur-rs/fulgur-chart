@@ -218,6 +218,25 @@ pub struct BarBox {
     pub h: f64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HorizontalBarBox {
+    pub series: usize,
+    pub index: usize,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct HorizontalBarLayout {
+    pub plot_left: f64,
+    pub plot_right: f64,
+    pub plot_top: f64,
+    pub plot_bottom: f64,
+    pub bars: Vec<HorizontalBarBox>,
+}
+
 /// Computes the pixel bounds for one dataset's category-axis bar slot.
 ///
 /// Numeric `barThickness` defines a fixed slot and ignores both percentage options. `flex` uses
@@ -400,13 +419,13 @@ fn enforce_stacked_min_bar_length(
 pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec<BarBox> {
     let n = spec.categories.len().max(1);
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
-    let band_w = super::common::band_width(frame, n);
     let (stack_groups, stack_group_count) = super::common::stack_group_indices(&spec.series);
-    let legacy_geometry = spec.series.iter().all(|series| {
-        series
-            .bar_geometry
-            .is_none_or(|geometry| !geometry.has_geometry_controls())
-    });
+    let legacy_geometry = matches!(spec.x_positions, crate::ir::XPositions::Category)
+        && spec.series.iter().all(|series| {
+            series
+                .bar_geometry
+                .is_none_or(|geometry| !geometry.has_geometry_controls())
+        });
     let s = spec.series.len().max(1);
     let placement_stacked = matches!(
         spec.kind,
@@ -434,8 +453,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     if placement_stacked && value_stacked {
         // stack ID ごとに並列の列を置き、各列の中で値を正負別に累積する。
         for i in 0..spec.categories.len() {
-            let center = super::common::category_center(frame, i, n);
-            let band_left = center - band_w / 2.0;
+            let (center, band_left, band_w) = super::common::x_index_band(spec, frame, i, n);
             // Raw sums preserve data stacking. Visual offsets separately carry minBarLength
             // expansion into the starting value of each following segment.
             let mut pos_acc = vec![0.0_f64; stack_group_count];
@@ -542,8 +560,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
         // stack ID ごとのスロットに、各系列を baseline から重ねて描く。
         // 値域は dodge と同じ個別値(value_stacked=false)。
         for i in 0..spec.categories.len() {
-            let center = super::common::category_center(frame, i, n);
-            let band_left = center - band_w / 2.0;
+            let (center, band_left, band_w) = super::common::x_index_band(spec, frame, i, n);
             for (sidx, ser) in spec.series.iter().enumerate() {
                 let stack_group = stack_groups[sidx];
                 let (bx, bar_width) = category_bar_bounds(
@@ -597,8 +614,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
         // value_stacked=true のとき値域は value_domain が担当するため geometry は変わらない。
         // 非有限値(null→NaN も含む)はギャップとしてスキップ。
         for i in 0..spec.categories.len() {
-            let center = super::common::category_center(frame, i, n);
-            let band_left = center - band_w / 2.0;
+            let (center, band_left, band_w) = super::common::x_index_band(spec, frame, i, n);
             for (sidx, ser) in spec.series.iter().enumerate() {
                 let (bx, bar_width) = category_bar_bounds(
                     center,
@@ -700,6 +716,11 @@ fn horizontal_legend_band_width(
 /// LinearScale が全値を同一点へ写すのを防ぐため、最低限のプロット幅を残す。
 /// 軸の実際のラベル形式で幅を測る。とくに log 軸を `fmt_num`(小数2桁丸め)で
 /// 測ると、1e-15 のような端ラベルが実際より短く見積もられ、はみ出す。
+struct HorizontalTickLabels<'a> {
+    axis: &'a crate::ir::AxisSpec,
+    temporal_ticks: Option<&'a [crate::temporal::TemporalTick]>,
+}
+
 fn horizontal_plot_bounds(
     base_left: f64,
     base_right: f64,
@@ -707,7 +728,7 @@ fn horizontal_plot_bounds(
     ticks: &[f64],
     m: &TextMeasurer,
     label_font: f64,
-    axis: &crate::ir::AxisSpec,
+    labels: HorizontalTickLabels<'_>,
 ) -> (f64, f64) {
     let canvas_width = if canvas_width.is_finite() {
         canvas_width.max(MIN_HORIZONTAL_PLOT_WIDTH)
@@ -737,17 +758,21 @@ fn horizontal_plot_bounds(
             base_left = (base_right - MIN_HORIZONTAL_PLOT_WIDTH).max(0.0);
         }
     }
-    let half_tick_width = |tick: f64| {
-        let label = crate::layout::common::format_axis_tick(axis, tick);
+    let half_tick_width = |index: usize, tick: f64| {
+        let label = labels
+            .temporal_ticks
+            .and_then(|ticks| ticks.get(index))
+            .map(|tick| tick.label.clone())
+            .unwrap_or_else(|| crate::layout::common::format_axis_tick(labels.axis, tick));
         finite_text_width(m, &label, label_font) / 2.0
     };
     let left_pad = ticks
         .first()
-        .map(|&tick| (half_tick_width(tick) - base_left).max(0.0))
+        .map(|&tick| (half_tick_width(0, tick) - base_left).max(0.0))
         .unwrap_or(0.0);
     let right_pad = ticks
         .last()
-        .map(|&tick| half_tick_width(tick))
+        .map(|&tick| half_tick_width(ticks.len() - 1, tick))
         .unwrap_or(0.0);
     let available_width = (base_right - base_left).max(0.0);
     let max_edge_padding = (available_width - MIN_HORIZONTAL_PLOT_WIDTH).max(0.0);
@@ -876,23 +901,55 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 /// 横棒(indexAxis:"y"): 値軸=X(左→右非反転)、カテゴリ軸=Y(上→下)。
 /// 縦向き前提の common::compute/draw_frame は使わず、転置レイアウトを自前で描く。
 fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
-    use crate::ir::ScaleKind;
+    build_horizontal_with_geometry(spec, m).0
+}
+
+pub(crate) fn horizontal_bar_layout(spec: &ChartSpec, m: &TextMeasurer) -> HorizontalBarLayout {
+    build_horizontal_with_geometry(spec, m).1
+}
+
+fn build_horizontal_with_geometry(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+) -> (Scene, HorizontalBarLayout) {
+    use crate::ir::{ScaleKind, XPositions};
     use crate::layout::common::*;
     use crate::scale::{LinearScale, NiceTicks, ValueScale};
     use crate::scene::Anchor;
+    use crate::temporal::TemporalScale;
 
     let ink = spec.theme.text_color;
     let label_font = spec.theme.font_size;
-    let legacy_geometry = spec.series.iter().all(|series| {
-        series
-            .bar_geometry
-            .is_none_or(|geometry| !geometry.has_geometry_controls())
-    });
+    let legacy_geometry = matches!(spec.y_positions, XPositions::Category)
+        && spec.series.iter().all(|series| {
+            series
+                .bar_geometry
+                .is_none_or(|geometry| !geometry.has_geometry_controls())
+        });
 
     // 横棒は値軸が x のため x_axis を渡す（begin_at_zero/suggested も x_axis から読む）。
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
     let is_log = spec.x_axis.scale_kind == ScaleKind::Logarithmic;
-    let (ticks, minor_ticks) = if is_log {
+    let is_temporal_x = is_temporal_scale(&spec.x_axis);
+    let x_temporal_ticks = if is_temporal_x {
+        temporal_axis_ticks(&spec.x_axis, dmin as i64, dmax as i64, spec.width)
+    } else {
+        Vec::new()
+    };
+    let (ticks, minor_ticks) = if is_temporal_x {
+        (
+            NiceTicks {
+                min: dmin,
+                max: dmax,
+                step: 0.0,
+                ticks: x_temporal_ticks
+                    .iter()
+                    .map(|tick| tick.unix_millis as f64)
+                    .collect(),
+            },
+            Vec::new(),
+        )
+    } else if is_log {
         let log = crate::scale::log_ticks_within(dmin, dmax);
         (
             NiceTicks {
@@ -910,9 +967,27 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         (configured_axis_ticks(dmin, dmax, &spec.x_axis), Vec::new())
     };
 
-    // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。
+    let y_temporal_positions = match &spec.y_positions {
+        XPositions::Temporal { unix_millis } => Some(unix_millis.as_slice()),
+        XPositions::Category => None,
+    };
+    let y_temporal_domain =
+        y_temporal_positions.map(|positions| temporal_index_domain(positions, &spec.y_axis, true));
+    let y_temporal_ticks = y_temporal_domain
+        .map(|(min, max)| temporal_axis_ticks(&spec.y_axis, min, max, spec.height))
+        .unwrap_or_default();
+
+    // インデックス軸ラベル幅(左軸): category なら各ラベル、temporal なら表示 tick の最大幅。
     let mut max_cat_w = 0.0_f64;
-    for c in &spec.categories {
+    let index_labels = if y_temporal_positions.is_some() {
+        y_temporal_ticks
+            .iter()
+            .map(|tick| tick.label.as_str())
+            .collect::<Vec<_>>()
+    } else {
+        spec.categories.iter().map(String::as_str).collect()
+    };
+    for c in index_labels {
         let w = finite_text_width(m, c, label_font);
         if w > max_cat_w {
             max_cat_w = w;
@@ -986,17 +1061,61 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         &ticks.ticks,
         m,
         label_font,
-        &spec.x_axis,
+        HorizontalTickLabels {
+            axis: &spec.x_axis,
+            temporal_ticks: is_temporal_x.then_some(x_temporal_ticks.as_slice()),
+        },
     );
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
+    let y_temporal_scale =
+        y_temporal_positions
+            .zip(y_temporal_domain)
+            .map(|(positions, (min, max))| {
+                TemporalScale::with_domain(
+                    spec.y_axis.scale_kind,
+                    positions,
+                    min,
+                    max,
+                    plot_top,
+                    plot_bottom,
+                )
+            });
+    let y_temporal_band_width =
+        y_temporal_positions
+            .zip(y_temporal_scale.as_ref())
+            .map(|(positions, scale)| {
+                temporal_position_band_width(
+                    positions,
+                    scale,
+                    spec.categories.len(),
+                    plot_top,
+                    plot_bottom,
+                )
+            });
 
     // 値→X(非反転)。対数軸は log10 空間の LinearScale を内側に持つ ValueScale::Log。
     // ticks.min/max は log_ticks_within(dmin, dmax) の戻り値で、渡した tight
     // ドメイン(常に正、dmin < dmax)をそのまま折り返す(decade 境界には丸めない)。
     // chart.js 実機は log 軸のピクセル写像を tight データドメインでそのまま行う
     // (scale.min/max がそれ)ため、これに合わせる(PR #144 の自動レビュー P1 指摘)。
-    let xs = if is_log {
+    let xs = if is_temporal_x {
+        let values = spec
+            .series
+            .iter()
+            .flat_map(|series| &series.values)
+            .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+            .map(|value| value.trunc() as i64)
+            .collect::<Vec<_>>();
+        ValueScale::Temporal(TemporalScale::with_domain(
+            spec.x_axis.scale_kind,
+            &values,
+            dmin as i64,
+            dmax as i64,
+            plot_left,
+            plot_right,
+        ))
+    } else if is_log {
         ValueScale::Log {
             inner: LinearScale::new(ticks.min.log10(), ticks.max.log10(), plot_left, plot_right),
             floor: ticks.min,
@@ -1008,6 +1127,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     };
 
     let mut items: Vec<Prim> = Vec::new();
+    let mut horizontal_bars = Vec::new();
 
     // 1. タイトル。
     if let Some(title) = &spec.title {
@@ -1026,7 +1146,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // display=false のとき Prim::Line を落とすが、値ラベルは常に残す。
     let x_grid_cfg = &spec.x_axis.grid;
     let x_grid_color = x_grid_cfg.color.unwrap_or(spec.theme.grid_color);
-    for &t in &ticks.ticks {
+    for (index, &t) in ticks.ticks.iter().enumerate() {
         let x = xs.map(t);
         if x_grid_cfg.display {
             items.push(Prim::Line {
@@ -1045,7 +1165,9 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             size: label_font,
             anchor: Anchor::Middle,
             fill: ink,
-            content: if is_log {
+            content: if is_temporal_x {
+                axis_temporal_tick_label(&spec.x_axis, &x_temporal_ticks, index, t)
+            } else if is_log {
                 crate::num::fmt_num_log(t)
             } else {
                 crate::num::fmt_axis_tick(t, spec.x_axis.ticks.format.as_ref())
@@ -1126,6 +1248,45 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
     }
 
+    if let Some(scale) = &y_temporal_scale {
+        let y_grid_cfg = &spec.y_axis.grid;
+        let y_grid_color = y_grid_cfg.color.unwrap_or(spec.theme.grid_color);
+        for tick in &y_temporal_ticks {
+            let y = scale.map_millis(tick.unix_millis);
+            if y_grid_cfg.display {
+                items.push(Prim::Line {
+                    x1: plot_left,
+                    y1: y,
+                    x2: plot_right,
+                    y2: y,
+                    stroke: y_grid_color,
+                    stroke_width: y_grid_cfg.line_width,
+                    dash: Vec::new(),
+                });
+            }
+            items.push(Prim::Text {
+                x: plot_left - 6.0,
+                y: y + label_font * TEXT_BASELINE_RATIO,
+                size: label_font,
+                anchor: Anchor::End,
+                fill: ink,
+                content: tick.label.clone(),
+                rotate_deg: None,
+            });
+            if y_grid_cfg.draw_ticks {
+                items.push(Prim::Line {
+                    x1: plot_left - TICK_LEN,
+                    y1: y,
+                    x2: plot_left,
+                    y2: y,
+                    stroke: y_grid_color,
+                    stroke_width: y_grid_cfg.line_width,
+                    dash: Vec::new(),
+                });
+            }
+        }
+    }
+
     // 4. カテゴリ band と 横棒。
     let n = spec.categories.len().max(1);
     let band_h = (plot_bottom - plot_top) / n as f64;
@@ -1156,11 +1317,25 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     );
 
     for i in 0..spec.categories.len() {
-        let band_top = plot_top + i as f64 * band_h;
-        let center_y = band_top + band_h / 2.0;
+        let (band_top, center_y, band_h) =
+            if let (Some(scale), Some(positions)) = (&y_temporal_scale, y_temporal_positions) {
+                let (center, top, height) = temporal_position_band(
+                    positions,
+                    scale,
+                    i,
+                    n,
+                    plot_top,
+                    plot_bottom,
+                    y_temporal_band_width.unwrap_or(band_h),
+                );
+                (top, center, height)
+            } else {
+                let top = plot_top + i as f64 * band_h;
+                (top, top + band_h / 2.0, band_h)
+            };
 
         // カテゴリラベル(左)。
-        if !spec.categories[i].is_empty() {
+        if y_temporal_positions.is_none() && !spec.categories[i].is_empty() {
             items.push(Prim::Text {
                 x: plot_left - 6.0,
                 y: center_y + label_font * TEXT_BASELINE_RATIO,
@@ -1278,6 +1453,14 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
             for segment in &stacked_segments {
                 let ser = &spec.series[segment.series_index];
+                horizontal_bars.push(HorizontalBarBox {
+                    series: segment.series_index,
+                    index: i,
+                    x: segment.bounds.x,
+                    y: segment.bounds.y,
+                    w: segment.bounds.w,
+                    h: segment.bounds.h,
+                });
                 let has_later_same_sign = stacked_segments.iter().any(|next| {
                     next.series_index > segment.series_index
                         && next.stack_group == segment.stack_group
@@ -1357,13 +1540,22 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 );
                 let x = base.min(head);
                 let w = (head - base).abs();
+                let bounds = BarBounds {
+                    x,
+                    y: by,
+                    w,
+                    h: bar_height,
+                };
+                horizontal_bars.push(HorizontalBarBox {
+                    series: series_index,
+                    index: i,
+                    x: bounds.x,
+                    y: bounds.y,
+                    w: bounds.w,
+                    h: bounds.h,
+                });
                 items.push(bar_primitive(
-                    BarBounds {
-                        x,
-                        y: by,
-                        w,
-                        h: bar_height,
-                    },
+                    bounds,
                     ser.fill_at(i),
                     ser.bar_geometry.and_then(|geometry| geometry.border_radius),
                     if base <= head {
@@ -1419,13 +1611,22 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 );
                 let x = base.min(head);
                 let w = (head - base).abs();
+                let bounds = BarBounds {
+                    x,
+                    y: by,
+                    w,
+                    h: bar_height,
+                };
+                horizontal_bars.push(HorizontalBarBox {
+                    series: sidx,
+                    index: i,
+                    x: bounds.x,
+                    y: bounds.y,
+                    w: bounds.w,
+                    h: bounds.h,
+                });
                 items.push(bar_primitive(
-                    BarBounds {
-                        x,
-                        y: by,
-                        w,
-                        h: bar_height,
-                    },
+                    bounds,
                     ser.fill_at(i),
                     ser.bar_geometry.and_then(|geometry| geometry.border_radius),
                     if base <= head {
@@ -1556,11 +1757,20 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         });
     }
 
-    Scene {
-        width: spec.width,
-        height: spec.height,
-        items,
-    }
+    (
+        Scene {
+            width: spec.width,
+            height: spec.height,
+            items,
+        },
+        HorizontalBarLayout {
+            plot_left,
+            plot_right,
+            plot_top,
+            plot_bottom,
+            bars: horizontal_bars,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1582,6 +1792,107 @@ mod geom_tests {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = super::build(&spec, &m);
         (spec, scene)
+    }
+
+    fn path_bounds(data: &str) -> (f64, f64, f64, f64) {
+        let mut tokens = data.split_ascii_whitespace();
+        let mut points = Vec::new();
+        while let Some(command) = tokens.next() {
+            let count = match command {
+                "M" | "L" => 1,
+                "C" => 3,
+                "Z" => 0,
+                _ => panic!("unexpected path command: {command}"),
+            };
+            for _ in 0..count {
+                let x = tokens.next().unwrap().parse::<f64>().unwrap();
+                let y = tokens.next().unwrap().parse::<f64>().unwrap();
+                points.push((x, y));
+            }
+        }
+        let min_x = points.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
+        let max_x = points
+            .iter()
+            .map(|(x, _)| *x)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let min_y = points.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
+        let max_y = points
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f64::NEG_INFINITY, f64::max);
+        (min_x, min_y, max_x, max_y)
+    }
+
+    #[test]
+    fn temporal_vertical_bars_follow_irregular_timestamp_spacing() {
+        let bars = boxes_for(
+            r#"{"type":"bar","data":{"labels":["1970-01-01","1970-01-02","1970-01-05"],
+            "datasets":[{"data":[1,2,3]}]},"options":{"scales":{"x":{"type":"time"}}}}"#,
+        );
+
+        assert_eq!(bars.len(), 3);
+        let first_gap = bars[1].x + bars[1].w / 2.0 - (bars[0].x + bars[0].w / 2.0);
+        let second_gap = bars[2].x + bars[2].w / 2.0 - (bars[1].x + bars[1].w / 2.0);
+        assert!((second_gap / first_gap - 3.0).abs() < 1e-9);
+        assert!((bars[1].w / bars[0].w - 1.0).abs() < 1e-9);
+        assert!((bars[2].w / bars[0].w - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn vertical_bars_support_temporal_value_axis() {
+        let json = r#"{"type":"bar","data":{"labels":["A","B","C"],
+          "datasets":[{"data":["1970-01-02","1970-01-03","1970-01-05"]}]},
+          "options":{"scales":{"y":{"type":"time","min":0,"max":345600000,
+            "time":{"unit":"day","displayFormats":{"day":"%Y-%m-%d"}}}}}}"#;
+        let (spec, scene) = scene_for(json);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let bars = vertical_bar_boxes(&spec, &frame);
+
+        assert_eq!(bars.len(), 3);
+        assert!((bars[1].h / bars[0].h - 2.0).abs() < 1e-9);
+        assert!((bars[2].h / bars[0].h - 4.0).abs() < 1e-9);
+        assert!(scene.items.iter().any(|item| matches!(item,
+            crate::scene::Prim::Text { content, .. } if content == "1970-01-05")));
+    }
+
+    #[test]
+    fn horizontal_bars_support_temporal_index_and_value_axes() {
+        let json = r#"{"type":"bar","data":{"labels":["1970-01-01","1970-01-02","1970-01-05"],
+          "datasets":[{"data":["1970-01-02","1970-01-03","1970-01-05"]}]},
+          "options":{"indexAxis":"y","scales":{
+            "x":{"type":"time","min":0,"max":345600000,"time":{"unit":"day","displayFormats":{"day":"%Y-%m-%d"}}},
+            "y":{"type":"time","time":{"unit":"day","displayFormats":{"day":"%Y-%m-%d"}}}}}}"#;
+        let (spec, scene) = scene_for(json);
+        let bars = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                crate::scene::Prim::Rect { x, y, w, h, .. } => Some((*x, *y, *x + *w, *y + *h)),
+                crate::scene::Prim::Path { d, .. } => Some(path_bounds(d)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(bars.len(), 3);
+        let centers = bars
+            .iter()
+            .map(|(_, top, _, bottom)| (top + bottom) / 2.0)
+            .collect::<Vec<_>>();
+        let first_gap = centers[1] - centers[0];
+        let second_gap = centers[2] - centers[1];
+        assert!((second_gap / first_gap - 3.0).abs() < 1e-9);
+        let first_height = bars[0].3 - bars[0].1;
+        assert!(((bars[1].3 - bars[1].1) / first_height - 1.0).abs() < 1e-9);
+        assert!(((bars[2].3 - bars[2].1) / first_height - 1.0).abs() < 1e-9);
+        assert!(matches!(
+            spec.y_positions,
+            crate::ir::XPositions::Temporal { .. }
+        ));
+        assert!(scene.items.iter().any(|item| matches!(item,
+            crate::scene::Prim::Text { content, .. } if content == "1970-01-02")));
+        assert!(scene.items.iter().any(|item| matches!(item,
+            crate::scene::Prim::Text { content, .. } if content == "1970-01-05")));
     }
 
     #[test]
@@ -2886,8 +3197,8 @@ mod horizontal_axis_style_tests {
     //! ChartJS フロントエンドを経由して spec を組む(scales.x/y と options.plugins.title を直に指定できる)。
 
     use super::{
-        MIN_HORIZONTAL_PLOT_WIDTH, build, finite_text_width, horizontal_legend_band_width,
-        horizontal_plot_bounds,
+        HorizontalTickLabels, MIN_HORIZONTAL_PLOT_WIDTH, build, finite_text_width,
+        horizontal_legend_band_width, horizontal_plot_bounds,
     };
     use crate::font::DEFAULT_FONT;
     use crate::frontend::chartjs;
@@ -2991,7 +3302,10 @@ mod horizontal_axis_style_tests {
             &ticks.ticks,
             m,
             spec.theme.font_size,
-            &spec.x_axis,
+            HorizontalTickLabels {
+                axis: &spec.x_axis,
+                temporal_ticks: None,
+            },
         )
         .1
     }
@@ -3014,10 +3328,30 @@ mod horizontal_axis_style_tests {
         let logarithmic = parse(
             r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]},"options":{"indexAxis":"y","scales":{"x":{"type":"logarithmic"}}}}"#,
         );
-        let (_, plot_right_linear) =
-            horizontal_plot_bounds(50.0, 700.0, 800.0, &ticks, &m, 12.0, &linear.x_axis);
-        let (_, plot_right_log) =
-            horizontal_plot_bounds(50.0, 700.0, 800.0, &ticks, &m, 12.0, &logarithmic.x_axis);
+        let (_, plot_right_linear) = horizontal_plot_bounds(
+            50.0,
+            700.0,
+            800.0,
+            &ticks,
+            &m,
+            12.0,
+            HorizontalTickLabels {
+                axis: &linear.x_axis,
+                temporal_ticks: None,
+            },
+        );
+        let (_, plot_right_log) = horizontal_plot_bounds(
+            50.0,
+            700.0,
+            800.0,
+            &ticks,
+            &m,
+            12.0,
+            HorizontalTickLabels {
+                axis: &logarithmic.x_axis,
+                temporal_ticks: None,
+            },
+        );
         assert!(
             plot_right_log < plot_right_linear,
             "log 軸では fmt_num_log の長いラベル分だけ右余白が広く \
