@@ -204,7 +204,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
 
     fn boxplot_spec() -> ChartSpec {

@@ -7,7 +7,8 @@ import init, { build, render, FulgurParseError } from '../index.js'
 import { BAR } from './fixtures.mjs'
 
 const wasmUrl = new URL('../pkg/fulgur_chart_wasm_bg.wasm', import.meta.url)
-await init({ module_or_path: await readFile(fileURLToPath(wasmUrl)) })
+const wasm = await readFile(fileURLToPath(wasmUrl))
+await init({ module_or_path: wasm })
 
 const fontUrl = new URL('../../../fulgur-chart/assets/fonts/NotoSansJP-Regular.otf', import.meta.url)
 const font = new Uint8Array(await readFile(fileURLToPath(fontUrl)))
@@ -16,6 +17,10 @@ const temporalLineUrl = new URL(
   import.meta.url,
 )
 const temporalLine = await readFile(fileURLToPath(temporalLineUrl), 'utf8')
+
+test('no-default-font WASM does not embed the bundled font', () => {
+  assert.equal(wasm.includes(font), false)
+})
 
 test('no-default-font build requires an explicit font for every format', () => {
   for (const format of ['svg', 'png', 'webp']) {

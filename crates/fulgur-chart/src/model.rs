@@ -627,7 +627,7 @@ pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::ir::Color;
     use crate::text::TextMeasurer;

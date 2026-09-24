@@ -154,7 +154,7 @@ fn catmull_rom_path(pts: &[(f64, f64)], tension: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::scene::Prim;
 
@@ -247,6 +247,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "default-font")]
     #[test]
     fn sparkline_decimation_is_deterministic() {
         let json = huge_sparkline_json("");
@@ -264,6 +265,7 @@ mod tests {
         assert!(polyline_len(&scene) <= 200, "lttb should hit samples cap");
     }
 
+    #[cfg(feature = "default-font")]
     #[test]
     fn huge_sparkline_with_tension_still_decimates_and_renders() {
         let data: Vec<String> = (0..5000).map(|i| ((i * 7) % 13).to_string()).collect();

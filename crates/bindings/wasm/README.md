@@ -61,10 +61,10 @@ omitting it raises `FulgurParseError`:
 const svg = build(spec).font(fontBytes).render('svg')
 ```
 
-Run `npm run test:no-default-font` to build this variant and verify that explicit fonts
-work for SVG, PNG, and WebP. It also runs the focused core test that checks the default
-font bytes are absent. The rest of the core unit suite assumes the bundled font is enabled,
-so the slim-build check does not run that suite with `--no-default-features`.
+Run `npm run test:no-default-font` to build this variant, verify that the generated WASM
+does not contain the bundled font bytes, and check that explicit fonts work for SVG, PNG,
+and WebP. It also runs the full core unit suite without `default-font`; tests use a separate
+test-only font fixture where font bytes are needed.
 
 ## npm Package Distribution
 

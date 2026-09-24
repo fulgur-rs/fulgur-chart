@@ -1776,7 +1776,7 @@ fn build_horizontal_with_geometry(
 #[cfg(test)]
 mod geom_tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::text::TextMeasurer;
 
@@ -3200,7 +3200,7 @@ mod horizontal_axis_style_tests {
         HorizontalTickLabels, MIN_HORIZONTAL_PLOT_WIDTH, build, finite_text_width,
         horizontal_legend_band_width, horizontal_plot_bounds,
     };
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::ir::ChartSpec;
     use crate::layout::common::{OUTER_PAD, X_LABEL_BAND, value_domain};
@@ -3868,7 +3868,7 @@ mod horizontal_log_scale_tests {
     //! 縦軸)と対になる、build_horizontal 専用の対数分岐テスト。
 
     use super::build;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::ir::{ChartSpec, ScaleKind};
     use crate::num::fmt_num_log;

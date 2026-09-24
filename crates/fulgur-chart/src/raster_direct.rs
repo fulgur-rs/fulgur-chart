@@ -22,6 +22,7 @@ use tiny_skia::{
 };
 use ttf_parser::OutlineBuilder;
 
+#[cfg(feature = "default-font")]
 use crate::font::DEFAULT_FONT;
 use crate::ir::Color;
 use crate::scene::{Anchor, Prim, Scene};
@@ -203,6 +204,7 @@ fn render_chart_to_png_with_options(
 }
 
 /// ChartSpec を PNG バイト列に直接ラスタライズする（デフォルトフォント）。
+#[cfg(feature = "default-font")]
 pub fn render_chart_to_png_default(
     spec: &crate::ir::ChartSpec,
     scale: f32,
@@ -1495,7 +1497,7 @@ fn point_xy(point: Point) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
 
     #[derive(Clone, Copy, Debug)]

@@ -184,7 +184,13 @@ pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Strin
     {
         return Ok(());
     }
-    let measurer = crate::text::TextMeasurer::new(crate::font::DEFAULT_FONT)
+    #[cfg(feature = "default-font")]
+    let font = crate::font::DEFAULT_FONT;
+    #[cfg(all(test, not(feature = "default-font")))]
+    let font = crate::font::TEST_FONT;
+    #[cfg(all(not(test), not(feature = "default-font")))]
+    let font = crate::font::DEFAULT_FONT;
+    let measurer = crate::text::TextMeasurer::new(font)
         .map_err(|error| format!("failed to measure plot-area scene: {error}"))?;
     validate_plot_area_scene_with_measurer(spec, limits, &measurer)
 }

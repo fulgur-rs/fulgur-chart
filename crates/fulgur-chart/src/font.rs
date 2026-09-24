@@ -8,6 +8,13 @@ pub static DEFAULT_FONT: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-Regu
 #[cfg(not(feature = "default-font"))]
 pub static DEFAULT_FONT: &[u8] = &[];
 
+/// 既定フォント機能を無効にしたユニットテスト用のフォント。
+#[cfg(all(test, feature = "default-font"))]
+pub(crate) static TEST_FONT: &[u8] = DEFAULT_FONT;
+
+#[cfg(all(test, not(feature = "default-font")))]
+pub(crate) static TEST_FONT: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-Regular.otf");
+
 /// 既定フォントのファミリ名(font-family の主名)。
 pub const DEFAULT_FAMILY: &str = "Noto Sans JP";
 

@@ -196,7 +196,7 @@ fn snap_to_axis_aligned(deg: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::ir::{ChartKind, ChartSpec, LegendPos, WordEntry};
 
     fn make_spec(entries: Vec<WordEntry>) -> ChartSpec {
