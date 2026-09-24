@@ -288,7 +288,7 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         std::time::Duration::from_millis(state.render_timeout_ms),
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let spec = render::parse_and_validate(&json_str, "chartjs", false)?;
+            let spec = render::parse_and_validate_for_render(&json_str, "chartjs", false)?;
             // 圧縮・WebP ポリシーはサーバ起動時設定を用いる（MCP も per-request 指定なし）。
             render::render(&spec, format, 1.0, compression, webp)
         }),
@@ -479,5 +479,42 @@ mod tests {
     async fn empty_batch_returns_400() {
         let (status, _) = post_mcp(test_app().await, "[]").await;
         assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn generate_chart_applies_tick_label_budget() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "generate_chart",
+                "arguments": {
+                    "format": "svg",
+                    "chart": {
+                        "type": "scatter",
+                        "data": {"datasets": [{"data": [{"x": 0.25, "y": 0.25}, {"x": 0.75, "y": 0.75}]}]},
+                        "options": {"scales": {
+                            "x": {"min": 0, "max": 1, "ticks": {"count": 4294967295u64, "format": {"maximumFractionDigits": 255}}},
+                            "y": {"min": 0, "max": 1, "ticks": {"count": 4294967295u64, "format": {"maximumFractionDigits": 255}}}
+                        }}
+                    }
+                }
+            }
+        })
+        .to_string();
+        let (status, response) = post_mcp(test_app().await, &body).await;
+
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert!(response["error"].is_null(), "response={response}");
+        let svg = response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("SVG content");
+        let label_count = svg
+            .split("</text>")
+            .filter_map(|fragment| fragment.rsplit_once('>').map(|(_, text)| text))
+            .filter(|text| text.parse::<f64>().is_ok())
+            .count();
+        assert_eq!(label_count, 64);
     }
 }

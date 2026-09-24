@@ -2318,6 +2318,23 @@ mod tests {
         assert_eq!(bounded.ticks.len(), 12);
     }
 
+    #[test]
+    fn apply_hard_axis_bounds_caps_ticks_when_limit_is_explicit() {
+        let mut spec = make_bar_spec(1, 100.0);
+        spec.x_axis.ticks.max_ticks_limit = Some(3);
+        let ticks = NiceTicks {
+            min: 0.0,
+            max: 11.0,
+            step: 1.0,
+            ticks: (0..=11).map(f64::from).collect(),
+        };
+
+        let bounded = apply_hard_axis_bounds(ticks, &spec.x_axis);
+
+        assert_eq!(bounded.ticks, vec![0.0, 6.0, 11.0]);
+        assert_eq!(bounded.step, 6.0);
+    }
+
     fn temporal_spec(unix_millis: Vec<i64>) -> ChartSpec {
         let mut spec = make_bar_spec(unix_millis.len(), 720.0);
         spec.kind = ChartKind::Line {

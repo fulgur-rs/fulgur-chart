@@ -14,6 +14,10 @@ use fulgur_chart::{
     text::TextMeasurer,
 };
 
+/// chart-server が外部 Chart.js 入力に許す軸ラベル数と小数部の上限。
+const MAX_RENDER_AXIS_TICKS: usize = 32;
+const MAX_RENDER_AXIS_FRACTION_DIGITS: u8 = 20;
+
 // ---------------------------------------------------------------------------
 // 出力フォーマット
 // ---------------------------------------------------------------------------
@@ -165,6 +169,50 @@ pub fn parse_and_validate(json: &str, dsl: &str, strict: bool) -> Result<ChartSp
     Ok(spec)
 }
 
+/// Chart.js spec を検証し、描画時の tick/label 予算を適用して返す。
+///
+/// 一つのリクエストで大量の tick と長いラベルを組み合わせた入力が、描画 worker を
+/// 長時間占有しないよう、x/y 軸それぞれの目盛り数と小数桁数に上限を設ける。
+pub fn parse_and_validate_for_render(
+    json: &str,
+    dsl: &str,
+    strict: bool,
+) -> Result<ChartSpec, RenderError> {
+    let mut spec = parse_and_validate(json, dsl, strict)?;
+    if dsl != "vegalite" {
+        apply_chartjs_render_budget(&mut spec);
+    }
+    Ok(spec)
+}
+
+fn apply_chartjs_render_budget(spec: &mut ChartSpec) {
+    for axis in [&mut spec.x_axis, &mut spec.y_axis] {
+        axis.ticks.count = axis
+            .ticks
+            .count
+            .map(|count| count.min(MAX_RENDER_AXIS_TICKS));
+        axis.ticks.max_ticks_limit = Some(
+            axis.ticks
+                .max_ticks_limit
+                .unwrap_or(MAX_RENDER_AXIS_TICKS)
+                .clamp(2, MAX_RENDER_AXIS_TICKS),
+        );
+        if let Some(format) = &mut axis.ticks.format {
+            format.minimum_fraction_digits = format
+                .minimum_fraction_digits
+                .map(|digits| digits.min(MAX_RENDER_AXIS_FRACTION_DIGITS));
+            format.maximum_fraction_digits = format
+                .maximum_fraction_digits
+                .map(|digits| digits.min(MAX_RENDER_AXIS_FRACTION_DIGITS));
+            if format.notation == Some(fulgur_chart::ir::AxisTickNotation::Compact)
+                && format.maximum_fraction_digits.is_none()
+            {
+                format.maximum_fraction_digits = Some(MAX_RENDER_AXIS_FRACTION_DIGITS);
+            }
+        }
+    }
+}
+
 /// `ChartSpec` を指定フォーマットにレンダリングしてバイト列を返す。
 ///
 /// `DataUri` の場合は SVG bytes を返す（data URI への変換は呼び出し元が行う）。
@@ -240,6 +288,94 @@ mod tests {
             false,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn chartjs_render_budget_bounds_scatter_tick_labels() {
+        let json = r#"{
+            "type":"scatter",
+            "data":{"datasets":[{"data":[{"x":0.25,"y":0.25},{"x":0.75,"y":0.75}]}]},
+            "options":{"scales":{
+                "x":{"min":0,"max":1,"ticks":{"count":4294967295,"maxTicksLimit":4294967295,
+                    "format":{"minimumFractionDigits":255,"maximumFractionDigits":255}}},
+                "y":{"min":0,"max":1,"ticks":{"count":4294967295,"maxTicksLimit":4294967295,
+                    "format":{"minimumFractionDigits":255,"maximumFractionDigits":255}}}
+            }}
+        }"#;
+        let spec = parse_and_validate_for_render(json, "chartjs", false).unwrap();
+        assert_eq!(spec.x_axis.ticks.count, Some(MAX_RENDER_AXIS_TICKS));
+        assert_eq!(spec.y_axis.ticks.count, Some(MAX_RENDER_AXIS_TICKS));
+        assert_eq!(
+            spec.x_axis.ticks.max_ticks_limit,
+            Some(MAX_RENDER_AXIS_TICKS)
+        );
+        assert_eq!(
+            spec.x_axis
+                .ticks
+                .format
+                .as_ref()
+                .unwrap()
+                .maximum_fraction_digits,
+            Some(MAX_RENDER_AXIS_FRACTION_DIGITS)
+        );
+        assert_eq!(
+            spec.y_axis
+                .ticks
+                .format
+                .as_ref()
+                .unwrap()
+                .minimum_fraction_digits,
+            Some(MAX_RENDER_AXIS_FRACTION_DIGITS)
+        );
+
+        let svg = render::render_chart(&spec);
+        let labels: Vec<&str> = svg
+            .split("</text>")
+            .filter_map(|fragment| fragment.rsplit_once('>').map(|(_, text)| text))
+            .filter(|text| text.parse::<f64>().is_ok())
+            .collect();
+        assert_eq!(labels.len(), 2 * MAX_RENDER_AXIS_TICKS);
+        assert!(labels.iter().all(|label| {
+            label.split_once('.').is_none_or(|(_, fraction)| {
+                fraction.len() <= MAX_RENDER_AXIS_FRACTION_DIGITS as usize
+            })
+        }));
+        assert!(labels.iter().map(|label| label.len()).sum::<usize>() <= 64 * 22);
+    }
+
+    #[test]
+    fn render_tick_budget_defaults_step_limit_and_bounds_compact_precision() {
+        let spec = parse_and_validate_for_render(
+            r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,1]}]},
+                "options":{"scales":{"y":{"ticks":{"stepSize":0.1,"format":{"notation":"compact"}}}}}}"#,
+            "chartjs",
+            false,
+        )
+        .unwrap();
+        assert_eq!(spec.y_axis.ticks.count, None);
+        assert_eq!(
+            spec.y_axis.ticks.max_ticks_limit,
+            Some(MAX_RENDER_AXIS_TICKS)
+        );
+        assert_eq!(
+            spec.y_axis
+                .ticks
+                .format
+                .as_ref()
+                .unwrap()
+                .maximum_fraction_digits,
+            Some(MAX_RENDER_AXIS_FRACTION_DIGITS)
+        );
+        assert!(spec.x_axis.ticks.format.is_none());
+
+        let vegalite = parse_and_validate_for_render(
+            r#"{"mark":"line","data":{"values":[{"category":"a","value":1},{"category":"b","value":2}]},
+                "encoding":{"x":{"field":"category","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}"#,
+            "vegalite",
+            false,
+        )
+        .unwrap();
+        assert_eq!(vegalite.x_axis.ticks.max_ticks_limit, None);
     }
 
     fn webp_on(max_area: u64) -> WebpPolicy {

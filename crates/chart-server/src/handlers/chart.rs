@@ -183,7 +183,7 @@ async fn handle_render(
         std::time::Duration::from_millis(state.render_timeout_ms),
         tokio::task::spawn_blocking(move || {
             let _permit = permit; // クロージャ完了まで permit を保持して Semaphore を正しく解放
-            let spec = render::parse_and_validate(&json, &dsl, false)?;
+            let spec = render::parse_and_validate_for_render(&json, &dsl, false)?;
             render::render(&spec, format, 1.0, compression, webp)
         }),
     )

@@ -93,6 +93,14 @@ pixel area (peak memory ≈ `area × 4 × 3`); lower it to fit a tight memory bu
 The default equals the library's hard limit, which the renderer also enforces.
 With WebP disabled, `format=webp` returns `415 Unsupported Media Type`.
 
+## Chart.js tick and label limits
+
+Rendered Chart.js requests are capped at **32 tick labels per axis** and **20
+fraction digits per label**. These bounds apply to `/chart`, short-link renders,
+and MCP renders so an untrusted spec cannot make a render worker spend excessive
+time measuring and drawing tick labels. `/chart/validate` only parses and validates
+the spec, so it does not apply render-time limits.
+
 ## Configuration
 
 | Variable | Default | Description |

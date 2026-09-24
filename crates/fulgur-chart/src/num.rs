@@ -292,6 +292,28 @@ mod tests {
     }
 
     #[test]
+    fn axis_tick_format_handles_non_finite_and_empty_format() {
+        assert_eq!(fmt_axis_tick(f64::NAN, None), "0");
+        assert_eq!(
+            fmt_axis_tick(1.2345, Some(&AxisTickFormat::default())),
+            fmt_num(1.2345)
+        );
+    }
+
+    #[test]
+    fn fixed_fraction_normalizes_negative_zero_and_pads_minimum_digits() {
+        assert_eq!(fixed_fraction(-0.0004, 3, 0), "0");
+        assert_eq!(fixed_fraction(1.0, 0, 2), "1.00");
+    }
+
+    #[test]
+    fn scientific_parts_falls_back_for_non_exponential_display() {
+        let (coefficient, exponent) = scientific_parts(f64::NAN);
+        assert!(coefficient.is_nan());
+        assert_eq!(exponent, 0);
+    }
+
+    #[test]
     fn non_finite_falls_back_to_zero() {
         // NaN / ±Inf は不正な SVG トークンなので "0" に落とす
         assert_eq!(fmt_num(f64::NAN), "0");

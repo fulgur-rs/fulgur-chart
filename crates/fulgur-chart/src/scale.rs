@@ -106,18 +106,7 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
 
     // 3-5. 1-2-5 ステップを選ぶ。
     let raw_step = range / count as f64;
-    let magnitude = 10f64.powf(raw_step.log10().floor());
-    let norm = raw_step / magnitude; // 1.0〜10.0
-    let step = magnitude
-        * if norm <= 1.0 {
-            1.0
-        } else if norm <= 2.0 {
-            2.0
-        } else if norm <= 5.0 {
-            5.0
-        } else {
-            10.0
-        };
+    let step = nice_step(raw_step);
 
     // 6. データ範囲を step グリッドに合わせて外側に丸める。
     let nice_min = (data_min / step).floor() * step;
@@ -274,11 +263,10 @@ pub fn configured_ticks(
     }
     if intervals > max_intervals as f64 {
         let ideal = (max - min) / max_intervals as f64;
-        let adjusted = if let Some(unit) = requested_step {
-            (ideal / unit).ceil().max(1.0) * unit
-        } else {
-            ideal
-        };
+        let adjusted = requested_step.map_or_else(
+            || nice_step(ideal),
+            |unit| nice_step(ideal / unit).max(1.0) * unit,
+        );
         if !adjusted.is_finite() || adjusted <= 0.0 {
             return base;
         }
@@ -291,6 +279,10 @@ pub fn configured_ticks(
         }
     }
 
+    configured_ticks_from_step(min, max, step, base)
+}
+
+fn configured_ticks_from_step(min: f64, max: f64, step: f64, base: NiceTicks) -> NiceTicks {
     let intervals = ((max - min) / step).ceil();
     if !intervals.is_finite() || intervals > MAX_TICK_INTERVALS as f64 {
         return base;
@@ -304,9 +296,6 @@ pub fn configured_ticks(
         if ticks.last().is_none_or(|last| *last != value) {
             ticks.push(value);
         }
-    }
-    if ticks.is_empty() {
-        return base;
     }
     let actual_step = ticks.get(1).map_or(step, |next| *next - ticks[0]);
     NiceTicks {
@@ -810,6 +799,145 @@ impl ValueScale {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_ticks_preserve_step_size_without_explicit_bounds() {
+        let options = AxisTickOptions {
+            step_size: Some(2.0),
+            ..AxisTickOptions::default()
+        };
+
+        let ticks = configured_ticks(1.0, 9.0, &options, None, None);
+
+        assert_eq!(ticks.step, 2.0);
+        assert_eq!(ticks.ticks, vec![0.0, 2.0, 4.0, 6.0, 8.0, 10.0]);
+    }
+
+    #[test]
+    fn configured_ticks_returns_base_for_count_outside_the_auto_domain() {
+        let options = AxisTickOptions {
+            count: Some(3),
+            ..AxisTickOptions::default()
+        };
+        let base = nice_ticks(0.0, 1.0, 10);
+
+        assert_eq!(
+            configured_ticks(0.0, 1.0, &options, Some(100.0), None),
+            base
+        );
+    }
+
+    #[test]
+    fn configured_ticks_falls_back_when_requested_step_overflows() {
+        let options = AxisTickOptions {
+            step_size: Some(f64::from_bits(1)),
+            ..AxisTickOptions::default()
+        };
+        let base = nice_ticks(0.0, 1e300, MAX_TICK_INTERVALS);
+
+        assert_eq!(
+            configured_ticks(0.0, 1e300, &options, None, None).step,
+            base.step
+        );
+    }
+
+    #[test]
+    fn configured_ticks_handles_precision_overflow() {
+        let options = AxisTickOptions {
+            precision: Some(100),
+            ..AxisTickOptions::default()
+        };
+
+        let ticks = configured_ticks(0.0, 1e300, &options, None, None);
+
+        assert!(ticks.step.is_finite() && ticks.step > 0.0);
+    }
+
+    #[test]
+    fn configured_ticks_returns_base_for_degenerate_step_domain() {
+        let options = AxisTickOptions {
+            step_size: Some(1.0),
+            ..AxisTickOptions::default()
+        };
+
+        assert_eq!(
+            configured_ticks(0.0, 0.0, &options, None, None),
+            nice_ticks(0.0, 0.0, MAX_TICK_INTERVALS)
+        );
+    }
+
+    #[test]
+    fn configured_ticks_returns_base_for_overflowing_span() {
+        let min = -f64::MAX;
+        let max = f64::MAX;
+        let options = AxisTickOptions::default();
+
+        assert_eq!(
+            configured_ticks(min, max, &options, None, None),
+            nice_ticks(min, max, 10)
+        );
+    }
+
+    #[test]
+    fn configured_ticks_adjusts_spacing_to_explicit_tick_limit() {
+        let options = AxisTickOptions {
+            step_size: Some(3.0),
+            max_ticks_limit: Some(3),
+            ..AxisTickOptions::default()
+        };
+
+        let ticks = configured_ticks(-1.0, 9.0, &options, None, None);
+
+        assert_eq!(ticks.ticks.len(), 3);
+        assert_eq!(ticks.step, 15.0);
+        assert_eq!(ticks.step % 3.0, 0.0);
+    }
+
+    #[test]
+    fn configured_ticks_uses_nice_spacing_when_default_limit_is_exceeded() {
+        let options = AxisTickOptions::default();
+
+        let ticks = configured_ticks(0.5, 10.4, &options, None, None);
+
+        assert_eq!(ticks.step, 2.0);
+        assert!(ticks.ticks.len() <= 11);
+    }
+
+    #[test]
+    fn configured_ticks_adjustment_rejects_infinite_step() {
+        let min = -1e300;
+        let max = 1e300;
+        let options = AxisTickOptions {
+            step_size: Some(f64::from_bits(1)),
+            max_ticks_limit: Some(2),
+            ..AxisTickOptions::default()
+        };
+        let base = nice_ticks(min, max, 1);
+
+        assert_eq!(configured_ticks(min, max, &options, None, None), base);
+    }
+
+    #[test]
+    fn configured_ticks_stops_at_non_divisible_maximum() {
+        let options = AxisTickOptions {
+            step_size: Some(0.1),
+            ..AxisTickOptions::default()
+        };
+
+        let ticks = configured_ticks(0.0, 0.3, &options, None, None);
+
+        assert!(ticks.ticks.iter().all(|tick| *tick <= ticks.max));
+    }
+
+    #[test]
+    fn configured_ticks_from_step_falls_back_above_safety_limit() {
+        let base = nice_ticks(0.0, 1.0, 10);
+
+        assert_eq!(
+            configured_ticks_from_step(0.0, (MAX_TICK_INTERVALS + 1) as f64, 1.0, base.clone()),
+            base
+        );
+    }
 
     #[test]
     fn value_scale_map_and_unmap_round_trip_linear_and_log_values() {

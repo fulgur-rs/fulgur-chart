@@ -178,6 +178,11 @@ fn linear_axis_format_sets_fraction_digits_and_notation() {
       "options":{"scales":{"y":{"min":0,"max":987654321,"ticks":{"stepSize":987654321,
         "format":{"notation":"compact"}}}}}}"#;
     assert!(render(compact_rounding).contains(">988M</text>"));
+
+    let standard = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,2]}]},
+      "options":{"scales":{"y":{"min":0,"max":2,"ticks":{"stepSize":2,
+        "format":{"notation":"standard"}}}}}}"#;
+    assert_eq!(numeric_texts(&render(standard)), vec![0.0, 2.0]);
 }
 
 #[test]
