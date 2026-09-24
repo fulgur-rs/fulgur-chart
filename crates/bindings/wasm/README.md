@@ -62,7 +62,9 @@ const svg = build(spec).font(fontBytes).render('svg')
 ```
 
 Run `npm run test:no-default-font` to build this variant and verify that explicit fonts
-work for SVG, PNG, and WebP.
+work for SVG, PNG, and WebP. It also runs the focused core test that checks the default
+font bytes are absent. The rest of the core unit suite assumes the bundled font is enabled,
+so the slim-build check does not run that suite with `--no-default-features`.
 
 ## npm Package Distribution
 
