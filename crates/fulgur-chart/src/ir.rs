@@ -409,6 +409,34 @@ pub enum ScaleKind {
     Logarithmic,
 }
 
+/// Chart.js `options.scales.{x,y}.ticks` の数値軸設定。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AxisTickOptions {
+    pub step_size: Option<f64>,
+    pub max_ticks_limit: Option<usize>,
+    pub count: Option<usize>,
+    pub precision: Option<usize>,
+    pub format: Option<AxisTickFormat>,
+}
+
+/// Chart.js `ticks.format` の対応する Intl.NumberFormat 項目。
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AxisTickFormat {
+    pub minimum_fraction_digits: Option<u8>,
+    pub maximum_fraction_digits: Option<u8>,
+    pub notation: Option<AxisTickNotation>,
+}
+
+/// Chart.js Intl.NumberFormat `notation` の対応値。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AxisTickNotation {
+    #[default]
+    Standard,
+    Scientific,
+    Engineering,
+    Compact,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AxisSpec {
     pub title: Option<AxisTitle>,
@@ -427,6 +455,8 @@ pub struct AxisSpec {
     /// 意味を持たないが、AxisSpec は x/y 共通型のため常に存在する。`Bar{..}` / `Line`
     /// の値軸と `Scatter` / `Bubble` の数値軸が Logarithmic を消費する。
     pub scale_kind: ScaleKind,
+    /// 線形数値軸の目盛生成とラベル書式。
+    pub ticks: AxisTickOptions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -985,6 +1015,7 @@ mod radial_axis_tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                ticks: AxisTickOptions::default(),
             },
             y_axis: AxisSpec {
                 title: None,
@@ -997,6 +1028,7 @@ mod radial_axis_tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                ticks: AxisTickOptions::default(),
             },
             legend: LegendPos::None,
             legend_options: LegendOptions::default(),

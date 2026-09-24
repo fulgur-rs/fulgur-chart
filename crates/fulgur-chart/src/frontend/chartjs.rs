@@ -8,7 +8,8 @@ use crate::schema::chartjs::{
 };
 use crate::schema::common::{
     AxisBorderOptions, AxisOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions,
-    GridLineOptions, LegendPointStyle as SchemaLegendPointStyle,
+    GridLineOptions, LegendPointStyle as SchemaLegendPointStyle, NumberFormatNotation,
+    NumberFormatOptions, ScaleTicksOptions,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -754,6 +755,41 @@ fn axis_border_from(opts: Option<&AxisBorderOptions>) -> AxisBorder {
         color: b.color.as_deref().and_then(parse_color),
         width: b.width.unwrap_or(1.0),
         dash: b.dash.clone().unwrap_or_default(),
+    }
+}
+
+/// `axis.ticks` の線形数値目盛オプションを IR に変換する。
+fn axis_ticks_from(opts: Option<&ScaleTicksOptions>) -> AxisTickOptions {
+    let Some(ticks) = opts else {
+        return AxisTickOptions::default();
+    };
+    let format = ticks
+        .format
+        .as_ref()
+        .map(|format: &NumberFormatOptions| AxisTickFormat {
+            minimum_fraction_digits: format.minimum_fraction_digits,
+            maximum_fraction_digits: format.maximum_fraction_digits,
+            notation: format.notation.map(|notation| match notation {
+                NumberFormatNotation::Standard => AxisTickNotation::Standard,
+                NumberFormatNotation::Scientific => AxisTickNotation::Scientific,
+                NumberFormatNotation::Engineering => AxisTickNotation::Engineering,
+                NumberFormatNotation::Compact => AxisTickNotation::Compact,
+            }),
+        });
+    AxisTickOptions {
+        step_size: ticks
+            .step_size
+            .filter(|step| step.is_finite() && *step > 0.0),
+        max_ticks_limit: ticks
+            .max_ticks_limit
+            .map(|limit| limit as usize)
+            .filter(|limit| *limit > 0),
+        count: ticks
+            .count
+            .map(|count| count as usize)
+            .filter(|count| *count >= 2),
+        precision: ticks.precision.map(usize::from),
+        format,
     }
 }
 
@@ -1624,6 +1660,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             } else {
                 ScaleKind::Linear
             },
+            ticks: axis_ticks_from(x_opts.and_then(|a| a.ticks.as_ref())),
         },
         y_axis: AxisSpec {
             title: axis_title_from(y_opts.and_then(|a| a.title.as_ref())),
@@ -1640,6 +1677,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             } else {
                 ScaleKind::Linear
             },
+            ticks: axis_ticks_from(y_opts.and_then(|a| a.ticks.as_ref())),
         },
         legend: legend_pos(&raw.options.plugins.legend),
         legend_options: legend_options(&raw.options.plugins.legend),
@@ -2197,6 +2235,7 @@ fn check_unknown_keys(
                     "suggestedMin",
                     "suggestedMax",
                     "offset",
+                    "ticks",
                 ]
             };
             // Codex Fix 7: axis 値が object でない (例: "r": 5) 場合は strict で拒否する。
@@ -2219,6 +2258,20 @@ fn check_unknown_keys(
                             format!("options.scales.{axis} は object でなければなりません")
                         })?;
                         check_object(ax, allowed_axis_keys, &format!("options.scales.{axis}"))?;
+                        if let Some(ticks) = ax.get("ticks").and_then(|v| v.as_object()) {
+                            check_object(
+                                ticks,
+                                &["stepSize", "maxTicksLimit", "count", "precision", "format"],
+                                &format!("options.scales.{axis}.ticks"),
+                            )?;
+                            if let Some(format) = ticks.get("format").and_then(|v| v.as_object()) {
+                                check_object(
+                                    format,
+                                    &["minimumFractionDigits", "maximumFractionDigits", "notation"],
+                                    &format!("options.scales.{axis}.ticks.format"),
+                                )?;
+                            }
+                        }
                     }
                 }
             }
@@ -2675,6 +2728,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         },
         border: AxisBorder::default(),
         scale_kind: ScaleKind::Linear,
+        ticks: AxisTickOptions::default(),
     };
 
     let series = vec![Series {
@@ -3069,6 +3123,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             },
             border: AxisBorder::default(),
             scale_kind: ScaleKind::Linear,
+            ticks: AxisTickOptions::default(),
         },
         y_axis: AxisSpec {
             title: None,
@@ -3084,6 +3139,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             },
             border: AxisBorder::default(),
             scale_kind: ScaleKind::Linear,
+            ticks: AxisTickOptions::default(),
         },
         legend: legend_pos(&raw.options.plugins.legend),
         legend_options: legend_options(&raw.options.plugins.legend),
@@ -3711,6 +3767,7 @@ fn zero_axis() -> AxisSpec {
             ..Default::default()
         },
         scale_kind: ScaleKind::Linear,
+        ticks: AxisTickOptions::default(),
     }
 }
 

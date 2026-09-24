@@ -1,5 +1,7 @@
 //! 決定的な数値フォーマット。SVG 座標・寸法はすべてこれを通す。
 
+use crate::ir::{AxisTickFormat, AxisTickNotation};
+
 /// 小数2桁に丸め、末尾の不要な 0 と小数点を除去する。
 /// 負ゼロは "0" に正規化。ロケール非依存。
 /// 非有限値（NaN / ±Infinity）は不正な SVG トークンになるため "0" に落とす。
@@ -27,6 +29,133 @@ pub fn fmt_num(v: f64) -> String {
         }
     }
     s
+}
+
+/// 線形軸のラベルを `ticks.format` の対応 subset で整形する。
+/// format 未指定時は既存チャートの表示を保つ。
+pub fn fmt_axis_tick(v: f64, options: Option<&AxisTickFormat>) -> String {
+    if !v.is_finite() {
+        return "0".to_string();
+    }
+    let Some(options) = options else {
+        return fmt_num(v);
+    };
+
+    let minimum_digits = options.minimum_fraction_digits.unwrap_or(0).min(100) as usize;
+    let maximum_digits = options
+        .maximum_fraction_digits
+        .map(|digits| digits.min(100) as usize)
+        .map(|digits| digits.max(minimum_digits))
+        .or_else(|| {
+            options
+                .minimum_fraction_digits
+                .map(|_| minimum_digits.max(3))
+        });
+    let notation = options.notation.unwrap_or_default();
+    let has_explicit_format = options.minimum_fraction_digits.is_some()
+        || options.maximum_fraction_digits.is_some()
+        || options.notation.is_some();
+
+    let (mut coefficient, mut exponent, mut suffix, is_exponential) = match notation {
+        AxisTickNotation::Standard => (v, 0, "", false),
+        AxisTickNotation::Scientific => {
+            let (coefficient, exponent) = scientific_parts(v);
+            (coefficient, exponent, "", true)
+        }
+        AxisTickNotation::Engineering => {
+            let (coefficient, exponent) = scientific_parts(v);
+            let engineering_exponent = exponent.div_euclid(3) * 3;
+            let adjusted = coefficient * 10f64.powi(exponent - engineering_exponent);
+            (adjusted, engineering_exponent, "", true)
+        }
+        AxisTickNotation::Compact => compact_parts(v),
+    };
+
+    let fraction_digits = maximum_digits.unwrap_or_else(|| {
+        if notation == AxisTickNotation::Compact {
+            minimum_digits.max(1)
+        } else {
+            3
+        }
+    });
+    let mut number = if has_explicit_format || notation != AxisTickNotation::Standard {
+        fixed_fraction(coefficient, fraction_digits, minimum_digits)
+    } else {
+        fmt_num(coefficient)
+    };
+
+    if notation == AxisTickNotation::Compact
+        && !is_exponential
+        && number
+            .parse::<f64>()
+            .is_ok_and(|rounded| rounded.abs() >= 1_000.0)
+        && exponent < 12
+    {
+        exponent += 3;
+        coefficient = v / 10f64.powi(exponent);
+        suffix = ["K", "M", "B", "T"][(exponent / 3 - 1) as usize];
+        number = fixed_fraction(coefficient, fraction_digits, minimum_digits);
+    }
+
+    if is_exponential {
+        number.push('E');
+        number.push_str(&exponent.to_string());
+    }
+    number.push_str(suffix);
+    number
+}
+
+fn fixed_fraction(value: f64, maximum_digits: usize, minimum_digits: usize) -> String {
+    let mut text = format!("{value:.maximum_digits$}");
+    if text.starts_with("-0") && text.parse::<f64>().is_ok_and(|rounded| rounded == 0.0) {
+        text.remove(0);
+    }
+    if minimum_digits > 0 {
+        let fraction_length = text
+            .split_once('.')
+            .map_or(0, |(_, fraction)| fraction.len());
+        if fraction_length == 0 {
+            text.push('.');
+        }
+        for _ in fraction_length..minimum_digits {
+            text.push('0');
+        }
+    } else if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    text
+}
+
+fn scientific_parts(value: f64) -> (f64, i32) {
+    let text = format!("{value:e}");
+    let Some((coefficient, exponent)) = text.split_once('e') else {
+        return (value, 0);
+    };
+    (
+        coefficient.parse().unwrap_or(value),
+        exponent.parse().unwrap_or(0),
+    )
+}
+
+fn compact_parts(value: f64) -> (f64, i32, &'static str, bool) {
+    let magnitude = value.abs();
+    if magnitude < 1_000.0 {
+        return (value, 0, "", false);
+    }
+    if magnitude >= 1e15 {
+        let (coefficient, exponent) = scientific_parts(value);
+        return (coefficient, exponent, "", true);
+    }
+    const UNITS: [&str; 4] = ["K", "M", "B", "T"];
+    let exponent = ((magnitude.log10() / 3.0).floor() as i32 * 3).clamp(3, 12);
+    let coefficient = value / 10f64.powi(exponent);
+    let suffix = UNITS[(exponent / 3 - 1) as usize];
+    (coefficient, exponent, suffix, false)
 }
 
 /// 対数軸の目盛ラベル用。`fmt_num` と違い小数点以下を2桁に丸めない
@@ -61,8 +190,8 @@ pub fn fmt_num(v: f64) -> String {
 /// `f64` の全表現域)まで、`mantissa` を `1..=9` まで総当たりして
 /// この2種の不具合が再現しないことを確認済み(このモジュールのテスト参照)。
 ///
-/// ticks.format(fulgur-chart-pof、別issue)が実装されたら、明示指定時は
-/// そちらを優先し、未指定時のデフォルトとしてこの関数を使い続ける想定。
+/// 線形軸の明示的な `ticks.format` は [`fmt_axis_tick`] が処理する。
+/// この関数は対数軸の目盛りラベル用に維持する。
 pub fn fmt_num_log(v: f64) -> String {
     if !v.is_finite() {
         return "0".to_string();

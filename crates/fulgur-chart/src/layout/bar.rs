@@ -710,6 +710,7 @@ fn horizontal_plot_bounds(
     m: &TextMeasurer,
     label_font: f64,
     is_log: bool,
+    format: Option<&crate::ir::AxisTickFormat>,
 ) -> (f64, f64) {
     let canvas_width = if canvas_width.is_finite() {
         canvas_width.max(MIN_HORIZONTAL_PLOT_WIDTH)
@@ -743,7 +744,7 @@ fn horizontal_plot_bounds(
         let label = if is_log {
             crate::num::fmt_num_log(tick)
         } else {
-            crate::num::fmt_num(tick)
+            crate::num::fmt_axis_tick(tick, format)
         };
         finite_text_width(m, &label, label_font) / 2.0
     };
@@ -884,8 +885,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     use crate::ir::ScaleKind;
     use crate::layout::common::*;
-    use crate::num::fmt_num;
-    use crate::scale::{LinearScale, NiceTicks, ValueScale, nice_ticks};
+    use crate::scale::{LinearScale, NiceTicks, ValueScale};
     use crate::scene::Anchor;
 
     let ink = spec.theme.text_color;
@@ -899,7 +899,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 横棒は値軸が x のため x_axis を渡す（begin_at_zero/suggested も x_axis から読む）。
     let (dmin, dmax) = value_domain(spec, &spec.x_axis);
     let is_log = spec.x_axis.scale_kind == ScaleKind::Logarithmic;
-    let (mut ticks, minor_ticks) = if is_log {
+    let (ticks, minor_ticks) = if is_log {
         let log = crate::scale::log_ticks_within(dmin, dmax);
         (
             NiceTicks {
@@ -914,11 +914,8 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             log.minor,
         )
     } else {
-        (nice_ticks(dmin, dmax, 10), Vec::new())
+        (configured_axis_ticks(dmin, dmax, &spec.x_axis), Vec::new())
     };
-    if !is_log {
-        ticks = apply_hard_axis_bounds(ticks, &spec.x_axis);
-    }
 
     // カテゴリラベル幅(左軸): 各 categories の最大幅 + 10。空なら最低でも 10。
     let mut max_cat_w = 0.0_f64;
@@ -997,6 +994,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         m,
         label_font,
         is_log,
+        spec.x_axis.ticks.format.as_ref(),
     );
     let plot_top = OUTER_PAD + title_band + legend_top;
     let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
@@ -1058,7 +1056,7 @@ fn build_horizontal(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             content: if is_log {
                 crate::num::fmt_num_log(t)
             } else {
-                fmt_num(t)
+                crate::num::fmt_axis_tick(t, spec.x_axis.ticks.format.as_ref())
             },
             rotate_deg: None,
         });
@@ -3002,6 +3000,7 @@ mod horizontal_axis_style_tests {
             m,
             spec.theme.font_size,
             false,
+            None,
         )
         .1
     }
@@ -3019,9 +3018,9 @@ mod horizontal_axis_style_tests {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let ticks = [1e-15];
         let (_, plot_right_linear) =
-            horizontal_plot_bounds(50.0, 700.0, 800.0, &ticks, &m, 12.0, false);
+            horizontal_plot_bounds(50.0, 700.0, 800.0, &ticks, &m, 12.0, false, None);
         let (_, plot_right_log) =
-            horizontal_plot_bounds(50.0, 700.0, 800.0, &ticks, &m, 12.0, true);
+            horizontal_plot_bounds(50.0, 700.0, 800.0, &ticks, &m, 12.0, true, None);
         assert!(
             plot_right_log < plot_right_linear,
             "is_log=true では fmt_num_log の長いラベル分だけ右余白が広く \

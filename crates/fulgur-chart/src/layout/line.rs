@@ -2466,6 +2466,7 @@ mod tests {
             grid: AxisGrid::default(),
             border: AxisBorder::default(),
             scale_kind: ScaleKind::Linear,
+            ticks: crate::ir::AxisTickOptions::default(),
         };
         ChartSpec {
             kind: ChartKind::Line {

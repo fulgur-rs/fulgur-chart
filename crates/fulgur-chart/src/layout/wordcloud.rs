@@ -222,6 +222,7 @@ mod tests {
                 grid: crate::ir::AxisGrid::default(),
                 border: crate::ir::AxisBorder::default(),
                 scale_kind: crate::ir::ScaleKind::Linear,
+                ticks: crate::ir::AxisTickOptions::default(),
             },
             y_axis: crate::ir::AxisSpec {
                 title: None,
@@ -234,6 +235,7 @@ mod tests {
                 grid: crate::ir::AxisGrid::default(),
                 border: crate::ir::AxisBorder::default(),
                 scale_kind: crate::ir::ScaleKind::Linear,
+                ticks: crate::ir::AxisTickOptions::default(),
             },
             legend: LegendPos::None,
             legend_options: crate::ir::LegendOptions::default(),

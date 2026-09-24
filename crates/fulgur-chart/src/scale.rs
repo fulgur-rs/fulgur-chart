@@ -1,6 +1,8 @@
 //! 線形スケールと nice ticks（1-2-5 ステップ）。すべて決定的な純関数。
 
-const MAX_TICK_INTERVALS: usize = 1_000;
+use crate::ir::AxisTickOptions;
+
+pub(crate) const MAX_TICK_INTERVALS: usize = 1_000;
 
 /// 値→ピクセルの線形写像。px_min>px_max（y軸の上下反転）も許容。
 #[derive(Debug, Clone)]
@@ -150,6 +152,151 @@ pub fn nice_ticks(data_min: f64, data_max: f64, target_count: usize) -> NiceTick
         min: nice_min,
         max: nice_max,
         step,
+        ticks,
+    }
+}
+
+/// Chart.js 線形軸の `ticks` 設定を反映した目盛りを生成する。
+///
+/// `maxTicksLimit` の既定値は Chart.js と同じ 11。`count` が有効なら指定数を優先し、
+/// それ以外では `stepSize` を nice 間隔の単位として使い、必要なら `maxTicksLimit` に
+/// 収まるよう間隔を広げる。`precision` は `stepSize` がない場合だけ間隔を切り上げる。
+pub fn configured_ticks(
+    data_min: f64,
+    data_max: f64,
+    options: &AxisTickOptions,
+    hard_min: Option<f64>,
+    hard_max: Option<f64>,
+) -> NiceTicks {
+    let max_ticks = options
+        .max_ticks_limit
+        .unwrap_or(11)
+        .clamp(2, MAX_TICK_INTERVALS + 1);
+    let base = nice_ticks(data_min, data_max, max_ticks - 1);
+    let min_bound = hard_min.filter(|value| value.is_finite());
+    let max_bound = hard_max.filter(|value| value.is_finite());
+
+    if let Some(count) = options.count.filter(|count| *count >= 2) {
+        let count = count.clamp(2, MAX_TICK_INTERVALS + 1);
+        let min = min_bound.unwrap_or(base.min);
+        let max = max_bound.unwrap_or(base.max);
+        let span = max - min;
+        let step = span / (count - 1) as f64;
+        if span.is_finite() && span > 0.0 && step.is_finite() && step > 0.0 {
+            let ticks = (0..count)
+                .map(|index| {
+                    if index + 1 == count {
+                        max
+                    } else {
+                        min + index as f64 * step
+                    }
+                })
+                .collect();
+            return NiceTicks {
+                min,
+                max,
+                step,
+                ticks,
+            };
+        }
+        return base;
+    }
+
+    let requested_step = options
+        .step_size
+        .filter(|step| step.is_finite() && *step > 0.0);
+    let mut step = if let Some(unit) = requested_step {
+        let multiples = (base.step / unit).ceil().max(1.0);
+        let scaled = unit * multiples;
+        if scaled.is_finite() && scaled > 0.0 {
+            scaled
+        } else {
+            base.step
+        }
+    } else {
+        base.step
+    };
+    if requested_step.is_none()
+        && let Some(precision) = options.precision
+    {
+        let factor = 10f64.powi(precision.min(100) as i32);
+        let scaled = step * factor;
+        if factor.is_finite() && scaled.is_finite() {
+            let rounded = scaled.ceil() / factor;
+            if rounded.is_finite() && rounded > 0.0 {
+                step = rounded;
+            }
+        }
+    }
+
+    let fixed_hard_bounds = requested_step.is_some_and(|requested| {
+        if let (Some(min), Some(max)) = (min_bound, max_bound) {
+            let spaces = (max - min) / requested;
+            spaces.is_finite() && (spaces - spaces.round()).abs() <= spaces.abs().max(1.0) * 1e-9
+        } else {
+            false
+        }
+    });
+    let mut min = if fixed_hard_bounds {
+        min_bound.unwrap_or(data_min)
+    } else {
+        (data_min / step).floor() * step
+    };
+    let mut max = if fixed_hard_bounds {
+        max_bound.unwrap_or(data_max)
+    } else {
+        (data_max / step).ceil() * step
+    };
+    if !min.is_finite() || !max.is_finite() || !step.is_finite() || max <= min {
+        return base;
+    }
+
+    let max_intervals = max_ticks.saturating_sub(1).max(1);
+    let intervals = ((max - min) / step).ceil();
+    if !intervals.is_finite() {
+        return base;
+    }
+    if intervals > max_intervals as f64 {
+        let ideal = (max - min) / max_intervals as f64;
+        let adjusted = if let Some(unit) = requested_step {
+            (ideal / unit).ceil().max(1.0) * unit
+        } else {
+            ideal
+        };
+        if !adjusted.is_finite() || adjusted <= 0.0 {
+            return base;
+        }
+        step = adjusted;
+        if min_bound.is_none() {
+            min = (data_min / step).floor() * step;
+        }
+        if max_bound.is_none() {
+            max = (data_max / step).ceil() * step;
+        }
+    }
+
+    let intervals = ((max - min) / step).ceil();
+    if !intervals.is_finite() || intervals > MAX_TICK_INTERVALS as f64 {
+        return base;
+    }
+    let mut ticks = Vec::with_capacity(intervals as usize + 1);
+    for index in 0..=(intervals as usize) {
+        let value = min + index as f64 * step;
+        if !value.is_finite() || value > max {
+            break;
+        }
+        if ticks.last().is_none_or(|last| *last != value) {
+            ticks.push(value);
+        }
+    }
+    if ticks.is_empty() {
+        return base;
+    }
+    let actual_step = ticks.get(1).map_or(step, |next| *next - ticks[0]);
+    NiceTicks {
+        min,
+        max,
+        step: actual_step,
         ticks,
     }
 }
