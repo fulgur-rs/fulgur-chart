@@ -11,8 +11,10 @@ use crate::schema::common::{
     GridLineOptions, LegendPointStyle as SchemaLegendPointStyle, NumberFormatNotation,
     NumberFormatOptions, ScaleTicksOptions, TimeDisplayFormats, TimeUnitOption as SchemaTimeUnit,
 };
-use serde::Deserialize;
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
+use std::fmt;
 
 /// top-level `width`/`height` 省略時の既定キャンバスサイズ(px)。
 /// wordCloud のみ専用既定(500x300)を使うため、ここには含めない。
@@ -568,11 +570,64 @@ enum DataField {
     Points(Vec<RawPoint>),
 }
 
-#[derive(Deserialize, Clone)]
-#[serde(untagged)]
+#[derive(Clone)]
 enum RawChartValue {
     Number(f64),
     String(String),
+}
+
+impl<'de> Deserialize<'de> for RawChartValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct RawChartValueVisitor;
+
+        impl<'de> Visitor<'de> for RawChartValueVisitor {
+            type Value = RawChartValue;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a number or string")
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawChartValue::Number(value))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawChartValue::Number(value as f64))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawChartValue::Number(value as f64))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawChartValue::String(value.to_owned()))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(RawChartValue::String(value))
+            }
+        }
+
+        deserializer.deserialize_any(RawChartValueVisitor)
+    }
 }
 
 #[derive(Deserialize, Clone)]
@@ -610,11 +665,9 @@ impl DataField {
                     let Some(value) = value else {
                         return Ok(f64::NAN);
                     };
-                    raw_chart_value_to_number(
-                        value,
-                        temporal,
-                        &format!("data.datasets[{dataset_index}].data[{index}]"),
-                    )
+                    raw_chart_value_to_number(value, temporal, || {
+                        format!("data.datasets[{dataset_index}].data[{index}]")
+                    })
                 })
                 .collect(),
             _ => Ok(vec![]),
@@ -637,12 +690,12 @@ impl DataField {
                         x: raw_chart_value_to_number(
                             p.x,
                             x_time.map(|time| ("options.scales.x", time)),
-                            &format!("data.datasets[{dataset_index}].data[{index}].x"),
+                            || format!("data.datasets[{dataset_index}].data[{index}].x"),
                         )?,
                         y: raw_chart_value_to_number(
                             p.y,
                             y_time.map(|time| ("options.scales.y", time)),
-                            &format!("data.datasets[{dataset_index}].data[{index}].y"),
+                            || format!("data.datasets[{dataset_index}].data[{index}].y"),
                         )?,
                         r: p.r,
                     })
@@ -689,25 +742,30 @@ impl DataField {
 fn raw_chart_value_to_number(
     value: RawChartValue,
     temporal: Option<(&str, &TimeOptions)>,
-    field: &str,
+    field: impl FnOnce() -> String,
 ) -> Result<f64, String> {
     match (value, temporal) {
         (RawChartValue::Number(value), None) if value.is_finite() => Ok(value),
-        (RawChartValue::Number(_), None) => Err(format!("{field} must be a finite number")),
+        (RawChartValue::Number(_), None) => Err(format!("{} must be a finite number", field())),
         (RawChartValue::Number(value), Some((_, options))) => {
             parse_epoch_millis(field, value, options).map(|millis| millis as f64)
         }
         (RawChartValue::String(value), Some((_, options))) => {
-            parse_temporal_string(field, &value, options).map(|millis| millis as f64)
+            let field = field();
+            parse_temporal_string(&field, &value, options).map(|millis| millis as f64)
         }
-        (RawChartValue::String(_), None) => Err(format!("{field} must be a number")),
+        (RawChartValue::String(_), None) => Err(format!("{} must be a number", field())),
     }
 }
 
-fn parse_epoch_millis(field: &str, value: f64, options: &TimeOptions) -> Result<i64, String> {
+fn parse_epoch_millis(
+    field: impl FnOnce() -> String,
+    value: f64,
+    options: &TimeOptions,
+) -> Result<i64, String> {
     const JS_DATE_LIMIT_MILLIS: f64 = 8.64e15;
     if !value.is_finite() || value.abs() > JS_DATE_LIMIT_MILLIS {
-        let shown_field = crate::temporal::bounded_error_fragment(field);
+        let shown_field = crate::temporal::bounded_error_fragment(&field());
         let shown_value = crate::temporal::bounded_error_fragment(&value.to_string());
         return Err(format!(
             "field {shown_field} epoch milliseconds are outside the supported date range: {shown_value}"
@@ -731,16 +789,16 @@ fn parse_temporal_string(axis: &str, value: &str, options: &TimeOptions) -> Resu
 }
 
 fn labels_to_categories(
-    labels: &[RawChartValue],
+    labels: Vec<RawChartValue>,
     temporal_index: bool,
 ) -> Result<Vec<String>, String> {
     labels
-        .iter()
+        .into_iter()
         .enumerate()
         .map(|(index, value)| match value {
-            RawChartValue::String(value) => Ok(value.clone()),
+            RawChartValue::String(value) => Ok(value),
             RawChartValue::Number(value) if temporal_index && value.is_finite() => {
-                Ok(crate::num::fmt_num(*value))
+                Ok(crate::num::fmt_num(value))
             }
             RawChartValue::Number(_) => Err(format!(
                 "data.labels[{index}] must be a string unless its index axis is temporal"
@@ -861,7 +919,9 @@ fn parse_temporal_labels(
         .map(|(index, label)| {
             let field = format!("{axis}.data.labels[{index}]");
             match label {
-                RawChartValue::Number(value) => parse_epoch_millis(&field, *value, options),
+                RawChartValue::Number(value) => {
+                    parse_epoch_millis(|| field.clone(), *value, options)
+                }
                 RawChartValue::String(value) => parse_temporal_string(&field, value, options),
             }
         })
@@ -1629,7 +1689,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         Some("y") => y_is_temporal,
         _ => false,
     };
-    let categories = labels_to_categories(&raw.data.labels, temporal_index)?;
+    let categories = labels_to_categories(raw.data.labels, temporal_index)?;
 
     // bar/line の値軸と scatter/bubble の数値 x/y 軸で log を許可する。
     // カテゴリ軸や未対応 kind への type:"logarithmic" 指定は黙って無視(Linear のまま)。
