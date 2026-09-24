@@ -216,7 +216,7 @@ const MARKER_R: f64 = 3.0;
 
 /// 欠損を除いた点列を、元カテゴリの不連続箇所で線分へ分割する。
 /// `span_gaps` 時は不連続をまたいで 1 本の線分として扱う。
-fn segments_for_valid_points(
+pub(super) fn segments_for_valid_points(
     valid: &[(f64, f64, usize)],
     span_gaps: bool,
 ) -> Vec<Vec<(f64, f64, usize)>> {
