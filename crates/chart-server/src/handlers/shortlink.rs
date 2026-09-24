@@ -110,7 +110,7 @@ fn no_store_cache_control() -> HeaderValue {
             (String = "text/plain"),
         )),
         (status = 304, description = "Not Modified (ETag match)"),
-        (status = 400, description = "Invalid chart spec or missing parameter"),
+        (status = 400, description = "Invalid chart spec or render dimensions"),
         (status = 404, description = "Short link not found (NOT_FOUND)"),
         (status = 415, description = "Requested output format is unsupported"),
         (status = 500, description = "Internal error"),

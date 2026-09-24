@@ -59,6 +59,10 @@ mod tests {
         for status in ["200", "304", "400", "404", "415", "500", "503", "504"] {
             assert!(responses.get(status).is_some(), "missing response {status}");
         }
+        assert_eq!(
+            responses["400"]["description"],
+            "Invalid chart spec or render dimensions"
+        );
 
         let content = &responses["200"]["content"];
         for media_type in ["image/svg+xml", "image/png", "image/webp", "text/plain"] {
