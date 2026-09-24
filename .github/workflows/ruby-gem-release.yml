@@ -63,14 +63,14 @@ jobs:
           sed -i -E "s|^(fulgur-chart = ).*|\1\"$VERSION\"|" \
             crates/bindings/ruby/ext/fulgur_chart/Cargo.toml
 
-      - uses: oxidize-rb/actions/setup-ruby-and-rust@e5f9a49a7812a078584072f6e3f657ad247c8771 # v1.4.4
+      - uses: oxidize-rb/actions/setup-ruby-and-rust@ec90b4aa48795518d79be3f5cc478d1d7ccd02a8 # v1.5.0
         with:
           ruby-version: "3.3"
           bundler-cache: true
           cargo-cache: true
           working-directory: crates/bindings/ruby
 
-      - uses: oxidize-rb/actions/cross-gem@e5f9a49a7812a078584072f6e3f657ad247c8771 # v1.4.4
+      - uses: oxidize-rb/actions/cross-gem@ec90b4aa48795518d79be3f5cc478d1d7ccd02a8 # v1.5.0
         id: cross-gem
         with:
           platform: ${{ matrix.platform }}
@@ -101,7 +101,7 @@ jobs:
           sed -i -E "s|^(fulgur-chart = ).*|\1\"$VERSION\"|" \
             crates/bindings/ruby/ext/fulgur_chart/Cargo.toml
 
-      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+      - uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9 # v1.325.0
         with:
           ruby-version: "3.3"
           bundler-cache: true
@@ -133,7 +133,7 @@ jobs:
           merge-multiple: true
           path: gems/
 
-      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+      - uses: ruby/setup-ruby@e8944e80fb94b20106697132f8c20c665fab29e9 # v1.325.0
         with:
           ruby-version: "3.3"
 
