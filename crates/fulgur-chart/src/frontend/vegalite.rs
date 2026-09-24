@@ -346,6 +346,7 @@ pub fn parse_with_limits(
         x_positions: temporal_x_domain.map_or(XPositions::Category, |unix_millis| {
             XPositions::Temporal { unix_millis }
         }),
+        y_positions: XPositions::Category,
         x_axis: AxisSpec {
             title: x_axis_title.map(|text| AxisTitle {
                 text,
@@ -369,6 +370,7 @@ pub fn parse_with_limits(
             },
             border: AxisBorder::default(),
             scale_kind: ScaleKind::Linear,
+            time: None,
             ticks: AxisTickOptions::default(),
         },
         y_axis: AxisSpec {
@@ -387,6 +389,7 @@ pub fn parse_with_limits(
             grid: grid.unwrap_or_default(),
             border: AxisBorder::default(),
             scale_kind: ScaleKind::Linear,
+            time: None,
             ticks: AxisTickOptions::default(),
         },
         legend: if temporal_line && color_field.is_some() {

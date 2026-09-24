@@ -159,6 +159,42 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
                 elements,
             })
         }
+        ChartKind::Bar {
+            horizontal: true, ..
+        } if crate::layout::common::is_temporal_scale(&spec.x_axis)
+            || crate::layout::common::is_temporal_scale(&spec.y_axis) =>
+        {
+            let layout = crate::layout::bar::horizontal_bar_layout(spec, m);
+            let pw = layout.plot_right - layout.plot_left;
+            let ph = layout.plot_bottom - layout.plot_top;
+            let (model_width, model_height) = model_dimensions(spec, m);
+            if pw <= 0.0 || ph <= 0.0 || model_width <= 0.0 || model_height <= 0.0 {
+                return None;
+            }
+            let plot_area = RectN {
+                x: layout.plot_left / model_width,
+                y: layout.plot_top / model_height,
+                w: pw / model_width,
+                h: ph / model_height,
+            };
+            let elements = layout
+                .bars
+                .iter()
+                .map(|bar| ElemN {
+                    series: bar.series,
+                    index: bar.index,
+                    kind: "bar".to_string(),
+                    nx: (bar.x - layout.plot_left) / pw,
+                    ny: (bar.y - layout.plot_top) / ph,
+                    nw: bar.w / pw,
+                    nh: bar.h / ph,
+                })
+                .collect();
+            Some(Geometry {
+                plot_area,
+                elements,
+            })
+        }
         ChartKind::Scatter | ChartKind::Bubble => {
             let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
             let pw = layout.plot_right - layout.plot_left;
@@ -389,12 +425,23 @@ fn category_axis(labels: &[String]) -> AxisModel {
     }
 }
 
+#[cfg(test)]
 fn temporal_axis(unix_millis: &[i64], ticks: &[TemporalTick]) -> AxisModel {
+    let min = unix_millis.iter().copied().min().map(|value| value as f64);
+    let max = unix_millis.iter().copied().max().map(|value| value as f64);
+    temporal_axis_with_domain(min, max, ticks)
+}
+
+fn temporal_axis_with_domain(
+    min: Option<f64>,
+    max: Option<f64>,
+    ticks: &[TemporalTick],
+) -> AxisModel {
     AxisModel {
         kind: "temporal".to_string(),
         labels: Some(ticks.iter().map(|tick| tick.label.clone()).collect()),
-        min: unix_millis.first().map(|value| *value as f64),
-        max: unix_millis.last().map(|value| *value as f64),
+        min,
+        max,
         step: ticks.windows(2).next().and_then(|first| {
             let expected = i128::from(first[1].unix_millis) - i128::from(first[0].unix_millis);
             ticks
@@ -409,6 +456,20 @@ fn temporal_axis(unix_millis: &[i64], ticks: &[TemporalTick]) -> AxisModel {
     }
 }
 
+fn value_axis_model(
+    axis: &crate::ir::AxisSpec,
+    ticks: &crate::scale::NiceTicks,
+    temporal_ticks: &[TemporalTick],
+) -> AxisModel {
+    if matches!(axis.scale_kind, ScaleKind::Time | ScaleKind::Timeseries) {
+        temporal_axis_with_domain(Some(ticks.min), Some(ticks.max), temporal_ticks)
+    } else if axis.scale_kind == ScaleKind::Logarithmic {
+        logarithmic_axis(ticks)
+    } else {
+        linear_axis(ticks)
+    }
+}
+
 /// 直交チャートの (x 軸, y 軸, y 目盛り数) を計算する。値(線形)軸は描画上の向きに
 /// 関わらず常に `y` に載せ、カテゴリ軸を `x` に載せる — JS 抽出器の正規化規約
 /// (線形値軸→y・カテゴリ→x)と揃え、apples-to-apples 照合を可能にするため。
@@ -420,16 +481,11 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
         (&spec.kind, &spec.x_positions)
     {
         let frame = crate::layout::common::compute(spec, m);
-        let y_model = if spec.y_axis.scale_kind == ScaleKind::Logarithmic {
-            logarithmic_axis(&frame.ticks)
-        } else {
-            linear_axis(&frame.ticks)
-        };
-        return Some((
-            temporal_axis(unix_millis, &frame.temporal_ticks),
-            y_model,
-            frame.ticks.ticks.len(),
-        ));
+        let (min, max) = crate::layout::common::x_temporal_domain(spec, unix_millis);
+        let x_model =
+            temporal_axis_with_domain(Some(min as f64), Some(max as f64), &frame.temporal_ticks);
+        let y_model = value_axis_model(&spec.y_axis, &frame.ticks, &frame.y_temporal_ticks);
+        return Some((x_model, y_model, frame.ticks.ticks.len()));
     }
 
     match &spec.kind {
@@ -441,13 +497,20 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
         }
         | ChartKind::Line { .. }
         | ChartKind::Mixed => {
-            let t = crate::layout::common::compute(spec, m).ticks;
-            let y_model = if spec.y_axis.scale_kind == ScaleKind::Logarithmic {
-                logarithmic_axis(&t)
-            } else {
-                linear_axis(&t)
+            let frame = crate::layout::common::compute(spec, m);
+            let x_model = match &spec.x_positions {
+                XPositions::Temporal { unix_millis } => {
+                    let (min, max) = crate::layout::common::x_temporal_domain(spec, unix_millis);
+                    temporal_axis_with_domain(
+                        Some(min as f64),
+                        Some(max as f64),
+                        &frame.temporal_ticks,
+                    )
+                }
+                XPositions::Category => category_axis(&spec.categories),
             };
-            Some((category_axis(&spec.categories), y_model, t.ticks.len()))
+            let y_model = value_axis_model(&spec.y_axis, &frame.ticks, &frame.y_temporal_ticks);
+            Some((x_model, y_model, frame.ticks.ticks.len()))
         }
         // 横棒: 値軸は描画上 x だが照合のため y に載せる。値域は build_horizontal と
         // 同じく x_axis から読む。カテゴリ=x。対数軸の場合も build_horizontal と同じ
@@ -457,7 +520,7 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
             horizontal: true, ..
         } => {
             let (lo, hi) = crate::layout::common::value_domain(spec, &spec.x_axis);
-            let (t, x_model) = if spec.x_axis.scale_kind == ScaleKind::Logarithmic {
+            let (t, value_model) = if spec.x_axis.scale_kind == ScaleKind::Logarithmic {
                 let log = crate::scale::log_ticks_within(lo, hi);
                 let nt = crate::scale::NiceTicks {
                     min: log.min,
@@ -467,6 +530,24 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
                 };
                 let model = logarithmic_axis(&nt);
                 (nt, model)
+            } else if matches!(
+                spec.x_axis.scale_kind,
+                ScaleKind::Time | ScaleKind::Timeseries
+            ) {
+                let ticks = crate::layout::common::temporal_axis_ticks(
+                    &spec.x_axis,
+                    lo as i64,
+                    hi as i64,
+                    spec.width,
+                );
+                let nt = crate::scale::NiceTicks {
+                    min: lo,
+                    max: hi,
+                    step: 0.0,
+                    ticks: ticks.iter().map(|tick| tick.unix_millis as f64).collect(),
+                };
+                let model = value_axis_model(&spec.x_axis, &nt, &ticks);
+                (nt, model)
             } else {
                 let nt = crate::layout::common::apply_hard_axis_bounds(
                     nice_ticks(lo, hi, 10),
@@ -475,21 +556,43 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
                 let model = linear_axis(&nt);
                 (nt, model)
             };
-            Some((category_axis(&spec.categories), x_model, t.ticks.len()))
+            let index_axis = match &spec.y_positions {
+                XPositions::Temporal { unix_millis } => {
+                    let (min, max) = crate::layout::common::temporal_index_domain(
+                        unix_millis,
+                        &spec.y_axis,
+                        true,
+                    );
+                    let ticks = crate::layout::common::temporal_axis_ticks(
+                        &spec.y_axis,
+                        min,
+                        max,
+                        spec.height,
+                    );
+                    temporal_axis_with_domain(Some(min as f64), Some(max as f64), &ticks)
+                }
+                XPositions::Category => category_axis(&spec.categories),
+            };
+            Some((index_axis, value_model, t.ticks.len()))
         }
         // scatter/bubble: x・y とも数値軸。renderer と同じ layout/ticks を共有する。
         ChartKind::Scatter | ChartKind::Bubble => {
             let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
-            let x = if spec.x_axis.scale_kind == crate::ir::ScaleKind::Logarithmic {
+            let x = if matches!(
+                spec.x_axis.scale_kind,
+                ScaleKind::Time | ScaleKind::Timeseries
+            ) {
+                temporal_axis_with_domain(
+                    Some(layout.x_ticks.min),
+                    Some(layout.x_ticks.max),
+                    &layout.x_temporal_ticks,
+                )
+            } else if spec.x_axis.scale_kind == crate::ir::ScaleKind::Logarithmic {
                 logarithmic_axis(&layout.x_ticks)
             } else {
                 linear_axis(&layout.x_ticks)
             };
-            let y = if spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic {
-                logarithmic_axis(&layout.y_ticks)
-            } else {
-                linear_axis(&layout.y_ticks)
-            };
+            let y = value_axis_model(&spec.y_axis, &layout.y_ticks, &layout.y_temporal_ticks);
             Some((x, y, layout.y_ticks.ticks.len()))
         }
         // boxplot: カテゴリ x、線形 y。ドメインは layout::boxplot と共有。
@@ -511,10 +614,7 @@ pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
     let mut model = build_model_core(spec);
     (model.meta.width, model.meta.height) = model_dimensions(spec, m);
     if let Some((x, y, y_ticks)) = compute_axes(spec, m) {
-        if matches!(
-            (&spec.kind, &spec.x_positions),
-            (ChartKind::Line { .. }, XPositions::Temporal { .. })
-        ) {
+        if x.kind == "temporal" {
             model.counts.x_ticks = x.ticks.as_ref().map_or(0, Vec::len);
         }
         model.counts.y_ticks = y_ticks;
@@ -636,6 +736,25 @@ mod tests {
             temporal_axis(&[], &ticks(&[2 * DAY, DAY, 0])).step,
             Some(-(DAY as f64))
         );
+    }
+
+    #[test]
+    fn scatter_model_exposes_temporal_x_and_y_axes() {
+        let json = r#"{"type":"scatter","data":{"datasets":[{"data":[
+            {"x":"1970-01-01","y":"1970-01-01"},
+            {"x":"1970-01-02","y":"1970-01-02"},
+            {"x":"1970-01-05","y":"1970-01-05"}]}]},
+            "options":{"scales":{"x":{"type":"time"},"y":{"type":"timeseries"}}}}"#;
+        let spec = chartjs::parse(json, true).unwrap();
+        let model = build_model(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let axes = model.axes.expect("scatter exposes both axes");
+
+        assert_eq!(axes.x.kind, "temporal");
+        assert_eq!(axes.y.kind, "temporal");
+        assert_eq!(axes.x.min, Some(0.0));
+        assert_eq!(axes.x.max, Some(4.0 * 86_400_000.0));
+        assert!(!axes.x.ticks.as_ref().unwrap().is_empty());
+        assert!(!axes.y.labels.as_ref().unwrap().is_empty());
     }
 
     #[test]
@@ -850,6 +969,73 @@ mod tests {
         assert_eq!(axes.x.kind, "category");
         assert!(model.counts.y_ticks > 0);
         assert_eq!(model.counts.y_ticks, axes.y.ticks.as_ref().unwrap().len());
+    }
+
+    #[test]
+    fn horizontal_bar_reports_temporal_index_and_value_axes() {
+        let json = r#"{"type":"bar","data":{"labels":["1970-01-01","1970-01-02","1970-01-05"],
+          "datasets":[{"data":["1970-01-02","1970-01-03","1970-01-05"]}]},
+          "options":{"indexAxis":"y","scales":{
+            "x":{"type":"time","min":0,"max":345600000,"time":{"unit":"day","displayFormats":{"day":"%Y-%m-%d"}}},
+            "y":{"type":"timeseries","time":{"unit":"day","displayFormats":{"day":"%Y-%m-%d"}}}}}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        let axes = model.axes.expect("横棒の temporal 軸が model に必要");
+
+        assert_eq!(axes.x.kind, "temporal");
+        assert_eq!(axes.y.kind, "temporal");
+        assert!(
+            axes.x
+                .labels
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|label| label == "1970-01-01")
+        );
+        assert!(
+            axes.y
+                .labels
+                .as_ref()
+                .unwrap()
+                .iter()
+                .any(|label| label == "1970-01-02")
+        );
+        assert_eq!(model.counts.y_ticks, axes.y.ticks.as_ref().unwrap().len());
+    }
+
+    #[test]
+    fn horizontal_temporal_bar_exposes_normalized_geometry() {
+        let json = r#"{"type":"bar","data":{"labels":["1970-01-01","1970-01-02","1970-01-05"],
+          "datasets":[{"data":["1970-01-02","1970-01-03","1970-01-05"]}]},
+          "options":{"indexAxis":"y","scales":{
+            "x":{"type":"time","min":0,"max":345600000,"time":{"unit":"day"}},
+            "y":{"type":"time","time":{"unit":"day"}}}}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+        let geometry = model
+            .geometry
+            .expect("temporal horizontal bars expose geometry");
+
+        assert_eq!(geometry.elements.len(), 3);
+        let centers = geometry
+            .elements
+            .iter()
+            .map(|element| element.ny + element.nh / 2.0)
+            .collect::<Vec<_>>();
+        assert!((centers[1] - centers[0] - 0.2).abs() < 0.01);
+        assert!((centers[2] - centers[1] - 0.6).abs() < 0.01);
+        assert!(geometry.elements.iter().all(|element| {
+            element.nx >= 0.0
+                && element.nx <= 1.0
+                && element.ny >= 0.0
+                && element.ny <= 1.0
+                && element.nw > 0.0
+                && element.nw <= 1.0
+                && element.nh > 0.0
+                && element.nh <= 1.0
+        }));
     }
 
     #[test]

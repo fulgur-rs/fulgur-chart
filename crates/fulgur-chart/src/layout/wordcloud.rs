@@ -210,6 +210,7 @@ mod tests {
             },
             categories: vec![],
             x_positions: crate::ir::XPositions::Category,
+            y_positions: crate::ir::XPositions::Category,
             series: vec![],
             x_axis: crate::ir::AxisSpec {
                 title: None,
@@ -222,6 +223,7 @@ mod tests {
                 grid: crate::ir::AxisGrid::default(),
                 border: crate::ir::AxisBorder::default(),
                 scale_kind: crate::ir::ScaleKind::Linear,
+                time: None,
                 ticks: crate::ir::AxisTickOptions::default(),
             },
             y_axis: crate::ir::AxisSpec {
@@ -235,6 +237,7 @@ mod tests {
                 grid: crate::ir::AxisGrid::default(),
                 border: crate::ir::AxisBorder::default(),
                 scale_kind: crate::ir::ScaleKind::Linear,
+                time: None,
                 ticks: crate::ir::AxisTickOptions::default(),
             },
             legend: LegendPos::None,

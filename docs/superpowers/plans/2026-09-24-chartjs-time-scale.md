@@ -130,8 +130,9 @@ be found with `rg` before editing; do not assume the file map is exhaustive.
 3. Make labels/data coordinate inputs preserve number/string/null until axis
    configuration is known. Keep non-temporal parsing behavior unchanged and
    reject non-string categories where the current contract rejects them.
-4. Parse temporal index labels for line/bar/mixed (including `indexAxis: "y"`),
-   temporal value-axis dataset values, and scatter/bubble x/y coordinates.
+4. Parse temporal index labels for line/bar/mixed in their existing
+   orientations (including horizontal bars with `indexAxis: "y"`), temporal
+   value-axis dataset values, and scatter/bubble x/y coordinates.
    Apply rounding once at input conversion; retain point order, duplicates,
    and null gaps.
 5. Add frontend tests for all input shapes and error bounds, then run existing

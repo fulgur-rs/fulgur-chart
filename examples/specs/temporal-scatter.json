@@ -1,0 +1,21 @@
+{
+  "type": "scatter",
+  "data": {
+    "datasets": [
+      {
+        "label": "Observations",
+        "data": [
+          { "x": "2026-09-17", "y": "2026-09-18T00:00:00Z" },
+          { "x": 1790208000000, "y": 1790294400000 },
+          { "x": "2026-09-21", "y": "2026-09-24" }
+        ]
+      }
+    ]
+  },
+  "options": {
+    "scales": {
+      "x": { "type": "time", "time": { "unit": "day" } },
+      "y": { "type": "time", "time": { "unit": "day" } }
+    }
+  }
+}

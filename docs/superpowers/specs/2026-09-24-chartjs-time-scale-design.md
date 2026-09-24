@@ -119,7 +119,8 @@ On a temporal axis, strings and JSON numbers are parsed as follows:
   `%Y-%m-%d` is the date-only form; omitted time fields default to midnight,
   and an omitted offset means UTC. `%z` accepts `Z`, `+HHMM`, or `+HH:MM`.
   `%Y` is a four-digit year and `%.f` accepts one through nine fractional
-  second digits; parsed sub-millisecond precision is truncated.
+  second digits; parsed sub-millisecond precision is truncated toward zero,
+  matching JavaScript date time clipping.
 - Finite JSON numbers are epoch milliseconds. Values outside the JavaScript
   date range (±8.64e15 milliseconds) are rejected; fractional milliseconds
   are truncated toward zero, matching JavaScript date time clipping.
@@ -133,10 +134,11 @@ strings; numeric epoch milliseconds bypass format parsing.
 
 ### Chart data shapes
 
-- For line, bar, and mixed charts using the index axis, `data.labels` provide
-  the temporal index values. `indexAxis: "y"` places those values on y;
-  otherwise they are on x. Dataset values continue to align with labels by
-  array index.
+- For line, bar, and mixed charts, `data.labels` provide temporal index values
+  in the orientation already supported by that chart: x for line, mixed, and
+  vertical bars; y for horizontal bars (`indexAxis: "y"`). Dataset values
+  continue to align with labels by array index. Mixed charts remain vertical,
+  matching their current parser/layout contract.
 - If a temporal axis is used as a value axis, each non-null dataset value is
   interpreted as a timestamp on that axis.
 - Scatter and bubble object points accept string or numeric `x` and `y` values

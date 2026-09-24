@@ -9,7 +9,7 @@ use crate::schema::chartjs::{
 use crate::schema::common::{
     AxisBorderOptions, AxisOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions,
     GridLineOptions, LegendPointStyle as SchemaLegendPointStyle, NumberFormatNotation,
-    NumberFormatOptions, ScaleTicksOptions,
+    NumberFormatOptions, ScaleTicksOptions, TimeDisplayFormats, TimeUnitOption as SchemaTimeUnit,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -311,7 +311,7 @@ fn pie_number_values(value: &serde_json::Value, path: &str) -> Result<Vec<f64>, 
 #[derive(Deserialize)]
 struct RawData {
     #[serde(default)]
-    labels: Vec<String>,
+    labels: Vec<RawChartValue>,
     datasets: Vec<RawDataset>,
 }
 
@@ -563,15 +563,22 @@ fn parse_cubic_interpolation_mode(ds: &RawDataset) -> Result<Option<CubicMode>, 
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum DataField {
-    Nums(Vec<Option<f64>>),
+    Nums(Vec<Option<RawChartValue>>),
     Boxes(Vec<Option<Vec<f64>>>),
     Points(Vec<RawPoint>),
 }
 
 #[derive(Deserialize, Clone)]
+#[serde(untagged)]
+enum RawChartValue {
+    Number(f64),
+    String(String),
+}
+
+#[derive(Deserialize, Clone)]
 struct RawPoint {
-    x: f64,
-    y: f64,
+    x: RawChartValue,
+    y: RawChartValue,
     #[serde(default)]
     r: Option<f64>,
 }
@@ -589,26 +596,59 @@ fn nan_box_point() -> crate::ir::BoxPoint {
 }
 
 impl DataField {
-    /// 数値配列なら採用（`None` → `f64::NAN`)、それ以外は空。カテゴリ系チャートの `values` 用。
-    fn into_values(self) -> Vec<f64> {
+    /// 数値配列を IR へ変換する。時間軸なら string/number を epoch milliseconds として解釈する。
+    fn into_values(
+        self,
+        temporal: Option<(&str, &TimeOptions)>,
+        dataset_index: usize,
+    ) -> Result<Vec<f64>, String> {
         match self {
-            DataField::Nums(v) => v.into_iter().map(|x| x.unwrap_or(f64::NAN)).collect(),
-            _ => vec![],
+            DataField::Nums(values) => values
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    let Some(value) = value else {
+                        return Ok(f64::NAN);
+                    };
+                    raw_chart_value_to_number(
+                        value,
+                        temporal,
+                        &format!("data.datasets[{dataset_index}].data[{index}]"),
+                    )
+                })
+                .collect(),
+            _ => Ok(vec![]),
         }
     }
 
     /// 点配列なら IR の `Point` へ、数値配列なら空。scatter/bubble の `points` 用。
-    fn into_points(self) -> Vec<Point> {
+    fn into_points(
+        self,
+        x_time: Option<&TimeOptions>,
+        y_time: Option<&TimeOptions>,
+        dataset_index: usize,
+    ) -> Result<Vec<Point>, String> {
         match self {
             DataField::Points(ps) => ps
                 .into_iter()
-                .map(|p| Point {
-                    x: p.x,
-                    y: p.y,
-                    r: p.r,
+                .enumerate()
+                .map(|(index, p)| {
+                    Ok(Point {
+                        x: raw_chart_value_to_number(
+                            p.x,
+                            x_time.map(|time| ("options.scales.x", time)),
+                            &format!("data.datasets[{dataset_index}].data[{index}].x"),
+                        )?,
+                        y: raw_chart_value_to_number(
+                            p.y,
+                            y_time.map(|time| ("options.scales.y", time)),
+                            &format!("data.datasets[{dataset_index}].data[{index}].y"),
+                        )?,
+                        r: p.r,
+                    })
                 })
                 .collect(),
-            _ => vec![],
+            _ => Ok(vec![]),
         }
     }
 
@@ -646,6 +686,69 @@ impl DataField {
     }
 }
 
+fn raw_chart_value_to_number(
+    value: RawChartValue,
+    temporal: Option<(&str, &TimeOptions)>,
+    field: &str,
+) -> Result<f64, String> {
+    match (value, temporal) {
+        (RawChartValue::Number(value), None) if value.is_finite() => Ok(value),
+        (RawChartValue::Number(_), None) => Err(format!("{field} must be a finite number")),
+        (RawChartValue::Number(value), Some((_, options))) => {
+            parse_epoch_millis(field, value, options).map(|millis| millis as f64)
+        }
+        (RawChartValue::String(value), Some((_, options))) => {
+            parse_temporal_string(field, &value, options).map(|millis| millis as f64)
+        }
+        (RawChartValue::String(_), None) => Err(format!("{field} must be a number")),
+    }
+}
+
+fn parse_epoch_millis(field: &str, value: f64, options: &TimeOptions) -> Result<i64, String> {
+    const JS_DATE_LIMIT_MILLIS: f64 = 8.64e15;
+    if !value.is_finite() || value.abs() > JS_DATE_LIMIT_MILLIS {
+        let shown_field = crate::temporal::bounded_error_fragment(field);
+        let shown_value = crate::temporal::bounded_error_fragment(&value.to_string());
+        return Err(format!(
+            "field {shown_field} epoch milliseconds are outside the supported date range: {shown_value}"
+        ));
+    }
+    let millis = value.trunc() as i64;
+    Ok(options.round.map_or(millis, |unit| {
+        crate::temporal::round_timestamp(millis, unit)
+    }))
+}
+
+fn parse_temporal_string(axis: &str, value: &str, options: &TimeOptions) -> Result<i64, String> {
+    let millis = if let Some(format) = options.parser.as_deref() {
+        crate::temporal::parse_custom_format_millis(axis, value, format)?
+    } else {
+        crate::temporal::parse_rfc3339_millis(axis, value)?
+    };
+    Ok(options.round.map_or(millis, |unit| {
+        crate::temporal::round_timestamp(millis, unit)
+    }))
+}
+
+fn labels_to_categories(
+    labels: &[RawChartValue],
+    temporal_index: bool,
+) -> Result<Vec<String>, String> {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(index, value)| match value {
+            RawChartValue::String(value) => Ok(value.clone()),
+            RawChartValue::Number(value) if temporal_index && value.is_finite() => {
+                Ok(crate::num::fmt_num(*value))
+            }
+            RawChartValue::Number(_) => Err(format!(
+                "data.labels[{index}] must be a string unless its index axis is temporal"
+            )),
+        })
+        .collect()
+}
+
 /// chart.js の「スカラ or 配列」を許容する untagged ヘルパ。
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -675,6 +778,94 @@ impl<T: Clone> ScalarOrArray<T> {
 /// (`"category"`/`"time"`/`"linear"` やタイポ、未指定)は false 扱い。
 fn is_logarithmic(opts: Option<&AxisOptions>) -> bool {
     opts.and_then(|a| a.r#type.as_deref()) == Some("logarithmic")
+}
+
+fn axis_scale_kind(opts: Option<&AxisOptions>) -> ScaleKind {
+    match opts.and_then(|axis| axis.r#type.as_deref()) {
+        Some("logarithmic") => ScaleKind::Logarithmic,
+        Some("time") => ScaleKind::Time,
+        Some("timeseries") => ScaleKind::Timeseries,
+        _ => ScaleKind::Linear,
+    }
+}
+
+fn axis_is_temporal(opts: Option<&AxisOptions>) -> bool {
+    matches!(
+        opts.and_then(|axis| axis.r#type.as_deref()),
+        Some("time" | "timeseries")
+    )
+}
+
+fn time_unit_from_schema(unit: SchemaTimeUnit) -> TimeUnit {
+    match unit {
+        SchemaTimeUnit::Millisecond => TimeUnit::Millisecond,
+        SchemaTimeUnit::Second => TimeUnit::Second,
+        SchemaTimeUnit::Minute => TimeUnit::Minute,
+        SchemaTimeUnit::Hour => TimeUnit::Hour,
+        SchemaTimeUnit::Day => TimeUnit::Day,
+        SchemaTimeUnit::Week => TimeUnit::Week,
+        SchemaTimeUnit::Month => TimeUnit::Month,
+        SchemaTimeUnit::Quarter => TimeUnit::Quarter,
+        SchemaTimeUnit::Year => TimeUnit::Year,
+    }
+}
+
+fn time_options_from(opts: Option<&AxisOptions>) -> Option<TimeOptions> {
+    let raw = opts?.time.as_ref()?;
+    let display_formats = raw
+        .display_formats
+        .as_ref()
+        .map(|formats: &TimeDisplayFormats| {
+            [
+                (SchemaTimeUnit::Millisecond, formats.millisecond.as_ref()),
+                (SchemaTimeUnit::Second, formats.second.as_ref()),
+                (SchemaTimeUnit::Minute, formats.minute.as_ref()),
+                (SchemaTimeUnit::Hour, formats.hour.as_ref()),
+                (SchemaTimeUnit::Day, formats.day.as_ref()),
+                (SchemaTimeUnit::Week, formats.week.as_ref()),
+                (SchemaTimeUnit::Month, formats.month.as_ref()),
+                (SchemaTimeUnit::Quarter, formats.quarter.as_ref()),
+                (SchemaTimeUnit::Year, formats.year.as_ref()),
+            ]
+            .into_iter()
+            .filter_map(|(unit, format)| {
+                format.map(|format| (time_unit_from_schema(unit), format.clone()))
+            })
+            .collect()
+        })
+        .unwrap_or_default();
+    Some(TimeOptions {
+        unit: raw.unit.map(time_unit_from_schema),
+        min_unit: raw.min_unit.map(time_unit_from_schema),
+        parser: raw.parser.clone(),
+        round: raw.round.map(time_unit_from_schema),
+        display_formats,
+    })
+}
+
+fn axis_time_options(opts: Option<&AxisOptions>) -> Option<TimeOptions> {
+    if !axis_is_temporal(opts) {
+        return None;
+    }
+    Some(time_options_from(opts).unwrap_or_default())
+}
+
+fn parse_temporal_labels(
+    labels: &[RawChartValue],
+    axis: &str,
+    options: &TimeOptions,
+) -> Result<Vec<i64>, String> {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| {
+            let field = format!("{axis}.data.labels[{index}]");
+            match label {
+                RawChartValue::Number(value) => parse_epoch_millis(&field, *value, options),
+                RawChartValue::String(value) => parse_temporal_string(&field, value, options),
+            }
+        })
+        .collect()
 }
 
 /// `axis.title` を IR の [`AxisTitle`] に変換する。
@@ -1355,6 +1546,91 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let x_opts = raw.options.scales.as_ref().and_then(|s| s.x.as_ref());
     let y_opts = raw.options.scales.as_ref().and_then(|s| s.y.as_ref());
 
+    let x_is_temporal = axis_is_temporal(x_opts);
+    let y_is_temporal = axis_is_temporal(y_opts);
+    let supports_cartesian_temporal = matches!(
+        kind,
+        ChartKind::Bar { .. }
+            | ChartKind::Line { .. }
+            | ChartKind::Mixed
+            | ChartKind::Scatter
+            | ChartKind::Bubble
+    );
+    if !supports_cartesian_temporal
+        && (x_is_temporal
+            || y_is_temporal
+            || x_opts.is_some_and(|axis| axis.time.is_some())
+            || y_opts.is_some_and(|axis| axis.time.is_some()))
+    {
+        return Err("temporal scales are only supported for Cartesian chart types".to_string());
+    }
+    for (name, opts, temporal) in [("x", x_opts, x_is_temporal), ("y", y_opts, y_is_temporal)] {
+        if opts.is_some_and(|axis| axis.time.is_some()) && !temporal {
+            return Err(format!(
+                "options.scales.{name}.time requires type 'time' or 'timeseries'"
+            ));
+        }
+    }
+    let x_time = axis_time_options(x_opts);
+    let y_time = axis_time_options(y_opts);
+    for (axis, options) in [("x", x_time.as_ref()), ("y", y_time.as_ref())] {
+        if let Some(options) = options {
+            if let Some(format) = options.parser.as_deref() {
+                crate::temporal::validate_time_format(
+                    &format!("options.scales.{axis}.time.parser"),
+                    format,
+                    false,
+                )?;
+            }
+            for (unit, format) in &options.display_formats {
+                crate::temporal::validate_time_format(
+                    &format!("options.scales.{axis}.time.displayFormats.{unit:?}"),
+                    format,
+                    true,
+                )?;
+            }
+        }
+    }
+    let index_axis_name = match &kind {
+        ChartKind::Bar {
+            horizontal: true, ..
+        } => Some("y"),
+        ChartKind::Bar {
+            horizontal: false, ..
+        }
+        | ChartKind::Line { .. }
+        | ChartKind::Mixed => Some("x"),
+        _ => None,
+    };
+    let x_positions = if x_is_temporal && index_axis_name == Some("x") {
+        XPositions::Temporal {
+            unix_millis: parse_temporal_labels(
+                &raw.data.labels,
+                "options.scales.x",
+                x_time.as_ref().expect("temporal x axis has options"),
+            )?,
+        }
+    } else {
+        XPositions::Category
+    };
+    let y_positions = if y_is_temporal && index_axis_name == Some("y") {
+        XPositions::Temporal {
+            unix_millis: parse_temporal_labels(
+                &raw.data.labels,
+                "options.scales.y",
+                y_time.as_ref().expect("temporal y axis has options"),
+            )?,
+        }
+    } else {
+        XPositions::Category
+    };
+    let temporal_index = match index_axis_name {
+        Some("x") => x_is_temporal,
+        Some("y") => y_is_temporal,
+        _ => false,
+    };
+    let categories = labels_to_categories(&raw.data.labels, temporal_index)?;
+
     // bar/line の値軸と scatter/bubble の数値 x/y 軸で log を許可する。
     // カテゴリ軸や未対応 kind への type:"logarithmic" 指定は黙って無視(Linear のまま)。
     let x_axis_is_log = matches!(
@@ -1374,7 +1650,26 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             | ChartKind::Scatter
             | ChartKind::Bubble
     ) && is_logarithmic(y_opts);
+    let x_axis_scale_kind = if x_axis_is_log {
+        ScaleKind::Logarithmic
+    } else if x_is_temporal {
+        axis_scale_kind(x_opts)
+    } else {
+        ScaleKind::Linear
+    };
+    let y_axis_scale_kind = if y_axis_is_log {
+        ScaleKind::Logarithmic
+    } else if y_is_temporal {
+        axis_scale_kind(y_opts)
+    } else {
+        ScaleKind::Linear
+    };
     let is_mixed = matches!(kind, ChartKind::Mixed);
+    let value_axis_time = if index_axis_name == Some("y") {
+        x_time.as_ref().map(|time| ("options.scales.x", time))
+    } else {
+        y_time.as_ref().map(|time| ("options.scales.y", time))
+    };
     let dataset_count = raw.data.datasets.len();
     let mut dataset_orders = is_mixed.then(|| Vec::with_capacity(raw.data.datasets.len()));
     let series: Vec<Series> = raw
@@ -1383,20 +1678,24 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         .into_iter()
         .enumerate()
         .zip(dataset_line_styles)
-        .map(|((i, ds), line_style)| {
+        .map(|((i, ds), line_style)| -> Result<Series, String> {
             if let Some(orders) = dataset_orders.as_mut() {
                 orders.push(ds.order.unwrap_or(0.0));
             }
             let area_fill = ds.fill.to_area_fill(i, dataset_count);
             // 点ベースは点データ、boxplot はボックスデータ、それ以外は数値配列を採る。`data` は一度だけ消費する。
             let (values, points, box_points) = if is_point_based {
-                (vec![], ds.data.into_points(), vec![])
+                (
+                    vec![],
+                    ds.data.into_points(x_time.as_ref(), y_time.as_ref(), i)?,
+                    vec![],
+                )
             } else if is_boxplot {
                 (vec![], vec![], ds.data.into_box_points())
             } else {
                 // 対数軸で描画できない値のスキップは layout 層で行う。IR の values は
                 // introspection API が入力値をそのまま報告できるよう保持する。
-                (ds.data.into_values(), vec![], vec![])
+                (ds.data.into_values(value_axis_time, i)?, vec![], vec![])
             };
             let n = if is_point_based {
                 points.len()
@@ -1490,7 +1789,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             } else {
                 None
             };
-            Series {
+            Ok(Series {
                 name: ds.label,
                 values,
                 points,
@@ -1522,9 +1821,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 box_points,
                 tree: vec![],
                 links: vec![],
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
 
     // Chart.js は order 昇順で凡例・tooltip の系列を並べ、同値では宣言順を使う。
     // 描画側はこの順序を逆にたどり、高い order を先に(背面へ)描く。
@@ -1649,8 +1948,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     Ok(ChartSpec {
         kind,
         series,
-        categories: raw.data.labels,
-        x_positions: XPositions::Category,
+        categories,
+        x_positions,
+        y_positions,
         x_axis: AxisSpec {
             title: axis_title_from(x_opts.and_then(|a| a.title.as_ref())),
             min: x_opts.and_then(|a| a.min),
@@ -1661,11 +1961,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             offset: x_offset,
             grid: axis_grid_from(x_opts.and_then(|a| a.grid.as_ref())),
             border: axis_border_from(x_opts.and_then(|a| a.border.as_ref())),
-            scale_kind: if x_axis_is_log {
-                ScaleKind::Logarithmic
-            } else {
-                ScaleKind::Linear
-            },
+            scale_kind: x_axis_scale_kind,
+            time: x_time,
             ticks: axis_ticks_from(x_opts.and_then(|a| a.ticks.as_ref())),
         },
         y_axis: AxisSpec {
@@ -1678,11 +1975,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             offset: y_offset,
             grid: axis_grid_from(y_opts.and_then(|a| a.grid.as_ref())),
             border: axis_border_from(y_opts.and_then(|a| a.border.as_ref())),
-            scale_kind: if y_axis_is_log {
-                ScaleKind::Logarithmic
-            } else {
-                ScaleKind::Linear
-            },
+            scale_kind: y_axis_scale_kind,
+            time: y_time,
             ticks: axis_ticks_from(y_opts.and_then(|a| a.ticks.as_ref())),
         },
         legend: legend_pos(&raw.options.plugins.legend),
@@ -2242,6 +2536,7 @@ fn check_unknown_keys(
                     "suggestedMax",
                     "offset",
                     "ticks",
+                    "time",
                 ]
             };
             // Codex Fix 7: axis 値が object でない (例: "r": 5) 場合は strict で拒否する。
@@ -2275,6 +2570,32 @@ fn check_unknown_keys(
                                     format,
                                     &["minimumFractionDigits", "maximumFractionDigits", "notation"],
                                     &format!("options.scales.{axis}.ticks.format"),
+                                )?;
+                            }
+                        }
+                        if let Some(time) = ax.get("time").and_then(|v| v.as_object()) {
+                            check_object(
+                                time,
+                                &["unit", "minUnit", "parser", "round", "displayFormats"],
+                                &format!("options.scales.{axis}.time"),
+                            )?;
+                            if let Some(formats) =
+                                time.get("displayFormats").and_then(|v| v.as_object())
+                            {
+                                check_object(
+                                    formats,
+                                    &[
+                                        "millisecond",
+                                        "second",
+                                        "minute",
+                                        "hour",
+                                        "day",
+                                        "week",
+                                        "month",
+                                        "quarter",
+                                        "year",
+                                    ],
+                                    &format!("options.scales.{axis}.time.displayFormats"),
                                 )?;
                             }
                         }
@@ -2734,6 +3055,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         },
         border: AxisBorder::default(),
         scale_kind: ScaleKind::Linear,
+        time: None,
         ticks: AxisTickOptions::default(),
     };
 
@@ -2764,6 +3086,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         series,
         categories: vec![],
         x_positions: XPositions::Category,
+        y_positions: XPositions::Category,
         x_axis: no_axis.clone(),
         y_axis: no_axis,
         legend: crate::ir::LegendPos::None,
@@ -3115,6 +3438,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         series,
         categories: x_cats,
         x_positions: XPositions::Category,
+        y_positions: XPositions::Category,
         x_axis: AxisSpec {
             title: None,
             min: None,
@@ -3129,6 +3453,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             },
             border: AxisBorder::default(),
             scale_kind: ScaleKind::Linear,
+            time: None,
             ticks: AxisTickOptions::default(),
         },
         y_axis: AxisSpec {
@@ -3145,6 +3470,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             },
             border: AxisBorder::default(),
             scale_kind: ScaleKind::Linear,
+            time: None,
             ticks: AxisTickOptions::default(),
         },
         legend: legend_pos(&raw.options.plugins.legend),
@@ -3498,6 +3824,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         series,
         categories: vec![],
         x_positions: XPositions::Category,
+        y_positions: XPositions::Category,
         x_axis: zero_axis(),
         y_axis: zero_axis(),
         legend: crate::ir::LegendPos::None,
@@ -3737,6 +4064,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         series,
         categories: vec![],
         x_positions: XPositions::Category,
+        y_positions: XPositions::Category,
         x_axis: zero_axis(),
         y_axis: zero_axis(),
         legend: LegendPos::None,
@@ -3773,6 +4101,7 @@ fn zero_axis() -> AxisSpec {
             ..Default::default()
         },
         scale_kind: ScaleKind::Linear,
+        time: None,
         ticks: AxisTickOptions::default(),
     }
 }
@@ -3914,6 +4243,7 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         series: vec![],
         categories: vec![],
         x_positions: XPositions::Category,
+        y_positions: XPositions::Category,
         x_axis: zero_axis(),
         y_axis: zero_axis(),
         legend: LegendPos::None,
@@ -5124,6 +5454,77 @@ mod tests {
         let spec = parse(json, false).expect("parse ok");
         assert_eq!(spec.y_axis.border.dash, vec![4.0, 4.0]);
         assert!((spec.y_axis.border.width - 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn time_x_axis_parses_iso_dates_into_temporal_positions() {
+        let json = r##"{
+          "type":"line",
+          "data":{"labels":["1970-01-01","1970-01-02"],"datasets":[{"data":[1,2]}]},
+          "options":{"scales":{"x":{"type":"time"}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert_eq!(
+            spec.x_positions,
+            XPositions::Temporal {
+                unix_millis: vec![0, 86_400_000]
+            }
+        );
+    }
+
+    #[test]
+    fn time_parser_uses_supported_custom_format() {
+        let json = r##"{
+          "type":"line",
+          "data":{"labels":["01/02/1970"],"datasets":[{"data":[1]}]},
+          "options":{"scales":{"x":{"type":"time","time":{"parser":"%m/%d/%Y"}}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert_eq!(
+            spec.x_positions,
+            XPositions::Temporal {
+                unix_millis: vec![86_400_000]
+            }
+        );
+    }
+
+    #[test]
+    fn time_x_axis_accepts_numeric_epoch_milliseconds() {
+        let json = r##"{
+          "type":"line",
+          "data":{"labels":[0,86400000],"datasets":[{"data":[1,2]}]},
+          "options":{"scales":{"x":{"type":"time"}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert_eq!(
+            spec.x_positions,
+            XPositions::Temporal {
+                unix_millis: vec![0, 86_400_000]
+            }
+        );
+    }
+
+    #[test]
+    fn temporal_coordinate_range_error_identifies_field_and_value() {
+        let json = r##"{
+          "type":"scatter",
+          "data":{"datasets":[{"data":[{"x":8640000000000001,"y":0}]}]},
+          "options":{"scales":{"x":{"type":"time"}}}
+        }"##;
+        let err = parse(json, false).unwrap_err();
+        assert!(err.contains("data.datasets[0].data[0].x"));
+        assert!(err.contains("8640000000000001"));
+    }
+
+    #[test]
+    fn time_value_axis_accepts_timestamp_strings_and_numeric_milliseconds() {
+        let json = r##"{
+          "type":"line",
+          "data":{"labels":["a","b"],"datasets":[{"data":["1970-01-01","1970-01-02"]}]},
+          "options":{"scales":{"y":{"type":"time"}}}
+        }"##;
+        let spec = parse(json, false).expect("parse ok");
+        assert_eq!(spec.series[0].values, vec![0.0, 86_400_000.0]);
     }
 
     #[test]

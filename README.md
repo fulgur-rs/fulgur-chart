@@ -143,7 +143,7 @@ Supports a data-only, static subset:
 
 - `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `treemap` / `boxplot` / `progress` / `gauge` / `radialGauge` / `wordCloud` / `sankey` (QuickChart's `progressBar` is also accepted as an alias for `progress`)
 - `data.labels`
-- `data.datasets[]` — `label` / `data` (numeric array; `{x,y}` / `{x,y,r}` for scatter/bubble; `{x,y,v}` for matrix; nested `[min,q1,median,q3,max]` arrays for boxplot) / `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts)
+- `data.datasets[]` — `label` / `data` (numeric array; `{x,y}` / `{x,y,r}` for scatter/bubble; `{x,y,v}` for matrix; nested `[min,q1,median,q3,max]` arrays for boxplot). Temporal axes also accept ISO date strings and epoch milliseconds in index labels, value arrays, and scatter/bubble coordinates. Other dataset options include `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts).
 - For `progress` (alias `progressBar`), `datasets[0].data` holds each bar's value; an optional second dataset's `data` overrides the per-bar max (default 100). The percentage label is shown by default and can be hidden with `options.plugins.datalabels.display: false`.
 - For `gauge`, `datasets[0].data` holds cumulative zone thresholds, `value` is the needle value, and `backgroundColor` is the per-zone colors (`minValue` sets the lower bound). Configure with `options.needle` / `options.valueLabel`. The value label falls back to the rounded value (JS `valueLabel.formatter` is not executed).
 - For `radialGauge`, `datasets[0].data` holds a single value drawn as a fill-to-value arc on a track ring. Configure with `options.domain` / `options.trackColor` / `options.centerPercentage` / `options.roundedCorners` / `options.centerArea` (`displayText` / `fontSize`). The center value text falls back to the rounded value (JS `centerArea.text` is not executed).
@@ -153,7 +153,7 @@ Supports a data-only, static subset:
 - `options.indexAxis`
 - `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right; `legend` does not apply to `gauge` / `radialGauge`)
 - `options.plugins.datalabels` (`display` — renders a value label at each data point)
-- `options.scales` (`stacked` — read from the index axis, matching chart.js; `suggestedMin` / `suggestedMax` and a subset of other options)
+- `options.scales` (`stacked` — read from the index axis, matching chart.js; `suggestedMin` / `suggestedMax` and a subset of other options). Cartesian line, bar, mixed, scatter, and bubble charts accept `type: "time"` or `"timeseries"` independently on x/y. Temporal axes use UTC; `time.unit`, `minUnit`, `parser` (a bounded strftime subset), `round`, and per-unit `displayFormats` are supported.
 - `options.theme` (extension; see below)
 
 Dynamic JavaScript features (`callback` / `animation` / `interaction` / plugin scripts)

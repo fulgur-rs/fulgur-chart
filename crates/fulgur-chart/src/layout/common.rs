@@ -7,7 +7,7 @@ use crate::ir::{
 use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, ValueScale, vega_nice_ticks};
 use crate::scene::{Anchor, Prim, StyledText};
-use crate::temporal::{TemporalTick, temporal_ticks};
+use crate::temporal::{TemporalScale, TemporalTick, temporal_ticks, temporal_ticks_with_options};
 use crate::text::TextMeasurer;
 
 /// 動径軸 (`options.scales.r`) のドメイン `[lo, hi]` を解決する。radar / polarArea 共通。
@@ -206,9 +206,11 @@ pub struct Frame {
     pub plot_bottom: f64,
     pub ticks: NiceTicks,
     pub ys: ValueScale,
+    pub xs: Option<TemporalScale>,
     /// 対数軸のラベルなし minor 目盛(mantissa 2..9)。線形軸では常に空。
     pub minor_ticks: Vec<f64>,
     pub temporal_ticks: Vec<TemporalTick>,
+    pub y_temporal_ticks: Vec<TemporalTick>,
 }
 
 /// 凡例の有無を判定する。
@@ -254,6 +256,17 @@ pub(crate) fn temporal_plot_right_legend_title(spec: &ChartSpec) -> Option<&str>
 /// 空データ/正データなしの場合は `0..1` ではなく `1..10` を返す。詳細は
 /// `log_value_domain` のドキュメントを参照。
 pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
+    if is_temporal_scale(axis) {
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        for value in spec.series.iter().flat_map(|series| &series.values) {
+            if value.is_finite() {
+                min = min.min(*value);
+                max = max.max(*value);
+            }
+        }
+        return resolve_temporal_domain(axis, min, max);
+    }
     if axis.scale_kind == ScaleKind::Logarithmic {
         return log_value_domain(spec, axis);
     }
@@ -336,6 +349,127 @@ pub fn value_domain(spec: &ChartSpec, axis: &AxisSpec) -> (f64, f64) {
         }
     }
     resolve_axis_domain(axis, data_min, data_max)
+}
+
+pub(crate) fn is_temporal_scale(axis: &AxisSpec) -> bool {
+    matches!(axis.scale_kind, ScaleKind::Time | ScaleKind::Timeseries)
+}
+
+pub(crate) fn resolve_temporal_domain(
+    axis: &AxisSpec,
+    mut data_min: f64,
+    mut data_max: f64,
+) -> (f64, f64) {
+    if !data_min.is_finite() || !data_max.is_finite() {
+        data_min = axis.min.unwrap_or(0.0);
+        data_max = axis.max.unwrap_or(data_min + 1.0);
+    }
+    if let Some(suggested_min) = axis.suggested_min.filter(|value| value.is_finite()) {
+        data_min = data_min.min(suggested_min);
+    }
+    if let Some(suggested_max) = axis.suggested_max.filter(|value| value.is_finite()) {
+        data_max = data_max.max(suggested_max);
+    }
+    (
+        axis.min
+            .filter(|value| value.is_finite())
+            .unwrap_or(data_min),
+        axis.max
+            .filter(|value| value.is_finite())
+            .unwrap_or(data_max),
+    )
+}
+
+fn temporal_position_domain(positions: &[i64], axis: &AxisSpec) -> (i64, i64) {
+    let data_min = positions.iter().copied().min().unwrap_or(0);
+    let data_max = positions.iter().copied().max().unwrap_or(data_min);
+    let min = axis
+        .min
+        .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+        .map(|value| value.trunc() as i64)
+        .or_else(|| {
+            axis.suggested_min
+                .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+                .map(|value| (value.trunc() as i64).min(data_min))
+        })
+        .unwrap_or(data_min);
+    let max = axis
+        .max
+        .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+        .map(|value| value.trunc() as i64)
+        .or_else(|| {
+            axis.suggested_max
+                .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+                .map(|value| (value.trunc() as i64).max(data_max))
+        })
+        .unwrap_or(data_max);
+    (min, max)
+}
+
+fn has_temporal_index_bars(spec: &ChartSpec) -> bool {
+    match spec.kind {
+        ChartKind::Bar {
+            horizontal: false, ..
+        } => true,
+        ChartKind::Mixed => spec
+            .series
+            .iter()
+            .any(|series| series.series_type == crate::ir::SeriesType::Bar),
+        _ => false,
+    }
+}
+
+fn temporal_sample_spacing(positions: &[i64]) -> Option<i128> {
+    let mut unique = positions.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    unique
+        .windows(2)
+        .map(|pair| i128::from(pair[1]) - i128::from(pair[0]))
+        .filter(|gap| *gap > 0)
+        .min()
+}
+
+pub(crate) fn temporal_index_domain(
+    positions: &[i64],
+    axis: &AxisSpec,
+    offset_bars: bool,
+) -> (i64, i64) {
+    let (mut min, mut max) = temporal_position_domain(positions, axis);
+    if offset_bars && let Some(half_spacing) = temporal_sample_spacing(positions).map(|gap| gap / 2)
+    {
+        if axis.min.is_none() {
+            min = (i128::from(min) - half_spacing).max(i128::from(i64::MIN)) as i64;
+        }
+        if axis.max.is_none() {
+            max = (i128::from(max) + half_spacing).min(i128::from(i64::MAX)) as i64;
+        }
+    }
+    (min, max)
+}
+
+pub(crate) fn x_temporal_domain(spec: &ChartSpec, positions: &[i64]) -> (i64, i64) {
+    temporal_index_domain(positions, &spec.x_axis, has_temporal_index_bars(spec))
+}
+
+pub(crate) fn temporal_axis_ticks(
+    axis: &AxisSpec,
+    min: i64,
+    max: i64,
+    pixel_extent: f64,
+) -> Vec<TemporalTick> {
+    if is_temporal_scale(axis) {
+        let default_options = crate::ir::TimeOptions::default();
+        temporal_ticks_with_options(
+            min,
+            max,
+            pixel_extent,
+            axis.time.as_ref().unwrap_or(&default_options),
+            &axis.ticks,
+        )
+    } else {
+        temporal_ticks(min, max, pixel_extent)
+    }
 }
 
 /// Maps each series to a compact stack-group index in first-seen order.
@@ -505,6 +639,22 @@ pub(crate) fn format_axis_tick(axis: &AxisSpec, tick: f64) -> String {
         crate::num::fmt_num_log(tick)
     } else {
         crate::num::fmt_axis_tick(tick, axis.ticks.format.as_ref())
+    }
+}
+
+pub(crate) fn axis_temporal_tick_label(
+    axis: &AxisSpec,
+    temporal_ticks: &[TemporalTick],
+    index: usize,
+    tick: f64,
+) -> String {
+    if is_temporal_scale(axis) {
+        temporal_ticks
+            .get(index)
+            .map(|tick| tick.label.clone())
+            .unwrap_or_else(|| format_axis_tick(axis, tick))
+    } else {
+        format_axis_tick(axis, tick)
     }
 }
 
@@ -786,7 +936,30 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // y ドメイン。
     let (domain_min, domain_max) = value_domain(spec, &spec.y_axis);
     let is_log = spec.y_axis.scale_kind == ScaleKind::Logarithmic;
-    let (mut ticks, minor_ticks) = if is_log {
+    let y_temporal_ticks = if is_temporal_scale(&spec.y_axis) {
+        temporal_axis_ticks(
+            &spec.y_axis,
+            domain_min as i64,
+            domain_max as i64,
+            spec.height,
+        )
+    } else {
+        Vec::new()
+    };
+    let (mut ticks, minor_ticks) = if is_temporal_scale(&spec.y_axis) {
+        (
+            NiceTicks {
+                min: domain_min,
+                max: domain_max,
+                step: 0.0,
+                ticks: y_temporal_ticks
+                    .iter()
+                    .map(|tick| tick.unix_millis as f64)
+                    .collect(),
+            },
+            Vec::new(),
+        )
+    } else if is_log {
         let log = crate::scale::log_ticks_within(domain_min, domain_max);
         (
             NiceTicks {
@@ -823,14 +996,14 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             Vec::new(),
         )
     };
-    if !is_log {
+    if !is_log && !is_temporal_scale(&spec.y_axis) {
         ticks = apply_hard_axis_bounds(ticks, &spec.y_axis);
     }
 
     // y 軸ラベル幅。対数軸は fmt_num_log を使う(幅の広いラベルでクリップさせない)。
     let mut max_w = 0.0_f32;
-    for &t in &ticks.ticks {
-        let s = format_axis_tick(&spec.y_axis, t);
+    for (index, &t) in ticks.ticks.iter().enumerate() {
+        let s = axis_temporal_tick_label(&spec.y_axis, &y_temporal_ticks, index, t);
         let w = m.width(&s, spec.theme.font_size as f32);
         if w > max_w {
             max_w = w;
@@ -926,11 +1099,10 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // 左側の最低 plot offset と右側の最低余白として使う。
     let plot_area_temporal_ticks = if matches!(spec.size_mode, SizeMode::PlotArea) {
         match &spec.x_positions {
-            XPositions::Temporal { unix_millis } => unix_millis
-                .first()
-                .zip(unix_millis.last())
-                .map(|(&min, &max)| temporal_ticks(min, max, spec.width))
-                .unwrap_or_default(),
+            XPositions::Temporal { unix_millis } => {
+                let (min, max) = x_temporal_domain(spec, unix_millis);
+                temporal_axis_ticks(&spec.x_axis, min, max, spec.width)
+            }
             XPositions::Category => Vec::new(),
         }
     } else {
@@ -1070,7 +1242,25 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // tight データドメインでそのまま行う(scale.min/max がそれ)ため、これに合わせる
     // (PR #144 の自動レビュー P1 指摘)。floor は ValueScale::Log::map が
     // 0/負値/丸め誤差を log10 前にクランプする下限として使う。
-    let ys = if is_log {
+    let y_values = spec
+        .series
+        .iter()
+        .flat_map(|series| &series.values)
+        .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+        .map(|value| value.trunc() as i64)
+        .collect::<Vec<_>>();
+    let ys = if is_temporal_scale(&spec.y_axis) {
+        let min = domain_min as i64;
+        let max = domain_max as i64;
+        ValueScale::Temporal(TemporalScale::with_domain(
+            spec.y_axis.scale_kind,
+            &y_values,
+            min,
+            max,
+            plot_bottom,
+            plot_top,
+        ))
+    } else if is_log {
         ValueScale::Log {
             inner: LinearScale::new(ticks.min.log10(), ticks.max.log10(), plot_bottom, plot_top),
             floor: ticks.min,
@@ -1084,12 +1274,30 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         ))
     };
     let temporal_ticks = match &spec.x_positions {
-        XPositions::Temporal { unix_millis } => unix_millis
-            .first()
-            .zip(unix_millis.last())
-            .map(|(&min, &max)| temporal_ticks(min, max, plot_right - plot_left))
-            .unwrap_or_default(),
+        XPositions::Temporal { unix_millis } => {
+            let (min, max) = x_temporal_domain(spec, unix_millis);
+            temporal_axis_ticks(&spec.x_axis, min, max, plot_right - plot_left)
+        }
         XPositions::Category => Vec::new(),
+    };
+    let xs = match &spec.x_positions {
+        XPositions::Temporal { unix_millis } => {
+            let (min, max) = x_temporal_domain(spec, unix_millis);
+            let kind = if is_temporal_scale(&spec.x_axis) {
+                spec.x_axis.scale_kind
+            } else {
+                ScaleKind::Time
+            };
+            Some(TemporalScale::with_domain(
+                kind,
+                unix_millis,
+                min,
+                max,
+                plot_left,
+                plot_right,
+            ))
+        }
+        XPositions::Category => None,
     };
 
     Frame {
@@ -1101,8 +1309,10 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         plot_bottom,
         ticks,
         ys,
+        xs,
         minor_ticks,
         temporal_ticks,
+        y_temporal_ticks,
     }
 }
 
@@ -1110,6 +1320,67 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
 pub fn category_center(frame: &Frame, i: usize, n: usize) -> f64 {
     let band_w = (frame.plot_right - frame.plot_left) / n.max(1) as f64;
     frame.plot_left + (i as f64 + 0.5) * band_w
+}
+
+/// Returns the center and local category band for a vertical index position.
+/// Temporal bars use the nearest distinct timestamp gaps so irregular dates keep
+/// their elapsed spacing; category charts keep their existing uniform bands.
+pub(crate) fn x_index_band(
+    spec: &ChartSpec,
+    frame: &Frame,
+    index: usize,
+    count: usize,
+) -> (f64, f64, f64) {
+    let XPositions::Temporal { unix_millis } = &spec.x_positions else {
+        let size = band_width(frame, count);
+        let center = category_center(frame, index, count);
+        return (center, center - size / 2.0, size);
+    };
+    let value = *unix_millis.get(index).unwrap_or(&0);
+    let Some(scale) = frame.xs.as_ref() else {
+        let center = temporal_x(
+            frame,
+            *unix_millis.iter().min().unwrap_or(&0),
+            *unix_millis.iter().max().unwrap_or(&0),
+            value,
+        );
+        let width = (frame.plot_right - frame.plot_left) / count.max(1) as f64;
+        return (center, center - width / 2.0, width);
+    };
+    temporal_position_band(
+        unix_millis,
+        scale,
+        index,
+        count,
+        frame.plot_left,
+        frame.plot_right,
+    )
+}
+
+pub(crate) fn temporal_position_band(
+    positions: &[i64],
+    scale: &TemporalScale,
+    index: usize,
+    count: usize,
+    pixel_start: f64,
+    pixel_end: f64,
+) -> (f64, f64, f64) {
+    let value = *positions.get(index).unwrap_or(&0);
+    let center = scale.map_millis(value);
+    let mut unique = positions.to_vec();
+    unique.sort_unstable();
+    unique.dedup();
+    let fallback = (pixel_end - pixel_start) / count.max(1) as f64;
+    let mut size = unique
+        .windows(2)
+        .map(|pair| (scale.map_millis(pair[1]) - scale.map_millis(pair[0])).abs())
+        .filter(|gap| gap.is_finite() && *gap > 0.0)
+        .min_by(f64::total_cmp)
+        .unwrap_or(fallback);
+    if !size.is_finite() || size <= 0.0 {
+        size = fallback;
+    }
+    (center, center - size / 2.0, size)
 }
 
 /// line/area の x 座標。chart.js の category スケール offset:false(edge-to-edge)に合わせ、
@@ -1145,10 +1416,19 @@ pub fn line_x(spec: &ChartSpec, frame: &Frame, index: usize) -> f64 {
     match &spec.x_positions {
         XPositions::Category => line_category_x(spec, frame, index, spec.categories.len().max(1)),
         XPositions::Temporal { unix_millis } => {
-            let min = *unix_millis.first().unwrap_or(&0);
-            let max = *unix_millis.last().unwrap_or(&min);
-            let value = *unix_millis.get(index).unwrap_or(&min);
-            temporal_x(frame, min, max, value)
+            let value = unix_millis
+                .get(index)
+                .copied()
+                .unwrap_or_else(|| *unix_millis.iter().min().unwrap_or(&0));
+            frame
+                .xs
+                .as_ref()
+                .map(|scale| scale.map_millis(value))
+                .unwrap_or_else(|| {
+                    let min = *unix_millis.iter().min().unwrap_or(&0);
+                    let max = *unix_millis.iter().max().unwrap_or(&min);
+                    temporal_x(frame, min, max, value)
+                })
         }
     }
 }
@@ -1219,7 +1499,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
     // 2. 横グリッド + y 軸ラベル(主目盛)。対数軸は fmt_num_log でラベルを描く。
     let grid_cfg = &spec.y_axis.grid;
     let grid_color = grid_cfg.color.unwrap_or(spec.theme.grid_color);
-    for &t in &frame.ticks.ticks {
+    for (index, &t) in frame.ticks.ticks.iter().enumerate() {
         let y = frame.ys.map(t);
         if grid_cfg.display {
             items.push(Prim::Line {
@@ -1238,7 +1518,7 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
             size: label_font,
             anchor: Anchor::End,
             fill: ink,
-            content: format_axis_tick(&spec.y_axis, t),
+            content: axis_temporal_tick_label(&spec.y_axis, &frame.y_temporal_ticks, index, t),
             rotate_deg: None,
         });
     }
@@ -1375,13 +1655,19 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         }
         XPositions::Temporal { unix_millis } => {
             // 4b. temporal x 軸。grid/tick は全 tick を描き、ラベルだけ決定的に重なり回避する。
-            let min = *unix_millis.first().unwrap_or(&0);
-            let max = *unix_millis.last().unwrap_or(&min);
             let x_grid = &spec.x_axis.grid;
             let grid_color = x_grid.color.unwrap_or(spec.theme.grid_color);
             let mut last_label_right = f64::NEG_INFINITY;
             for tick in &frame.temporal_ticks {
-                let x = temporal_x(frame, min, max, tick.unix_millis);
+                let x = frame
+                    .xs
+                    .as_ref()
+                    .map(|scale| scale.map_millis(tick.unix_millis))
+                    .unwrap_or_else(|| {
+                        let min = *unix_millis.iter().min().unwrap_or(&0);
+                        let max = *unix_millis.iter().max().unwrap_or(&min);
+                        temporal_x(frame, min, max, tick.unix_millis)
+                    });
                 if x_grid.display {
                     items.push(Prim::Line {
                         x1: x,
@@ -2241,6 +2527,7 @@ mod tests {
             },
             categories: (0..n).map(|i| format!("Cat{i:04}")).collect(),
             x_positions: XPositions::Category,
+            y_positions: XPositions::Category,
             series: vec![Series {
                 name: String::new(),
                 values: vec![1.0; n],
@@ -2273,6 +2560,7 @@ mod tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                time: None,
                 ticks: crate::ir::AxisTickOptions::default(),
             },
             y_axis: AxisSpec {
@@ -2286,6 +2574,7 @@ mod tests {
                 grid: AxisGrid::default(),
                 border: AxisBorder::default(),
                 scale_kind: ScaleKind::Linear,
+                time: None,
                 ticks: crate::ir::AxisTickOptions::default(),
             },
             legend: LegendPos::None,
@@ -2392,6 +2681,41 @@ mod tests {
         let x1 = line_x(&spec, &frame, 1);
         let x2 = line_x(&spec, &frame, 2);
         assert!(((x1 - x0) / (x2 - x0) - 1.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn chartjs_timeseries_x_spaces_irregular_dates_equally() {
+        let mut spec = temporal_spec(vec![0, 86_400_000, 4 * 86_400_000]);
+        spec.x_axis.scale_kind = ScaleKind::Timeseries;
+        let frame = compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let x0 = line_x(&spec, &frame, 0);
+        let x1 = line_x(&spec, &frame, 1);
+        let x2 = line_x(&spec, &frame, 2);
+
+        assert!(((x1 - x0) / (x2 - x0) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn chartjs_temporal_y_supports_time_and_timeseries_mapping() {
+        let day = 86_400_000_i64;
+        let mut time_spec = temporal_spec(vec![0, day, 2 * day]);
+        time_spec.y_axis.scale_kind = ScaleKind::Time;
+        time_spec.y_axis.time = Some(crate::ir::TimeOptions::default());
+        time_spec.series[0].values = vec![0.0, day as f64, (4 * day) as f64];
+        let time_frame = compute(&time_spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let time_y0 = time_frame.ys.map(0.0);
+        let time_y1 = time_frame.ys.map(day as f64);
+        let time_y4 = time_frame.ys.map((4 * day) as f64);
+        assert!(((time_y0 - time_y1) / (time_y0 - time_y4) - 0.25).abs() < 1e-9);
+
+        let mut timeseries_spec = time_spec;
+        timeseries_spec.y_axis.scale_kind = ScaleKind::Timeseries;
+        let timeseries_frame = compute(&timeseries_spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let y0 = timeseries_frame.ys.map(0.0);
+        let y1 = timeseries_frame.ys.map(day as f64);
+        let y4 = timeseries_frame.ys.map((4 * day) as f64);
+        assert!(((y0 - y1) / (y0 - y4) - 0.5).abs() < 1e-9);
+        assert!(matches!(timeseries_frame.ys, ValueScale::Temporal(_)));
     }
 
     #[test]
@@ -3315,6 +3639,7 @@ mod tests {
             ValueScale::Log { inner: _, floor } => {
                 assert_eq!(*floor, frame.ticks.min);
             }
+            ValueScale::Temporal(_) => panic!("expected ValueScale::Log for a logarithmic axis"),
             ValueScale::Linear(_) => panic!("expected ValueScale::Log for a logarithmic axis"),
         }
         // 軸は上下反転しているので、最小 tick はプロット下端、最大 tick は上端。
