@@ -204,11 +204,6 @@ fn apply_chartjs_render_budget(spec: &mut ChartSpec) {
             format.maximum_fraction_digits = format
                 .maximum_fraction_digits
                 .map(|digits| digits.min(MAX_RENDER_AXIS_FRACTION_DIGITS));
-            if format.notation == Some(fulgur_chart::ir::AxisTickNotation::Compact)
-                && format.maximum_fraction_digits.is_none()
-            {
-                format.maximum_fraction_digits = Some(MAX_RENDER_AXIS_FRACTION_DIGITS);
-            }
         }
     }
 }
@@ -364,9 +359,20 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .maximum_fraction_digits,
-            Some(MAX_RENDER_AXIS_FRACTION_DIGITS)
+            None
         );
         assert!(spec.x_axis.ticks.format.is_none());
+
+        let compact_svg = render::render_chart(
+            &parse_and_validate_for_render(
+                r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[0,999.9]}]},
+                    "options":{"scales":{"y":{"min":0,"max":999.9,"ticks":{"stepSize":999.9,"format":{"notation":"compact"}}}}}}"#,
+                "chartjs",
+                false,
+            )
+            .unwrap(),
+        );
+        assert!(compact_svg.contains(">1K</text>"));
 
         let vegalite = parse_and_validate_for_render(
             r#"{"mark":"line","data":{"values":[{"category":"a","value":1},{"category":"b","value":2}]},

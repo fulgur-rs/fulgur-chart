@@ -160,7 +160,7 @@ fn compact_fraction_digits(value: f64) -> usize {
     if !value.is_finite() || value == 0.0 {
         return 0;
     }
-    (1.0 - value.abs().log10().floor()).clamp(0.0, 100.0) as usize
+    (1.0 - value.abs().log10().floor()).clamp(0.0, 20.0) as usize
 }
 
 /// 対数軸の目盛ラベル用。`fmt_num` と違い小数点以下を2桁に丸めない
@@ -287,8 +287,14 @@ mod tests {
         };
         assert_eq!(fmt_axis_tick(987_654_321.0, Some(&format)), "988M");
         assert_eq!(fmt_axis_tick(999_999.0, Some(&format)), "1M");
+        assert_eq!(fmt_axis_tick(999.9, Some(&format)), "1K");
         assert_eq!(fmt_axis_tick(999.999, Some(&format)), "1K");
         assert_eq!(fmt_axis_tick(1e15, Some(&format)), "1000T");
+        assert_eq!(compact_fraction_digits(1e-20), 20);
+        assert_eq!(
+            fmt_axis_tick(1e-20, Some(&format)),
+            "0.00000000000000000001"
+        );
     }
 
     #[test]
