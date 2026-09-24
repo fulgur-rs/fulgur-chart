@@ -56,7 +56,7 @@ pub fn fmt_axis_tick(v: f64, options: Option<&AxisTickFormat>) -> String {
         || options.maximum_fraction_digits.is_some()
         || options.notation.is_some();
 
-    let (mut coefficient, mut exponent, mut suffix, is_exponential) = match notation {
+    let (mut coefficient, mut exponent, mut suffix, mut is_exponential) = match notation {
         AxisTickNotation::Standard => (v, 0, "", false),
         AxisTickNotation::Scientific => {
             let (coefficient, exponent) = scientific_parts(v);
@@ -71,8 +71,19 @@ pub fn fmt_axis_tick(v: f64, options: Option<&AxisTickFormat>) -> String {
         AxisTickNotation::Compact => compact_parts(v),
     };
 
+    // Keep automatic compact labels bounded without rounding tiny non-zero values to zero.
+    // If a plain decimal needs more digits than this limit, show it in scientific notation.
+    let compact_scientific_fallback = notation == AxisTickNotation::Compact
+        && maximum_digits.is_none()
+        && compact_fraction_digits(coefficient) > MAX_COMPACT_FRACTION_DIGITS;
+    if compact_scientific_fallback {
+        (coefficient, exponent) = scientific_parts(v);
+        suffix = "";
+        is_exponential = true;
+    }
+
     let fraction_digits = maximum_digits.unwrap_or_else(|| {
-        if notation == AxisTickNotation::Compact {
+        if notation == AxisTickNotation::Compact && !compact_scientific_fallback {
             compact_fraction_digits(coefficient)
         } else {
             3
@@ -83,6 +94,18 @@ pub fn fmt_axis_tick(v: f64, options: Option<&AxisTickFormat>) -> String {
     } else {
         fmt_num(coefficient)
     };
+
+    // Rounding a scientific coefficient such as 9.9996 to three fraction digits can carry
+    // into the next decade. Normalize that result so it renders as 1E-20, not 10E-21.
+    if compact_scientific_fallback
+        && number
+            .parse::<f64>()
+            .is_ok_and(|rounded| rounded.abs() >= 10.0)
+    {
+        coefficient /= 10.0;
+        exponent += 1;
+        number = fixed_fraction(coefficient, fraction_digits, minimum_digits);
+    }
 
     if notation == AxisTickNotation::Compact
         && !is_exponential
@@ -160,8 +183,10 @@ fn compact_fraction_digits(value: f64) -> usize {
     if !value.is_finite() || value == 0.0 {
         return 0;
     }
-    (1.0 - value.abs().log10().floor()).clamp(0.0, 20.0) as usize
+    (1.0 - value.abs().log10().floor()).max(0.0) as usize
 }
+
+const MAX_COMPACT_FRACTION_DIGITS: usize = 20;
 
 /// 対数軸の目盛ラベル用。`fmt_num` と違い小数点以下を2桁に丸めない
 /// (log軸は 0.0001 のような広いレンジの値を扱うため)。
@@ -290,11 +315,11 @@ mod tests {
         assert_eq!(fmt_axis_tick(999.9, Some(&format)), "1K");
         assert_eq!(fmt_axis_tick(999.999, Some(&format)), "1K");
         assert_eq!(fmt_axis_tick(1e15, Some(&format)), "1000T");
-        assert_eq!(compact_fraction_digits(1e-20), 20);
-        assert_eq!(
-            fmt_axis_tick(1e-20, Some(&format)),
-            "0.00000000000000000001"
-        );
+        assert_eq!(compact_fraction_digits(1e-20), 21);
+        assert_eq!(fmt_axis_tick(1e-20, Some(&format)), "1E-20");
+        assert_eq!(fmt_axis_tick(1e-21, Some(&format)), "1E-21");
+        assert_eq!(fmt_axis_tick(1.234e-21, Some(&format)), "1.234E-21");
+        assert_eq!(fmt_axis_tick(9.9996e-21, Some(&format)), "1E-20");
     }
 
     #[test]

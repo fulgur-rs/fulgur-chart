@@ -97,9 +97,12 @@ With WebP disabled, `format=webp` returns `415 Unsupported Media Type`.
 
 Rendered Chart.js requests are capped at **32 tick labels per axis** and **20
 fraction digits per label**. Explicit fraction digit settings are capped at 20;
-automatic compact notation precision is capped at 20 as well. These bounds apply
-to `/chart`, short-link renders, and MCP renders so an untrusted spec cannot make
-a render worker spend excessive time measuring and drawing tick labels.
+automatic compact notation uses at most 20 fraction digits and switches to
+scientific notation when smaller values need more. These bounds apply to `/chart`,
+short-link renders, and MCP renders so an untrusted spec cannot make a render
+worker spend excessive time measuring and drawing tick labels. The automatic
+compact precision limit is also enforced by the shared formatter for direct
+library users.
 `/chart/validate` only parses and validates the spec, so it does not apply
 render-time limits.
 
