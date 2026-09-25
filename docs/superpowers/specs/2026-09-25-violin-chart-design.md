@@ -58,13 +58,13 @@ For a sample group with at least two finite values, use the upstream Gaussian KD
 h = 1.06 * min(sample_standard_deviation, IQR / 1.34) * n^(-1/5)
 ```
 
-Use type-7 quartiles for IQR. Evaluate 100 evenly spaced value positions from the group's minimum through maximum. Normalize each group's density by that group's maximum estimate, then map it to half the category slot allocated to that dataset. This yields a symmetric violin centered on the category position and keeps dataset violins grouped within each category. For `violin`, density controls horizontal width and the value controls y; for `horizontalViolin`, density controls vertical height and the value controls x. Draw each body as one closed, filled and stroked `Prim::Path`.
+Use type-7 quartiles for IQR. Evaluate 100 evenly spaced value positions from the group's minimum through maximum. Normalize each group's density by that group's maximum estimate, then map it to half the category slot allocated to that dataset. This yields a symmetric violin centered on the category position and keeps dataset violins grouped within each category. For `violin`, density controls horizontal width and the value controls y; for `horizontalViolin`, density controls vertical height and the value controls x. Draw each body as one closed, filled and stroked `Prim::ClippedPath`, using the exact plot rectangle to clip both fill and stroke.
 
 Draw the median as a small diamond and the arithmetic mean as a small circle, oriented along the value axis and matching the upstream violin element's default markers. Do not overlay a box, whiskers, or raw sample jitter points.
 
-When a group contains one sample or the computed bandwidth is non-positive or non-finite (including groups with zero IQR), use max(0.01 * value_axis_span, 1e-9) as the fallback bandwidth in data units. If subtracting the axis bounds overflows, use one percent of the larger absolute axis bound before applying the 1e-9 lower bound. Evaluate around the sample mean over three fallback bandwidths on each side so the group remains visible. This also avoids division by zero in the KDE.
+When a group contains one sample or the computed bandwidth is non-positive or non-finite, use max(0.01 * value_axis_span, 1e-9) as the fallback bandwidth in data units. If subtracting the axis bounds overflows, use one percent of the larger absolute axis bound before applying the 1e-9 lower bound. For singleton or constant groups, evaluate around the sample mean over three fallback bandwidths on each side and include that interval in the automatic domain. For non-constant groups with unusable bandwidth, including zero-IQR groups, keep the evaluation range at the observed minimum and maximum while using the fallback bandwidth. This avoids division by zero without shifting the apparent distribution away from observed values.
 
-Density output must remain finite. Empty or all-missing groups are skipped. Every generated path is clipped to the plot frame so explicit hard min/max bounds are honored.
+Density output must remain finite. Empty or all-missing groups are skipped. Clip violin bodies and markers to the plot frame, including their stroke outlines, so explicit hard min/max bounds are honored without moving out-of-range statistics onto an axis edge.
 
 ## Resource Limits
 

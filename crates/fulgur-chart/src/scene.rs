@@ -54,6 +54,18 @@ pub enum Prim {
         stroke: Option<Color>,
         stroke_width: f64,
     },
+    /// Path whose fill and stroke are clipped to a user-space rectangle.
+    ClippedPath {
+        /// SVG path data using the same restricted commands as Path.
+        d: String,
+        fill: Option<Color>,
+        stroke: Option<Color>,
+        stroke_width: f64,
+        clip_x: f64,
+        clip_y: f64,
+        clip_w: f64,
+        clip_h: f64,
+    },
     /// Dashed version of a path used for dataset line styling.
     StyledPath {
         /// SVG path data using the same restricted commands as `Prim::Path`.

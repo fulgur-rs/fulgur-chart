@@ -18,7 +18,7 @@ use std::f64::consts::PI;
 use image::codecs::webp::WebPEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use tiny_skia::{
-    self, FillRule, Paint, PathBuilder, PathSegment, Pixmap, Point, Rect, Stroke, Transform,
+    self, FillRule, Mask, Paint, PathBuilder, PathSegment, Pixmap, Point, Rect, Stroke, Transform,
 };
 use ttf_parser::OutlineBuilder;
 
@@ -26,6 +26,8 @@ use ttf_parser::OutlineBuilder;
 use crate::font::DEFAULT_FONT;
 use crate::ir::Color;
 use crate::scene::{Anchor, Prim, Scene};
+
+type ClipMaskKey = (u64, u64, u64, u64);
 
 /// PNG 出力の最大ピクセル面積(幅 × 高さ)。
 /// scale 適用後のピクセル数がこれを超えると OOM のリスクがあるため Err とする。
@@ -377,6 +379,7 @@ fn scene_to_pixmap_with(
 
     let transform = Transform::from_scale(scale, scale);
     let mut glyph_cache: HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>> = HashMap::new();
+    let mut clip_masks: HashMap<ClipMaskKey, Mask> = HashMap::new();
 
     let mut i = 0;
     while i < scene.items.len() {
@@ -419,7 +422,14 @@ fn scene_to_pixmap_with(
             // まとめて描画して i += run で進める。1 要素ずつ進めると毎回フルスキャンが
             // 走り O(n^2) になる(閾値直下の均一 scatter で顕著)。
             for prim in &scene.items[i..i + run] {
-                render_prim(&mut pixmap, prim, transform, face, &mut glyph_cache);
+                render_prim(
+                    &mut pixmap,
+                    prim,
+                    transform,
+                    face,
+                    &mut glyph_cache,
+                    &mut clip_masks,
+                );
             }
             i += run;
         } else {
@@ -429,6 +439,7 @@ fn scene_to_pixmap_with(
                 transform,
                 face,
                 &mut glyph_cache,
+                &mut clip_masks,
             );
             i += 1;
         }
@@ -769,6 +780,7 @@ fn render_prim(
     transform: Transform,
     face: &ttf_parser::Face<'_>,
     cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
+    clip_masks: &mut HashMap<ClipMaskKey, Mask>,
 ) {
     match prim {
         Prim::Rect { x, y, w, h, fill } => {
@@ -883,6 +895,64 @@ fn render_prim(
                     &make_stroke(*stroke_width),
                     transform,
                     None,
+                );
+            }
+        }
+
+        Prim::ClippedPath {
+            d,
+            fill,
+            stroke,
+            stroke_width,
+            clip_x,
+            clip_y,
+            clip_w,
+            clip_h,
+        } => {
+            let key = (
+                clip_x.to_bits(),
+                clip_y.to_bits(),
+                clip_w.to_bits(),
+                clip_h.to_bits(),
+            );
+            if let std::collections::hash_map::Entry::Vacant(entry) = clip_masks.entry(key) {
+                let Some(rect) = Rect::from_xywh(
+                    *clip_x as f32,
+                    *clip_y as f32,
+                    *clip_w as f32,
+                    *clip_h as f32,
+                ) else {
+                    return;
+                };
+                let clip_path = PathBuilder::from_rect(rect);
+                let Some(mut mask) = Mask::new(pixmap.width(), pixmap.height()) else {
+                    return;
+                };
+                mask.fill_path(&clip_path, FillRule::Winding, true, transform);
+                entry.insert(mask);
+            }
+            let Some(mask) = clip_masks.get(&key) else {
+                return;
+            };
+            let Some(path) = parse_path_data(d) else {
+                return;
+            };
+            if let Some(fill_color) = fill {
+                pixmap.fill_path(
+                    &path,
+                    &solid_paint(*fill_color),
+                    FillRule::Winding,
+                    transform,
+                    Some(mask),
+                );
+            }
+            if let Some(stroke_color) = stroke {
+                pixmap.stroke_path(
+                    &path,
+                    &solid_paint(*stroke_color),
+                    &make_stroke(*stroke_width),
+                    transform,
+                    Some(mask),
                 );
             }
         }
@@ -1979,6 +2049,48 @@ mod tests {
     }
 
     #[test]
+    fn clipped_path_mask_contains_fill_and_mitered_stroke() {
+        let scene = Scene {
+            width: 40.0,
+            height: 40.0,
+            items: vec![Prim::ClippedPath {
+                d: "M 9 20 L 10 19 L 11 20 L 10 21 Z".into(),
+                fill: Some(Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                }),
+                stroke: Some(Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                }),
+                stroke_width: 8.0,
+                clip_x: 10.0,
+                clip_y: 10.0,
+                clip_w: 20.0,
+                clip_h: 20.0,
+            }],
+        };
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let pixmap = scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap();
+        let mut visible = 0;
+        for (index, pixel) in pixmap.data().as_chunks::<4>().0.iter().enumerate() {
+            if pixel[3] == 0 {
+                continue;
+            }
+            visible += 1;
+            let x = index as u32 % pixmap.width();
+            let y = index as u32 / pixmap.width();
+            assert!((10..30).contains(&x), "outside clip at ({x}, {y})");
+            assert!((10..30).contains(&y), "outside clip at ({x}, {y})");
+        }
+        assert!(visible > 0, "clipped path still draws inside its clip");
+    }
+
+    #[test]
     fn parse_path_data_m_l_z() {
         let path = parse_path_data("M 10 20 L 30 40 Z");
         assert!(path.is_some(), "M/L/Z パスはパース可能");
@@ -2435,6 +2547,7 @@ mod tests {
             Transform::identity(),
             &face,
             &mut cache,
+            &mut HashMap::new(),
         );
         assert_eq!(set.stamps[0].data(), expected.data());
 

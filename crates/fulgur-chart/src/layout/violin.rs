@@ -80,6 +80,32 @@ fn auxiliary_spec(spec: &ChartSpec, horizontal: bool) -> ChartSpec {
     } else {
         extend_suggested_bounds(&mut aux.y_axis, data_min, data_max);
     }
+
+    // Include the KDE interval for degenerate groups in the automatic domain. Hard min/max
+    // bounds still take precedence over these suggestions.
+    let value_axis = if horizontal { &aux.x_axis } else { &aux.y_axis };
+    let (domain_min, domain_max) = common::value_domain(&aux, value_axis);
+    let ticks = common::configured_axis_ticks(domain_min, domain_max, value_axis);
+    let mut fallback_min = f64::INFINITY;
+    let mut fallback_max = f64::NEG_INFINITY;
+    for series in &spec.series {
+        for group in &series.violin_samples {
+            let samples = finite_samples(group);
+            let bandwidth = normal_reference_bandwidth(&samples);
+            if samples.is_empty() || (bandwidth.is_finite() && bandwidth > 0.0) {
+                continue;
+            }
+            let mean = stable_mean(&samples);
+            let radius = fallback_bandwidth(&ticks) * 3.0;
+            fallback_min = fallback_min.min((mean - radius).max(-f64::MAX));
+            fallback_max = fallback_max.max((mean + radius).min(f64::MAX));
+        }
+    }
+    if horizontal {
+        extend_suggested_bounds(&mut aux.x_axis, fallback_min, fallback_max);
+    } else {
+        extend_suggested_bounds(&mut aux.y_axis, fallback_min, fallback_max);
+    }
     aux
 }
 
@@ -214,11 +240,17 @@ fn density_samples(samples: &[f64], ticks: &NiceTicks) -> Vec<(f64, f64)> {
     } else {
         let fallback = fallback_bandwidth(ticks);
         let radius = fallback * 3.0;
-        (
-            fallback,
-            (mean - radius).max(-f64::MAX),
-            (mean + radius).min(f64::MAX),
-        )
+        if min < max {
+            // A non-constant group can have zero IQR. Keep its evaluation range on its observed
+            // minimum and maximum; only replace its unusable bandwidth.
+            (fallback, min, max)
+        } else {
+            (
+                fallback,
+                (mean - radius).max(-f64::MAX),
+                (mean + radius).min(f64::MAX),
+            )
+        }
     };
     let mut density = (0..DENSITY_POSITIONS)
         .map(|index| {
@@ -257,10 +289,6 @@ fn median(samples: &[f64]) -> f64 {
     quantile(&sorted, 0.5)
 }
 
-fn clipped_value(value: f64, ticks: &NiceTicks) -> f64 {
-    common::clip_axis_value(value, ticks)
-}
-
 fn category_center(frame: &ViolinFrame, index: usize, count: usize) -> f64 {
     if frame.horizontal {
         let band = (frame.plot_bottom - frame.plot_top) / count.max(1) as f64;
@@ -295,32 +323,194 @@ fn path_from_points(points: &[(f64, f64)]) -> String {
     path
 }
 
-fn body_path(frame: &ViolinFrame, center: f64, half_width: f64, samples: &[f64]) -> String {
+fn intersection(a: (f64, f64), b: (f64, f64), axis: usize, boundary: f64) -> (f64, f64) {
+    let a_value = if axis == 0 { a.0 } else { a.1 };
+    let b_value = if axis == 0 { b.0 } else { b.1 };
+    let scale = a_value.abs().max(b_value.abs()).max(boundary.abs());
+    let t = if scale == 0.0 {
+        0.0
+    } else {
+        ((boundary / scale) - (a_value / scale)) / ((b_value / scale) - (a_value / scale))
+    }
+    .clamp(0.0, 1.0);
+    let mut point = (interpolate(a.0, b.0, t), interpolate(a.1, b.1, t));
+    if axis == 0 {
+        point.0 = boundary;
+    } else {
+        point.1 = boundary;
+    }
+    point
+}
+
+fn clip_polygon_edge(
+    points: &[(f64, f64)],
+    axis: usize,
+    boundary: f64,
+    keep_greater: bool,
+) -> Vec<(f64, f64)> {
+    if points.is_empty() {
+        return Vec::new();
+    }
+    let value = |point: (f64, f64)| if axis == 0 { point.0 } else { point.1 };
+    let inside = |point: (f64, f64)| {
+        if keep_greater {
+            value(point) >= boundary
+        } else {
+            value(point) <= boundary
+        }
+    };
+    let mut output = Vec::with_capacity(points.len() + 2);
+    let mut previous = *points.last().expect("non-empty polygon");
+    let mut previous_inside = inside(previous);
+    for &current in points {
+        let current_inside = inside(current);
+        if current_inside != previous_inside {
+            output.push(intersection(previous, current, axis, boundary));
+        }
+        if current_inside {
+            output.push(current);
+        }
+        previous = current;
+        previous_inside = current_inside;
+    }
+    output
+}
+
+fn clip_polygon_to_rect(
+    mut points: Vec<(f64, f64)>,
+    left: f64,
+    right: f64,
+    top: f64,
+    bottom: f64,
+) -> Vec<(f64, f64)> {
+    if left > right || top > bottom {
+        return Vec::new();
+    }
+    points = clip_polygon_edge(&points, 0, left, true);
+    points = clip_polygon_edge(&points, 0, right, false);
+    points = clip_polygon_edge(&points, 1, top, true);
+    clip_polygon_edge(&points, 1, bottom, false)
+}
+
+fn stroke_inset(stroke_width: f64) -> f64 {
+    if stroke_width.is_finite() {
+        stroke_width.max(0.0) / 2.0
+    } else {
+        0.0
+    }
+}
+
+fn plot_clip_rect(frame: &ViolinFrame) -> (f64, f64, f64, f64) {
+    (
+        frame.plot_left,
+        frame.plot_right,
+        frame.plot_top,
+        frame.plot_bottom,
+    )
+}
+
+fn clipped_path(
+    frame: &ViolinFrame,
+    d: String,
+    fill: Option<crate::ir::Color>,
+    stroke: Option<crate::ir::Color>,
+    stroke_width: f64,
+) -> Prim {
+    let (left, right, top, bottom) = plot_clip_rect(frame);
+    Prim::ClippedPath {
+        d,
+        fill,
+        stroke,
+        stroke_width,
+        clip_x: left,
+        clip_y: top,
+        clip_w: right - left,
+        clip_h: bottom - top,
+    }
+}
+
+fn body_path(frame: &ViolinFrame, center: f64, half_width: f64, samples: &[f64]) -> Option<String> {
     let densities = density_samples(samples, &frame.ticks);
     let mut points = Vec::with_capacity(DENSITY_POSITIONS * 2);
     for &(value, density) in &densities {
-        let value_pos = frame.value_scale.map(clipped_value(value, &frame.ticks));
         let half = half_width * density.clamp(0.0, 1.0);
         points.push(if frame.horizontal {
-            (value_pos, center - half)
+            (value, center - half)
         } else {
-            (center + half, value_pos)
+            (center + half, value)
         });
     }
     for &(value, density) in densities.iter().rev() {
-        let value_pos = frame.value_scale.map(clipped_value(value, &frame.ticks));
         let half = half_width * density.clamp(0.0, 1.0);
         points.push(if frame.horizontal {
-            (value_pos, center + half)
+            (value, center + half)
         } else {
-            (center - half, value_pos)
+            (center - half, value)
         });
     }
-    path_from_points(&points)
+    // Clip in value space before mapping, so out-of-range observations are cut at the axis
+    // boundary instead of collapsing onto it.
+    points = if frame.horizontal {
+        clip_polygon_to_rect(
+            points,
+            frame.ticks.min,
+            frame.ticks.max,
+            frame.plot_top,
+            frame.plot_bottom,
+        )
+    } else {
+        clip_polygon_to_rect(
+            points,
+            frame.plot_left,
+            frame.plot_right,
+            frame.ticks.min,
+            frame.ticks.max,
+        )
+    };
+    for point in &mut points {
+        if frame.horizontal {
+            point.0 = frame.value_scale.map(point.0);
+        } else {
+            point.1 = frame.value_scale.map(point.1);
+        }
+    }
+    let (left, right, top, bottom) = plot_clip_rect(frame);
+    let points = clip_polygon_to_rect(points, left, right, top, bottom);
+    (points.len() >= 3).then(|| path_from_points(&points))
 }
 
-fn diamond_path(frame: &ViolinFrame, category: f64, value: f64) -> String {
-    let value = frame.value_scale.map(clipped_value(value, &frame.ticks));
+fn marker_value_position(frame: &ViolinFrame, value: f64, radius: f64) -> Option<f64> {
+    if !value.is_finite() {
+        return None;
+    }
+    let (left, right, top, bottom) = plot_clip_rect(frame);
+    let (min_pixel, max_pixel) = if frame.horizontal {
+        (left - radius, right + radius)
+    } else {
+        (bottom + radius, top - radius)
+    };
+    let min_value = frame.value_scale.unmap(min_pixel);
+    let max_value = frame.value_scale.unmap(max_pixel);
+    let lower = min_value.min(max_value);
+    let upper = min_value.max(max_value);
+    if value < lower || value > upper {
+        return None;
+    }
+    let position = frame.value_scale.map(value);
+    position.is_finite().then_some(position)
+}
+
+fn diamond_path(
+    frame: &ViolinFrame,
+    category: f64,
+    value: f64,
+    stroke_width: f64,
+) -> Option<String> {
+    let value = marker_value_position(
+        frame,
+        value,
+        DIAMOND_VALUE_RADIUS + stroke_inset(stroke_width),
+    )?;
     let (center_x, center_y) = if frame.horizontal {
         (value, category)
     } else {
@@ -328,7 +518,7 @@ fn diamond_path(frame: &ViolinFrame, category: f64, value: f64) -> String {
     };
     let value_radius = DIAMOND_VALUE_RADIUS;
     let category_radius = DIAMOND_CATEGORY_RADIUS;
-    let mut points = if frame.horizontal {
+    let points = if frame.horizontal {
         vec![
             (center_x - value_radius, center_y),
             (center_x, center_y - category_radius),
@@ -343,11 +533,19 @@ fn diamond_path(frame: &ViolinFrame, category: f64, value: f64) -> String {
             (center_x - category_radius, center_y),
         ]
     };
-    for (x, y) in &mut points {
-        *x = x.clamp(frame.plot_left, frame.plot_right);
-        *y = y.clamp(frame.plot_top, frame.plot_bottom);
-    }
-    path_from_points(&points)
+    let (left, right, top, bottom) = plot_clip_rect(frame);
+    let points = clip_polygon_to_rect(points, left, right, top, bottom);
+    (points.len() >= 3).then(|| path_from_points(&points))
+}
+
+fn circle_points(cx: f64, cy: f64, radius: f64) -> Vec<(f64, f64)> {
+    const CIRCLE_POINTS: usize = 32;
+    (0..CIRCLE_POINTS)
+        .map(|index| {
+            let angle = std::f64::consts::TAU * index as f64 / CIRCLE_POINTS as f64;
+            (cx + radius * angle.cos(), cy + radius * angle.sin())
+        })
+        .collect()
 }
 
 fn add_markers(
@@ -360,35 +558,68 @@ fn add_markers(
 ) {
     let fill = series.fill_at(index);
     let stroke = series.stroke_at(index);
-    let mean = frame
-        .value_scale
-        .map(clipped_value(stable_mean(samples), &frame.ticks));
+    let Some(mean) = marker_value_position(
+        frame,
+        stable_mean(samples),
+        MARKER_RADIUS + stroke_inset(series.stroke_width),
+    ) else {
+        if let Some(d) = diamond_path(frame, category, median(samples), series.stroke_width) {
+            items.push(clipped_path(
+                frame,
+                d,
+                Some(fill),
+                Some(stroke),
+                series.stroke_width,
+            ));
+        }
+        return;
+    };
     let (cx, cy) = if frame.horizontal {
         (mean, category)
     } else {
         (category, mean)
     };
-    let radius = MARKER_RADIUS
-        .min((cx - frame.plot_left).max(0.0))
-        .min((frame.plot_right - cx).max(0.0))
-        .min((cy - frame.plot_top).max(0.0))
-        .min((frame.plot_bottom - cy).max(0.0));
-    if radius > 0.0 && radius.is_finite() {
+    if cx - MARKER_RADIUS >= frame.plot_left + stroke_inset(series.stroke_width)
+        && cx + MARKER_RADIUS <= frame.plot_right - stroke_inset(series.stroke_width)
+        && cy - MARKER_RADIUS >= frame.plot_top + stroke_inset(series.stroke_width)
+        && cy + MARKER_RADIUS <= frame.plot_bottom - stroke_inset(series.stroke_width)
+    {
         items.push(Prim::Circle {
             cx,
             cy,
-            r: radius,
+            r: MARKER_RADIUS,
             fill,
             stroke,
             stroke_width: series.stroke_width,
         });
+    } else {
+        let (left, right, top, bottom) = plot_clip_rect(frame);
+        let points = clip_polygon_to_rect(
+            circle_points(cx, cy, MARKER_RADIUS),
+            left,
+            right,
+            top,
+            bottom,
+        );
+        if points.len() >= 3 {
+            items.push(clipped_path(
+                frame,
+                path_from_points(&points),
+                Some(fill),
+                Some(stroke),
+                series.stroke_width,
+            ));
+        }
     }
-    items.push(Prim::Path {
-        d: diamond_path(frame, category, median(samples)),
-        fill: Some(fill),
-        stroke: Some(stroke),
-        stroke_width: series.stroke_width,
-    });
+    if let Some(d) = diamond_path(frame, category, median(samples), series.stroke_width) {
+        items.push(clipped_path(
+            frame,
+            d,
+            Some(fill),
+            Some(stroke),
+            series.stroke_width,
+        ));
+    }
 }
 
 pub(crate) fn compute_frame(spec: &ChartSpec, m: &TextMeasurer) -> ViolinFrame {
@@ -441,13 +672,15 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
             let category = category_center(&frame, category_index, category_count)
                 + (group_offset + series_index as f64) * dataset_band;
-            let d = body_path(&frame, category, half_width, &samples);
-            scene.items.push(Prim::Path {
-                d,
-                fill: Some(series.fill_at(category_index)),
-                stroke: Some(series.stroke_at(category_index)),
-                stroke_width: series.stroke_width,
-            });
+            if let Some(d) = body_path(&frame, category, half_width, &samples) {
+                scene.items.push(clipped_path(
+                    &frame,
+                    d,
+                    Some(series.fill_at(category_index)),
+                    Some(series.stroke_at(category_index)),
+                    series.stroke_width,
+                ));
+            }
             add_markers(
                 &mut scene.items,
                 &frame,
@@ -483,6 +716,11 @@ mod tests {
             .iter()
             .filter_map(|item| match item {
                 Prim::Path {
+                    d,
+                    fill: Some(fill),
+                    ..
+                }
+                | Prim::ClippedPath {
                     d,
                     fill: Some(fill),
                     ..
@@ -610,7 +848,11 @@ mod tests {
                 .items
                 .iter()
                 .find_map(|item| match item {
-                    Prim::Path { d, .. } if d.matches("L ").count() == 3 => Some(path_points(d)),
+                    Prim::Path { d, .. } | Prim::ClippedPath { d, .. }
+                        if d.matches("L ").count() == 3 =>
+                    {
+                        Some(path_points(d))
+                    }
                     _ => None,
                 })
                 .expect("median diamond");
@@ -672,6 +914,187 @@ mod tests {
     }
 
     #[test]
+    fn violin_hard_bounds_clip_strokes_and_skip_fully_outside_groups() {
+        for (chart_type, axis) in [("violin", "y"), ("horizontalViolin", "x")] {
+            let crossing_json = format!(
+                r##"{{"type":"{chart_type}","data":{{"labels":["A"],"datasets":[{{"data":[[-12,3,17]],"backgroundColor":"#ff0000","borderColor":"#ff0000","borderWidth":8}}]}},"options":{{"scales":{{"{axis}":{{"min":0,"max":10}}}}}}}}"##
+            );
+            let spec = parse(&crossing_json);
+            let frame = compute_frame(&spec, &measurer());
+            let scene = build(&spec, &measurer());
+            let fill = spec.series[0].fill_at(0);
+            let stroke = spec.series[0].stroke_at(0);
+            let mut series_primitives = 0;
+            for item in &scene.items {
+                match item {
+                    Prim::ClippedPath {
+                        d,
+                        fill: Some(item_fill),
+                        stroke: Some(item_stroke),
+                        clip_x,
+                        clip_y,
+                        clip_w,
+                        clip_h,
+                        ..
+                    } if *item_fill == fill && *item_stroke == stroke => {
+                        series_primitives += 1;
+                        close(*clip_x, frame.plot_left);
+                        close(*clip_y, frame.plot_top);
+                        close(*clip_w, frame.plot_right - frame.plot_left);
+                        close(*clip_h, frame.plot_bottom - frame.plot_top);
+                        for (x, y) in path_points(d) {
+                            assert!((frame.plot_left..=frame.plot_right).contains(&x));
+                            assert!((frame.plot_top..=frame.plot_bottom).contains(&y));
+                        }
+                    }
+                    Prim::Circle {
+                        cx,
+                        cy,
+                        r,
+                        fill: item_fill,
+                        stroke: item_stroke,
+                        stroke_width,
+                    } if *item_fill == fill && *item_stroke == stroke => {
+                        series_primitives += 1;
+                        let outer = *r + *stroke_width / 2.0;
+                        assert!(*cx - outer >= frame.plot_left - 0.02);
+                        assert!(*cx + outer <= frame.plot_right + 0.02);
+                        assert!(*cy - outer >= frame.plot_top - 0.02);
+                        assert!(*cy + outer <= frame.plot_bottom + 0.02);
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(series_primitives, 3, "chart={chart_type}");
+            let outside_json = format!(
+                r##"{{"type":"{chart_type}","data":{{"labels":["A"],"datasets":[{{"data":[[100,110,120]],"backgroundColor":"#ff0000","borderColor":"#ff0000","borderWidth":8}}]}},"options":{{"scales":{{"{axis}":{{"min":0,"max":10}}}}}}}}"##
+            );
+            let outside_spec = parse(&outside_json);
+            let outside_scene = build(&outside_spec, &measurer());
+            let outside_fill = outside_spec.series[0].fill_at(0);
+            let outside_stroke = outside_spec.series[0].stroke_at(0);
+            assert!(
+                !outside_scene.items.iter().any(|item| match item {
+                    Prim::ClippedPath {
+                        fill: Some(item_fill),
+                        stroke: Some(item_stroke),
+                        ..
+                    } => *item_fill == outside_fill && *item_stroke == outside_stroke,
+                    Prim::Circle {
+                        fill: item_fill,
+                        stroke: item_stroke,
+                        ..
+                    } => *item_fill == outside_fill && *item_stroke == outside_stroke,
+                    _ => false,
+                }),
+                "fully outside group must not leave violin marks: chart={chart_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn violin_markers_are_kept_when_body_is_outside_a_hard_bound() {
+        for (chart_type, horizontal) in [("violin", false), ("horizontalViolin", true)] {
+            let axis = if horizontal { "x" } else { "y" };
+            let json = format!(
+                r##"{{"type":"{chart_type}","data":{{"labels":["A","B"],"datasets":[{{"data":[[-0.0002,-0.0001],[100,110]]}}]}},"options":{{"scales":{{"{axis}":{{"min":0,"max":110}}}}}}}}"##
+            );
+            let spec = parse(&json);
+            let frame = compute_frame(&spec, &measurer());
+            let scene = build(&spec, &measurer());
+            assert_eq!(
+                body_paths(&scene).len(),
+                1,
+                "only the in-range group has a body"
+            );
+            let first_category = category_center(&frame, 0, 2);
+            let first_group_markers = scene
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Prim::ClippedPath { d, .. } => {
+                        let points = path_points(d);
+                        let category_mean = points
+                            .iter()
+                            .map(|(x, y)| if horizontal { *y } else { *x })
+                            .sum::<f64>()
+                            / points.len() as f64;
+                        ((category_mean - first_category).abs() < 0.5).then_some(points.len())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                first_group_markers.iter().any(|count| *count < 100),
+                "mean and median markers should survive when the body clips away: {chart_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn violin_median_uses_exact_plot_clip_for_thick_mitered_stroke() {
+        let spec = parse(
+            r##"{"type":"horizontalViolin","data":{"labels":["A"],"datasets":[{"data":[[0.5,1,1,1,2]],"borderWidth":8}]},"options":{"scales":{"x":{"min":0,"max":100}}}}"##,
+        );
+        let frame = compute_frame(&spec, &measurer());
+        let scene = build(&spec, &measurer());
+        let median = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::ClippedPath {
+                    d,
+                    stroke_width,
+                    clip_x,
+                    clip_y,
+                    clip_w,
+                    clip_h,
+                    ..
+                } if d.matches("L ").count() == 3 => {
+                    Some((*stroke_width, *clip_x, *clip_y, *clip_w, *clip_h))
+                }
+                _ => None,
+            })
+            .expect("median path is clipped");
+        close(median.0, 8.0);
+        close(median.1, frame.plot_left);
+        close(median.2, frame.plot_top);
+        close(median.3, frame.plot_right - frame.plot_left);
+        close(median.4, frame.plot_bottom - frame.plot_top);
+    }
+
+    #[test]
+    fn violin_zero_iqr_group_keeps_observed_value_range() {
+        for (chart_type, horizontal) in [("violin", false), ("horizontalViolin", true)] {
+            let json = format!(
+                r#"{{"type":"{chart_type}","data":{{"labels":["A"],"datasets":[{{"data":[[0,0,0,0,100]]}}]}}}}"#
+            );
+            let spec = parse(&json);
+            let frame = compute_frame(&spec, &measurer());
+            let scene = build(&spec, &measurer());
+            let (body, _) = body_paths(&scene).into_iter().next().expect("violin body");
+            let points = path_points(body);
+            let observed_min = frame.value_scale.map(0.0);
+            let observed_max = frame.value_scale.map(100.0);
+            let coordinates = points
+                .iter()
+                .map(|(x, y)| if horizontal { *x } else { *y })
+                .collect::<Vec<_>>();
+            let expected_clip_inset = spec.series[0].stroke_width / 2.0 + 0.02;
+            assert!(
+                coordinates
+                    .iter()
+                    .any(|value| (value - observed_min).abs() < expected_clip_inset)
+            );
+            assert!(
+                coordinates
+                    .iter()
+                    .any(|value| (value - observed_max).abs() < expected_clip_inset)
+            );
+        }
+    }
+
+    #[test]
     fn violin_singleton_and_constant_groups_remain_finite_in_both_orientations() {
         for chart_type in ["violin", "horizontalViolin"] {
             for data in ["[5]", "[3,3,3,3]"] {
@@ -679,7 +1102,9 @@ mod tests {
                     r#"{{"type":"{chart_type}","data":{{"labels":["A"],"datasets":[{{"data":[{data}]}}]}}}}"#
                 );
                 let spec = parse(&json);
-                let scene = build(&spec, &measurer());
+                let measurer = measurer();
+                let frame = compute_frame(&spec, &measurer);
+                let scene = build(&spec, &measurer);
                 let bodies = body_paths(&scene);
                 assert_eq!(bodies.len(), 1, "chart={chart_type}, data={data}");
                 assert!(
@@ -687,6 +1112,20 @@ mod tests {
                         .iter()
                         .all(|(x, y)| x.is_finite() && y.is_finite())
                 );
+                let mean = scene
+                    .items
+                    .iter()
+                    .find_map(|item| match item {
+                        Prim::Circle { cx, cy, r, .. } => Some((*cx, *cy, *r)),
+                        _ => None,
+                    })
+                    .expect("visible mean marker");
+                assert!(mean.2 > 0.0, "mean marker has positive radius");
+                if chart_type == "horizontalViolin" {
+                    assert!(mean.0 > frame.plot_left && mean.0 < frame.plot_right);
+                } else {
+                    assert!(mean.1 > frame.plot_top && mean.1 < frame.plot_bottom);
+                }
             }
         }
     }

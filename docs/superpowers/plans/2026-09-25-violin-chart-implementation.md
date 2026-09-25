@@ -12,7 +12,7 @@
 
 - Support QuickChart types `violin` and `horizontalViolin`; preserve existing boxplot input and rendering.
 - Use 100 density positions and bandwidth `h = 1.06 * min(sample_standard_deviation, IQR / 1.34) * n^(-1/5)`, with type-7 quartiles.
-- For singleton or unusable bandwidth, use max(0.01 * value_axis_span, 1e-9) in data units; if the span subtraction overflows, use one percent of the larger absolute axis bound before the 1e-9 lower bound.
+- For singleton or unusable bandwidth, use max(0.01 * value_axis_span, 1e-9) in data units; if the span subtraction overflows, use one percent of the larger absolute axis bound before the 1e-9 lower bound. Singleton/constant groups evaluate around the mean and extend the automatic domain; non-constant zero-IQR groups retain their observed range.
 - Count every raw sample slot, including nulls, against `max_total_data_points`; estimate KDE work as finite sample count × 100 with saturating arithmetic and cap it at `max_total_data_points.saturating_mul(100)`.
 - Count no more than three categorical primitives per non-empty group: body, median, and mean.
 - Draw vertical categories on x and horizontal categories on y. Normalize public model axes to category x and value y in both orientations.

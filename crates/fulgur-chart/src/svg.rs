@@ -3,7 +3,10 @@
 use crate::ir::Color;
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
+use std::collections::HashMap;
 use std::fmt::Write;
+
+type ClipKey = (u64, u64, u64, u64);
 
 pub fn render_svg(scene: &Scene, font_family: &str) -> String {
     let mut s = String::new();
@@ -31,9 +34,42 @@ pub fn render_svg(scene: &Scene, font_family: &str) -> String {
             gi += 1;
         }
     }
-    if gi > 0 {
+    let mut clip_defs = String::new();
+    let mut clip_ids = HashMap::<ClipKey, usize>::new();
+    for item in &scene.items {
+        if let Prim::ClippedPath {
+            clip_x,
+            clip_y,
+            clip_w,
+            clip_h,
+            ..
+        } = item
+        {
+            let key = (
+                clip_x.to_bits(),
+                clip_y.to_bits(),
+                clip_w.to_bits(),
+                clip_h.to_bits(),
+            );
+            if !clip_ids.contains_key(&key) {
+                let idx = clip_ids.len();
+                clip_ids.insert(key, idx);
+                write!(
+                    clip_defs,
+                    r#"<clipPath id="clip{idx}" clipPathUnits="userSpaceOnUse"><rect x="{}" y="{}" width="{}" height="{}"/></clipPath>"#,
+                    fmt_num(*clip_x),
+                    fmt_num(*clip_y),
+                    fmt_num(*clip_w),
+                    fmt_num(*clip_h)
+                )
+                .unwrap();
+            }
+        }
+    }
+    if gi > 0 || !clip_ids.is_empty() {
         s.push_str("<defs>");
         s.push_str(&grad_defs);
+        s.push_str(&clip_defs);
         s.push_str("</defs>");
     }
 
@@ -41,7 +77,7 @@ pub fn render_svg(scene: &Scene, font_family: &str) -> String {
     // 参照する必要があるため、defs パスと同じ順序で採番するカウンタを渡す。
     let mut grad_idx = 0usize;
     for item in &scene.items {
-        write_prim(&mut s, item, font_family, &mut grad_idx);
+        write_prim(&mut s, item, font_family, &mut grad_idx, &clip_ids);
     }
     s.push_str("</svg>\n");
     s
@@ -83,7 +119,13 @@ fn opacity_attr(name: &str, a: f32) -> String {
     }
 }
 
-fn write_prim(s: &mut String, prim: &Prim, font_family: &str, grad_idx: &mut usize) {
+fn write_prim(
+    s: &mut String,
+    prim: &Prim,
+    font_family: &str,
+    grad_idx: &mut usize,
+    clip_ids: &HashMap<ClipKey, usize>,
+) {
     match prim {
         Prim::Rect { x, y, w, h, fill } => {
             let x = fmt_num(*x);
@@ -211,6 +253,47 @@ fn write_prim(s: &mut String, prim: &Prim, font_family: &str, grad_idx: &mut usi
             }
             if let Some(c) = stroke {
                 tail.push_str(&opacity_attr("stroke-opacity", c.a));
+            }
+            write!(
+                s,
+                r#"<path d="{d}" fill="{fill_attr}" stroke="{stroke_attr}"{tail}/>"#
+            )
+            .unwrap();
+        }
+        Prim::ClippedPath {
+            d,
+            fill,
+            stroke,
+            stroke_width,
+            clip_x,
+            clip_y,
+            clip_w,
+            clip_h,
+        } => {
+            let key = (
+                clip_x.to_bits(),
+                clip_y.to_bits(),
+                clip_w.to_bits(),
+                clip_h.to_bits(),
+            );
+            let clip_id = clip_ids.get(&key).expect("clipped path definition");
+            let fill_attr = fill
+                .as_ref()
+                .map(color_hex)
+                .unwrap_or_else(|| "none".to_string());
+            let stroke_attr = stroke
+                .as_ref()
+                .map(color_hex)
+                .unwrap_or_else(|| "none".to_string());
+            let mut tail = format!(r#" clip-path="url(#clip{clip_id})""#);
+            if stroke.is_some() {
+                write!(tail, r#" stroke-width="{}""#, fmt_num(*stroke_width)).unwrap();
+            }
+            if let Some(color) = fill {
+                tail.push_str(&opacity_attr("fill-opacity", color.a));
+            }
+            if let Some(color) = stroke {
+                tail.push_str(&opacity_attr("stroke-opacity", color.a));
             }
             write!(
                 s,
@@ -595,6 +678,31 @@ mod tests {
             svg.contains(r#"stroke-width="2" stroke-opacity="0.75"/>"#),
             "got: {svg}"
         );
+    }
+
+    #[test]
+    fn clipped_path_emits_reusable_user_space_clip() {
+        let scene = Scene {
+            width: 40.0,
+            height: 40.0,
+            items: vec![Prim::ClippedPath {
+                d: "M0 0 L20 0 L20 20 Z".into(),
+                fill: Some(blue()),
+                stroke: Some(black()),
+                stroke_width: 8.0,
+                clip_x: 10.0,
+                clip_y: 12.0,
+                clip_w: 20.0,
+                clip_h: 18.0,
+            }],
+        };
+        let svg = render_svg(&scene, "Noto Sans JP, sans-serif");
+        assert!(svg.contains(
+            r#"<clipPath id="clip0" clipPathUnits="userSpaceOnUse"><rect x="10" y="12" width="20" height="18"/></clipPath>"#
+        ));
+        assert!(svg.contains(
+            r##"<path d="M0 0 L20 0 L20 20 Z" fill="#36a2eb" stroke="#000000" clip-path="url(#clip0)" stroke-width="8"/>"##
+        ));
     }
 
     #[test]
