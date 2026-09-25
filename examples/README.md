@@ -24,6 +24,8 @@ features.
     - `radar.json` … radar chart (multivariate, two series)
     - `mixed.json` … mixed chart (bar + line via per-dataset `type`)
     - `matrix.json` … matrix (heatmap) chart (`{x, y, v}` point data, color gradient)
+    - `violin.json` … vertical violin chart (grouped raw samples; one category has no observations)
+    - `violin-horizontal.json` … horizontal violin chart (grouped raw samples)
   - Features:
     - `datalabels.json` … data labels (`plugins.datalabels.display`)
     - `theme.json` … theme override (`options.theme`, dark palette)
@@ -52,7 +54,7 @@ The chart.js specs (everything except `vegalite`) can be generated together:
 
 ```sh
   for n in bar bar-horizontal stacked-bar line time-line timeseries-line \
-         temporal-scatter area pie doughnut scatter bubble radar mixed matrix datalabels theme; do
+         temporal-scatter area pie doughnut scatter bubble radar mixed matrix violin violin-horizontal datalabels theme; do
   cargo run -q -p fulgur-chart-cli -- render "examples/specs/$n.json" -o "examples/out/$n.svg"
 done
 ```
