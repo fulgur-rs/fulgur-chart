@@ -2,10 +2,12 @@
 //! golden PNG とピクセル許容差で比較する。tiny-skia の AA・浮動小数の
 //! プラットフォーム差を吸収しつつ、実害のある視覚回帰は検出する。
 //!
-//! golden の再生成は環境変数 `UPDATE_GOLDEN`（任意の値）で行う:
+//! golden の再生成は環境変数 `UPDATE_GOLDEN` で行う:
 //!   UPDATE_GOLDEN=1 cargo test -p fulgur-chart --test golden_png
+//!   UPDATE_GOLDEN=bar_logarithmic cargo test -p fulgur-chart --test golden_png
 //!
-//! レンダラ変更時は意図的に UPDATE_GOLDEN=1 で再生成してから commit する。
+//! `1` は全件、spec 名は該当する golden のみ再生成する。レンダラ変更時は意図的に
+//! 全件を再生成してから commit する。
 
 use std::path::PathBuf;
 
@@ -34,6 +36,40 @@ const CHANNEL_TOLERANCE: i16 = 4;
 
 /// 全ピクセルに占める差分ピクセルの許容割合（0.5%）。
 const MAX_DIFF_FRAC: f64 = 0.005;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GoldenMode {
+    Compare,
+    UpdateAll,
+    UpdateOne(&'static str),
+}
+
+impl GoldenMode {
+    fn includes(self, name: &str) -> bool {
+        match self {
+            Self::Compare | Self::UpdateAll => true,
+            Self::UpdateOne(target) => target == name,
+        }
+    }
+
+    fn updates(self) -> bool {
+        !matches!(self, Self::Compare)
+    }
+}
+
+fn parse_golden_mode(value: Option<&str>) -> Result<GoldenMode, String> {
+    match value {
+        None => Ok(GoldenMode::Compare),
+        Some("1") => Ok(GoldenMode::UpdateAll),
+        Some(name) => match NAMES.iter().copied().find(|&candidate| candidate == name) {
+            Some(name) => Ok(GoldenMode::UpdateOne(name)),
+            None => Err(format!(
+                "invalid UPDATE_GOLDEN value {name:?}; use '1' to update all goldens or a spec name: {}",
+                NAMES.join(", ")
+            )),
+        },
+    }
+}
 
 /// spec JSON のパス。CARGO_MANIFEST_DIR は crates/fulgur-chart なので
 /// ../../ でリポジトリルートへ戻り examples/specs を指す。
@@ -66,14 +102,63 @@ fn render_to_png(name: &str) -> Vec<u8> {
 }
 
 #[test]
+fn golden_mode_without_update_env_compares_all_specs() {
+    let mode = parse_golden_mode(None).unwrap();
+
+    assert_eq!(mode, GoldenMode::Compare);
+    assert!(NAMES.iter().all(|&name| mode.includes(name)));
+    assert!(!mode.updates());
+}
+
+#[test]
+fn golden_mode_one_updates_all_specs() {
+    let mode = parse_golden_mode(Some("1")).unwrap();
+
+    assert_eq!(mode, GoldenMode::UpdateAll);
+    assert!(NAMES.iter().all(|&name| mode.includes(name)));
+    assert!(mode.updates());
+}
+
+#[test]
+fn golden_mode_spec_name_updates_only_that_spec() {
+    let mode = parse_golden_mode(Some("bar_logarithmic")).unwrap();
+
+    assert_eq!(mode, GoldenMode::UpdateOne("bar_logarithmic"));
+    let selected = NAMES
+        .iter()
+        .copied()
+        .filter(|&name| mode.includes(name))
+        .collect::<Vec<_>>();
+    assert_eq!(selected, ["bar_logarithmic"]);
+    assert!(mode.updates());
+}
+
+#[test]
+fn golden_mode_rejects_empty_and_unknown_names() {
+    assert!(parse_golden_mode(Some("")).is_err());
+    assert!(parse_golden_mode(Some("not_a_spec")).is_err());
+}
+
+#[test]
 fn golden_png_matches() {
-    let update = std::env::var_os("UPDATE_GOLDEN").is_some();
+    let update_mode = match std::env::var("UPDATE_GOLDEN") {
+        Ok(value) => parse_golden_mode(Some(&value)),
+        Err(std::env::VarError::NotPresent) => parse_golden_mode(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err("UPDATE_GOLDEN must be valid UTF-8".to_owned())
+        }
+    }
+    .unwrap_or_else(|error| panic!("invalid golden update configuration: {error}"));
 
     for &name in NAMES {
+        if !update_mode.includes(name) {
+            continue;
+        }
+
         let actual_png = render_to_png(name);
         let golden = golden_path(name);
 
-        if update {
+        if update_mode.updates() {
             // 再生成モード: golden を書き出して比較はスキップ。
             if let Some(dir) = golden.parent() {
                 std::fs::create_dir_all(dir)
