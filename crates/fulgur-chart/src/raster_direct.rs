@@ -2049,18 +2049,13 @@ mod tests {
     }
 
     #[test]
-    fn clipped_path_mask_contains_fill_and_mitered_stroke() {
+    fn clipped_path_mask_keeps_stroke_only_intersections_inside_the_rect() {
         let scene = Scene {
             width: 40.0,
             height: 40.0,
             items: vec![Prim::ClippedPath {
-                d: "M 9 20 L 10 19 L 11 20 L 10 21 Z".into(),
-                fill: Some(Color {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                    a: 1.0,
-                }),
+                d: "M 8 20 L 9 19 L 9.5 20 L 9 21 Z".into(),
+                fill: None,
                 stroke: Some(Color {
                     r: 0,
                     g: 0,

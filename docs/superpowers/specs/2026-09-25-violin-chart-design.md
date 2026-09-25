@@ -64,7 +64,7 @@ Draw the median as a small diamond and the arithmetic mean as a small circle, or
 
 When a group contains one sample or the computed bandwidth is non-positive or non-finite, use max(0.01 * value_axis_span, 1e-9) as the fallback bandwidth in data units. If subtracting the axis bounds overflows, use one percent of the larger absolute axis bound before applying the 1e-9 lower bound. For singleton or constant groups, evaluate around the sample mean over three fallback bandwidths on each side and include that interval in the automatic domain. For non-constant groups with unusable bandwidth, including zero-IQR groups, keep the evaluation range at the observed minimum and maximum while using the fallback bandwidth. This avoids division by zero without shifting the apparent distribution away from observed values.
 
-Density output must remain finite. Empty or all-missing groups are skipped. Clip violin bodies and markers to the plot frame, including their stroke outlines, so explicit hard min/max bounds are honored without moving out-of-range statistics onto an axis edge.
+Density output must remain finite. Empty or all-missing groups are skipped. Clip violin bodies and markers to the exact plot frame in the SVG and raster renderers, including their stroke outlines, so explicit hard min/max bounds are honored without moving out-of-range statistics onto an axis edge. Bound source geometry before coordinate mapping by the maximum miter extension plus an antialias pixel, but do not cut it at the plot edge before stroking.
 
 ## Resource Limits
 

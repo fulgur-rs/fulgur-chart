@@ -409,6 +409,29 @@ fn plot_clip_rect(frame: &ViolinFrame) -> (f64, f64, f64, f64) {
     )
 }
 
+const MAX_MITER_STROKE_EXTENSION: f64 = 2.0;
+const MAX_GEOMETRY_CLIP_MARGIN: f64 = 1_000_000.0;
+
+/// Leave enough geometry for a miter-limited stroke to reach the exact renderer clip.
+fn stroke_clip_margin(stroke_width: f64) -> f64 {
+    if !stroke_width.is_finite() {
+        return 1.0;
+    }
+    (stroke_width.max(0.0) * MAX_MITER_STROKE_EXTENSION + 1.0).min(MAX_GEOMETRY_CLIP_MARGIN)
+}
+
+fn expanded_value_bounds(frame: &ViolinFrame, margin: f64) -> (f64, f64) {
+    let (left, right, top, bottom) = plot_clip_rect(frame);
+    let (first_pixel, last_pixel) = if frame.horizontal {
+        (left - margin, right + margin)
+    } else {
+        (bottom + margin, top - margin)
+    };
+    let first = frame.value_scale.unmap(first_pixel);
+    let last = frame.value_scale.unmap(last_pixel);
+    (first.min(last), first.max(last))
+}
+
 fn clipped_path(
     frame: &ViolinFrame,
     d: String,
@@ -429,7 +452,13 @@ fn clipped_path(
     }
 }
 
-fn body_path(frame: &ViolinFrame, center: f64, half_width: f64, samples: &[f64]) -> Option<String> {
+fn body_path(
+    frame: &ViolinFrame,
+    center: f64,
+    half_width: f64,
+    stroke_width: f64,
+    samples: &[f64],
+) -> Option<String> {
     let densities = density_samples(samples, &frame.ticks);
     let mut points = Vec::with_capacity(DENSITY_POSITIONS * 2);
     for &(value, density) in &densities {
@@ -448,24 +477,16 @@ fn body_path(frame: &ViolinFrame, center: f64, half_width: f64, samples: &[f64])
             (center - half, value)
         });
     }
-    // Clip in value space before mapping, so out-of-range observations are cut at the axis
-    // boundary instead of collapsing onto it.
+    // Bound coordinates before mapping, but retain the full renderer stroke extent around the
+    // plot. The renderer applies the exact clip after both fill and stroke, avoiding extra joins
+    // on clipped edges and keeping a stroke visible when the body lies just outside hard bounds.
+    let margin = stroke_clip_margin(stroke_width);
+    let (value_min, value_max) = expanded_value_bounds(frame, margin);
+    let (left, right, top, bottom) = plot_clip_rect(frame);
     points = if frame.horizontal {
-        clip_polygon_to_rect(
-            points,
-            frame.ticks.min,
-            frame.ticks.max,
-            frame.plot_top,
-            frame.plot_bottom,
-        )
+        clip_polygon_to_rect(points, value_min, value_max, top - margin, bottom + margin)
     } else {
-        clip_polygon_to_rect(
-            points,
-            frame.plot_left,
-            frame.plot_right,
-            frame.ticks.min,
-            frame.ticks.max,
-        )
+        clip_polygon_to_rect(points, left - margin, right + margin, value_min, value_max)
     };
     for point in &mut points {
         if frame.horizontal {
@@ -474,8 +495,6 @@ fn body_path(frame: &ViolinFrame, center: f64, half_width: f64, samples: &[f64])
             point.1 = frame.value_scale.map(point.1);
         }
     }
-    let (left, right, top, bottom) = plot_clip_rect(frame);
-    let points = clip_polygon_to_rect(points, left, right, top, bottom);
     (points.len() >= 3).then(|| path_from_points(&points))
 }
 
@@ -509,7 +528,7 @@ fn diamond_path(
     let value = marker_value_position(
         frame,
         value,
-        DIAMOND_VALUE_RADIUS + stroke_inset(stroke_width),
+        DIAMOND_VALUE_RADIUS + stroke_clip_margin(stroke_width),
     )?;
     let (center_x, center_y) = if frame.horizontal {
         (value, category)
@@ -533,9 +552,7 @@ fn diamond_path(
             (center_x - category_radius, center_y),
         ]
     };
-    let (left, right, top, bottom) = plot_clip_rect(frame);
-    let points = clip_polygon_to_rect(points, left, right, top, bottom);
-    (points.len() >= 3).then(|| path_from_points(&points))
+    Some(path_from_points(&points))
 }
 
 fn circle_points(cx: f64, cy: f64, radius: f64) -> Vec<(f64, f64)> {
@@ -561,7 +578,7 @@ fn add_markers(
     let Some(mean) = marker_value_position(
         frame,
         stable_mean(samples),
-        MARKER_RADIUS + stroke_inset(series.stroke_width),
+        MARKER_RADIUS + stroke_clip_margin(series.stroke_width),
     ) else {
         if let Some(d) = diamond_path(frame, category, median(samples), series.stroke_width) {
             items.push(clipped_path(
@@ -593,23 +610,13 @@ fn add_markers(
             stroke_width: series.stroke_width,
         });
     } else {
-        let (left, right, top, bottom) = plot_clip_rect(frame);
-        let points = clip_polygon_to_rect(
-            circle_points(cx, cy, MARKER_RADIUS),
-            left,
-            right,
-            top,
-            bottom,
-        );
-        if points.len() >= 3 {
-            items.push(clipped_path(
-                frame,
-                path_from_points(&points),
-                Some(fill),
-                Some(stroke),
-                series.stroke_width,
-            ));
-        }
+        items.push(clipped_path(
+            frame,
+            path_from_points(&circle_points(cx, cy, MARKER_RADIUS)),
+            Some(fill),
+            Some(stroke),
+            series.stroke_width,
+        ));
     }
     if let Some(d) = diamond_path(frame, category, median(samples), series.stroke_width) {
         items.push(clipped_path(
@@ -672,7 +679,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
             let category = category_center(&frame, category_index, category_count)
                 + (group_offset + series_index as f64) * dataset_band;
-            if let Some(d) = body_path(&frame, category, half_width, &samples) {
+            if let Some(d) = body_path(&frame, category, half_width, series.stroke_width, &samples)
+            {
                 scene.items.push(clipped_path(
                     &frame,
                     d,
@@ -904,10 +912,11 @@ mod tests {
             let scene = build(&spec, &measurer);
             close(frame.ticks.min, 0.0);
             close(frame.ticks.max, 10.0);
+            let margin = stroke_clip_margin(spec.series[0].stroke_width);
             for (d, _) in body_paths(&scene) {
                 for (x, y) in path_points(d) {
-                    assert!((frame.plot_left..=frame.plot_right).contains(&x));
-                    assert!((frame.plot_top..=frame.plot_bottom).contains(&y));
+                    assert!((frame.plot_left - margin..=frame.plot_right + margin).contains(&x));
+                    assert!((frame.plot_top - margin..=frame.plot_bottom + margin).contains(&y));
                 }
             }
         }
@@ -935,6 +944,7 @@ mod tests {
                         clip_y,
                         clip_w,
                         clip_h,
+                        stroke_width,
                         ..
                     } if *item_fill == fill && *item_stroke == stroke => {
                         series_primitives += 1;
@@ -942,9 +952,14 @@ mod tests {
                         close(*clip_y, frame.plot_top);
                         close(*clip_w, frame.plot_right - frame.plot_left);
                         close(*clip_h, frame.plot_bottom - frame.plot_top);
+                        let margin = stroke_clip_margin(*stroke_width);
                         for (x, y) in path_points(d) {
-                            assert!((frame.plot_left..=frame.plot_right).contains(&x));
-                            assert!((frame.plot_top..=frame.plot_bottom).contains(&y));
+                            assert!(
+                                (frame.plot_left - margin..=frame.plot_right + margin).contains(&x)
+                            );
+                            assert!(
+                                (frame.plot_top - margin..=frame.plot_bottom + margin).contains(&y)
+                            );
                         }
                     }
                     Prim::Circle {
@@ -1002,13 +1017,8 @@ mod tests {
             let spec = parse(&json);
             let frame = compute_frame(&spec, &measurer());
             let scene = build(&spec, &measurer());
-            assert_eq!(
-                body_paths(&scene).len(),
-                1,
-                "only the in-range group has a body"
-            );
             let first_category = category_center(&frame, 0, 2);
-            let first_group_markers = scene
+            let first_group_paths = scene
                 .items
                 .iter()
                 .filter_map(|item| match item {
@@ -1025,9 +1035,36 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             assert!(
-                first_group_markers.iter().any(|count| *count < 100),
-                "mean and median markers should survive when the body clips away: {chart_type}"
+                first_group_paths.iter().any(|count| *count > 100),
+                "retain geometry for a body stroke intersecting the plot: {chart_type}"
             );
+            assert!(
+                first_group_paths
+                    .iter()
+                    .filter(|count| **count < 100)
+                    .count()
+                    >= 2,
+                "mean and median markers should survive near a hard bound: {chart_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn violin_keeps_stroke_geometry_that_alone_reaches_a_hard_bound() {
+        for (chart_type, axis) in [("violin", "y"), ("horizontalViolin", "x")] {
+            let json = format!(
+                r##"{{"type":"{chart_type}","data":{{"labels":["A"],"datasets":[{{"data":[[-0.5,-0.49]],"borderWidth":8}}]}},"options":{{"scales":{{"{axis}":{{"min":0,"max":100}}}}}}}}"##
+            );
+            let spec = parse(&json);
+            let frame = compute_frame(&spec, &measurer());
+            let scene = build(&spec, &measurer());
+            let bodies = body_paths(&scene);
+            assert_eq!(bodies.len(), 1, "stroke intersects plot: {chart_type}");
+            let margin = stroke_clip_margin(spec.series[0].stroke_width);
+            for (x, y) in path_points(bodies[0].0) {
+                assert!((frame.plot_left - margin..=frame.plot_right + margin).contains(&x));
+                assert!((frame.plot_top - margin..=frame.plot_bottom + margin).contains(&y));
+            }
         }
     }
 
