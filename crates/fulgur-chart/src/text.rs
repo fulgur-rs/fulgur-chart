@@ -36,17 +36,17 @@ impl<'a> TextMeasurer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT;
 
     #[test]
     fn empty_string_is_zero_width() {
-        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(TEST_FONT).unwrap();
         assert_eq!(m.width("", 12.0), 0.0);
     }
 
     #[test]
     fn wider_text_is_wider() {
-        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(TEST_FONT).unwrap();
         let a = m.width("W", 12.0);
         let b = m.width("WWW", 12.0);
         assert!(b > a && b > 0.0);
@@ -54,7 +54,7 @@ mod tests {
 
     #[test]
     fn scales_with_font_size() {
-        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(TEST_FONT).unwrap();
         let small = m.width("売上", 10.0);
         let large = m.width("売上", 20.0);
         assert!((large / small - 2.0).abs() < 1e-6);

@@ -1,6 +1,8 @@
 //! IR → SVG の最上位エントリ。
 
-use crate::font::{DEFAULT_FAMILY, DEFAULT_FONT, family_name};
+#[cfg(feature = "default-font")]
+use crate::font::DEFAULT_FONT;
+use crate::font::{DEFAULT_FAMILY, family_name};
 use crate::text::TextMeasurer;
 
 /// 既定フォント(Noto Sans JP)で描画する legacy の未検証 low-level 経路。
@@ -8,6 +10,7 @@ use crate::text::TextMeasurer;
 /// 後方互換と byte 一致のため [`crate::guard::validate_spec`] を内部では呼ばない。
 /// 入力検証を含む fallible な SVG 経路が必要なら
 /// [`render_chart_with_font`] に [`DEFAULT_FONT`] を渡す。
+#[cfg(feature = "default-font")]
 pub fn render_chart(spec: &crate::ir::ChartSpec) -> String {
     let m = TextMeasurer::new(DEFAULT_FONT).expect("bundled font parses");
     render_with(spec, &m, "Noto Sans JP, sans-serif")
@@ -62,6 +65,7 @@ fn render_with(spec: &crate::ir::ChartSpec, m: &TextMeasurer, font_family: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::font::TEST_FONT;
     use crate::frontend::chartjs;
 
     fn spec() -> crate::ir::ChartSpec {
@@ -70,15 +74,15 @@ mod tests {
     }
 
     #[test]
-    fn with_default_font_is_ok_svg() {
-        let out = render_chart_with_font(&spec(), DEFAULT_FONT).unwrap();
+    fn with_explicit_font_is_ok_svg() {
+        let out = render_chart_with_font(&spec(), TEST_FONT).unwrap();
         assert!(out.starts_with("<svg"));
     }
 
     #[test]
     fn with_font_is_deterministic() {
-        let a = render_chart_with_font(&spec(), DEFAULT_FONT).unwrap();
-        let b = render_chart_with_font(&spec(), DEFAULT_FONT).unwrap();
+        let a = render_chart_with_font(&spec(), TEST_FONT).unwrap();
+        let b = render_chart_with_font(&spec(), TEST_FONT).unwrap();
         assert_eq!(a, b);
     }
 
@@ -91,7 +95,7 @@ mod tests {
     fn custom_font_render_preserves_legacy_unrelated_base_policy_contract() {
         let mut invalid_by_base_policy = spec();
         invalid_by_base_policy.width = 0.0;
-        let svg = render_chart_with_font(&invalid_by_base_policy, DEFAULT_FONT).unwrap();
+        let svg = render_chart_with_font(&invalid_by_base_policy, TEST_FONT).unwrap();
         assert!(svg.starts_with("<svg"));
     }
 
@@ -105,7 +109,7 @@ mod tests {
     #[test]
     fn custom_font_family_is_css_quoted_in_svg() {
         // 同梱フォント(family "Noto Sans JP")でもカスタム経路はクォートされる。
-        let out = render_chart_with_font(&spec(), DEFAULT_FONT).unwrap();
+        let out = render_chart_with_font(&spec(), TEST_FONT).unwrap();
         // SVG 属性では XML エスケープされ &quot; になる。
         assert!(
             out.contains("&quot;Noto Sans JP&quot;, sans-serif"),
@@ -113,6 +117,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "default-font")]
     #[test]
     fn boxplot_renders_to_svg() {
         let json = r#"{

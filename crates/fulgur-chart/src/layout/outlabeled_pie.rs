@@ -318,7 +318,7 @@ fn expand_template(tmpl: &str, label: &str, value: f64, pct: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::render::render_chart_with_font;
 

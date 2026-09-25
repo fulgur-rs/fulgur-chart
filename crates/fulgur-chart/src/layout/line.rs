@@ -1672,7 +1672,7 @@ fn catmull_rom_path(pts: &[(f64, f64)], tension: f64, min_y: f64, max_y: f64) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
     use crate::layout::common;
     use crate::text::TextMeasurer;

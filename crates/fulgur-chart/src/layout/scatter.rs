@@ -849,7 +849,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::ir::{
         AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, Color,
         LegendPos, LineInterpolation, Point, ScaleKind, Series, SeriesType, SizeMode, TimeOptions,

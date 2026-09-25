@@ -17,7 +17,9 @@
   ],
   "scripts": {
     "build": "wasm-pack build --target web --release --locked",
+    "build:no-default-font": "wasm-pack build --target web --release --locked --no-default-features --features no-default-font",
     "test": "node --test",
+    "test:no-default-font": "npm run build:no-default-font && node __test__/no-default-font-smoke.mjs && cargo test --manifest-path ../../fulgur-chart/Cargo.toml --no-default-features --locked --lib",
     "test:browser": "node --test __test__/browser-smoke.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "prepack": "npm run build && rm -f pkg/.gitignore"

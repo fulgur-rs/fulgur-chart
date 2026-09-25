@@ -2562,7 +2562,7 @@ pub fn value_label(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::font::DEFAULT_FONT;
+    use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::ir::{
         AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, LegendPos,
         LineInterpolation, Point, ScaleKind, Series, SeriesType, SizeMode, XPositions,
@@ -3706,7 +3706,7 @@ mod tests {
     /// 対数軸の compute() が返す `Frame` を検証する共通ヘルパ。
     fn compute_log_frame(values: Vec<f64>, width: f64) -> Frame {
         let spec = log_spec(values, width);
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         compute(&spec, &m)
     }
 
@@ -3764,7 +3764,7 @@ mod tests {
         // 線形軸では常に minor_ticks が空であることを固定する回帰テスト
         // (log 専用フィールドが線形パスへ意図せず漏れ出さないことの保証)。
         let spec = make_bar_spec(3, 400.0);
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         assert!(frame.minor_ticks.is_empty());
         assert!(matches!(frame.ys, ValueScale::Linear(_)));
@@ -3798,7 +3798,7 @@ mod tests {
     #[test]
     fn draw_frame_log_scale_labels_major_ticks_only_with_fmt_num_log() {
         let spec = log_spec(vec![1.0, 100_000.0], 600.0);
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -3825,7 +3825,7 @@ mod tests {
     #[test]
     fn draw_frame_log_scale_grid_includes_major_and_minor_lines() {
         let spec = log_spec(vec![1.0, 100.0], 600.0);
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -3852,7 +3852,7 @@ mod tests {
     fn draw_frame_log_scale_grid_display_false_skips_major_and_minor_lines() {
         let mut spec = log_spec(vec![1.0, 100.0], 600.0);
         spec.y_axis.grid.display = false;
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -3879,7 +3879,7 @@ mod tests {
         // 対数軸では tick 刻みも major+minor の本数だけ描かれることを固定する。
         let mut spec = log_spec(vec![1.0, 100.0], 600.0);
         spec.y_axis.grid.draw_ticks = true;
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -3915,7 +3915,7 @@ mod tests {
         // 既定の beginAtZero:true のままだとドメインが1桁広がり(0.00001 まで)、
         // このテストの主眼(ラベル幅計算)から逸れる余分な major tick が増えてしまう。
         spec.y_axis.begin_at_zero = false;
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
 
         let font = spec.theme.font_size as f32;
@@ -3954,7 +3954,7 @@ mod tests {
     fn grid_display_false_produces_no_grid_lines() {
         let mut spec = make_bar_spec(3, 400.0);
         spec.y_axis.grid.display = false;
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -3985,7 +3985,7 @@ mod tests {
             b: 0,
             a: 1.0,
         });
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4005,7 +4005,7 @@ mod tests {
     fn grid_line_width_reaches_prim() {
         let mut spec = make_bar_spec(3, 400.0);
         spec.y_axis.grid.line_width = 3.0;
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4329,7 +4329,7 @@ mod tests {
         // baseline のみを識別するには stroke 色でも絞り込む必要がある。
         let mut spec = make_bar_spec(3, 400.0);
         spec.x_axis.border.display = false;
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let ink = spec.theme.text_color;
         let mut items = Vec::new();
@@ -4354,7 +4354,7 @@ mod tests {
     fn border_dash_reaches_baseline() {
         let mut spec = make_bar_spec(3, 400.0);
         spec.x_axis.border.dash = vec![4.0, 4.0];
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4382,7 +4382,7 @@ mod tests {
             a: 1.0,
         });
         spec.x_axis.border.width = 2.5;
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4402,7 +4402,7 @@ mod tests {
     fn grid_draw_ticks_true_adds_tick_marks() {
         let mut spec = make_bar_spec(3, 400.0);
         spec.y_axis.grid.draw_ticks = true;
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4432,7 +4432,7 @@ mod tests {
     #[test]
     fn grid_draw_ticks_false_produces_no_tick_marks() {
         let spec = make_bar_spec(3, 400.0); // default: draw_ticks=false
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4452,7 +4452,7 @@ mod tests {
 
     #[test]
     fn y_axis_title_shifts_plot_left_right() {
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let spec_no_title = make_bar_spec(3, 400.0);
         let mut spec_with_title = make_bar_spec(3, 400.0);
         spec_with_title.y_axis.title = Some(AxisTitle {
@@ -4480,7 +4480,7 @@ mod tests {
             font_size: None,
             align: AxisTitleAlign::Center,
         });
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4502,7 +4502,7 @@ mod tests {
             font_size: None,
             align: AxisTitleAlign::Start,
         });
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4527,7 +4527,7 @@ mod tests {
             font_size: None,
             align: AxisTitleAlign::End,
         });
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4554,7 +4554,7 @@ mod tests {
             font_size: Some(20.0),
             align: AxisTitleAlign::Center,
         });
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4572,7 +4572,7 @@ mod tests {
     #[test]
     fn no_y_axis_title_produces_no_rotated_text() {
         let spec = make_bar_spec(3, 400.0); // title=None default
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4590,7 +4590,7 @@ mod tests {
 
     #[test]
     fn x_axis_title_shifts_plot_bottom_up() {
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let a = make_bar_spec(3, 400.0);
         let mut b = make_bar_spec(3, 400.0);
         b.x_axis.title = Some(AxisTitle {
@@ -4618,7 +4618,7 @@ mod tests {
             font_size: None,
             align: AxisTitleAlign::Center,
         });
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4640,7 +4640,7 @@ mod tests {
             font_size: None,
             align: AxisTitleAlign::Start,
         });
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4662,7 +4662,7 @@ mod tests {
             font_size: None,
             align: AxisTitleAlign::End,
         });
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
@@ -4680,7 +4680,7 @@ mod tests {
         // plot_bottom がシフトしないことは x_axis_title_shifts_plot_bottom_up で担保。
         // ここでは title=None で下側バンドの余分な text が生えないことを assert する。
         let spec = make_bar_spec(3, 400.0); // title=None
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
