@@ -37,19 +37,12 @@ pub fn render_svg(scene: &Scene, font_family: &str) -> String {
     let mut clip_defs = String::new();
     let mut clip_ids = HashMap::<ClipKey, usize>::new();
     for item in &scene.items {
-        if let Prim::ClippedPath {
-            clip_x,
-            clip_y,
-            clip_w,
-            clip_h,
-            ..
-        } = item
-        {
+        if let Prim::ClippedPath { clip, .. } = item {
             let key = (
-                clip_x.to_bits(),
-                clip_y.to_bits(),
-                clip_w.to_bits(),
-                clip_h.to_bits(),
+                clip.x.to_bits(),
+                clip.y.to_bits(),
+                clip.w.to_bits(),
+                clip.h.to_bits(),
             );
             if !clip_ids.contains_key(&key) {
                 let idx = clip_ids.len();
@@ -57,10 +50,10 @@ pub fn render_svg(scene: &Scene, font_family: &str) -> String {
                 write!(
                     clip_defs,
                     r#"<clipPath id="clip{idx}" clipPathUnits="userSpaceOnUse"><rect x="{}" y="{}" width="{}" height="{}"/></clipPath>"#,
-                    fmt_num(*clip_x),
-                    fmt_num(*clip_y),
-                    fmt_num(*clip_w),
-                    fmt_num(*clip_h)
+                    fmt_num(clip.x),
+                    fmt_num(clip.y),
+                    fmt_num(clip.w),
+                    fmt_num(clip.h)
                 )
                 .unwrap();
             }
@@ -265,16 +258,13 @@ fn write_prim(
             fill,
             stroke,
             stroke_width,
-            clip_x,
-            clip_y,
-            clip_w,
-            clip_h,
+            clip,
         } => {
             let key = (
-                clip_x.to_bits(),
-                clip_y.to_bits(),
-                clip_w.to_bits(),
-                clip_h.to_bits(),
+                clip.x.to_bits(),
+                clip.y.to_bits(),
+                clip.w.to_bits(),
+                clip.h.to_bits(),
             );
             let clip_id = clip_ids.get(&key).expect("clipped path definition");
             let fill_attr = fill
@@ -690,10 +680,12 @@ mod tests {
                 fill: Some(blue()),
                 stroke: Some(black()),
                 stroke_width: 8.0,
-                clip_x: 10.0,
-                clip_y: 12.0,
-                clip_w: 20.0,
-                clip_h: 18.0,
+                clip: Box::new(crate::scene::ClipRect {
+                    x: 10.0,
+                    y: 12.0,
+                    w: 20.0,
+                    h: 18.0,
+                }),
             }],
         };
         let svg = render_svg(&scene, "Noto Sans JP, sans-serif");

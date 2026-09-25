@@ -3,7 +3,7 @@
 use crate::ir::{AxisSpec, ChartKind, ChartSpec};
 use crate::layout::common::{self, Frame};
 use crate::scale::{LinearScale, NiceTicks, ValueScale};
-use crate::scene::{Prim, Scene};
+use crate::scene::{ClipRect, Prim, Scene};
 use crate::text::TextMeasurer;
 
 const DENSITY_POSITIONS: usize = 100;
@@ -450,10 +450,12 @@ fn clipped_path(
         fill,
         stroke,
         stroke_width,
-        clip_x: left,
-        clip_y: top,
-        clip_w: right - left,
-        clip_h: bottom - top,
+        clip: Box::new(ClipRect {
+            x: left,
+            y: top,
+            w: right - left,
+            h: bottom - top,
+        }),
     }
 }
 
@@ -945,18 +947,15 @@ mod tests {
                         d,
                         fill: Some(item_fill),
                         stroke: Some(item_stroke),
-                        clip_x,
-                        clip_y,
-                        clip_w,
-                        clip_h,
+                        clip,
                         stroke_width,
                         ..
                     } if *item_fill == fill && *item_stroke == stroke => {
                         series_primitives += 1;
-                        close(*clip_x, frame.plot_left);
-                        close(*clip_y, frame.plot_top);
-                        close(*clip_w, frame.plot_right - frame.plot_left);
-                        close(*clip_h, frame.plot_bottom - frame.plot_top);
+                        close(clip.x, frame.plot_left);
+                        close(clip.y, frame.plot_top);
+                        close(clip.w, frame.plot_right - frame.plot_left);
+                        close(clip.h, frame.plot_bottom - frame.plot_top);
                         let margin = stroke_clip_margin(*stroke_width);
                         for (x, y) in path_points(d) {
                             assert!(
@@ -1100,13 +1099,10 @@ mod tests {
                 Prim::ClippedPath {
                     d,
                     stroke_width,
-                    clip_x,
-                    clip_y,
-                    clip_w,
-                    clip_h,
+                    clip,
                     ..
                 } if d.matches("L ").count() == 3 => {
-                    Some((*stroke_width, *clip_x, *clip_y, *clip_w, *clip_h))
+                    Some((*stroke_width, clip.x, clip.y, clip.w, clip.h))
                 }
                 _ => None,
             })

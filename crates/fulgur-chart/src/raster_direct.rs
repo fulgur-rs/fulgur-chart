@@ -904,24 +904,18 @@ fn render_prim(
             fill,
             stroke,
             stroke_width,
-            clip_x,
-            clip_y,
-            clip_w,
-            clip_h,
+            clip,
         } => {
             let key = (
-                clip_x.to_bits(),
-                clip_y.to_bits(),
-                clip_w.to_bits(),
-                clip_h.to_bits(),
+                clip.x.to_bits(),
+                clip.y.to_bits(),
+                clip.w.to_bits(),
+                clip.h.to_bits(),
             );
             if let std::collections::hash_map::Entry::Vacant(entry) = clip_masks.entry(key) {
-                let Some(rect) = Rect::from_xywh(
-                    *clip_x as f32,
-                    *clip_y as f32,
-                    *clip_w as f32,
-                    *clip_h as f32,
-                ) else {
+                let Some(rect) =
+                    Rect::from_xywh(clip.x as f32, clip.y as f32, clip.w as f32, clip.h as f32)
+                else {
                     return;
                 };
                 let clip_path = PathBuilder::from_rect(rect);
@@ -2063,10 +2057,12 @@ mod tests {
                     a: 1.0,
                 }),
                 stroke_width: 8.0,
-                clip_x: 10.0,
-                clip_y: 10.0,
-                clip_w: 20.0,
-                clip_h: 20.0,
+                clip: Box::new(crate::scene::ClipRect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 20.0,
+                    h: 20.0,
+                }),
             }],
         };
         let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
