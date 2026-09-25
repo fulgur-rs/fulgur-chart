@@ -302,6 +302,8 @@ pub struct Series {
     /// scatter のマーカー半径(chart.js pointRadius)。None なら既定値。
     /// bubble では point.r を優先し、欠落時のフォールバックに使う。
     pub point_radius: Option<f64>,
+    /// violin のカテゴリごとの生サンプル。violin 種別のみ使用、他は空。None は入力 null。
+    pub violin_samples: Vec<Vec<Option<f64>>>,
     /// boxplot の5数要約データ。boxplot 種別のみ使用、他は空。
     pub box_points: Vec<BoxPoint>,
     /// treemap の階層データ (トップレベルノードの forest)。treemap 種別のみ使用、他は空。
@@ -664,6 +666,10 @@ pub enum ChartKind {
     /// QuickChart 互換の progress バー。軸なし水平バー。
     /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。
     Progress,
+    /// QuickChart 互換の violin。カテゴリごとの生サンプルからKDEを計算する。
+    Violin {
+        horizontal: bool,
+    },
     /// QuickChart 互換の boxplot。カテゴリ×5数要約(min/q1/median/q3/max)。
     BoxPlot,
     /// QuickChart 互換のスパークライン。軸・ラベル・凡例なしのミニマル折れ線。
@@ -869,6 +875,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
             links: vec![],
@@ -896,6 +903,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
             links: vec![],
@@ -938,6 +946,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
             links: vec![],

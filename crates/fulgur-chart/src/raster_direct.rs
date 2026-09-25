@@ -18,7 +18,7 @@ use std::f64::consts::PI;
 use image::codecs::webp::WebPEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use tiny_skia::{
-    self, FillRule, Paint, PathBuilder, PathSegment, Pixmap, Point, Rect, Stroke, Transform,
+    self, FillRule, Mask, Paint, PathBuilder, PathSegment, Pixmap, Point, Rect, Stroke, Transform,
 };
 use ttf_parser::OutlineBuilder;
 
@@ -26,6 +26,8 @@ use ttf_parser::OutlineBuilder;
 use crate::font::DEFAULT_FONT;
 use crate::ir::Color;
 use crate::scene::{Anchor, Prim, Scene};
+
+type ClipMaskKey = (u64, u64, u64, u64);
 
 /// PNG 出力の最大ピクセル面積(幅 × 高さ)。
 /// scale 適用後のピクセル数がこれを超えると OOM のリスクがあるため Err とする。
@@ -308,6 +310,55 @@ const STAMP_MAX_DEVICE_R: f64 = 64.0;
 /// 余裕を残せる。中心、半径、正の stroke 半幅、output scale を全て含めて検証する。
 const MAX_SAFE_DEVICE_CIRCLE_COORD_PX: f64 = 4_000_000.0;
 
+fn validate_clipped_path_device_bounds(scene: &Scene, scale: f32) -> Result<(), String> {
+    const MAX_MITER_STROKE_EXTENSION: f64 = 2.0;
+    let scale = scale as f64;
+    for prim in &scene.items {
+        let Prim::ClippedPath {
+            d,
+            stroke,
+            stroke_width,
+            clip,
+            ..
+        } = prim
+        else {
+            continue;
+        };
+        let Some(path) = parse_path_data(d) else {
+            continue;
+        };
+        let bounds = path.bounds();
+        let path_extent = [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()]
+            .into_iter()
+            .map(|value| f64::from(value).abs())
+            .fold(0.0_f64, f64::max);
+        let stroke_extent = if stroke.is_some() {
+            if !stroke_width.is_finite() {
+                return Err(format!(
+                    "raster clipped path device bounds exceed safe coordinate limit of {:.0} px",
+                    MAX_SAFE_DEVICE_CIRCLE_COORD_PX
+                ));
+            }
+            stroke_width.max(0.0) * MAX_MITER_STROKE_EXTENSION
+        } else {
+            0.0
+        };
+        // The clip rectangle is also sent to tiny-skia as a mask path, so include its edges.
+        let clip_extent = [clip.x, clip.y, clip.x + clip.w, clip.y + clip.h]
+            .into_iter()
+            .map(f64::abs)
+            .fold(0.0_f64, f64::max);
+        let max_device_coord = (path_extent + stroke_extent).max(clip_extent) * scale;
+        if !max_device_coord.is_finite() || max_device_coord > MAX_SAFE_DEVICE_CIRCLE_COORD_PX {
+            return Err(format!(
+                "raster clipped path device bounds exceed safe coordinate limit of {:.0} px",
+                MAX_SAFE_DEVICE_CIRCLE_COORD_PX
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_circle_device_bounds(scene: &Scene, scale: f32) -> Result<(), String> {
     let scale = scale as f64;
     for prim in &scene.items {
@@ -371,12 +422,14 @@ fn scene_to_pixmap_with(
     let area = w as u64 * h as u64;
     limits.check(w, h, area)?;
     validate_circle_device_bounds(scene, scale)?;
+    validate_clipped_path_device_bounds(scene, scale)?;
 
     let mut pixmap = Pixmap::new(w, h)
         .ok_or_else(|| format!("Pixmap allocation failed: invalid dimensions {w}x{h}"))?;
 
     let transform = Transform::from_scale(scale, scale);
     let mut glyph_cache: HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>> = HashMap::new();
+    let mut clip_masks: HashMap<ClipMaskKey, Mask> = HashMap::new();
 
     let mut i = 0;
     while i < scene.items.len() {
@@ -419,7 +472,14 @@ fn scene_to_pixmap_with(
             // まとめて描画して i += run で進める。1 要素ずつ進めると毎回フルスキャンが
             // 走り O(n^2) になる(閾値直下の均一 scatter で顕著)。
             for prim in &scene.items[i..i + run] {
-                render_prim(&mut pixmap, prim, transform, face, &mut glyph_cache);
+                render_prim(
+                    &mut pixmap,
+                    prim,
+                    transform,
+                    face,
+                    &mut glyph_cache,
+                    &mut clip_masks,
+                );
             }
             i += run;
         } else {
@@ -429,6 +489,7 @@ fn scene_to_pixmap_with(
                 transform,
                 face,
                 &mut glyph_cache,
+                &mut clip_masks,
             );
             i += 1;
         }
@@ -769,6 +830,7 @@ fn render_prim(
     transform: Transform,
     face: &ttf_parser::Face<'_>,
     cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
+    clip_masks: &mut HashMap<ClipMaskKey, Mask>,
 ) {
     match prim {
         Prim::Rect { x, y, w, h, fill } => {
@@ -883,6 +945,58 @@ fn render_prim(
                     &make_stroke(*stroke_width),
                     transform,
                     None,
+                );
+            }
+        }
+
+        Prim::ClippedPath {
+            d,
+            fill,
+            stroke,
+            stroke_width,
+            clip,
+        } => {
+            let key = (
+                clip.x.to_bits(),
+                clip.y.to_bits(),
+                clip.w.to_bits(),
+                clip.h.to_bits(),
+            );
+            if let std::collections::hash_map::Entry::Vacant(entry) = clip_masks.entry(key) {
+                let Some(rect) =
+                    Rect::from_xywh(clip.x as f32, clip.y as f32, clip.w as f32, clip.h as f32)
+                else {
+                    return;
+                };
+                let clip_path = PathBuilder::from_rect(rect);
+                let Some(mut mask) = Mask::new(pixmap.width(), pixmap.height()) else {
+                    return;
+                };
+                mask.fill_path(&clip_path, FillRule::Winding, true, transform);
+                entry.insert(mask);
+            }
+            let Some(mask) = clip_masks.get(&key) else {
+                return;
+            };
+            let Some(path) = parse_path_data(d) else {
+                return;
+            };
+            if let Some(fill_color) = fill {
+                pixmap.fill_path(
+                    &path,
+                    &solid_paint(*fill_color),
+                    FillRule::Winding,
+                    transform,
+                    Some(mask),
+                );
+            }
+            if let Some(stroke_color) = stroke {
+                pixmap.stroke_path(
+                    &path,
+                    &solid_paint(*stroke_color),
+                    &make_stroke(*stroke_width),
+                    transform,
+                    Some(mask),
                 );
             }
         }
@@ -1914,6 +2028,73 @@ mod tests {
         );
     }
 
+    fn clipped_path_scene(
+        d: &str,
+        fill: Option<Color>,
+        stroke: Option<Color>,
+        stroke_width: f64,
+    ) -> Scene {
+        Scene {
+            width: 40.0,
+            height: 40.0,
+            items: vec![Prim::ClippedPath {
+                d: d.to_string(),
+                fill,
+                stroke,
+                stroke_width,
+                clip: Box::new(crate::scene::ClipRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 40.0,
+                    h: 40.0,
+                }),
+            }],
+        }
+    }
+
+    #[test]
+    fn clipped_path_device_bounds_check_output_scale_and_stroke_extent() {
+        let off_canvas = clipped_path_scene(
+            "M 2100000 10 L 2100002 10 L 2100002 12 L 2100000 12 Z",
+            Some(Color {
+                r: 54,
+                g: 162,
+                b: 235,
+                a: 1.0,
+            }),
+            None,
+            0.0,
+        );
+        let scale_error = match scene_to_png(&off_canvas, 2.0, DEFAULT_FONT) {
+            Err(error) => error,
+            Ok(_) => panic!("off-canvas clipped path must fail before rasterization"),
+        };
+        assert!(
+            scale_error.contains("clipped path device bounds"),
+            "{scale_error}"
+        );
+
+        let thick_stroke = clipped_path_scene(
+            "M 1000000 10 L 1000002 10 L 1000002 12 L 1000000 12 Z",
+            None,
+            Some(Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            }),
+            1_100_000.0,
+        );
+        let stroke_error = match scene_to_png(&thick_stroke, 1.5, DEFAULT_FONT) {
+            Err(error) => error,
+            Ok(_) => panic!("clipped path stroke extent must fail before rasterization"),
+        };
+        assert!(
+            stroke_error.contains("clipped path device bounds"),
+            "{stroke_error}"
+        );
+    }
+
     #[test]
     fn circle_device_bounds_preserve_invalid_circle_no_draw_semantics() {
         for radius in [f64::NAN, f64::INFINITY, -1.0] {
@@ -1976,6 +2157,45 @@ mod tests {
         .unwrap();
         let png = render_chart_to_png(&spec, 1.0, DEFAULT_FONT).unwrap();
         assert_eq!(&png[0..4], &[0x89, b'P', b'N', b'G']);
+    }
+
+    #[test]
+    fn clipped_path_mask_keeps_stroke_only_intersections_inside_the_rect() {
+        let scene = Scene {
+            width: 40.0,
+            height: 40.0,
+            items: vec![Prim::ClippedPath {
+                d: "M 8 20 L 9 19 L 9.5 20 L 9 21 Z".into(),
+                fill: None,
+                stroke: Some(Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                }),
+                stroke_width: 8.0,
+                clip: Box::new(crate::scene::ClipRect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 20.0,
+                    h: 20.0,
+                }),
+            }],
+        };
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let pixmap = scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap();
+        let mut visible = 0;
+        for (index, pixel) in pixmap.data().as_chunks::<4>().0.iter().enumerate() {
+            if pixel[3] == 0 {
+                continue;
+            }
+            visible += 1;
+            let x = index as u32 % pixmap.width();
+            let y = index as u32 / pixmap.width();
+            assert!((10..30).contains(&x), "outside clip at ({x}, {y})");
+            assert!((10..30).contains(&y), "outside clip at ({x}, {y})");
+        }
+        assert!(visible > 0, "clipped path still draws inside its clip");
     }
 
     #[test]
@@ -2435,6 +2655,7 @@ mod tests {
             Transform::identity(),
             &face,
             &mut cache,
+            &mut HashMap::new(),
         );
         assert_eq!(set.stamps[0].data(), expected.data());
 

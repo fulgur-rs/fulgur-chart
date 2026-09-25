@@ -24,6 +24,8 @@ const NAMES: &[&str] = &[
     "line_with_null",
     "bar_with_null",
     "boxplot_with_null",
+    "violin",
+    "violin-horizontal",
     "bar_logarithmic",
 ];
 

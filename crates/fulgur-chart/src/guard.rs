@@ -27,6 +27,9 @@ const MAX_WORDCLOUD_WORD_BYTES: usize = 200;
 /// プリミティブ数・パースコストに直結する。10,000 本 ≈ 出力規模・処理量ともに実用上限。
 pub const MAX_SANKEY_LINKS: usize = 10_000;
 
+/// violin の KDE で評価する密度位置数。
+const VIOLIN_DENSITY_POSITIONS: usize = 100;
+
 /// sankey のユニークノード数上限 (スタックオーバーフロー/DoS 対策)。
 ///
 /// レイアウト(`layout/sankey.rs`)の `process_from`/`process_to`、および
@@ -177,6 +180,46 @@ fn validate_tree(
 ///
 /// CLI は `--width`/`--height` オーバーライドを適用した後にこの関数を呼ぶ。
 /// 超過した場合は `Err(説明メッセージ)` を返す。
+fn violin_raw_sample_slots(series: &crate::ir::Series) -> usize {
+    series
+        .violin_samples
+        .iter()
+        .fold(0usize, |count, group| count.saturating_add(group.len()))
+}
+
+fn violin_finite_sample_count(spec: &ChartSpec) -> usize {
+    spec.series.iter().fold(0usize, |count, series| {
+        let finite = series
+            .violin_samples
+            .iter()
+            .flat_map(|group| group.iter())
+            .filter(|sample| sample.is_some_and(|value| value.is_finite()))
+            .count();
+        count.saturating_add(finite)
+    })
+}
+
+fn violin_kde_work_exceeds(finite_samples: usize, max_data_points: usize) -> bool {
+    finite_samples.saturating_mul(VIOLIN_DENSITY_POSITIONS)
+        > max_data_points.saturating_mul(VIOLIN_DENSITY_POSITIONS)
+}
+
+fn violin_nonempty_group_count(spec: &ChartSpec) -> usize {
+    spec.series.iter().fold(0usize, |count, series| {
+        let groups = series
+            .violin_samples
+            .iter()
+            .take(spec.categories.len())
+            .filter(|group| {
+                group
+                    .iter()
+                    .any(|sample| sample.is_some_and(f64::is_finite))
+            })
+            .count();
+        count.saturating_add(groups)
+    })
+}
+
 pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     validate_spec_base(spec, limits)?;
     if !matches!(spec.kind, ChartKind::Line { .. })
@@ -373,6 +416,19 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         ));
     }
 
+    // violin は非空 group ごとに body/median/mean の最大 3 primitives を生成する。
+    if matches!(spec.kind, crate::ir::ChartKind::Violin { .. }) {
+        const PRIMS_PER_VIOLIN: usize = 3;
+        let groups = violin_nonempty_group_count(spec);
+        let violin_primitives = groups.saturating_mul(PRIMS_PER_VIOLIN);
+        if violin_primitives > limits.max_categorical_primitives {
+            return Err(format!(
+                "violin groups {groups} require {violin_primitives} primitives, exceeding limit {}",
+                limits.max_categorical_primitives,
+            ));
+        }
+    }
+
     // --- progress バー数(プリミティブ数) ---
     // progress は series[0].values の各要素が 1 本のバーになり、バーごとに
     // トラック・前景・バー名・%ラベルで最大 4 プリミティブを生む。カテゴリ(labels)が
@@ -541,6 +597,20 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         }
     }
 
+    // --- violin KDE の仕事量 ---
+    if matches!(spec.kind, crate::ir::ChartKind::Violin { .. }) {
+        let finite_samples = violin_finite_sample_count(spec);
+        if violin_kde_work_exceeds(finite_samples, limits.max_total_data_points) {
+            let work = finite_samples.saturating_mul(VIOLIN_DENSITY_POSITIONS);
+            let maximum = limits
+                .max_total_data_points
+                .saturating_mul(VIOLIN_DENSITY_POSITIONS);
+            return Err(format!(
+                "violin KDE work estimate {work} exceeds limit {maximum}"
+            ));
+        }
+    }
+
     // --- 全データ点数の合計(scatter/bubble 向け) ---
     // values と points の大きい方を各系列のコストとして合算する。
     // treemap ツリーをノード数・深さ・ラベル長で検証する。深さ上限により本検証と
@@ -554,13 +624,19 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
     // グローバルな max_total_data_points 上限が sankey にも効く。
     let link_points: usize = spec.series.iter().map(|s| s.links.len()).sum();
 
-    let total_points: usize = spec
-        .series
-        .iter()
-        .map(|s| s.values.len().max(s.points.len()).max(s.box_points.len()))
-        .sum::<usize>()
-        + tree_points
-        + link_points;
+    let series_points = spec.series.iter().fold(0usize, |total, series| {
+        let points = series
+            .values
+            .len()
+            .max(series.points.len())
+            .max(series.box_points.len())
+            .max(violin_raw_sample_slots(series))
+            .max(series.violin_samples.len());
+        total.saturating_add(points)
+    });
+    let total_points = series_points
+        .saturating_add(tree_points)
+        .saturating_add(link_points);
     if total_points > limits.max_total_data_points {
         return Err(format!(
             "全系列のデータ点数合計 {} が上限 {} を超えています",
@@ -913,6 +989,63 @@ mod tests {
     }
 
     #[test]
+    fn violin_raw_sample_slots_including_nulls_count_toward_point_limit() {
+        let mut spec = chartjs::parse(
+            r#"{"type":"violin","data":{"labels":["A"],"datasets":[{"data":[[1,null,null]]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.series[0].violin_samples[0] = vec![Some(1.0), None, None];
+        let limits = InputLimits {
+            max_total_data_points: 2,
+            ..default_limits()
+        };
+
+        let err = validate_spec(&spec, &limits).unwrap_err();
+        assert!(err.contains("データ点数合計"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn violin_empty_groups_count_toward_point_limit() {
+        let spec = chartjs::parse(
+            r#"{"type":"violin","data":{"labels":["A","B","C"],"datasets":[{"data":[null,[],[]]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let limits = InputLimits {
+            max_total_data_points: 2,
+            ..default_limits()
+        };
+
+        let err = validate_spec(&spec, &limits).unwrap_err();
+        assert!(err.contains("データ点数合計"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn violin_kde_work_limit_uses_saturating_arithmetic() {
+        assert!(violin_kde_work_exceeds(3, 2));
+        assert!(!violin_kde_work_exceeds(2, 2));
+        assert!(violin_kde_work_exceeds(usize::MAX, usize::MAX / 100));
+        assert!(!violin_kde_work_exceeds(usize::MAX, usize::MAX));
+    }
+
+    #[test]
+    fn violin_primitive_bound_counts_three_per_nonempty_group() {
+        let spec = chartjs::parse(
+            r#"{"type":"violin","data":{"labels":["A","B"],"datasets":[{"data":[[1,2],[3,4]]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let limits = InputLimits {
+            max_categorical_primitives: 5,
+            ..default_limits()
+        };
+
+        let err = validate_spec(&spec, &limits).unwrap_err();
+        assert!(err.contains("violin"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn temporal_positions_must_match_categories() {
         let mut spec = base_spec();
         spec.categories = vec!["a".into(), "b".into()];
@@ -1248,6 +1381,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
             links: vec![],
@@ -1290,6 +1424,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
             links: vec![],
@@ -1326,6 +1461,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
             links: vec![],
@@ -1361,6 +1497,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
             links: vec![],

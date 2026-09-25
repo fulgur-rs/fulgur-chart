@@ -10,6 +10,15 @@ pub enum Anchor {
     End,
 }
 
+/// User-space rectangle used to clip a path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClipRect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
 /// 描画プリミティブ。SVG要素に1対1で対応する。
 #[derive(Clone, Debug, PartialEq)]
 pub enum Prim {
@@ -53,6 +62,16 @@ pub enum Prim {
         fill: Option<Color>,
         stroke: Option<Color>,
         stroke_width: f64,
+    },
+    /// Path whose fill and stroke are clipped to a user-space rectangle.
+    ClippedPath {
+        /// SVG path data using the same restricted commands as Path.
+        d: String,
+        fill: Option<Color>,
+        stroke: Option<Color>,
+        stroke_width: f64,
+        /// Boxed so this rare primitive does not increase the size of every Prim.
+        clip: Box<ClipRect>,
     },
     /// Dashed version of a path used for dataset line styling.
     StyledPath {

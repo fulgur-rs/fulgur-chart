@@ -559,14 +559,14 @@ fn parse_cubic_interpolation_mode(ds: &RawDataset) -> Result<Option<CubicMode>, 
     }
 }
 
-/// `data`: 数値配列(カテゴリ系)、ネスト配列(boxplot)、または点オブジェクト配列(scatter/bubble)。
-/// untagged は順に試す: `Nums` → `[1, null, 2]`、`Boxes` → `[[1,2,3,4,5], null]`、`Points` → `[{x,y}]`。
-/// `Nums` / `Boxes` は要素の `null` を許容し、frontend 境界で `f64::NAN` に写像する。
+/// Dataset data is a flat numeric list, nested box/violin samples, or point objects.
+/// The untagged variant order preserves existing boxplot and point parsing.
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum DataField {
     Nums(Vec<Option<RawChartValue>>),
     Boxes(Vec<Option<Vec<f64>>>),
+    Samples(Vec<Option<Vec<Option<f64>>>>),
     Points(Vec<RawPoint>),
 }
 
@@ -735,6 +735,27 @@ impl DataField {
                 vec![nan_box_point(); v.len()]
             }
             _ => vec![],
+        }
+    }
+
+    /// Convert nested groups or an all-null flat array to category sample groups.
+    fn into_violin_samples(self) -> Vec<Vec<Option<f64>>> {
+        match self {
+            DataField::Boxes(groups) => groups
+                .into_iter()
+                .map(|group| {
+                    group
+                        .map(|values| values.into_iter().map(Some).collect())
+                        .unwrap_or_default()
+                })
+                .collect(),
+            DataField::Samples(groups) => {
+                groups.into_iter().map(Option::unwrap_or_default).collect()
+            }
+            DataField::Nums(groups) if groups.iter().all(Option::is_none) => {
+                vec![Vec::new(); groups.len()]
+            }
+            _ => Vec::new(),
         }
     }
 }
@@ -1373,6 +1394,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             // QuickChart の正式名は "progressBar"。互換のため "progress" も受理する。
             "progress" | "progressBar" => ChartKind::Progress,
             "boxplot" => ChartKind::BoxPlot,
+            "violin" => ChartKind::Violin { horizontal: false },
+            "horizontalViolin" => ChartKind::Violin { horizontal: true },
             "polarArea" => ChartKind::PolarArea,
             "sparkline" => ChartKind::Sparkline,
             "outlabeledPie" => ChartKind::OutlabeledPie {
@@ -1441,7 +1464,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     // scatter/bubble はどちらも点データ(Series.points)を使う線形×線形チャート。
     let is_point_based = matches!(kind, ChartKind::Scatter | ChartKind::Bubble);
     let is_boxplot = matches!(kind, ChartKind::BoxPlot);
-    // sparkline はライン系のスケール慣習に従い begin_at_zero をデフォルト false にする。
+    let is_violin = matches!(kind, ChartKind::Violin { .. });
+    // sparkline と violin はデータ範囲を既定ドメインにする。
     let is_sparkline = matches!(kind, ChartKind::Sparkline);
 
     // データ形状とチャート種の整合を検査する。点ベース(scatter/bubble)は {x,y(,r)}
@@ -1453,13 +1477,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             DataField::Nums(v) => {
                 if is_point_based {
                     !v.is_empty()
-                } else if is_boxplot {
+                } else if is_boxplot || is_violin {
                     !v.is_empty() && !v.iter().all(Option::is_none)
                 } else {
                     false
                 }
             }
-            DataField::Boxes(v) => !is_boxplot && !v.is_empty(),
+            DataField::Boxes(v) => !(is_boxplot || is_violin || v.is_empty()),
+            DataField::Samples(v) => !is_violin && !v.is_empty(),
             DataField::Points(v) => !is_point_based && !v.is_empty(),
         };
         if mismatched {
@@ -1480,6 +1505,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             | crate::ir::ChartKind::Bar { .. }
             | crate::ir::ChartKind::Mixed
             | crate::ir::ChartKind::BoxPlot
+            | crate::ir::ChartKind::Violin { .. }
     );
     if !supports_null_data {
         for ds in &raw.data.datasets {
@@ -1615,6 +1641,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             | ChartKind::Mixed
             | ChartKind::Scatter
             | ChartKind::Bubble
+            | ChartKind::Violin { .. }
     );
     if !supports_cartesian_temporal
         && (x_is_temporal
@@ -1659,7 +1686,9 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             horizontal: false, ..
         }
         | ChartKind::Line { .. }
-        | ChartKind::Mixed => Some("x"),
+        | ChartKind::Mixed
+        | ChartKind::Violin { horizontal: false } => Some("x"),
+        ChartKind::Violin { horizontal: true } => Some("y"),
         _ => None,
     };
     let x_positions = if x_is_temporal && index_axis_name == Some("x") {
@@ -1691,7 +1720,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     };
     let categories = labels_to_categories(raw.data.labels, temporal_index)?;
 
-    // bar/line の値軸と scatter/bubble の数値 x/y 軸で log を許可する。
+    // 値軸(bar/line/violin)と scatter/bubble の数値 x/y 軸で log を許可する。
     // カテゴリ軸や未対応 kind への type:"logarithmic" 指定は黙って無視(Linear のまま)。
     let x_axis_is_log = matches!(
         kind,
@@ -1700,6 +1729,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             ..
         } | ChartKind::Scatter
             | ChartKind::Bubble
+            | ChartKind::Violin { horizontal: true }
     ) && is_logarithmic(x_opts);
     let y_axis_is_log = matches!(
         kind,
@@ -1709,6 +1739,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         } | ChartKind::Line { .. }
             | ChartKind::Scatter
             | ChartKind::Bubble
+            | ChartKind::Violin { horizontal: false }
     ) && is_logarithmic(y_opts);
     let x_axis_scale_kind = if x_axis_is_log {
         ScaleKind::Logarithmic
@@ -1744,23 +1775,33 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             }
             let area_fill = ds.fill.to_area_fill(i, dataset_count);
             // 点ベースは点データ、boxplot はボックスデータ、それ以外は数値配列を採る。`data` は一度だけ消費する。
-            let (values, points, box_points) = if is_point_based {
+            let (values, points, box_points, violin_samples) = if is_point_based {
                 (
                     vec![],
                     ds.data.into_points(x_time.as_ref(), y_time.as_ref(), i)?,
                     vec![],
+                    vec![],
                 )
             } else if is_boxplot {
-                (vec![], vec![], ds.data.into_box_points())
+                (vec![], vec![], ds.data.into_box_points(), vec![])
+            } else if is_violin {
+                (vec![], vec![], vec![], ds.data.into_violin_samples())
             } else {
                 // 対数軸で描画できない値のスキップは layout 層で行う。IR の values は
                 // introspection API が入力値をそのまま報告できるよう保持する。
-                (ds.data.into_values(value_axis_time, i)?, vec![], vec![])
+                (
+                    ds.data.into_values(value_axis_time, i)?,
+                    vec![],
+                    vec![],
+                    vec![],
+                )
             };
             let n = if is_point_based {
                 points.len()
             } else if is_boxplot {
                 box_points.len()
+            } else if is_violin {
+                violin_samples.len()
             } else {
                 values.len()
             };
@@ -1878,6 +1919,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 },
                 bar_geometry,
                 point_radius: ds.point_radius,
+                violin_samples,
                 box_points,
                 tree: vec![],
                 links: vec![],
@@ -1939,10 +1981,11 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         ChartKind::Bar {
             horizontal: true,
             ..
-        }
+        } | ChartKind::Violin { horizontal: true }
     );
     let is_line = matches!(kind, ChartKind::Line { .. });
-    let value_begin_at_zero = !is_point_based && !is_sparkline && !is_line;
+    let value_begin_at_zero =
+        !is_point_based && !is_sparkline && !is_line && !is_boxplot && !is_violin;
 
     // suggestedMin/suggestedMax および beginAtZero: options.scales.{x,y} から取得する
     // (x_opts/y_opts 自体は series 構築より前に hoist 済み)。
@@ -3136,6 +3179,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         bar_geometry: None,
         series_type: SeriesType::Bar,
         point_radius: None,
+        violin_samples: vec![],
         box_points: vec![],
         tree: forest,
         links: vec![],
@@ -3487,6 +3531,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
             links: vec![],
@@ -3859,6 +3904,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         bar_geometry: None,
         series_type: SeriesType::Bar,
         point_radius: None,
+        violin_samples: vec![],
         box_points: vec![],
         tree: vec![],
         links,
@@ -4114,6 +4160,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         bar_geometry: None,
         series_type: SeriesType::Bar,
         point_radius: None,
+        violin_samples: vec![],
         box_points: vec![],
         tree: vec![],
         links: vec![],
@@ -4409,6 +4456,77 @@ mod tests {
             parse(json, false).is_err(),
             "boxplot with flat numbers should fail"
         );
+    }
+
+    #[test]
+    fn parse_violin_accepts_nested_samples() {
+        let json = r#"{"type":"violin","data":{"labels":["A"],"datasets":[{"data":[[1,2,3]]}]}}"#;
+        let spec = parse(json, false).expect("nested violin samples should parse");
+        assert!(matches!(
+            spec.kind,
+            crate::ir::ChartKind::Violin { horizontal: false }
+        ));
+        assert_eq!(
+            spec.series[0].violin_samples,
+            vec![vec![Some(1.0), Some(2.0), Some(3.0)]]
+        );
+    }
+
+    #[test]
+    fn parse_horizontal_violin_accepts_inner_null_samples() {
+        let json = r#"{"type":"horizontalViolin","data":{"labels":["A"],"datasets":[{"data":[[1,null,3]]}]}}"#;
+        let spec = parse(json, false).expect("horizontal violin samples should parse");
+        assert!(matches!(
+            spec.kind,
+            crate::ir::ChartKind::Violin { horizontal: true }
+        ));
+        assert_eq!(
+            spec.series[0].violin_samples,
+            vec![vec![Some(1.0), None, Some(3.0)]]
+        );
+    }
+
+    #[test]
+    fn parse_violin_accepts_null_and_empty_groups() {
+        let json = r#"{"type":"violin","data":{"labels":["A","B","C"],"datasets":[{"data":[null,[],[null,null]]}]}}"#;
+        let spec = parse(json, false).expect("empty violin groups should parse");
+        assert_eq!(
+            spec.series[0].violin_samples,
+            vec![vec![], vec![], vec![None, None]]
+        );
+    }
+
+    #[test]
+    fn parse_violin_rejects_non_null_flat_numbers() {
+        let json = r#"{"type":"violin","data":{"labels":["A"],"datasets":[{"data":[1,2]}]}}"#;
+        let error = parse(json, false).unwrap_err();
+        assert!(error.contains("データ形状"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn parse_violin_rejects_non_numeric_samples() {
+        let json = r#"{"type":"violin","data":{"labels":["A"],"datasets":[{"data":[[1,"bad"]]}]}}"#;
+        let error = parse(json, false).unwrap_err();
+        assert!(
+            !error.contains("未対応の type"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn chartjs_violin_schema_round_trips_exact_type_names() {
+        for name in ["violin", "horizontalViolin"] {
+            let json = format!(
+                r#"{{"type":"{name}","data":{{"labels":["A"],"datasets":[{{"data":[[1,null,3]]}}]}}}}"#
+            );
+            let schema: crate::schema::ChartJsSpec = serde_json::from_str(&json).unwrap();
+            let round_trip = serde_json::to_value(schema).unwrap();
+            assert_eq!(round_trip["type"], name);
+            assert_eq!(
+                round_trip["data"]["datasets"][0]["data"][0][1],
+                serde_json::Value::Null
+            );
+        }
     }
 
     #[test]

@@ -228,12 +228,14 @@ pub(crate) struct HorizontalBarBox {
     pub h: f64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct HorizontalBarLayout {
     pub plot_left: f64,
     pub plot_right: f64,
     pub plot_top: f64,
     pub plot_bottom: f64,
+    pub value_ticks: crate::scale::NiceTicks,
+    pub value_scale: crate::scale::ValueScale,
     pub bars: Vec<HorizontalBarBox>,
 }
 
@@ -908,9 +910,85 @@ pub(crate) fn horizontal_bar_layout(spec: &ChartSpec, m: &TextMeasurer) -> Horiz
     build_horizontal_with_geometry(spec, m).1
 }
 
+pub(crate) fn horizontal_bar_layout_with_temporal_values(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    temporal_values: &[i64],
+) -> HorizontalBarLayout {
+    build_horizontal_with_geometry_using_temporal_values(spec, m, Some(temporal_values)).1
+}
+
+pub(crate) fn build_horizontal_with_temporal_values(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    temporal_values: &[i64],
+) -> Scene {
+    build_horizontal_with_geometry_using_temporal_values(spec, m, Some(temporal_values)).0
+}
+
+pub(crate) fn horizontal_category_bands(
+    spec: &ChartSpec,
+    plot_top: f64,
+    plot_bottom: f64,
+) -> Vec<(f64, f64)> {
+    use crate::ir::XPositions;
+    use crate::layout::common::{
+        temporal_index_domain, temporal_position_band, temporal_position_band_width,
+    };
+    use crate::temporal::TemporalScale;
+
+    let count = spec.categories.len().max(1);
+    let fallback = (plot_bottom - plot_top) / count as f64;
+    match &spec.y_positions {
+        XPositions::Category => (0..spec.categories.len())
+            .map(|index| (plot_top + (index as f64 + 0.5) * fallback, fallback))
+            .collect(),
+        XPositions::Temporal { unix_millis } => {
+            let (min, max) = temporal_index_domain(unix_millis, &spec.y_axis, true);
+            let scale = TemporalScale::with_domain(
+                spec.y_axis.scale_kind,
+                unix_millis,
+                min,
+                max,
+                plot_top,
+                plot_bottom,
+            );
+            let band_width = temporal_position_band_width(
+                unix_millis,
+                &scale,
+                spec.categories.len(),
+                plot_top,
+                plot_bottom,
+            );
+            (0..spec.categories.len())
+                .map(|index| {
+                    let (center, _, height) = temporal_position_band(
+                        unix_millis,
+                        &scale,
+                        index,
+                        spec.categories.len(),
+                        plot_top,
+                        plot_bottom,
+                        band_width,
+                    );
+                    (center, height)
+                })
+                .collect()
+        }
+    }
+}
+
 fn build_horizontal_with_geometry(
     spec: &ChartSpec,
     m: &TextMeasurer,
+) -> (Scene, HorizontalBarLayout) {
+    build_horizontal_with_geometry_using_temporal_values(spec, m, None)
+}
+
+fn build_horizontal_with_geometry_using_temporal_values(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    temporal_values: Option<&[i64]>,
 ) -> (Scene, HorizontalBarLayout) {
     use crate::ir::{ScaleKind, XPositions};
     use crate::layout::common::*;
@@ -1100,13 +1178,17 @@ fn build_horizontal_with_geometry(
     // chart.js 実機は log 軸のピクセル写像を tight データドメインでそのまま行う
     // (scale.min/max がそれ)ため、これに合わせる(PR #144 の自動レビュー P1 指摘)。
     let xs = if is_temporal_x {
-        let values = spec
-            .series
-            .iter()
-            .flat_map(|series| &series.values)
-            .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
-            .map(|value| value.trunc() as i64)
-            .collect::<Vec<_>>();
+        let values = temporal_values.map_or_else(
+            || {
+                spec.series
+                    .iter()
+                    .flat_map(|series| &series.values)
+                    .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+                    .map(|value| value.trunc() as i64)
+                    .collect::<Vec<_>>()
+            },
+            <[i64]>::to_vec,
+        );
         ValueScale::Temporal(TemporalScale::with_domain(
             spec.x_axis.scale_kind,
             &values,
@@ -1768,6 +1850,8 @@ fn build_horizontal_with_geometry(
             plot_right,
             plot_top,
             plot_bottom,
+            value_ticks: ticks,
+            value_scale: xs,
             bars: horizontal_bars,
         },
     )

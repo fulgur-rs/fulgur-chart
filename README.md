@@ -134,6 +134,7 @@ fulgur-chart inspect chart.json
 - Progress bar chart (QuickChart-style; horizontal fill bar with centered percentage)
 - Matrix chart / heatmap (`{x, y, v}` point data; cells shaded by interpolating between two colors)
 - Box plot chart (5-number summary: `type: "boxplot"`, `data` as nested arrays `[min, q1, median, q3, max]`)
+- Violin charts (`type: "violin"` / `"horizontalViolin"`; each category contains a raw sample array, for example `[[2, 3, 4, 8], [1, 2, 5]]`)
 - Gauge chart (QuickChart-style; semicircle with colored zones, needle, value label)
 - Radial gauge chart (QuickChart-style; full circle fill-to-value with center value text)
 
@@ -141,9 +142,9 @@ fulgur-chart inspect chart.json
 
 Supports a data-only, static subset:
 
-- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `treemap` / `boxplot` / `progress` / `gauge` / `radialGauge` / `wordCloud` / `sankey` (QuickChart's `progressBar` is also accepted as an alias for `progress`)
+- `type` — `bar` / `line` / `pie` / `doughnut` / `scatter` / `bubble` / `radar` / `matrix` / `treemap` / `boxplot` / `violin` / `horizontalViolin` / `progress` / `gauge` / `radialGauge` / `wordCloud` / `sankey` (QuickChart's `progressBar` is also accepted as an alias for `progress`)
 - `data.labels`
-- `data.datasets[]` — `label` / `data` (numeric array; `{x,y}` / `{x,y,r}` for scatter/bubble; `{x,y,v}` for matrix; nested `[min,q1,median,q3,max]` arrays for boxplot). Temporal axes also accept ISO date strings and epoch milliseconds in index labels, value arrays, and scatter/bubble coordinates. Other dataset options include `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts).
+- `data.datasets[]` — `label` / `data` (numeric array; `{x,y}` / `{x,y,r}` for scatter/bubble; `{x,y,v}` for matrix; nested `[min,q1,median,q3,max]` arrays for boxplot; nested raw sample arrays such as `[[2,3,4],[1,2,5]]` for violin). Temporal axes also accept ISO date strings and epoch milliseconds in index labels, value arrays, and scatter/bubble coordinates. Other dataset options include `backgroundColor` / `borderColor` / `borderWidth` / `fill` / `tension` / `pointRadius` / `type` (per-dataset type for mixed charts).
 - For `progress` (alias `progressBar`), `datasets[0].data` holds each bar's value; an optional second dataset's `data` overrides the per-bar max (default 100). The percentage label is shown by default and can be hidden with `options.plugins.datalabels.display: false`.
 - For `gauge`, `datasets[0].data` holds cumulative zone thresholds, `value` is the needle value, and `backgroundColor` is the per-zone colors (`minValue` sets the lower bound). Configure with `options.needle` / `options.valueLabel`. The value label falls back to the rounded value (JS `valueLabel.formatter` is not executed).
 - For `radialGauge`, `datasets[0].data` holds a single value drawn as a fill-to-value arc on a track ring. Configure with `options.domain` / `options.trackColor` / `options.centerPercentage` / `options.roundedCorners` / `options.centerArea` (`displayText` / `fontSize`). The center value text falls back to the rounded value (JS `centerArea.text` is not executed).
