@@ -47,6 +47,7 @@ No KDE tuning fields are added in this issue. The number of density positions is
 - Treat the outer data-array length as the number of category slots for the series. The semantic model reports one element per category slot; resource validation counts every raw sample slot, including nulls.
 - Add a dedicated `layout::violin` module. It shares the existing categorical index-axis frame and numeric value-axis rules, uses each category's samples to extend the automatic value domain, and respects hard user axis bounds in either orientation.
 - In rendered geometry, vertical violin uses category x/value y and horizontal violin uses category y/value x. Keep the public model's axis normalization consistent with horizontal bars: model x remains categorical and model y remains the value axis in both orientations.
+- Report the original public chart type in the semantic model: `violin` for vertical and `horizontalViolin` for horizontal input.
 - Add `Violin` handling to layout dispatch, model type naming and normalized axes, element counts, and input guards.
 
 ## KDE and Rendering
