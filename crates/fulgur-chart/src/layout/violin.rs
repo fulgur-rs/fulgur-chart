@@ -20,6 +20,7 @@ pub(crate) struct ViolinFrame {
     pub(crate) plot_right: f64,
     pub(crate) plot_top: f64,
     pub(crate) plot_bottom: f64,
+    category_bands: Vec<(f64, f64)>,
     pub(crate) ticks: NiceTicks,
     pub(crate) value_scale: ValueScale,
 }
@@ -113,7 +114,20 @@ fn vertical_frame(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     common::compute(spec, m)
 }
 
-fn violin_frame_from_vertical(frame: &Frame) -> ViolinFrame {
+fn violin_frame_from_vertical(spec: &ChartSpec, frame: &Frame) -> ViolinFrame {
+    let count = spec.categories.len().max(1);
+    let category_bands = (0..spec.categories.len())
+        .map(|index| match &spec.x_positions {
+            crate::ir::XPositions::Temporal { .. } => {
+                let (center, _, width) = common::x_index_band(spec, frame, index, count);
+                (center, width)
+            }
+            crate::ir::XPositions::Category => {
+                let width = (frame.plot_right - frame.plot_left) / count as f64;
+                (common::category_center(frame, index, count), width)
+            }
+        })
+        .collect();
     ViolinFrame {
         horizontal: false,
         scene_width: frame.scene_width,
@@ -122,6 +136,7 @@ fn violin_frame_from_vertical(frame: &Frame) -> ViolinFrame {
         plot_right: frame.plot_right,
         plot_top: frame.plot_top,
         plot_bottom: frame.plot_bottom,
+        category_bands,
         ticks: frame.ticks.clone(),
         value_scale: frame.ys.clone(),
     }
@@ -157,6 +172,11 @@ fn horizontal_frame(spec: &ChartSpec, m: &TextMeasurer) -> ViolinFrame {
         plot_right: layout.plot_right,
         plot_top: layout.plot_top,
         plot_bottom: layout.plot_bottom,
+        category_bands: crate::layout::bar::horizontal_category_bands(
+            spec,
+            layout.plot_top,
+            layout.plot_bottom,
+        ),
         ticks: layout.value_ticks,
         value_scale: layout.value_scale,
     }
@@ -299,24 +319,6 @@ fn median(samples: &[f64]) -> f64 {
     let mut sorted = samples.to_vec();
     sorted.sort_by(f64::total_cmp);
     quantile(&sorted, 0.5)
-}
-
-fn category_center(frame: &ViolinFrame, index: usize, count: usize) -> f64 {
-    if frame.horizontal {
-        let band = (frame.plot_bottom - frame.plot_top) / count.max(1) as f64;
-        frame.plot_top + (index as f64 + 0.5) * band
-    } else {
-        frame.plot_left
-            + (index as f64 + 0.5) * (frame.plot_right - frame.plot_left) / count.max(1) as f64
-    }
-}
-
-fn category_band(frame: &ViolinFrame, count: usize) -> f64 {
-    if frame.horizontal {
-        (frame.plot_bottom - frame.plot_top) / count.max(1) as f64
-    } else {
-        (frame.plot_right - frame.plot_left) / count.max(1) as f64
-    }
 }
 
 fn path_from_points(points: &[(f64, f64)]) -> String {
@@ -654,7 +656,7 @@ pub(crate) fn compute_frame(spec: &ChartSpec, m: &TextMeasurer) -> ViolinFrame {
     if horizontal {
         horizontal_frame(&aux, m)
     } else {
-        violin_frame_from_vertical(&vertical_frame(&aux, m))
+        violin_frame_from_vertical(&aux, &vertical_frame(&aux, m))
     }
 }
 
@@ -671,7 +673,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         (scene, horizontal_frame(&aux, m))
     } else {
         let common_frame = vertical_frame(&aux, m);
-        let frame = violin_frame_from_vertical(&common_frame);
+        let frame = violin_frame_from_vertical(&aux, &common_frame);
         let mut items = Vec::new();
         common::draw_frame(&mut items, spec, &common_frame, m);
         (
@@ -684,11 +686,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         )
     };
 
-    let category_count = spec.categories.len().max(1);
     let series_count = spec.series.len().max(1);
-    let category_band = category_band(&frame, category_count);
-    let dataset_band = category_band / series_count as f64;
-    let half_width = dataset_band * 0.45;
     let group_offset = -(series_count as f64 - 1.0) / 2.0;
     for (series_index, series) in spec.series.iter().enumerate() {
         for category_index in 0..spec.categories.len() {
@@ -699,8 +697,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             if samples.is_empty() {
                 continue;
             }
-            let category = category_center(&frame, category_index, category_count)
-                + (group_offset + series_index as f64) * dataset_band;
+            let Some((category_center, category_band)) = frame.category_bands.get(category_index)
+            else {
+                continue;
+            };
+            let dataset_band = category_band / series_count as f64;
+            let half_width = dataset_band * 0.45;
+            let category = category_center + (group_offset + series_index as f64) * dataset_band;
             if let Some(d) = body_path(&frame, category, half_width, series.stroke_width, &samples)
             {
                 scene.items.push(clipped_path(
@@ -841,6 +844,46 @@ mod tests {
             centers[0] < centers[1],
             "dataset slot centers should preserve order: {centers:?}"
         );
+    }
+
+    #[test]
+    fn violin_temporal_categories_follow_irregular_timestamp_spacing() {
+        for (chart_type, axis, horizontal) in
+            [("violin", "x", false), ("horizontalViolin", "y", true)]
+        {
+            let json = format!(
+                r#"{{"type":"{chart_type}","data":{{"labels":["1970-01-01","1970-01-02","1970-01-05"],"datasets":[{{"data":[[1,2,3],[1,2,3],[1,2,3]]}}]}},"options":{{"scales":{{"{axis}":{{"type":"time","time":{{"unit":"day"}}}}}}}}}}"#
+            );
+            let spec = parse(&json);
+            let scene = build(&spec, &measurer());
+            let centers = scene
+                .items
+                .into_iter()
+                .filter_map(|item| match item {
+                    Prim::Path { d, .. } | Prim::ClippedPath { d, .. }
+                        if d.matches("L ").count() == 3 =>
+                    {
+                        let points = path_points(&d);
+                        Some(
+                            points
+                                .iter()
+                                .map(|(x, y)| if horizontal { *y } else { *x })
+                                .sum::<f64>()
+                                / points.len() as f64,
+                        )
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(centers.len(), 3, "{chart_type}");
+            let first_gap = centers[1] - centers[0];
+            let second_gap = centers[2] - centers[1];
+            assert!(
+                (second_gap / first_gap - 3.0).abs() < 0.02,
+                "temporal category spacing should follow elapsed time: {chart_type} {centers:?}"
+            );
+        }
     }
 
     #[test]
@@ -1096,7 +1139,7 @@ mod tests {
             let spec = parse(&json);
             let frame = compute_frame(&spec, &measurer());
             let scene = build(&spec, &measurer());
-            let first_category = category_center(&frame, 0, 2);
+            let first_category = frame.category_bands[0].0;
             let first_group_paths = scene
                 .items
                 .iter()

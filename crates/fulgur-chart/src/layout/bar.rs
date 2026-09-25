@@ -926,6 +926,58 @@ pub(crate) fn build_horizontal_with_temporal_values(
     build_horizontal_with_geometry_using_temporal_values(spec, m, Some(temporal_values)).0
 }
 
+pub(crate) fn horizontal_category_bands(
+    spec: &ChartSpec,
+    plot_top: f64,
+    plot_bottom: f64,
+) -> Vec<(f64, f64)> {
+    use crate::ir::XPositions;
+    use crate::layout::common::{
+        temporal_index_domain, temporal_position_band, temporal_position_band_width,
+    };
+    use crate::temporal::TemporalScale;
+
+    let count = spec.categories.len().max(1);
+    let fallback = (plot_bottom - plot_top) / count as f64;
+    match &spec.y_positions {
+        XPositions::Category => (0..spec.categories.len())
+            .map(|index| (plot_top + (index as f64 + 0.5) * fallback, fallback))
+            .collect(),
+        XPositions::Temporal { unix_millis } => {
+            let (min, max) = temporal_index_domain(unix_millis, &spec.y_axis, true);
+            let scale = TemporalScale::with_domain(
+                spec.y_axis.scale_kind,
+                unix_millis,
+                min,
+                max,
+                plot_top,
+                plot_bottom,
+            );
+            let band_width = temporal_position_band_width(
+                unix_millis,
+                &scale,
+                spec.categories.len(),
+                plot_top,
+                plot_bottom,
+            );
+            (0..spec.categories.len())
+                .map(|index| {
+                    let (center, _, height) = temporal_position_band(
+                        unix_millis,
+                        &scale,
+                        index,
+                        spec.categories.len(),
+                        plot_top,
+                        plot_bottom,
+                        band_width,
+                    );
+                    (center, height)
+                })
+                .collect()
+        }
+    }
+}
+
 fn build_horizontal_with_geometry(
     spec: &ChartSpec,
     m: &TextMeasurer,
