@@ -36,7 +36,8 @@ pub struct VlData {
 pub struct VlChannel {
     /// Name of the field in each record of data.values.
     pub field: String,
-    /// Type hint (e.g. "quantitative", "nominal"). Currently has no effect on rendering.
+    /// Type hint (e.g. "quantitative", "nominal"). Rendering infers types from data;
+    /// point size additionally requires "quantitative" when this hint is present.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub field_type: Option<String>,
 }
@@ -548,6 +549,8 @@ pub struct VlPointEncoding {
     pub y: VlChannel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<VlChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<VlChannel>,
 }
 
 // ────────────────────────────────────────────────

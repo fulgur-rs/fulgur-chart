@@ -6,7 +6,8 @@
 //! - `mark`: 文字列 `"bar"|"line"|"point"|"arc"` または `{"type": "<同左>"}`。
 //! - `data.values`: インラインのレコード配列（JSON オブジェクトの配列）のみ対応。
 //!   `data.url` や values 欠落は明確なメッセージで Err。
-//! - `encoding`: `x`/`y`/`color`/`theta`。各チャネルは `{ "field", "type"? }`。
+//! - `encoding`: `x`/`y`/`color`/`theta`。point は `size` も受理する。
+//!   各チャネルは `{ "field", "type"? }`。
 //!
 //! すべて決定的（distinct 値の抽出は first-seen 順、HashMap 不使用）でパニックしない。
 
@@ -57,6 +58,16 @@ pub fn parse_with_limits(
     let x_field = channel_field(encoding, "x");
     let y_field = channel_field(encoding, "y");
     let color_field = channel_field(encoding, "color");
+    let point_mark = read_mark_name(top) == Some("point");
+    let size_field = if point_mark {
+        point_size_field(encoding)?
+    } else {
+        None
+    };
+    if size_field.is_some() {
+        validate_point_size_type(encoding)?;
+        kind = ChartKind::Bubble;
+    }
     // Vega-Lite の実際のデフォルト: mark:"area" は color channel があり、かつ
     // encoding.y.stack が明示的に null でない限り積み上げになる。
     // 下の temporal_line 計算より前に置く必要はない(parse_mark が area も
@@ -88,13 +99,16 @@ pub fn parse_with_limits(
                 }
             }
         }
-        ChartKind::Scatter => {
+        ChartKind::Scatter | ChartKind::Bubble => {
             let xf = require_field(&x_field, "x")?;
             let yf = require_field(&y_field, "y")?;
             validate_numeric(&records, xf)?;
             validate_numeric(&records, yf)?;
             if let Some(cf) = color_field.as_deref() {
                 validate_category(&records, cf)?;
+            }
+            if let Some(sf) = size_field.as_deref() {
+                validate_point_size_values(&records, sf)?;
             }
         }
         ChartKind::Pie { .. } => {
@@ -138,7 +152,7 @@ pub fn parse_with_limits(
                 }
             }
         }
-        // Bubble/Radar/Mixed は Vega-Lite mark から生成されない。
+        // Radar/Mixed は Vega-Lite mark から生成されない。
         _ => {}
     }
 
@@ -275,8 +289,15 @@ pub fn parse_with_limits(
                     None,
                 )
             }
-            ChartKind::Scatter => (
-                build_scatter(&records, &x_field, &y_field, &color_field, &theme),
+            ChartKind::Scatter | ChartKind::Bubble => (
+                build_scatter(
+                    &records,
+                    &x_field,
+                    &y_field,
+                    &color_field,
+                    size_field.as_deref(),
+                    &theme,
+                ),
                 vec![],
                 None,
             ),
@@ -294,9 +315,12 @@ pub fn parse_with_limits(
         }
     }
 
-    // scatter/rect は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点（chartjs と一致）。
-    let y_begin_at_zero = !matches!(kind, ChartKind::Scatter | ChartKind::VegaRect { .. });
-    let scatter = matches!(&kind, ChartKind::Scatter);
+    // scatter/bubble/rect は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点。
+    let y_begin_at_zero = !matches!(
+        kind,
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::VegaRect { .. }
+    );
+    let scatter = matches!(&kind, ChartKind::Scatter | ChartKind::Bubble);
     let grid = if temporal_line {
         Some(temporal_axis_grid(top, theme.grid_color)?)
     } else {
@@ -488,6 +512,50 @@ fn channel_field(encoding: &Map<String, Value>, channel: &str) -> Option<String>
         .and_then(|o| o.get("field"))
         .and_then(Value::as_str)
         .map(str::to_owned)
+}
+
+fn point_size_field(encoding: &Map<String, Value>) -> Result<Option<String>, String> {
+    match encoding.get("size") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(channel)) => match channel.get("field") {
+            Some(Value::String(field)) => Ok(Some(field.clone())),
+            None => Err("encoding.size.field is required".to_string()),
+            Some(other) => Err(format!(
+                "encoding.size.field must be a string, got {}",
+                json_value_type(other)
+            )),
+        },
+        Some(other) => Err(format!(
+            "encoding.size must be an object, got {}",
+            json_value_type(other)
+        )),
+    }
+}
+
+fn validate_point_size_type(encoding: &Map<String, Value>) -> Result<(), String> {
+    let Some(channel) = encoding.get("size").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    match channel.get("type") {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(value)) if value == "quantitative" => Ok(()),
+        Some(Value::String(_)) => Err("encoding.size.type must be \"quantitative\"".to_string()),
+        Some(other) => Err(format!(
+            "encoding.size.type must be a string, got {}",
+            json_value_type(other)
+        )),
+    }
+}
+
+fn validate_point_size_values(records: &[Map<String, Value>], field: &str) -> Result<(), String> {
+    for record in records {
+        match record.get(field).and_then(Value::as_f64) {
+            Some(value) if value.is_finite() => {}
+            Some(_) => return Err(format!("size field {field} must contain finite numbers")),
+            None => return Err(format!("size field {field} must contain numbers")),
+        }
+    }
+    Ok(())
 }
 
 /// encoding チャネルの `type` 文字列を借用で取り出す。
@@ -1374,8 +1442,10 @@ fn build_scatter(
     x_field: &Option<String>,
     y_field: &Option<String>,
     color_field: &Option<String>,
+    size_field: Option<&str>,
     theme: &Theme,
 ) -> Vec<Series> {
+    let size_domain = size_field.and_then(|field| numeric_domain(records, field));
     let group_names: Vec<String> = match color_field {
         Some(_) => distinct_categories(records, color_field.as_deref()),
         None => vec![String::new()],
@@ -1394,7 +1464,8 @@ fn build_scatter(
                 .map(|r| Point {
                     x: field_f64(r, x_field.as_deref()),
                     y: field_f64(r, y_field.as_deref()),
-                    r: None,
+                    r: size_domain
+                        .map(|(min, max)| point_size_radius(field_f64(r, size_field), min, max)),
                 })
                 .collect();
             let color = palette_pick(&theme.palette, si);
@@ -1422,6 +1493,39 @@ fn build_scatter(
             }
         })
         .collect()
+}
+
+/// Numeric size encoding shares one domain across all color groups.
+fn numeric_domain(records: &[Map<String, Value>], field: &str) -> Option<(f64, f64)> {
+    let mut values = records
+        .iter()
+        .filter_map(|record| record.get(field).and_then(Value::as_f64))
+        .filter(|value| value.is_finite());
+    let first = values.next()?;
+    Some(values.fold((first, first), |(min, max), value| {
+        (min.min(value), max.max(value))
+    }))
+}
+
+// Current Vega-Lite defaults for a point size scale with continuous x/y:
+// minSize=4 and maxSize=(0.95 * default step 20)^2=361 square pixels.
+const VEGA_LITE_POINT_SIZE_MIN_AREA: f64 = 4.0;
+const VEGA_LITE_POINT_SIZE_MAX_AREA: f64 = 361.0;
+
+/// Map the quantitative size domain to Vega-Lite's default area range, then
+/// convert the circle area to the radius consumed by ChartKind::Bubble.
+fn point_size_radius(value: f64, domain_min: f64, domain_max: f64) -> f64 {
+    let fraction = if domain_min == domain_max {
+        0.5
+    } else {
+        // Scaling before subtraction avoids overflow for large finite domains.
+        let scale = domain_min.abs().max(domain_max.abs()).max(1.0);
+        ((value / scale - domain_min / scale) / (domain_max / scale - domain_min / scale))
+            .clamp(0.0, 1.0)
+    };
+    let area = VEGA_LITE_POINT_SIZE_MIN_AREA
+        + fraction * (VEGA_LITE_POINT_SIZE_MAX_AREA - VEGA_LITE_POINT_SIZE_MIN_AREA);
+    (area / std::f64::consts::PI).sqrt()
 }
 
 /// arc（pie）の単一系列を組む。カテゴリは color.field 優先（なければ x.field）。
@@ -1536,7 +1640,8 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         // mark 別 encoding allow-list を選ぶ。mark 名が読めない/未対応なら
         // 現状挙動(全キー拒否せずスルー)を保つ = 後段パースに委ねる。
         let allowed: &[&str] = match read_mark_name(top) {
-            Some("bar" | "line" | "point" | "circle" | "area") => &["x", "y", "color"],
+            Some("bar" | "line" | "circle" | "area") => &["x", "y", "color"],
+            Some("point") => &["x", "y", "color", "size"],
             Some("arc") => &["theta", "color", "x", "y"],
             Some("rect") => &["x", "y", "color"],
             _ => return Ok(()),
