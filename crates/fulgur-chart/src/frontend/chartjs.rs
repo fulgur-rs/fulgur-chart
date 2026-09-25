@@ -1641,6 +1641,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             | ChartKind::Mixed
             | ChartKind::Scatter
             | ChartKind::Bubble
+            | ChartKind::Violin { .. }
     );
     if !supports_cartesian_temporal
         && (x_is_temporal
@@ -1719,7 +1720,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     };
     let categories = labels_to_categories(raw.data.labels, temporal_index)?;
 
-    // bar/line の値軸と scatter/bubble の数値 x/y 軸で log を許可する。
+    // 値軸(bar/line/violin)と scatter/bubble の数値 x/y 軸で log を許可する。
     // カテゴリ軸や未対応 kind への type:"logarithmic" 指定は黙って無視(Linear のまま)。
     let x_axis_is_log = matches!(
         kind,
@@ -1728,6 +1729,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             ..
         } | ChartKind::Scatter
             | ChartKind::Bubble
+            | ChartKind::Violin { horizontal: true }
     ) && is_logarithmic(x_opts);
     let y_axis_is_log = matches!(
         kind,
@@ -1737,6 +1739,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         } | ChartKind::Line { .. }
             | ChartKind::Scatter
             | ChartKind::Bubble
+            | ChartKind::Violin { horizontal: false }
     ) && is_logarithmic(y_opts);
     let x_axis_scale_kind = if x_axis_is_log {
         ScaleKind::Logarithmic

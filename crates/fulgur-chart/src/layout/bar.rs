@@ -228,12 +228,14 @@ pub(crate) struct HorizontalBarBox {
     pub h: f64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct HorizontalBarLayout {
     pub plot_left: f64,
     pub plot_right: f64,
     pub plot_top: f64,
     pub plot_bottom: f64,
+    pub value_ticks: crate::scale::NiceTicks,
+    pub value_scale: crate::scale::ValueScale,
     pub bars: Vec<HorizontalBarBox>,
 }
 
@@ -1768,6 +1770,8 @@ fn build_horizontal_with_geometry(
             plot_right,
             plot_top,
             plot_bottom,
+            value_ticks: ticks,
+            value_scale: xs,
             bars: horizontal_bars,
         },
     )

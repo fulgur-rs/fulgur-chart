@@ -2,7 +2,7 @@
 
 use crate::ir::{AxisSpec, ChartKind, ChartSpec};
 use crate::layout::common::{self, Frame};
-use crate::scale::{LinearScale, NiceTicks, ValueScale};
+use crate::scale::{NiceTicks, ValueScale};
 use crate::scene::{ClipRect, Prim, Scene};
 use crate::text::TextMeasurer;
 
@@ -129,14 +129,6 @@ fn violin_frame_from_vertical(frame: &Frame) -> ViolinFrame {
 
 fn horizontal_frame(spec: &ChartSpec, m: &TextMeasurer) -> ViolinFrame {
     let layout = crate::layout::bar::horizontal_bar_layout(spec, m);
-    let (domain_min, domain_max) = common::value_domain(spec, &spec.x_axis);
-    let ticks = common::configured_axis_ticks(domain_min, domain_max, &spec.x_axis);
-    let value_scale = ValueScale::Linear(LinearScale::new(
-        ticks.min,
-        ticks.max,
-        layout.plot_left,
-        layout.plot_right,
-    ));
     ViolinFrame {
         horizontal: true,
         scene_width: spec.width,
@@ -145,8 +137,8 @@ fn horizontal_frame(spec: &ChartSpec, m: &TextMeasurer) -> ViolinFrame {
         plot_right: layout.plot_right,
         plot_top: layout.plot_top,
         plot_bottom: layout.plot_bottom,
-        ticks,
-        value_scale,
+        ticks: layout.value_ticks,
+        value_scale: layout.value_scale,
     }
 }
 
@@ -883,6 +875,58 @@ mod tests {
                 close(median_center.0, category_center);
                 close(median_center.1, expected_median);
             }
+        }
+    }
+
+    #[test]
+    fn horizontal_violin_median_aligns_with_log_and_temporal_axis_gridlines() {
+        let cases = [
+            r#"{"type":"horizontalViolin","data":{"labels":["A"],"datasets":[{"data":[[1,10,100,10,10]]}]},"options":{"scales":{"x":{"type":"logarithmic","min":1,"max":100}}}}"#,
+            r#"{"type":"horizontalViolin","data":{"labels":["A"],"datasets":[{"data":[[1704067200000,1706745600000,1706745600000,1706745600000,1711929600000]]}]},"options":{"scales":{"x":{"type":"time","min":1704067200000,"max":1711929600000,"time":{"unit":"month"}}}}}"#,
+        ];
+
+        for json in cases {
+            let spec = parse(json);
+            let expected_scale = if json.contains("logarithmic") {
+                crate::ir::ScaleKind::Logarithmic
+            } else {
+                crate::ir::ScaleKind::Time
+            };
+            assert_eq!(spec.x_axis.scale_kind, expected_scale, "{json}");
+            let measurer = measurer();
+            let frame = compute_frame(&spec, &measurer);
+            if spec.x_axis.scale_kind == crate::ir::ScaleKind::Logarithmic {
+                close(
+                    frame.value_scale.map(10.0),
+                    (frame.plot_left + frame.plot_right) / 2.0,
+                );
+            }
+            let scene = build(&spec, &measurer);
+            let median_x = scene
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Prim::ClippedPath { d, .. } if d.matches("L ").count() == 3 => {
+                        let points = path_points(d);
+                        Some(points.iter().map(|point| point.0).sum::<f64>() / points.len() as f64)
+                    }
+                    _ => None,
+                })
+                .expect("median path");
+            let aligned = scene.items.iter().any(|item| match item {
+                Prim::Line { x1, y1, x2, y2, .. }
+                    if (*x1 - *x2).abs() < 0.01
+                        && (*y1 - frame.plot_top).abs() < 0.01
+                        && (*y2 - frame.plot_bottom).abs() < 0.01 =>
+                {
+                    (*x1 - median_x).abs() < 0.02
+                }
+                _ => false,
+            });
+            assert!(
+                aligned,
+                "median {median_x} should align with a value-axis gridline: {json}"
+            );
         }
     }
 

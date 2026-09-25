@@ -310,6 +310,55 @@ const STAMP_MAX_DEVICE_R: f64 = 64.0;
 /// 余裕を残せる。中心、半径、正の stroke 半幅、output scale を全て含めて検証する。
 const MAX_SAFE_DEVICE_CIRCLE_COORD_PX: f64 = 4_000_000.0;
 
+fn validate_clipped_path_device_bounds(scene: &Scene, scale: f32) -> Result<(), String> {
+    const MAX_MITER_STROKE_EXTENSION: f64 = 2.0;
+    let scale = scale as f64;
+    for prim in &scene.items {
+        let Prim::ClippedPath {
+            d,
+            stroke,
+            stroke_width,
+            clip,
+            ..
+        } = prim
+        else {
+            continue;
+        };
+        let Some(path) = parse_path_data(d) else {
+            continue;
+        };
+        let bounds = path.bounds();
+        let path_extent = [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()]
+            .into_iter()
+            .map(|value| f64::from(value).abs())
+            .fold(0.0_f64, f64::max);
+        let stroke_extent = if stroke.is_some() {
+            if !stroke_width.is_finite() {
+                return Err(format!(
+                    "raster clipped path device bounds exceed safe coordinate limit of {:.0} px",
+                    MAX_SAFE_DEVICE_CIRCLE_COORD_PX
+                ));
+            }
+            stroke_width.max(0.0) * MAX_MITER_STROKE_EXTENSION
+        } else {
+            0.0
+        };
+        // The clip rectangle is also sent to tiny-skia as a mask path, so include its edges.
+        let clip_extent = [clip.x, clip.y, clip.x + clip.w, clip.y + clip.h]
+            .into_iter()
+            .map(f64::abs)
+            .fold(0.0_f64, f64::max);
+        let max_device_coord = (path_extent + stroke_extent).max(clip_extent) * scale;
+        if !max_device_coord.is_finite() || max_device_coord > MAX_SAFE_DEVICE_CIRCLE_COORD_PX {
+            return Err(format!(
+                "raster clipped path device bounds exceed safe coordinate limit of {:.0} px",
+                MAX_SAFE_DEVICE_CIRCLE_COORD_PX
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_circle_device_bounds(scene: &Scene, scale: f32) -> Result<(), String> {
     let scale = scale as f64;
     for prim in &scene.items {
@@ -373,6 +422,7 @@ fn scene_to_pixmap_with(
     let area = w as u64 * h as u64;
     limits.check(w, h, area)?;
     validate_circle_device_bounds(scene, scale)?;
+    validate_clipped_path_device_bounds(scene, scale)?;
 
     let mut pixmap = Pixmap::new(w, h)
         .ok_or_else(|| format!("Pixmap allocation failed: invalid dimensions {w}x{h}"))?;
@@ -1975,6 +2025,73 @@ mod tests {
         assert_eq!(
             scene_to_png(&scene, 1.0, DEFAULT_FONT),
             Err("raster circle device bounds exceed safe coordinate limit of 4000000 px".into())
+        );
+    }
+
+    fn clipped_path_scene(
+        d: &str,
+        fill: Option<Color>,
+        stroke: Option<Color>,
+        stroke_width: f64,
+    ) -> Scene {
+        Scene {
+            width: 40.0,
+            height: 40.0,
+            items: vec![Prim::ClippedPath {
+                d: d.to_string(),
+                fill,
+                stroke,
+                stroke_width,
+                clip: Box::new(crate::scene::ClipRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 40.0,
+                    h: 40.0,
+                }),
+            }],
+        }
+    }
+
+    #[test]
+    fn clipped_path_device_bounds_check_output_scale_and_stroke_extent() {
+        let off_canvas = clipped_path_scene(
+            "M 2100000 10 L 2100002 10 L 2100002 12 L 2100000 12 Z",
+            Some(Color {
+                r: 54,
+                g: 162,
+                b: 235,
+                a: 1.0,
+            }),
+            None,
+            0.0,
+        );
+        let scale_error = match scene_to_png(&off_canvas, 2.0, DEFAULT_FONT) {
+            Err(error) => error,
+            Ok(_) => panic!("off-canvas clipped path must fail before rasterization"),
+        };
+        assert!(
+            scale_error.contains("clipped path device bounds"),
+            "{scale_error}"
+        );
+
+        let thick_stroke = clipped_path_scene(
+            "M 1000000 10 L 1000002 10 L 1000002 12 L 1000000 12 Z",
+            None,
+            Some(Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            }),
+            1_100_000.0,
+        );
+        let stroke_error = match scene_to_png(&thick_stroke, 1.5, DEFAULT_FONT) {
+            Err(error) => error,
+            Ok(_) => panic!("clipped path stroke extent must fail before rasterization"),
+        };
+        assert!(
+            stroke_error.contains("clipped path device bounds"),
+            "{stroke_error}"
         );
     }
 
