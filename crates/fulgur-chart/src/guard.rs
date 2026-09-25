@@ -630,7 +630,8 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
             .len()
             .max(series.points.len())
             .max(series.box_points.len())
-            .max(violin_raw_sample_slots(series));
+            .max(violin_raw_sample_slots(series))
+            .max(series.violin_samples.len());
         total.saturating_add(points)
     });
     let total_points = series_points
@@ -995,6 +996,22 @@ mod tests {
         )
         .unwrap();
         spec.series[0].violin_samples[0] = vec![Some(1.0), None, None];
+        let limits = InputLimits {
+            max_total_data_points: 2,
+            ..default_limits()
+        };
+
+        let err = validate_spec(&spec, &limits).unwrap_err();
+        assert!(err.contains("データ点数合計"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn violin_empty_groups_count_toward_point_limit() {
+        let spec = chartjs::parse(
+            r#"{"type":"violin","data":{"labels":["A","B","C"],"datasets":[{"data":[null,[],[]]}]}}"#,
+            false,
+        )
+        .unwrap();
         let limits = InputLimits {
             max_total_data_points: 2,
             ..default_limits()
