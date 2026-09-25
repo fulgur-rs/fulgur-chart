@@ -233,11 +233,24 @@ export async function extractChartjsModel(spec, width, height) {
   // counts.y_ticks は diff.mjs では比較されない(axes 次元が担当するため)。
   let axes;
   const scaleIds = Object.keys(chart.scales);
-  const linId =
+  const yLinId =
     scaleIds.find(
       (id) =>
         chart.scales[id].type === 'linear' && chart.scales[id].axis === 'y',
-    ) ?? scaleIds.find((id) => chart.scales[id].type === 'linear');
+    );
+  const yLogId =
+    scaleIds.find(
+      (id) =>
+        chart.scales[id].type === 'logarithmic' && chart.scales[id].axis === 'y',
+    );
+  // The configured y scale takes precedence over fallbacks. For horizontal bars,
+  // the value scale is x while y is categorical, so fall back only if y has no value scale.
+  const linId =
+    yLinId ??
+    (yLogId ? undefined : scaleIds.find((id) => chart.scales[id].type === 'linear'));
+  const logId =
+    yLogId ??
+    (!linId ? scaleIds.find((id) => chart.scales[id].type === 'logarithmic') : undefined);
   const catId = scaleIds.find((id) => chart.scales[id].type === 'category');
   if (linId) {
     const s = chart.scales[linId];
@@ -248,6 +261,10 @@ export async function extractChartjsModel(spec, width, height) {
       ? { kind: 'category', labels: chart.scales[catId].getLabels() }
       : { kind: 'linear' };
     axes = { x: xAxis, y: yAxis };
+  } else if (logId) {
+    // log ticks intentionally stay outside tick-for-tick parity; identify the value axis
+    // so diff.mjs can report axes as skipped instead of comparing a fabricated zero count.
+    axes = { y: { kind: 'logarithmic' } };
   }
 
   const geometry = barGeometry(chart, spec, width, height) ?? pointGeometry(chart, spec, width, height);
@@ -262,7 +279,7 @@ export async function extractChartjsModel(spec, width, height) {
       datasets: spec.data.datasets.length,
       legend_items: spec.data.datasets.filter((d) => d.label).length,
       x_ticks: (spec.data.labels || []).length,
-      y_ticks: axes ? axes.y.ticks.length : 0,
+      y_ticks: axes?.y?.kind === 'logarithmic' ? null : axes ? axes.y.ticks.length : 0,
     },
     geometry,
     png, // Buffer(レポート用)
