@@ -132,6 +132,18 @@ fn pie_datalabels_skip_zero_and_negative() {
 }
 
 #[test]
+fn pie_datalabels_skip_zero_circumference() {
+    let json = r#"{
+      "type":"pie",
+      "data":{"labels":["a","b"],"datasets":[{"data":[123,87]}]},
+      "options":{"circumference":0,"plugins":{"datalabels":{"display":true}}}
+    }"#;
+    let svg = render(json);
+    assert!(!svg.contains(">123</text>"));
+    assert!(!svg.contains(">87</text>"));
+}
+
+#[test]
 fn horizontal_bar_datalabels_render_negative_value() {
     // 横棒の負値は左端に Anchor::End で描く分岐の検証。
     let json = r#"{

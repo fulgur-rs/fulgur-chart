@@ -1085,6 +1085,8 @@ mod tests {
         spec.kind = ChartKind::Pie {
             cutout: crate::ir::PieCutout::Percent(0.0),
             dataset_options: Vec::new(),
+            rotation_rad: 0.0,
+            circumference_rad: std::f64::consts::TAU,
         };
         spec.x_positions = XPositions::Temporal {
             unix_millis: vec![1],

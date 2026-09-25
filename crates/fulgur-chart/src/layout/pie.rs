@@ -5,7 +5,7 @@ use crate::ir::{ArcBorderRadius, ChartKind, ChartSpec, Color, LegendPos, PieCuto
 use crate::num::fmt_num;
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
-use std::f64::consts::PI;
+use std::f64::consts::{PI, TAU};
 use std::fmt::Write;
 
 /// スライス境界の白線（chart.js 風）。
@@ -32,12 +32,19 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     // doughnut の内径比。
     let no_dataset_options: &[crate::ir::PieGeometryOptions] = &[];
-    let (cutout, dataset_options) = match &spec.kind {
+    let (cutout, dataset_options, rotation_rad, circumference_rad) = match &spec.kind {
         ChartKind::Pie {
             cutout,
             dataset_options,
-        } => (*cutout, dataset_options.as_slice()),
-        _ => (PieCutout::Percent(0.0), no_dataset_options),
+            rotation_rad,
+            circumference_rad,
+        } => (
+            *cutout,
+            dataset_options.as_slice(),
+            *rotation_rad,
+            *circumference_rad,
+        ),
+        _ => (PieCutout::Percent(0.0), no_dataset_options, 0.0, 2.0 * PI),
     };
 
     let series = spec.series.first();
@@ -226,12 +233,15 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 .unwrap_or(0.0)
                 .max(0.0);
             let arc_spacing = spacing / 2.0;
-            let mut a0 = -PI / 2.0; // 12 時方向。
+            // Reduce rotation before adding the 12 o'clock offset so huge finite values do not
+            // round away that offset or later slice sweeps.
+            let mut a0 = normalized_angle(-PI / 2.0 + normalized_angle(rotation_rad));
             for (i, &value) in dataset.values.iter().enumerate() {
                 if !(value.is_finite() && value > 0.0) {
                     continue; // v<=0 は角度を進めずスキップ。
                 }
-                let a1 = a0 + (value / total) * 2.0 * PI;
+                let sweep = (value / total) * circumference_rad.abs();
+                let a1 = normalized_angle(a0 + normalized_angle(sweep));
                 let fill = dataset.fill_at(i);
                 let offset = geometry_options
                     .map(|options| options.offset_at(i))
@@ -240,10 +250,10 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 let border_radius = geometry_options
                     .map(|options| options.border_radius_at(i))
                     .unwrap_or(ArcBorderRadius::Uniform(0.0));
-                let label_angle = (a0 + a1) / 2.0;
+                let label_angle = normalized_angle(a0 + normalized_angle(sweep / 2.0));
                 let offset_x = (offset / 4.0) * label_angle.cos();
                 let offset_y = (offset / 4.0) * label_angle.sin();
-                let radius_offset = (offset / 4.0) * (1.0 - (a1 - a0).min(PI).sin());
+                let radius_offset = (offset / 4.0) * (1.0 - sweep.min(PI).sin());
                 let radial_adjustment = arc_spacing + radius_offset;
                 let geom = Geom {
                     cx: cx + offset_x,
@@ -258,19 +268,27 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     },
                 };
 
-                // Full circles need two SVG arcs. Keep a single center translation for both halves;
-                // spacing and corner radii have no exposed arc boundary on a self-joined circle.
-                if a1 - a0 >= 2.0 * PI - 1e-9 {
-                    let amid = a0 + (a1 - a0) / 2.0;
-                    items.push(make_slice(&geom, a0, amid, fill));
-                    items.push(make_slice(&geom, amid, a1, fill));
-                } else if let Some(slice) =
-                    make_configured_slice(&geom, a0, a1, fill, arc_spacing, border_radius)
+                // SVG cannot draw an arc whose endpoints are the same. Draw one turn at most for
+                // each data slice, splitting full circles into two semicircles. Keep a0 advancing
+                // by the full sweep below so later slices retain their angular positions.
+                if sweep >= TAU {
+                    let midpoint = a0 + PI;
+                    items.push(make_slice(&geom, a0, midpoint, fill));
+                    items.push(make_slice(&geom, midpoint, a0 + TAU, fill));
+                } else if sweep > 0.0
+                    && let Some(slice) = make_configured_slice(
+                        &geom,
+                        a0,
+                        a0 + sweep,
+                        fill,
+                        arc_spacing,
+                        border_radius,
+                    )
                 {
                     items.push(slice);
                 }
 
-                if spec.data_labels {
+                if spec.data_labels && sweep > 0.0 {
                     let label_radius = (ring_inner + ring_outer) / 2.0;
                     labels.push(common::value_label(
                         cx + offset_x + label_radius * label_angle.cos(),
@@ -296,6 +314,14 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         width: spec.width,
         height: spec.height,
         items,
+    }
+}
+
+fn normalized_angle(angle: f64) -> f64 {
+    if angle.abs() > TAU {
+        angle.sin().atan2(angle.cos())
+    } else {
+        angle
     }
 }
 
@@ -633,6 +659,133 @@ mod tests {
         .unwrap();
         let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
         assert!(!scene.items.is_empty());
+    }
+
+    #[test]
+    fn chartjs_rotation_and_partial_circumference_set_slice_angles() {
+        let spec = chartjs::parse(
+            r#"{"type":"pie","data":{"labels":["A","B"],"datasets":[{"data":[1,1]}]},"options":{"rotation":90,"circumference":180}}"#,
+            false,
+        )
+        .unwrap();
+        let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let paths: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Path { d, .. } => Some(d.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths.len(), 2);
+
+        let first: Vec<_> = paths[0].split_whitespace().collect();
+        let second: Vec<_> = paths[1].split_whitespace().collect();
+        assert_eq!(first[0], "M");
+        assert_eq!(first[3], "L");
+        assert_eq!(first[6], "A");
+        assert_eq!(second[0], "M");
+        assert_eq!(second[3], "L");
+        assert_eq!(second[6], "A");
+
+        let cx: f64 = first[1].parse().unwrap();
+        let cy: f64 = first[2].parse().unwrap();
+        let radius: f64 = first[7].parse().unwrap();
+        let first_start_x: f64 = first[4].parse().unwrap();
+        let first_start_y: f64 = first[5].parse().unwrap();
+        let first_end_x: f64 = first[12].parse().unwrap();
+        let first_end_y: f64 = first[13].parse().unwrap();
+        let last_end_x: f64 = second[12].parse().unwrap();
+        let last_end_y: f64 = second[13].parse().unwrap();
+
+        // 90° rotation starts at the right edge; a 180° sweep ends at the left edge.
+        assert!((first_start_x - (cx + radius)).abs() < 0.01);
+        assert!((first_start_y - cy).abs() < 0.01);
+        assert!((first_end_x - cx).abs() < 0.01);
+        assert!((first_end_y - (cy + radius)).abs() < 0.01);
+        assert!((last_end_x - (cx - radius)).abs() < 0.01);
+        assert!((last_end_y - cy).abs() < 0.01);
+    }
+
+    #[test]
+    fn negative_circumference_uses_the_same_sweep_as_positive() {
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let positive = chartjs::parse(
+            r#"{"type":"pie","data":{"datasets":[{"data":[1,1]}]},"options":{"rotation":90,"circumference":180}}"#,
+            false,
+        )
+        .unwrap();
+        let negative = chartjs::parse(
+            r#"{"type":"pie","data":{"datasets":[{"data":[1,1]}]},"options":{"rotation":90,"circumference":-180}}"#,
+            false,
+        )
+        .unwrap();
+
+        let paths = |spec: &ChartSpec| {
+            build(spec, &measurer)
+                .items
+                .into_iter()
+                .filter_map(|item| match item {
+                    Prim::Path { d, .. } => Some(d),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(paths(&negative), paths(&positive));
+    }
+
+    #[test]
+    fn overfull_circumference_draws_valid_full_circle_arcs() {
+        let spec = chartjs::parse(
+            r#"{"type":"pie","data":{"datasets":[{"data":[1]}]},"options":{"circumference":720}}"#,
+            false,
+        )
+        .unwrap();
+        let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let paths: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Path { d, .. } => Some(d.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths.len(), 2);
+
+        for path in paths {
+            let tokens: Vec<_> = path.split_whitespace().collect();
+            let start_x: f64 = tokens[4].parse().unwrap();
+            let start_y: f64 = tokens[5].parse().unwrap();
+            let radius: f64 = tokens[7].parse().unwrap();
+            let end_x: f64 = tokens[12].parse().unwrap();
+            let end_y: f64 = tokens[13].parse().unwrap();
+            let arc_chord = ((end_x - start_x).powi(2) + (end_y - start_y).powi(2)).sqrt();
+
+            // A full circle is split into two valid semicircles with opposite endpoints.
+            assert!((arc_chord - 2.0 * radius).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn extreme_rotation_keeps_adjacent_slices_distinct() {
+        let spec = chartjs::parse(
+            r#"{"type":"pie","data":{"datasets":[{"data":[1,1]}]},"options":{"rotation":1e300,"circumference":180}}"#,
+            false,
+        )
+        .unwrap();
+        let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let paths: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Path { d, .. } => Some(d),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(paths.len(), 2);
+        assert_ne!(paths[0], paths[1]);
     }
 
     #[test]

@@ -451,6 +451,8 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
         "arc" => Ok(ChartKind::Pie {
             cutout: crate::ir::PieCutout::Percent(0.0),
             dataset_options: vec![],
+            rotation_rad: 0.0,
+            circumference_rad: std::f64::consts::TAU,
         }),
         other => Err(format!("未対応の mark: {other}")),
     }

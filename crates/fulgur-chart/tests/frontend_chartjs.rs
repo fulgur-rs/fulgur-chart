@@ -2414,6 +2414,30 @@ fn pie_schema_roundtrip_preserves_cutout_and_dataset_arc_options() {
 }
 
 #[test]
+fn pie_rotation_and_circumference_round_trip_through_schema_and_strict_parser() {
+    use fulgur_chart::schema::ChartJsSpec;
+
+    let cases = [
+        r#"{"type":"pie","data":{"datasets":[{"data":[1.0,2.0]}]},"options":{"rotation":90.0,"circumference":180.0}}"#,
+        r#"{"type":"doughnut","data":{"datasets":[{"data":[2.0,1.0]}]},"options":{"rotation":-45.0,"circumference":270.0}}"#,
+    ];
+
+    for json in cases {
+        let expected: serde_json::Value = serde_json::from_str(json).unwrap();
+        let schema = serde_json::from_value::<ChartJsSpec>(expected.clone());
+        assert!(
+            schema.is_ok(),
+            "pie angle options should be in the schema: {json}"
+        );
+        assert_eq!(serde_json::to_value(schema.unwrap()).unwrap(), expected);
+        assert!(
+            chartjs::parse(json, true).is_ok(),
+            "strict parsing should accept pie angle options: {json}"
+        );
+    }
+}
+
+#[test]
 fn pie_arc_options_are_rejected_by_schema_and_strict_parser_on_other_arc_charts() {
     use fulgur_chart::schema::ChartJsSpec;
 
@@ -2421,6 +2445,8 @@ fn pie_arc_options_are_rejected_by_schema_and_strict_parser_on_other_arc_charts(
         r#"{"type":"polarArea","data":{"datasets":[{"data":[1,2],"spacing":2} ]}}"#,
         r#"{"type":"outlabeledPie","data":{"datasets":[{"data":[1,2],"spacing":2}]}}"#,
         r#"{"type":"outlabeledDoughnut","data":{"datasets":[{"data":[1,2],"spacing":2}]}}"#,
+        r#"{"type":"polarArea","data":{"datasets":[{"data":[1,2]}]},"options":{"rotation":90}}"#,
+        r#"{"type":"outlabeledPie","data":{"datasets":[{"data":[1,2]}]},"options":{"circumference":180}}"#,
     ];
     for json in invalid {
         assert!(
@@ -2438,6 +2464,8 @@ fn pie_arc_options_are_rejected_by_schema_and_strict_parser_on_other_arc_charts(
 fn strict_rejects_pie_only_cutout_and_arc_options_on_bar() {
     let cases = [
         r#"{"type":"bar","data":{"datasets":[{"data":[1]}]},"options":{"cutout":20}}"#,
+        r#"{"type":"bar","data":{"datasets":[{"data":[1]}]},"options":{"rotation":90}}"#,
+        r#"{"type":"bar","data":{"datasets":[{"data":[1]}]},"options":{"circumference":180}}"#,
         r#"{"type":"bar","data":{"datasets":[{"data":[1],"spacing":2}]}}"#,
         r#"{"type":"bar","data":{"datasets":[{"data":[1],"offset":2}]}}"#,
     ];

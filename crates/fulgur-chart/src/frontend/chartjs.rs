@@ -53,6 +53,12 @@ struct RawOptions {
     /// Pie-only; retain raw JSON until the chart type is known so other kinds stay tolerant.
     #[serde(default)]
     cutout: Option<serde_json::Value>,
+    /// Pie-only degrees; retain raw JSON until the chart type is known so other kinds stay tolerant.
+    #[serde(default)]
+    rotation: Option<serde_json::Value>,
+    /// Pie-only degrees; retain raw JSON until the chart type is known so other kinds stay tolerant.
+    #[serde(default)]
+    circumference: Option<serde_json::Value>,
     // Accept an explicit `options.plugins: null` as the default (schemas render it nullable).
     #[serde(default, deserialize_with = "null_or_default")]
     plugins: RawPlugins,
@@ -226,6 +232,14 @@ fn parse_pie_cutout(value: &serde_json::Value) -> Result<PieCutout, String> {
             }),
         _ => Err("options.cutout must be a finite number or a percentage string".into()),
     }
+}
+
+fn parse_pie_angle(value: &serde_json::Value, path: &str) -> Result<f64, String> {
+    let degrees = value
+        .as_f64()
+        .filter(|degrees| degrees.is_finite())
+        .ok_or_else(|| format!("{path} must be a finite number"))?;
+    Ok(degrees.to_radians())
 }
 
 fn parse_pie_dataset_options(datasets: &[RawDataset]) -> Result<Vec<PieGeometryOptions>, String> {
@@ -1383,10 +1397,14 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
             "pie" => ChartKind::Pie {
                 cutout: PieCutout::Percent(0.0),
                 dataset_options: vec![],
+                rotation_rad: 0.0,
+                circumference_rad: std::f64::consts::TAU,
             },
             "doughnut" => ChartKind::Pie {
                 cutout: PieCutout::Percent(50.0),
                 dataset_options: vec![],
+                rotation_rad: 0.0,
+                circumference_rad: std::f64::consts::TAU,
             },
             "scatter" => ChartKind::Scatter,
             "bubble" => ChartKind::Bubble,
@@ -1411,7 +1429,12 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     };
 
     let kind = match kind {
-        ChartKind::Pie { cutout, .. } => ChartKind::Pie {
+        ChartKind::Pie {
+            cutout,
+            rotation_rad,
+            circumference_rad,
+            ..
+        } => ChartKind::Pie {
             cutout: raw
                 .options
                 .cutout
@@ -1420,6 +1443,20 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                 .transpose()?
                 .unwrap_or(cutout),
             dataset_options: parse_pie_dataset_options(&raw.data.datasets)?,
+            rotation_rad: raw
+                .options
+                .rotation
+                .as_ref()
+                .map(|value| parse_pie_angle(value, "options.rotation"))
+                .transpose()?
+                .unwrap_or(rotation_rad),
+            circumference_rad: raw
+                .options
+                .circumference
+                .as_ref()
+                .map(|value| parse_pie_angle(value, "options.circumference"))
+                .transpose()?
+                .unwrap_or(circumference_rad),
         },
         other => other,
     };
@@ -2517,7 +2554,15 @@ fn check_unknown_keys(
 
     if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
         let allowed_options: &[&str] = if allow_pie {
-            &["indexAxis", "plugins", "scales", "theme", "cutout"]
+            &[
+                "indexAxis",
+                "plugins",
+                "scales",
+                "theme",
+                "cutout",
+                "rotation",
+                "circumference",
+            ]
         } else {
             &["indexAxis", "plugins", "scales", "theme"]
         };
