@@ -233,13 +233,15 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 .unwrap_or(0.0)
                 .max(0.0);
             let arc_spacing = spacing / 2.0;
-            let mut a0 = -PI / 2.0 + rotation_rad; // Chart.js rotation=0 は 12 時方向。
+            // Reduce rotation before adding the 12 o'clock offset so huge finite values do not
+            // round away that offset or later slice sweeps.
+            let mut a0 = normalized_angle(-PI / 2.0 + normalized_angle(rotation_rad));
             for (i, &value) in dataset.values.iter().enumerate() {
                 if !(value.is_finite() && value > 0.0) {
                     continue; // v<=0 は角度を進めずスキップ。
                 }
                 let sweep = (value / total) * circumference_rad.abs();
-                let a1 = a0 + sweep;
+                let a1 = normalized_angle(a0 + normalized_angle(sweep));
                 let fill = dataset.fill_at(i);
                 let offset = geometry_options
                     .map(|options| options.offset_at(i))
@@ -248,7 +250,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 let border_radius = geometry_options
                     .map(|options| options.border_radius_at(i))
                     .unwrap_or(ArcBorderRadius::Uniform(0.0));
-                let label_angle = a0 + sweep / 2.0;
+                let label_angle = normalized_angle(a0 + normalized_angle(sweep / 2.0));
                 let offset_x = (offset / 4.0) * label_angle.cos();
                 let offset_y = (offset / 4.0) * label_angle.sin();
                 let radius_offset = (offset / 4.0) * (1.0 - sweep.min(PI).sin());
@@ -269,20 +271,15 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 // SVG cannot draw an arc whose endpoints are the same. Draw one turn at most for
                 // each data slice, splitting full circles into two semicircles. Keep a0 advancing
                 // by the full sweep below so later slices retain their angular positions.
-                let draw_start = if a0.abs() > TAU {
-                    a0.sin().atan2(a0.cos())
-                } else {
-                    a0
-                };
                 if sweep >= TAU {
-                    let midpoint = draw_start + PI;
-                    items.push(make_slice(&geom, draw_start, midpoint, fill));
-                    items.push(make_slice(&geom, midpoint, draw_start + TAU, fill));
+                    let midpoint = a0 + PI;
+                    items.push(make_slice(&geom, a0, midpoint, fill));
+                    items.push(make_slice(&geom, midpoint, a0 + TAU, fill));
                 } else if sweep > 0.0
                     && let Some(slice) = make_configured_slice(
                         &geom,
-                        draw_start,
-                        draw_start + sweep,
+                        a0,
+                        a0 + sweep,
                         fill,
                         arc_spacing,
                         border_radius,
@@ -291,7 +288,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     items.push(slice);
                 }
 
-                if spec.data_labels {
+                if spec.data_labels && sweep > 0.0 {
                     let label_radius = (ring_inner + ring_outer) / 2.0;
                     labels.push(common::value_label(
                         cx + offset_x + label_radius * label_angle.cos(),
@@ -317,6 +314,14 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         width: spec.width,
         height: spec.height,
         items,
+    }
+}
+
+fn normalized_angle(angle: f64) -> f64 {
+    if angle.abs() > TAU {
+        angle.sin().atan2(angle.cos())
+    } else {
+        angle
     }
 }
 
@@ -760,6 +765,27 @@ mod tests {
             // A full circle is split into two valid semicircles with opposite endpoints.
             assert!((arc_chord - 2.0 * radius).abs() < 0.01);
         }
+    }
+
+    #[test]
+    fn extreme_rotation_keeps_adjacent_slices_distinct() {
+        let spec = chartjs::parse(
+            r#"{"type":"pie","data":{"datasets":[{"data":[1,1]}]},"options":{"rotation":1e300,"circumference":180}}"#,
+            false,
+        )
+        .unwrap();
+        let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let paths: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Path { d, .. } => Some(d),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(paths.len(), 2);
+        assert_ne!(paths[0], paths[1]);
     }
 
     #[test]
