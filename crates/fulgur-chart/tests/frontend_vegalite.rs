@@ -1587,6 +1587,89 @@ fn point_mark_maps_to_scatter_with_points() {
 }
 
 #[test]
+fn point_mark_size_encoding_maps_scaled_area_to_bubble_radius() {
+    let json = r#"{
+        "mark": {"type": "point"},
+        "data": {"values": [
+            {"x":1,"y":2,"group":"A","size":10},
+            {"x":3,"y":4,"group":"A","size":20},
+            {"x":5,"y":6,"group":"B","size":30}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"quantitative"},
+            "y": {"field":"y","type":"quantitative"},
+            "color": {"field":"group","type":"nominal"},
+            "size": {"field":"size","type":"quantitative"}
+        }
+    }"#;
+
+    let spec = vegalite::parse(json, true).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Bubble));
+    assert_eq!(spec.series.len(), 2);
+    assert_eq!(spec.series[0].name, "A");
+    assert_eq!(spec.series[1].name, "B");
+    assert!(!spec.y_axis.begin_at_zero);
+
+    // Vega-Lite's default point size range is 4..361 px² for the default 20 px step.
+    // The global data domain 10..30 maps to areas 4, 182.5, and 361 px².
+    let pi = std::f64::consts::PI;
+    for (series, point, expected_area) in [
+        (&spec.series[0], 0, 4.0),
+        (&spec.series[0], 1, 182.5),
+        (&spec.series[1], 0, 361.0),
+    ] {
+        let radius = series.points[point].r.unwrap();
+        assert!(
+            (radius * radius * pi - expected_area).abs() < 1e-10,
+            "expected area {expected_area}, got radius {radius}"
+        );
+    }
+
+    let _: fulgur_chart::schema::VegaLiteSpec = serde_json::from_str(json).unwrap();
+}
+
+#[test]
+fn point_mark_size_encoding_rejects_non_numeric_field_values() {
+    let json = r#"{
+        "mark": "point",
+        "data": {"values": [{"x":1,"y":2,"size":"large"}]},
+        "encoding": {
+            "x": {"field":"x","type":"quantitative"},
+            "y": {"field":"y","type":"quantitative"},
+            "size": {"field":"size","type":"quantitative"}
+        }
+    }"#;
+    let err = vegalite::parse(json, false).unwrap_err();
+    assert!(err.contains("numbers"), "unexpected error: {err}");
+}
+
+#[test]
+fn point_mark_size_schema_matches_quantitative_type_validation() {
+    let inferred = r#"{
+        "mark": "point",
+        "data": {"values": [{"x":1,"y":2,"size":10}]},
+        "encoding": {
+            "x": {"field":"x","type":"quantitative"},
+            "y": {"field":"y","type":"quantitative"},
+            "size": {"field":"size"}
+        }
+    }"#;
+    let _inferred_spec: fulgur_chart::schema::VegaLiteSpec =
+        serde_json::from_str(inferred).unwrap();
+    assert!(matches!(
+        vegalite::parse(inferred, true).unwrap().kind,
+        ChartKind::Bubble
+    ));
+
+    let nominal = inferred.replace(
+        "\"field\":\"size\"",
+        "\"field\":\"size\",\"type\":\"nominal\"",
+    );
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&nominal).is_err());
+    assert!(vegalite::parse(&nominal, true).is_err());
+}
+
+#[test]
 fn arc_mark_maps_to_pie_with_theta_sums() {
     let json = r#"{
         "mark": "arc",
