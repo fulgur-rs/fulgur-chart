@@ -16,6 +16,28 @@ test('bar: 系列色と軸目盛りを共通スキーマで抽出', async () => 
   assert.equal(model.axes.x.labels.length, 3);
 });
 
+test('bar: logarithmic value axis is identified and tick parity is unavailable', async () => {
+  const spec = {
+    type: 'bar',
+    data: { labels: ['small', 'large'], datasets: [{ data: [1, 100] }] },
+    options: { scales: { y: { type: 'logarithmic' } } },
+  };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.equal(model.axes.y.kind, 'logarithmic');
+  assert.equal(model.counts.y_ticks, null);
+});
+
+test('scatter: logarithmic y axis takes precedence over linear x fallback', async () => {
+  const spec = {
+    type: 'scatter',
+    data: { datasets: [{ data: [{ x: 1, y: 1 }, { x: 100, y: 100 }] }] },
+    options: { scales: { y: { type: 'logarithmic' } } },
+  };
+  const model = await extractChartjsModel(spec, 800, 600);
+  assert.equal(model.axes.y.kind, 'logarithmic');
+  assert.equal(model.counts.y_ticks, null);
+});
+
 test('bar: 既定パレット色は canonical rgba に正規化される', async () => {
   const spec = { type: 'bar', data: { labels: ['a','b','c'],
     datasets: [{ label: 's', data: [0,100,50] }] } };

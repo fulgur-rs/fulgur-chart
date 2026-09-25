@@ -114,7 +114,8 @@ export function diffModels(fulgur, chartjs) {
   // axes(両方に linear y がある場合のみ厳密比較)
   const fy = fulgur.axes?.y;
   const cy = chartjs.axes?.y;
-  if (fy && cy) {
+  const axesActuallyCompared = fy?.kind === 'linear' && cy?.kind === 'linear';
+  if (axesActuallyCompared) {
     const axDiffs = [];
     if (!num(fy.min, cy.min))
       axDiffs.push({ field: 'y.min', fulgur: fy.min, chartjs: cy.min });
@@ -131,11 +132,16 @@ export function diffModels(fulgur, chartjs) {
 
   // counts
   // y_ticks は両 axes.y が比較された場合は axes 次元に委ねる(冗長ノイズ回避)。
-  // axes が skipped(片方のみ axes.y あり)の場合はフォールバックとして y_ticks を比較する。
-  const axesActuallyCompared = !!(fulgur.axes?.y && chartjs.axes?.y);
-  const countKeys = axesActuallyCompared
-    ? ['datasets', 'legend_items', 'x_ticks']
-    : ['datasets', 'legend_items', 'x_ticks', 'y_ticks'];
+  // axes が skipped の場合は y_ticks が両方で利用可能ならフォールバック比較する。
+  // null は log scale のように tick parity を意図的に扱わない明示値。
+  const countKeys = ['datasets', 'legend_items', 'x_ticks'];
+  if (
+    !axesActuallyCompared &&
+    fulgur.counts.y_ticks !== null &&
+    chartjs.counts.y_ticks !== null
+  ) {
+    countKeys.push('y_ticks');
+  }
   const countDiffs = [];
   for (const k of countKeys) {
     if (fulgur.counts[k] !== chartjs.counts[k])

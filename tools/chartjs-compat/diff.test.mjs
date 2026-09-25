@@ -80,6 +80,19 @@ test('axes が skipped のとき y_ticks 差分は counts 失敗になる', () =
   assert.equal(r.dimensions.counts.pass, false, 'axes skipped 時は y_ticks を counts でチェックするべき');
 });
 
+test('対数軸は未対応として axes と y_ticks の比較を skip', () => {
+  const f = base(); const c = base();
+  f.axes.y = { kind: 'logarithmic', min: 1, max: 100, step: null, ticks: [1, 10, 100] };
+  c.axes.y = { kind: 'logarithmic' };
+  f.counts.y_ticks = 3;
+  c.counts.y_ticks = null;
+  const r = diffModels(f, c);
+  assert.equal(r.dimensions.axes.skipped, true);
+  assert.equal(r.dimensions.axes.pass, true);
+  assert.equal(r.dimensions.counts.pass, true);
+  assert.equal(r.pass, true);
+});
+
 test('geometry 一致は PASS', () => {
   const f = { ...base(), geometry: geomBase() };
   const c = { ...base(), geometry: geomBase() };
