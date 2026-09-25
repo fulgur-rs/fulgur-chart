@@ -32,12 +32,19 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
 
     // doughnut の内径比。
     let no_dataset_options: &[crate::ir::PieGeometryOptions] = &[];
-    let (cutout, dataset_options) = match &spec.kind {
+    let (cutout, dataset_options, rotation_rad, circumference_rad) = match &spec.kind {
         ChartKind::Pie {
             cutout,
             dataset_options,
-        } => (*cutout, dataset_options.as_slice()),
-        _ => (PieCutout::Percent(0.0), no_dataset_options),
+            rotation_rad,
+            circumference_rad,
+        } => (
+            *cutout,
+            dataset_options.as_slice(),
+            *rotation_rad,
+            *circumference_rad,
+        ),
+        _ => (PieCutout::Percent(0.0), no_dataset_options, 0.0, 2.0 * PI),
     };
 
     let series = spec.series.first();
@@ -226,12 +233,12 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                 .unwrap_or(0.0)
                 .max(0.0);
             let arc_spacing = spacing / 2.0;
-            let mut a0 = -PI / 2.0; // 12 時方向。
+            let mut a0 = -PI / 2.0 + rotation_rad; // Chart.js rotation=0 は 12 時方向。
             for (i, &value) in dataset.values.iter().enumerate() {
                 if !(value.is_finite() && value > 0.0) {
                     continue; // v<=0 は角度を進めずスキップ。
                 }
-                let a1 = a0 + (value / total) * 2.0 * PI;
+                let a1 = a0 + (value / total) * circumference_rad;
                 let fill = dataset.fill_at(i);
                 let offset = geometry_options
                     .map(|options| options.offset_at(i))
@@ -633,6 +640,52 @@ mod tests {
         .unwrap();
         let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
         assert!(!scene.items.is_empty());
+    }
+
+    #[test]
+    fn chartjs_rotation_and_partial_circumference_set_slice_angles() {
+        let spec = chartjs::parse(
+            r#"{"type":"pie","data":{"labels":["A","B"],"datasets":[{"data":[1,1]}]},"options":{"rotation":90,"circumference":180}}"#,
+            false,
+        )
+        .unwrap();
+        let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let paths: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Path { d, .. } => Some(d.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths.len(), 2);
+
+        let first: Vec<_> = paths[0].split_whitespace().collect();
+        let second: Vec<_> = paths[1].split_whitespace().collect();
+        assert_eq!(first[0], "M");
+        assert_eq!(first[3], "L");
+        assert_eq!(first[6], "A");
+        assert_eq!(second[0], "M");
+        assert_eq!(second[3], "L");
+        assert_eq!(second[6], "A");
+
+        let cx: f64 = first[1].parse().unwrap();
+        let cy: f64 = first[2].parse().unwrap();
+        let radius: f64 = first[7].parse().unwrap();
+        let first_start_x: f64 = first[4].parse().unwrap();
+        let first_start_y: f64 = first[5].parse().unwrap();
+        let first_end_x: f64 = first[12].parse().unwrap();
+        let first_end_y: f64 = first[13].parse().unwrap();
+        let last_end_x: f64 = second[12].parse().unwrap();
+        let last_end_y: f64 = second[13].parse().unwrap();
+
+        // 90° rotation starts at the right edge; a 180° sweep ends at the left edge.
+        assert!((first_start_x - (cx + radius)).abs() < 0.01);
+        assert!((first_start_y - cy).abs() < 0.01);
+        assert!((first_end_x - cx).abs() < 0.01);
+        assert!((first_end_y - (cy + radius)).abs() < 0.01);
+        assert!((last_end_x - (cx - radius)).abs() < 0.01);
+        assert!((last_end_y - cy).abs() < 0.01);
     }
 
     #[test]

@@ -641,6 +641,10 @@ pub enum ChartKind {
     Pie {
         cutout: PieCutout,
         dataset_options: Vec<PieGeometryOptions>,
+        /// Resolved starting angle in radians. Zero begins at 12 o'clock.
+        rotation_rad: f64,
+        /// Resolved clockwise sweep in radians.
+        circumference_rad: f64,
     }, // zero cutout = pie, positive cutout = doughnut
     Scatter, // 線形 x × 線形 y。点データ(Series.points)を使う
     Bubble,  // scatter と同じ枠組み。半径は point.r(第3次元)を使う
