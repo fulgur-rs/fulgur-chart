@@ -260,9 +260,11 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
     }
 }
 
-/// 描画要素数(scatter/bubble は points、boxplot は box_points、その他は values)。
+/// 描画要素数(scatter/bubble は points、boxplot は box_points、violin は sample groups)。
 fn element_count(s: &crate::ir::Series) -> usize {
-    if !s.box_points.is_empty() {
+    if !s.violin_samples.is_empty() {
+        s.violin_samples.len()
+    } else if !s.box_points.is_empty() {
         s.box_points.len()
     } else if s.points.is_empty() {
         s.values.len()
@@ -606,6 +608,22 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
                 t.ticks.len(),
             ))
         }
+        // violin は描画向きに関わらずモデル上 category=x / value=y に正規化する。
+        // numeric domain と ticks は実際の描画 frame から得て、水平では x 軸設定を使う。
+        ChartKind::Violin { horizontal } => {
+            let frame = crate::layout::violin::compute_frame(spec, m);
+            let value_axis = if *horizontal {
+                &spec.x_axis
+            } else {
+                &spec.y_axis
+            };
+            let value_model = value_axis_model(value_axis, &frame.ticks, &[]);
+            Some((
+                category_axis(&spec.categories),
+                value_model,
+                frame.ticks.ticks.len(),
+            ))
+        }
         _ => None,
     }
 }
@@ -633,6 +651,50 @@ mod tests {
     use crate::frontend::chartjs;
     use crate::ir::Color;
     use crate::text::TextMeasurer;
+
+    #[test]
+    fn violin_model_normalizes_axes_and_reports_category_slots() {
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+        for chart_type in ["violin", "horizontalViolin"] {
+            let value_scale = if chart_type == "violin" { "y" } else { "x" };
+            let json = format!(
+                r#"{{"type":"{chart_type}","data":{{"labels":["A","B"],"datasets":[{{"data":[[-10,null,20],[3,5]],"backgroundColor":["red","blue"]}}]}},"options":{{"scales":{{"{value_scale}":{{"min":-12,"max":22}}}}}}}}"#
+            );
+            let spec = chartjs::parse(&json, true).unwrap();
+            let model = build_model(&spec, &measurer);
+
+            assert_eq!(model.meta.r#type, chart_type);
+            let axes = model.axes.expect("violin exposes normalized axes");
+            assert_eq!(axes.x.kind, "category");
+            assert_eq!(
+                axes.x.labels.as_deref(),
+                Some(["A".to_string(), "B".to_string()].as_slice())
+            );
+            assert_eq!(axes.y.kind, "linear");
+            assert_eq!((axes.y.min, axes.y.max), (Some(-12.0), Some(22.0)));
+            assert_eq!(
+                model.series[0].fill.len(),
+                2,
+                "one color entry per category slot"
+            );
+
+            let auto_json = format!(
+                r#"{{"type":"{chart_type}","data":{{"labels":["A","B"],"datasets":[{{"data":[[-10,null,20],[3,5]]}}]}}}}"#
+            );
+            let auto_spec = chartjs::parse(&auto_json, true).unwrap();
+            let auto_model = build_model(&auto_spec, &measurer);
+            let auto_y = auto_model.axes.expect("violin exposes value axis").y;
+            assert!(
+                auto_y.min.unwrap() <= -10.0,
+                "sample minimum is covered: {auto_y:?}"
+            );
+            assert!(
+                auto_y.max.unwrap() >= 20.0,
+                "sample maximum is covered: {auto_y:?}"
+            );
+        }
+    }
 
     #[test]
     fn horizontal_model_axis_preserves_hard_min_max_after_nice_ticks() {
