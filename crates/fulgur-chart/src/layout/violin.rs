@@ -410,14 +410,14 @@ fn plot_clip_rect(frame: &ViolinFrame) -> (f64, f64, f64, f64) {
 }
 
 const MAX_MITER_STROKE_EXTENSION: f64 = 2.0;
-const MAX_GEOMETRY_CLIP_MARGIN: f64 = 1_000_000.0;
 
 /// Leave enough geometry for a miter-limited stroke to reach the exact renderer clip.
 fn stroke_clip_margin(stroke_width: f64) -> f64 {
     if !stroke_width.is_finite() {
         return 1.0;
     }
-    (stroke_width.max(0.0) * MAX_MITER_STROKE_EXTENSION + 1.0).min(MAX_GEOMETRY_CLIP_MARGIN)
+    stroke_width.clamp(0.0, f64::MAX / MAX_MITER_STROKE_EXTENSION) * MAX_MITER_STROKE_EXTENSION
+        + 1.0
 }
 
 fn expanded_value_bounds(frame: &ViolinFrame, margin: f64) -> (f64, f64) {
@@ -429,7 +429,12 @@ fn expanded_value_bounds(frame: &ViolinFrame, margin: f64) -> (f64, f64) {
     };
     let first = frame.value_scale.unmap(first_pixel);
     let last = frame.value_scale.unmap(last_pixel);
-    (first.min(last), first.max(last))
+    let lower = first.min(last);
+    let upper = first.max(last);
+    (
+        if lower.is_finite() { lower } else { -f64::MAX },
+        if upper.is_finite() { upper } else { f64::MAX },
+    )
 }
 
 fn clipped_path(
@@ -1065,6 +1070,19 @@ mod tests {
                 assert!((frame.plot_left - margin..=frame.plot_right + margin).contains(&x));
                 assert!((frame.plot_top - margin..=frame.plot_bottom + margin).contains(&y));
             }
+        }
+    }
+
+    #[test]
+    fn violin_geometry_margin_tracks_large_finite_stroke_widths() {
+        close(stroke_clip_margin(4_000_000.0), 8_000_001.0);
+        for (chart_type, axis) in [("violin", "y"), ("horizontalViolin", "x")] {
+            let json = format!(
+                r##"{{"type":"{chart_type}","data":{{"labels":["A"],"datasets":[{{"data":[[-200000,-199999]],"borderWidth":4000000}}]}},"options":{{"scales":{{"{axis}":{{"min":0,"max":100}}}}}}}}"##
+            );
+            let spec = parse(&json);
+            let scene = build(&spec, &measurer());
+            assert_eq!(body_paths(&scene).len(), 1, "chart={chart_type}");
         }
     }
 
