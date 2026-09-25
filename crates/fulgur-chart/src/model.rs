@@ -306,6 +306,8 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::VegaRect { .. } => "vegaRect",
         ChartKind::Progress => "progress",
         ChartKind::BoxPlot => "boxplot",
+        ChartKind::Violin { horizontal: true } => "horizontalViolin",
+        ChartKind::Violin { horizontal: false } => "violin",
         ChartKind::Sparkline => "sparkline",
         ChartKind::PolarArea => "polarArea",
         ChartKind::RadialGauge { .. } => "radialGauge",

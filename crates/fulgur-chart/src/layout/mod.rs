@@ -19,6 +19,7 @@ pub mod scatter;
 pub mod sparkline;
 pub mod treemap;
 pub mod vega_rect;
+pub mod violin;
 pub mod wordcloud;
 
 use crate::ir::{ChartKind, ChartSpec};
@@ -39,6 +40,7 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::VegaRect { .. } => vega_rect::build(spec, m),
         ChartKind::Progress => progress::build(spec, m),
         ChartKind::BoxPlot => boxplot::build(spec, m),
+        ChartKind::Violin { .. } => violin::build(spec, m),
         ChartKind::Sparkline => sparkline::build(spec, m),
         ChartKind::RadialGauge { .. } | ChartKind::Gauge { .. } => gauge::build(spec, m),
         ChartKind::OutlabeledPie { .. } => outlabeled_pie::build(spec, m),

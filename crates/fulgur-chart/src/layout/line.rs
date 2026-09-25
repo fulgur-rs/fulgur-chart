@@ -2499,6 +2499,7 @@ mod tests {
                         bar_geometry: None,
                         series_type: crate::ir::SeriesType::Line,
                         point_radius: None,
+                        violin_samples: vec![],
                         box_points: vec![],
                         tree: vec![],
                         links: vec![],

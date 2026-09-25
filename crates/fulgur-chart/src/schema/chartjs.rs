@@ -33,6 +33,9 @@ pub enum ChartJsSpec {
     #[serde(alias = "progressBar")]
     Progress(ProgressSpec),
     Boxplot(BoxplotSpec),
+    Violin(ViolinSpec),
+    #[serde(rename = "horizontalViolin")]
+    HorizontalViolin(ViolinSpec),
     /// QuickChart-compatible sparkline: minimal line chart with no axes, labels, or legend.
     Sparkline(SparklineSpec),
     Gauge(GaugeSpec),
@@ -1119,6 +1122,58 @@ pub struct ProgressDataset {
 pub struct ProgressOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins: Option<ProgressPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeOptions>,
+}
+
+// ────────────────────────────────────────────────
+// Violin charts
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ViolinSpec {
+    pub data: ViolinData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<ViolinOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1.0, max = 32768.0))]
+    pub height: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ViolinData {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    pub datasets: Vec<ViolinDataset>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ViolinDataset {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Each category contains raw observations; null observations are ignored by KDE.
+    pub data: Vec<Option<Vec<Option<f64>>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<ScalarOrArray<ColorString>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_color: Option<ScalarOrArray<ColorString>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub border_width: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ViolinOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<CommonPlugins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scales: Option<BarScales>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<ThemeOptions>,
 }

@@ -884,6 +884,7 @@ mod tests {
                 bar_geometry: None,
                 series_type: SeriesType::Bar,
                 point_radius: None,
+                violin_samples: vec![],
                 box_points: vec![],
                 tree: vec![],
                 links: vec![],
