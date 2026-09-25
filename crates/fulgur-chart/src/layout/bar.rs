@@ -218,6 +218,31 @@ pub struct BarBox {
     pub h: f64,
 }
 
+/// Returns contiguous ranges for the category-major boxes from `vertical_bar_boxes`.
+fn category_bar_box_ranges(
+    bar_boxes: &[BarBox],
+    category_count: usize,
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::with_capacity(category_count);
+    let mut cursor = 0;
+    for category in 0..category_count {
+        while cursor < bar_boxes.len() && bar_boxes[cursor].index < category {
+            cursor += 1;
+        }
+        let start = cursor;
+        while cursor < bar_boxes.len() && bar_boxes[cursor].index == category {
+            cursor += 1;
+        }
+        ranges.push(start..cursor);
+    }
+    debug_assert_eq!(
+        cursor,
+        bar_boxes.len(),
+        "bar boxes must fit their categories"
+    );
+    ranges
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct HorizontalBarBox {
     pub series: usize,
@@ -414,6 +439,7 @@ fn enforce_stacked_min_bar_length(
 
 /// 縦棒の全データ矩形を build_vertical と同一の式で算出する単一の真実源。
 /// レンダラ(`build_vertical`)とモデル(`model::Geometry`)の両方がこれを呼ぶ。
+/// 出力はカテゴリ順で、同一カテゴリ内は系列順。
 /// 非積み上げ (dodge): category 外側 × series 内側で有限値のみ box を生成する。
 ///   欠損値 (get() None) と非有限値 (NaN / ±∞) は skip され、box は emit されない。
 /// 非積み上げ・積み上げともに hard y bound で各端点を clip し、描画と geometry の範囲を
@@ -821,6 +847,11 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let positive_moves_up = frame.ys.map(frame.ticks.max) < frame.ys.map(frame.ticks.min);
     let (stack_groups, _) = super::common::stack_group_indices(&spec.series);
     let bar_boxes = vertical_bar_boxes(spec, &frame);
+    let category_ranges = if stacked {
+        category_bar_box_ranges(&bar_boxes, spec.categories.len())
+    } else {
+        Vec::new()
+    };
     for b in &bar_boxes {
         let ser = &spec.series[b.series];
         let base_side = if (b.value >= 0.0) == positive_moves_up {
@@ -828,15 +859,19 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         } else {
             BarSide::Top
         };
-        let has_later_same_sign = stacked
-            && bar_boxes.iter().any(|next| {
-                next.series > b.series
-                    && next.index == b.index
-                    && next.h > 0.0
-                    && stack_groups[next.series] == stack_groups[b.series]
-                    && is_renderable_value(next.value, is_log)
-                    && next.value.signum() == b.value.signum()
-            });
+        let has_later_same_sign = if stacked {
+            bar_boxes[category_ranges[b.index].clone()]
+                .iter()
+                .any(|next| {
+                    next.series > b.series
+                        && next.h > 0.0
+                        && stack_groups[next.series] == stack_groups[b.series]
+                        && is_renderable_value(next.value, is_log)
+                        && next.value.signum() == b.value.signum()
+                })
+        } else {
+            false
+        };
         items.push(bar_primitive(
             BarBounds {
                 x: b.x,
@@ -1876,6 +1911,41 @@ mod geom_tests {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = super::build(&spec, &m);
         (spec, scene)
+    }
+
+    #[test]
+    fn vertical_bar_box_category_ranges_exclude_other_categories() {
+        let boxes = [
+            BarBox {
+                series: 0,
+                index: 0,
+                value: 2.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
+            BarBox {
+                series: 1,
+                index: 0,
+                value: 3.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
+            BarBox {
+                series: 0,
+                index: 2,
+                value: 4.0,
+                x: 0.0,
+                y: 0.0,
+                w: 1.0,
+                h: 1.0,
+            },
+        ];
+
+        assert_eq!(category_bar_box_ranges(&boxes, 3), vec![0..2, 2..2, 2..3],);
     }
 
     fn path_bounds(data: &str) -> (f64, f64, f64, f64) {
