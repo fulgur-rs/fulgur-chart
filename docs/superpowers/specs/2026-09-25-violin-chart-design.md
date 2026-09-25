@@ -62,7 +62,7 @@ Use type-7 quartiles for IQR. Evaluate 100 evenly spaced value positions from th
 
 Draw the median as a small diamond and the arithmetic mean as a small circle, oriented along the value axis and matching the upstream violin element's default markers. Do not overlay a box, whiskers, or raw sample jitter points.
 
-When a group contains one sample or the computed bandwidth is non-positive or non-finite (including groups with zero IQR), use a positive fallback bandwidth equal to one percent of the computed value-axis span, with a small finite lower bound. Evaluate around the sample mean over three fallback bandwidths on each side so the group remains visible. This also avoids division by zero in the KDE.
+When a group contains one sample or the computed bandwidth is non-positive or non-finite (including groups with zero IQR), use max(0.01 * value_axis_span, 1e-9) as the fallback bandwidth in data units. If subtracting the axis bounds overflows, use one percent of the larger absolute axis bound before applying the 1e-9 lower bound. Evaluate around the sample mean over three fallback bandwidths on each side so the group remains visible. This also avoids division by zero in the KDE.
 
 Density output must remain finite. Empty or all-missing groups are skipped. Every generated path is clipped to the plot frame so explicit hard min/max bounds are honored.
 
