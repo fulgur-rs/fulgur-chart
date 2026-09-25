@@ -45,7 +45,8 @@ No KDE tuning fields are added in this issue. The number of density positions is
 - Add `Violin` and `HorizontalViolin` variants to the Chart.js schema and parser. Reuse the existing nested numeric data representation where possible, while keeping the violin-specific conversion separate from five-number boxplot conversion. Reject inner null values for boxplot as before.
 - Treat the outer data-array length as the number of category slots for the series. The semantic model reports one element per category slot; resource validation counts every raw sample slot, including nulls.
 - Add a dedicated `layout::violin` module. It shares the existing categorical index-axis frame and numeric value-axis rules, uses each category's samples to extend the automatic value domain, and respects hard user axis bounds in either orientation.
-- Add `Violin` handling to layout dispatch, model type naming and axes, element counts, and input guards.
+- In rendered geometry, vertical violin uses category x/value y and horizontal violin uses category y/value x. Keep the public model's axis normalization consistent with horizontal bars: model x remains categorical and model y remains the value axis in both orientations.
+- Add `Violin` handling to layout dispatch, model type naming and normalized axes, element counts, and input guards.
 
 ## KDE and Rendering
 
@@ -75,7 +76,7 @@ Density output must remain finite. Empty or all-missing groups are skipped. Ever
 - Add `violin` and `horizontalViolin` to the README's supported chart types and describe `datasets[].data` as nested raw sample arrays.
 - Add vertical and horizontal violin examples with multiple categories and non-symmetric distributions, plus committed PNG goldens.
 - Add parser tests for both orientations, null/empty samples, malformed samples, and ChartJsSpec schema round-trip.
-- Add layout tests for a symmetric body, grouped datasets, oriented mean/median markers, value-domain coverage, hard value bounds, and singleton/constant groups in both orientations.
+- Add layout tests for a symmetric body, grouped datasets, oriented mean/median markers, value-domain coverage, hard value bounds, and singleton/constant groups in both orientations. Add model tests confirming category-x/value-y normalization for both orientations.
 - Add guard tests for raw observation count and KDE work limits.
 - Run the relevant core Rust test suite, golden PNG verification, formatter, and CI before PR merge.
 
