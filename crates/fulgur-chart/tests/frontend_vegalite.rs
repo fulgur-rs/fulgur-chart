@@ -1432,6 +1432,71 @@ fn area_with_color_defaults_to_stacked() {
 }
 
 #[test]
+fn categorical_stacked_area_preflights_series_and_category_limits() {
+    let cases = [
+        (
+            fulgur_chart::guard::InputLimits {
+                max_categories: 1,
+                ..fulgur_chart::guard::InputLimits::default()
+            },
+            "max_categories",
+        ),
+        (
+            fulgur_chart::guard::InputLimits {
+                max_series: 1,
+                ..fulgur_chart::guard::InputLimits::default()
+            },
+            "max_series",
+        ),
+        (
+            fulgur_chart::guard::InputLimits {
+                max_categorical_primitives: 3,
+                ..fulgur_chart::guard::InputLimits::default()
+            },
+            "max_categorical_primitives",
+        ),
+    ];
+
+    for (limits, expected) in cases {
+        let error =
+            vegalite::parse_with_limits(CATEGORICAL_AREA_STACKED, false, &limits).unwrap_err();
+        assert!(
+            error.contains(expected),
+            "expected {expected} limit error, got: {error}"
+        );
+    }
+}
+
+#[test]
+fn categorical_stacked_area_accepts_shape_at_all_limits() {
+    let limits = fulgur_chart::guard::InputLimits {
+        max_categories: 2,
+        max_series: 2,
+        max_categorical_primitives: 4,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let spec = vegalite::parse_with_limits(CATEGORICAL_AREA_STACKED, false, &limits).unwrap();
+    assert_eq!(spec.categories.len(), 2);
+    assert_eq!(spec.series.len(), 2);
+}
+
+#[test]
+fn categorical_unstacked_area_keeps_existing_parse_limits_behavior() {
+    let json = CATEGORICAL_AREA_STACKED.replace(
+        r#""y": {"field": "sales", "type": "quantitative"}"#,
+        r#""y": {"field": "sales", "type": "quantitative", "stack": null}"#,
+    );
+    let limits = fulgur_chart::guard::InputLimits {
+        max_categories: 1,
+        max_series: 1,
+        max_categorical_primitives: 0,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let spec = vegalite::parse_with_limits(&json, false, &limits).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Line { stacked: false, .. }));
+}
+
+#[test]
 fn area_stack_null_disables_stacking() {
     let json = CATEGORICAL_AREA_STACKED.replace(
         r#""y": {"field": "sales", "type": "quantitative"}"#,

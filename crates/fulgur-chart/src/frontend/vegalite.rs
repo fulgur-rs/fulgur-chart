@@ -23,14 +23,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// `strict` が真のとき、上位/encoding/各チャネルのキーをホワイトリストで検査し、
 /// 最初の未知キーをそのパス付きで Err にする。非 strict は未知キーを無視する。
 ///
-/// rect の pre-allocation guard には `InputLimits::default()` を用いる。
+/// pre-allocation guard には `InputLimits::default()` を用いる。
 /// caller-supplied limits を渡したい場合は [`parse_with_limits`] を使う。
 pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     parse_with_limits(json, strict, &crate::guard::InputLimits::default())
 }
 
-/// caller-supplied limits を使う variant。rect と temporal line は allocation-heavy
-/// な dense product を構築する前に caller の限度値を検査する。
+/// caller-supplied limits を使う variant。rect、temporal line、categorical stacked area は
+/// allocation-heavy なデータ構造を構築する前に caller の限度値を検査する。
 pub fn parse_with_limits(
     json: &str,
     strict: bool,
@@ -171,6 +171,9 @@ pub fn parse_with_limits(
     if matches!(kind, ChartKind::Line { .. }) && color_field.is_some() && !temporal_line {
         let cats = distinct_categories(&records, x_field.as_deref());
         let groups = distinct_categories(&records, color_field.as_deref());
+        if is_area && matches!(kind, ChartKind::Line { stacked: true, .. }) {
+            preflight_stacked_area_shape(cats.len(), groups.len(), limits)?;
+        }
         for group in &groups {
             for cat in &cats {
                 let present = records.iter().any(|r| {
@@ -448,6 +451,33 @@ pub fn parse_with_limits(
         decimation: Decimation::default(),
         radial_axis: None,
     })
+}
+
+fn preflight_stacked_area_shape(
+    category_count: usize,
+    series_count: usize,
+    limits: &crate::guard::InputLimits,
+) -> Result<(), String> {
+    if category_count > limits.max_categories {
+        return Err(format!(
+            "categorical stacked area category count {category_count} exceeds max_categories limit {}",
+            limits.max_categories
+        ));
+    }
+    if series_count > limits.max_series {
+        return Err(format!(
+            "categorical stacked area series count {series_count} exceeds max_series limit {}",
+            limits.max_series
+        ));
+    }
+    let product = category_count.saturating_mul(series_count);
+    if product > limits.max_categorical_primitives {
+        return Err(format!(
+            "categorical stacked area series × categories product {product} exceeds max_categorical_primitives limit {}",
+            limits.max_categorical_primitives
+        ));
+    }
+    Ok(())
 }
 
 /// `mark` を [`ChartKind`] へ。文字列または `{"type": "<同左>"}` を受理する。
