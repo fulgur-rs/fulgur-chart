@@ -46,6 +46,17 @@ pub fn parse_with_limits(
         .ok_or_else(|| "トップレベルは object でなければなりません".to_string())?;
 
     let mut kind = parse_mark(top.get("mark"))?;
+    let is_area = read_mark_name(top) == Some("area");
+    // Reject this immediately, before validating data or encoding, so the unsupported
+    // area + point combination is reported whenever the key is present.
+    if is_area
+        && top
+            .get("mark")
+            .and_then(Value::as_object)
+            .is_some_and(|mark| mark.contains_key("point"))
+    {
+        return Err("mark.point is not supported for area charts".to_string());
+    }
     let records = parse_data_values(top.get("data"))?;
     let encoding = top
         .get("encoding")
@@ -73,17 +84,6 @@ pub fn parse_with_limits(
     // 下の temporal_line 計算より前に置く必要はない(parse_mark が area も
     // ChartKind::Line{..} を返すため matches! は既に真)が、以降の全ロジックが
     // kind.stacked の最終値に依存するので、encoding が読める最初の地点で確定させる。
-    let is_area = read_mark_name(top) == Some("area");
-    // area + point overlay is out of scope. Temporal area shares the line builder,
-    // which would otherwise interpret mark.point as a request to draw markers.
-    if is_area
-        && top
-            .get("mark")
-            .and_then(Value::as_object)
-            .is_some_and(|mark| mark.contains_key("point"))
-    {
-        return Err("mark.point is not supported for area charts".to_string());
-    }
     if is_area {
         let stacked = color_field.is_some() && !y_stack_disabled(encoding);
         kind = ChartKind::Line {

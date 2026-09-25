@@ -2948,6 +2948,16 @@ fn non_strict_area_rejects_mark_point_property() {
 }
 
 #[test]
+fn non_strict_area_rejects_mark_point_before_data_validation() {
+    let json = r#"{"mark":{"type":"area","point":true},"encoding":{}}"#;
+    let error = vegalite::parse(json, false).unwrap_err();
+    assert!(
+        error.contains("mark.point"),
+        "area mark.point should be rejected before other fields, got {error}"
+    );
+}
+
+#[test]
 fn temporal_area_with_color_defaults_to_stacked() {
     let spec = vegalite::parse(TEMPORAL_AREA_STACKED, false).unwrap();
     assert!(matches!(spec.kind, ChartKind::Line { stacked: true, .. }));
