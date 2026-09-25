@@ -910,9 +910,33 @@ pub(crate) fn horizontal_bar_layout(spec: &ChartSpec, m: &TextMeasurer) -> Horiz
     build_horizontal_with_geometry(spec, m).1
 }
 
+pub(crate) fn horizontal_bar_layout_with_temporal_values(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    temporal_values: &[i64],
+) -> HorizontalBarLayout {
+    build_horizontal_with_geometry_using_temporal_values(spec, m, Some(temporal_values)).1
+}
+
+pub(crate) fn build_horizontal_with_temporal_values(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    temporal_values: &[i64],
+) -> Scene {
+    build_horizontal_with_geometry_using_temporal_values(spec, m, Some(temporal_values)).0
+}
+
 fn build_horizontal_with_geometry(
     spec: &ChartSpec,
     m: &TextMeasurer,
+) -> (Scene, HorizontalBarLayout) {
+    build_horizontal_with_geometry_using_temporal_values(spec, m, None)
+}
+
+fn build_horizontal_with_geometry_using_temporal_values(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    temporal_values: Option<&[i64]>,
 ) -> (Scene, HorizontalBarLayout) {
     use crate::ir::{ScaleKind, XPositions};
     use crate::layout::common::*;
@@ -1102,13 +1126,17 @@ fn build_horizontal_with_geometry(
     // chart.js 実機は log 軸のピクセル写像を tight データドメインでそのまま行う
     // (scale.min/max がそれ)ため、これに合わせる(PR #144 の自動レビュー P1 指摘)。
     let xs = if is_temporal_x {
-        let values = spec
-            .series
-            .iter()
-            .flat_map(|series| &series.values)
-            .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
-            .map(|value| value.trunc() as i64)
-            .collect::<Vec<_>>();
+        let values = temporal_values.map_or_else(
+            || {
+                spec.series
+                    .iter()
+                    .flat_map(|series| &series.values)
+                    .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+                    .map(|value| value.trunc() as i64)
+                    .collect::<Vec<_>>()
+            },
+            <[i64]>::to_vec,
+        );
         ValueScale::Temporal(TemporalScale::with_domain(
             spec.x_axis.scale_kind,
             &values,

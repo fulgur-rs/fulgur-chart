@@ -127,8 +127,28 @@ fn violin_frame_from_vertical(frame: &Frame) -> ViolinFrame {
     }
 }
 
+fn horizontal_temporal_values(spec: &ChartSpec) -> Option<Vec<i64>> {
+    if spec.x_axis.scale_kind != crate::ir::ScaleKind::Timeseries {
+        return None;
+    }
+    Some(
+        spec.series
+            .iter()
+            .flat_map(|series| &series.violin_samples)
+            .flat_map(|group| group.iter().copied().flatten())
+            .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+            .map(|value| value.trunc() as i64)
+            .collect(),
+    )
+}
+
 fn horizontal_frame(spec: &ChartSpec, m: &TextMeasurer) -> ViolinFrame {
-    let layout = crate::layout::bar::horizontal_bar_layout(spec, m);
+    let layout = match horizontal_temporal_values(spec) {
+        Some(values) => {
+            crate::layout::bar::horizontal_bar_layout_with_temporal_values(spec, m, &values)
+        }
+        None => crate::layout::bar::horizontal_bar_layout(spec, m),
+    };
     ViolinFrame {
         horizontal: true,
         scene_width: spec.width,
@@ -642,10 +662,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let horizontal = is_horizontal(spec);
     let aux = auxiliary_spec(spec, horizontal);
     let (mut scene, frame) = if horizontal {
-        (
-            crate::layout::bar::build(&aux, m),
-            horizontal_frame(&aux, m),
-        )
+        let scene = match horizontal_temporal_values(&aux) {
+            Some(values) => {
+                crate::layout::bar::build_horizontal_with_temporal_values(&aux, m, &values)
+            }
+            None => crate::layout::bar::build(&aux, m),
+        };
+        (scene, horizontal_frame(&aux, m))
     } else {
         let common_frame = vertical_frame(&aux, m);
         let frame = violin_frame_from_vertical(&common_frame);
@@ -883,12 +906,15 @@ mod tests {
         let cases = [
             r#"{"type":"horizontalViolin","data":{"labels":["A"],"datasets":[{"data":[[1,10,100,10,10]]}]},"options":{"scales":{"x":{"type":"logarithmic","min":1,"max":100}}}}"#,
             r#"{"type":"horizontalViolin","data":{"labels":["A"],"datasets":[{"data":[[1704067200000,1706745600000,1706745600000,1706745600000,1711929600000]]}]},"options":{"scales":{"x":{"type":"time","min":1704067200000,"max":1711929600000,"time":{"unit":"month"}}}}}"#,
+            r#"{"type":"horizontalViolin","data":{"labels":["A"],"datasets":[{"data":[[1704067200000,1706745600000,1706745600000,1706745600000,1711929600000]]}]},"options":{"scales":{"x":{"type":"timeseries","min":1704067200000,"max":1711929600000,"time":{"unit":"month"}}}}}"#,
         ];
 
         for json in cases {
             let spec = parse(json);
             let expected_scale = if json.contains("logarithmic") {
                 crate::ir::ScaleKind::Logarithmic
+            } else if json.contains("timeseries") {
+                crate::ir::ScaleKind::Timeseries
             } else {
                 crate::ir::ScaleKind::Time
             };
@@ -898,6 +924,11 @@ mod tests {
             if spec.x_axis.scale_kind == crate::ir::ScaleKind::Logarithmic {
                 close(
                     frame.value_scale.map(10.0),
+                    (frame.plot_left + frame.plot_right) / 2.0,
+                );
+            } else if spec.x_axis.scale_kind == crate::ir::ScaleKind::Timeseries {
+                close(
+                    frame.value_scale.map(1706745600000.0),
                     (frame.plot_left + frame.plot_right) / 2.0,
                 );
             }
