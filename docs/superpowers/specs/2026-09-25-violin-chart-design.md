@@ -43,6 +43,7 @@ No KDE tuning fields are added in this issue. The number of density positions is
 
 - Add `ChartKind::Violin { horizontal: bool }` and a dedicated `Series.violin_samples: Vec<Vec<Option<f64>>>` field. Retaining null slots lets the guard count the complete input size while layout filters missing samples. Existing `Series.box_points` and `ChartKind::BoxPlot` keep their current meaning.
 - Add `Violin` and `HorizontalViolin` variants to the Chart.js schema and parser. Reuse the existing nested numeric data representation where possible, while keeping the violin-specific conversion separate from five-number boxplot conversion. Reject inner null values for boxplot as before.
+- Preserve the current untagged parser's shape precedence: nested arrays without inner nulls are parsed by the existing `Boxes` variant; add a nested optional-sample variant for inner nulls. An all-null outer array such as `[null, null]` can match the flat `Nums` variant first, so accept it for violin and convert each entry to an empty group. Continue rejecting non-null flat numeric arrays for violin, and leave boxplot's current interpretation unchanged. Spell the schema variant `horizontalViolin` explicitly because the root enum's default rename rule lowercases variant names.
 - Treat the outer data-array length as the number of category slots for the series. The semantic model reports one element per category slot; resource validation counts every raw sample slot, including nulls.
 - Add a dedicated `layout::violin` module. It shares the existing categorical index-axis frame and numeric value-axis rules, uses each category's samples to extend the automatic value domain, and respects hard user axis bounds in either orientation.
 - In rendered geometry, vertical violin uses category x/value y and horizontal violin uses category y/value x. Keep the public model's axis normalization consistent with horizontal bars: model x remains categorical and model y remains the value axis in both orientations.
@@ -75,7 +76,7 @@ Density output must remain finite. Empty or all-missing groups are skipped. Ever
 
 - Add `violin` and `horizontalViolin` to the README's supported chart types and describe `datasets[].data` as nested raw sample arrays.
 - Add vertical and horizontal violin examples with multiple categories and non-symmetric distributions, plus committed PNG goldens.
-- Add parser tests for both orientations, null/empty samples, malformed samples, and ChartJsSpec schema round-trip.
+- Add parser tests for both orientations, null/empty samples (including an all-null outer array), rejection of non-null flat numeric arrays, malformed samples, and ChartJsSpec schema round-trip.
 - Add layout tests for a symmetric body, grouped datasets, oriented mean/median markers, value-domain coverage, hard value bounds, and singleton/constant groups in both orientations. Add model tests confirming category-x/value-y normalization for both orientations.
 - Add guard tests for raw observation count and KDE work limits.
 - Run the relevant core Rust test suite, golden PNG verification, formatter, and CI before PR merge.
