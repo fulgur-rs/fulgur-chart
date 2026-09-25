@@ -1483,7 +1483,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
                     false
                 }
             }
-            DataField::Boxes(v) => !(is_boxplot || is_violin) && !v.is_empty(),
+            DataField::Boxes(v) => !(is_boxplot || is_violin || v.is_empty()),
             DataField::Samples(v) => !is_violin && !v.is_empty(),
             DataField::Points(v) => !is_point_based && !v.is_empty(),
         };

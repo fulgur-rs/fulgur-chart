@@ -195,9 +195,7 @@ fn fallback_bandwidth(ticks: &NiceTicks) -> f64 {
     } else {
         ticks.max.abs().max(ticks.min.abs())
     };
-    (scale * 0.01)
-        .max(MIN_FALLBACK_BANDWIDTH)
-        .min(f64::MAX / 8.0)
+    (scale * 0.01).clamp(MIN_FALLBACK_BANDWIDTH, f64::MAX / 8.0)
 }
 
 fn interpolate(a: f64, b: f64, t: f64) -> f64 {

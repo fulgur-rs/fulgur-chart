@@ -261,7 +261,7 @@ pub fn validate_time_format(field: &str, format: &str, display: bool) -> Result<
         has_month |= directive == b'm';
         has_day |= directive == b'd';
     }
-    if !display && !(has_year && has_month && has_day) {
+    if !(display || has_year && has_month && has_day) {
         return Err(format!("{field} parser format must include %Y, %m, and %d"));
     }
     Ok(())
