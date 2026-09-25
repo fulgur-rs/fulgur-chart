@@ -1,6 +1,6 @@
 use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::{chartjs, vegalite};
-use fulgur_chart::ir::{LegendPos, SizeMode, XPositions};
+use fulgur_chart::ir::{LegendPos, ScaleKind, SizeMode, XPositions};
 use fulgur_chart::layout::common;
 use fulgur_chart::model::{build_model, build_model_core};
 use fulgur_chart::temporal::parse_rfc3339_millis;
@@ -184,6 +184,24 @@ fn temporal_line_model_uses_scene_dimensions_and_temporal_axis() {
             parse_rfc3339_millis("timestamp", "2026-07-05T00:00:00Z").unwrap()
         ]
     );
+}
+
+#[test]
+fn temporal_line_model_preserves_logarithmic_y_axis() {
+    let json = r##"{
+        "type":"line",
+        "data":{"labels":["1970-01-01","1970-01-02","1970-01-03"],"datasets":[{"data":[1,10,100]}]},
+        "options":{"scales":{"x":{"type":"time"},"y":{"type":"logarithmic"}}}
+    }"##;
+    let spec = chartjs::parse(json, false).expect("temporal line with log y axis should parse");
+    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let model = build_model(&spec, &m);
+    let axes = model.axes.expect("line model should expose axes");
+
+    assert!(matches!(spec.x_positions, XPositions::Temporal { .. }));
+    assert_eq!(spec.y_axis.scale_kind, ScaleKind::Logarithmic);
+    assert_eq!(axes.x.kind, "temporal");
+    assert_eq!(axes.y.kind, "logarithmic");
 }
 
 #[test]
