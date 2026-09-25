@@ -2929,6 +2929,35 @@ const TEMPORAL_AREA_STACKED: &str = r#"{
 }"#;
 
 #[test]
+fn non_strict_area_rejects_mark_point_property() {
+    for base in [TEMPORAL_AREA_STACKED, CATEGORICAL_AREA_STACKED] {
+        for point in ["true", "false", "null"] {
+            let json = base.replace(
+                r#""mark": "area""#,
+                &format!(r#""mark": {{"type": "area", "point": {point}}}"#),
+            );
+            let error = vegalite::parse(&json, false).err();
+            assert!(
+                error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("mark.point")),
+                "area mark.point={point} should be rejected, got {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn non_strict_area_rejects_mark_point_before_data_validation() {
+    let json = r#"{"mark":{"type":"area","point":true},"encoding":{}}"#;
+    let error = vegalite::parse(json, false).unwrap_err();
+    assert!(
+        error.contains("mark.point"),
+        "area mark.point should be rejected before other fields, got {error}"
+    );
+}
+
+#[test]
 fn temporal_area_with_color_defaults_to_stacked() {
     let spec = vegalite::parse(TEMPORAL_AREA_STACKED, false).unwrap();
     assert!(matches!(spec.kind, ChartKind::Line { stacked: true, .. }));
