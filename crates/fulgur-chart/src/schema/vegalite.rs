@@ -550,7 +550,17 @@ pub struct VlPointEncoding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<VlChannel>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<VlChannel>,
+    pub size: Option<VlPointSizeChannel>,
+}
+
+/// Quantitative point size channel. Omitted `type` is inferred from the data.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlPointSizeChannel {
+    /// Name of the numeric field mapped to point area.
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlQuantitativeType>,
 }
 
 // ────────────────────────────────────────────────

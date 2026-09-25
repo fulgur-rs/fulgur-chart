@@ -1644,6 +1644,32 @@ fn point_mark_size_encoding_rejects_non_numeric_field_values() {
 }
 
 #[test]
+fn point_mark_size_schema_matches_quantitative_type_validation() {
+    let inferred = r#"{
+        "mark": "point",
+        "data": {"values": [{"x":1,"y":2,"size":10}]},
+        "encoding": {
+            "x": {"field":"x","type":"quantitative"},
+            "y": {"field":"y","type":"quantitative"},
+            "size": {"field":"size"}
+        }
+    }"#;
+    let _inferred_spec: fulgur_chart::schema::VegaLiteSpec =
+        serde_json::from_str(inferred).unwrap();
+    assert!(matches!(
+        vegalite::parse(inferred, true).unwrap().kind,
+        ChartKind::Bubble
+    ));
+
+    let nominal = inferred.replace(
+        "\"field\":\"size\"",
+        "\"field\":\"size\",\"type\":\"nominal\"",
+    );
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&nominal).is_err());
+    assert!(vegalite::parse(&nominal, true).is_err());
+}
+
+#[test]
 fn arc_mark_maps_to_pie_with_theta_sums() {
     let json = r#"{
         "mark": "arc",
