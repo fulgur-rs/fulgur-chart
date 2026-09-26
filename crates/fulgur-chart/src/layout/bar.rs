@@ -3278,6 +3278,86 @@ mod geom_tests {
     }
 
     #[test]
+    fn vertical_stacked_data_label_midpoint_uses_pixel_space_under_log_scale() {
+        // 積み上げ縦棒 + 対数 y 軸、2 系列 [10, 90](単一カテゴリ)。
+        // 系列2のセグメントは値空間で [10, 100]。対数写像では、値空間の中点 55 を
+        // map した位置と、描画済みセグメントのピクセル中点は一致しない。
+        let json = r##"{"type":"bar","data":{"labels":["A"],
+            "datasets":[{"data":[10],"backgroundColor":"#1f77b4"},
+                {"data":[90],"backgroundColor":"#ff7f0e"}]},
+            "options":{"scales":{"x":{"stacked":true},
+                "y":{"stacked":true,"type":"logarithmic","min":1,"max":100,"beginAtZero":false}},
+                "plugins":{"datalabels":{"display":true}}}}"##;
+        let mut spec = chartjs::parse(json, false).unwrap();
+        spec.height = 800.0;
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = super::build_vertical(&spec, &m);
+
+        assert!(
+            scene.items.iter().any(|item| matches!(item,
+                Prim::Text { content, .. } if content == "100"
+            )),
+            "the explicitly bounded log y axis should render its 100 tick"
+        );
+
+        // 第2系列の Rect が値空間 [10, 100] のセグメント。
+        let second_fill = spec.series[1].fill_at(0);
+        let (bar_x, bar_y, bar_w, bar_h) = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Rect { x, y, w, h, fill } if *fill == second_fill => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .expect("missing second stacked bar segment");
+        let pixel_mid = bar_y + bar_h / 2.0;
+
+        // 誤った値空間 midpoint (55) を対数写像した位置を、Rect の両端から独立に再現。
+        // y 座標は値が大きいほど小さくなる。
+        let t = (55.0_f64.log10() - 10.0_f64.log10()) / (100.0_f64.log10() - 10.0_f64.log10());
+        let buggy_y = bar_y + bar_h * (1.0 - t);
+
+        // データラベルの y はベースラインなので、共通のベースライン補正を引いて
+        // 描画上の中点と比較する。x をバー中央に限定して軸ラベルを除外する。
+        let (label_baseline, label_size) = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Text {
+                    x,
+                    y,
+                    size,
+                    content,
+                    anchor: crate::scene::Anchor::Middle,
+                    ..
+                } if content == "90"
+                    && (*x - (bar_x + bar_w / 2.0)).abs() < 0.5
+                    && *y >= bar_y
+                    && *y <= bar_y + bar_h =>
+                {
+                    Some((*y, *size))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing data label for value 90"));
+        let label_mid = label_baseline - label_size * super::super::common::TEXT_BASELINE_RATIO;
+
+        assert!(
+            (buggy_y - pixel_mid).abs() > 50.0,
+            "test scenario should separate value-space and pixel-space midpoints: \
+             buggy_y={buggy_y} pixel_mid={pixel_mid}"
+        );
+        assert!(
+            (label_mid - pixel_mid).abs() < 0.5,
+            "label center y={label_mid} should match pixel-space segment midpoint={pixel_mid}"
+        );
+        assert!(
+            (label_mid - buggy_y).abs() > 50.0,
+            "label center y={label_mid} should differ from the value-space midpoint={buggy_y}"
+        );
+    }
+
+    #[test]
     fn horizontal_dodge_skips_nan_value() {
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let spec = chartjs::parse(
