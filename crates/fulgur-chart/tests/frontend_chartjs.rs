@@ -766,6 +766,14 @@ fn strict_accepts_scales_offset() {
 }
 
 #[test]
+fn vertical_bar_category_x_offset_defaults_to_true() {
+    let json = r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]}}"#;
+    let spec = chartjs::parse(json, false).unwrap();
+
+    assert!(spec.x_axis.offset);
+}
+
+#[test]
 fn both_axes_stacked_sets_both_flags() {
     let json = r#"{ "type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},
       "options":{"scales":{"x":{"stacked":true},"y":{"stacked":true}}} }"#;

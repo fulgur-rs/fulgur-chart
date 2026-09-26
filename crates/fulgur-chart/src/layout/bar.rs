@@ -2,7 +2,7 @@
 //! 縦棒・横棒に対応。決定的に組み立て、NaN/Inf/panic を出さない。
 
 use crate::ir::{BarBorderRadius, BarGeometryOptions, BarThickness, ChartSpec};
-use crate::scene::{Prim, Scene};
+use crate::scene::{ClipRect, Prim, Scene};
 use crate::text::TextMeasurer;
 use std::fmt::Write;
 
@@ -197,6 +197,47 @@ pub(crate) fn bar_primitive(
         fill: Some(fill),
         stroke: None,
         stroke_width: 0.0,
+    }
+}
+
+fn clip_bar_primitive_to_plot(primitive: Prim, frame: &super::common::Frame) -> Prim {
+    let (d, fill, stroke, stroke_width) = match primitive {
+        Prim::Rect { x, y, w, h, fill } => (
+            format!(
+                "M {} {} L {} {} L {} {} L {} {} Z",
+                crate::num::fmt_num(x),
+                crate::num::fmt_num(y),
+                crate::num::fmt_num(x + w),
+                crate::num::fmt_num(y),
+                crate::num::fmt_num(x + w),
+                crate::num::fmt_num(y + h),
+                crate::num::fmt_num(x),
+                crate::num::fmt_num(y + h)
+            ),
+            Some(fill),
+            None,
+            0.0,
+        ),
+        Prim::Path {
+            d,
+            fill,
+            stroke,
+            stroke_width,
+        } => (d, fill, stroke, stroke_width),
+        other => return other,
+    };
+
+    Prim::ClippedPath {
+        d,
+        fill,
+        stroke,
+        stroke_width,
+        clip: Box::new(ClipRect {
+            x: frame.plot_left,
+            y: frame.plot_top,
+            w: frame.plot_right - frame.plot_left,
+            h: frame.plot_bottom - frame.plot_top,
+        }),
     }
 }
 
@@ -449,6 +490,7 @@ pub fn vertical_bar_boxes(spec: &ChartSpec, frame: &super::common::Frame) -> Vec
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let (stack_groups, stack_group_count) = super::common::stack_group_indices(&spec.series);
     let legacy_geometry = matches!(spec.x_positions, crate::ir::XPositions::Category)
+        && spec.x_axis.offset
         && spec.series.iter().all(|series| {
             series
                 .bar_geometry
@@ -872,7 +914,7 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         } else {
             false
         };
-        items.push(bar_primitive(
+        let primitive = bar_primitive(
             BarBounds {
                 x: b.x,
                 y: b.y,
@@ -883,7 +925,16 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             ser.bar_geometry.and_then(|geometry| geometry.border_radius),
             base_side,
             !has_later_same_sign,
-        ));
+        );
+        let primitive = if matches!(spec.x_positions, crate::ir::XPositions::Category)
+            && !spec.x_axis.offset
+            && (b.x < frame.plot_left || b.x + b.w > frame.plot_right)
+        {
+            clip_bar_primitive_to_plot(primitive, &frame)
+        } else {
+            primitive
+        };
+        items.push(primitive);
         if !spec.data_labels
             || b.h <= 0.0
             || !super::common::axis_value_in_bounds(b.value, &frame.ticks)
@@ -2364,6 +2415,114 @@ mod geom_tests {
 
         assert!((boxes[0].w - band * 0.8 * 0.9).abs() < 1e-9);
         assert!((boxes[0].x - (category_start + band * 0.1)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn offset_false_vertical_bars_use_edge_categories_and_interval_width() {
+        let spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["A","B","C"],
+              "datasets":[{"data":[10,20,30]}]},
+              "options":{"scales":{"x":{"offset":false}}}}"#,
+            false,
+        )
+        .unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let boxes = vertical_bar_boxes(&spec, &frame);
+        let interval = (frame.plot_right - frame.plot_left) / 2.0;
+
+        assert_eq!(boxes.len(), 3);
+        for (index, bar) in boxes.iter().enumerate() {
+            let expected_center = frame.plot_left + index as f64 * interval;
+            assert!(
+                (bar.x + bar.w / 2.0 - expected_center).abs() < 1e-9,
+                "offset:false の棒はカテゴリ位置を中心にする: index={index}, center={}, expected={expected_center}",
+                bar.x + bar.w / 2.0
+            );
+            assert!(
+                (bar.w - interval * DEFAULT_CATEGORY_PERCENTAGE * DEFAULT_BAR_PERCENTAGE).abs()
+                    < 1e-9,
+                "offset:false の棒幅はカテゴリ間隔を基準にする: index={index}, width={}, interval={interval}",
+                bar.w
+            );
+        }
+    }
+
+    #[test]
+    fn offset_false_vertical_bar_labels_and_grid_use_category_edges() {
+        let json = r#"{"type":"bar","data":{"labels":["A","B","C"],
+          "datasets":[{"data":[10,20,30]}]},
+          "options":{"scales":{"x":{"offset":false,"grid":{"display":true}}}}}"#;
+        let (spec, scene) = scene_for(json);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let interval = (frame.plot_right - frame.plot_left) / 2.0;
+        let labels: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Text { x, content, .. } if ["A", "B", "C"].contains(&content.as_str()) => {
+                    Some((content.as_str(), *x))
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(labels.len(), 3);
+        for (index, (content, x)) in labels.iter().enumerate() {
+            let expected = frame.plot_left + index as f64 * interval;
+            assert!(
+                (*x - expected).abs() < 1e-9,
+                "offset:false のカテゴリラベルは棒位置に揃える: {content} x={x} expected={expected}"
+            );
+        }
+
+        let expected_grid = (0..3)
+            .map(|index| {
+                let x = frame.plot_left + index as f64 * interval;
+                format!(
+                    "M {} {} L {} {}",
+                    crate::num::fmt_num(x),
+                    crate::num::fmt_num(frame.plot_top),
+                    crate::num::fmt_num(x),
+                    crate::num::fmt_num(frame.plot_bottom)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            scene.items.iter().any(|item| matches!(
+                item,
+                Prim::Path { d, .. } if d == &expected_grid
+            )),
+            "offset:false のカテゴリ grid は棒位置に揃える"
+        );
+    }
+
+    #[test]
+    fn offset_false_vertical_bars_are_clipped_to_the_plot_area() {
+        let json = r#"{"type":"bar","data":{"labels":["A","B","C"],
+          "datasets":[{"data":[10,20,30]}]},
+          "options":{"scales":{"x":{"offset":false}}}}"#;
+        let (spec, scene) = scene_for(json);
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = super::super::common::compute(&spec, &m);
+        let clips: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::ClippedPath { clip, .. } => Some(clip.as_ref()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(clips.len(), 2);
+        assert!(clips.iter().all(|clip| {
+            (clip.x - frame.plot_left).abs() < 1e-9
+                && (clip.y - frame.plot_top).abs() < 1e-9
+                && (clip.w - (frame.plot_right - frame.plot_left)).abs() < 1e-9
+                && (clip.h - (frame.plot_bottom - frame.plot_top)).abs() < 1e-9
+        }));
     }
 
     #[test]
