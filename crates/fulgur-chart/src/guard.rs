@@ -858,6 +858,19 @@ pub(crate) fn validate_marker_radii(spec: &ChartSpec) -> Result<(), String> {
                 }
             }
         }
+        ChartKind::Square => {
+            for series in &spec.series {
+                for point in series
+                    .points
+                    .iter()
+                    .filter(|point| point.x.is_finite() && point.y.is_finite())
+                {
+                    if point.r.is_some_and(unsupported) {
+                        return point_r_error();
+                    }
+                }
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -949,6 +962,7 @@ fn estimate_outlabel_expanded_bytes(spec: &ChartSpec, template: &str) -> usize {
 mod tests {
     use super::*;
     use crate::frontend::chartjs;
+    use crate::frontend::vegalite;
     use crate::ir::XPositions;
 
     fn base_spec() -> ChartSpec {
@@ -982,6 +996,16 @@ mod tests {
         let mut spec = chartjs::parse(
             r#"{"type":"bubble","data":{"datasets":[{"data":[{"x":1,"y":2}]}]}}"#,
             false,
+        )
+        .unwrap();
+        spec.series[0].points[0].r = radius;
+        spec
+    }
+
+    fn effective_square_point_r_spec(radius: Option<f64>) -> ChartSpec {
+        let mut spec = vegalite::parse(
+            r#"{"mark":"square","data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"}}}"#,
+            true,
         )
         .unwrap();
         spec.series[0].points[0].r = radius;
@@ -1215,6 +1239,31 @@ mod tests {
                 validate_spec(&spec, &default_limits()),
                 Err(ERROR.to_string()),
                 "point.r={radius:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn effective_square_point_r_accepts_supported_boundaries() {
+        for radius in [None, Some(0.0), Some(-1.0), Some(32_768.0)] {
+            let spec = effective_square_point_r_spec(radius);
+            assert!(
+                validate_spec(&spec, &default_limits()).is_ok(),
+                "square point.r={radius:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn effective_square_point_r_rejects_unsupported_boundaries() {
+        const ERROR: &str = "point.r must be finite and no greater than 32768";
+
+        for radius in [32_769.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let spec = effective_square_point_r_spec(Some(radius));
+            assert_eq!(
+                validate_spec(&spec, &default_limits()),
+                Err(ERROR.to_string()),
+                "square point.r={radius:?}"
             );
         }
     }

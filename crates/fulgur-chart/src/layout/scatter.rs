@@ -1,4 +1,4 @@
-//! scatter チャート: 数値 x/y 軸に点(円)を描く。
+//! scatter チャート: 数値 x/y 軸に点を描く。
 //! カテゴリ系の `common::compute` は x をカテゴリ前提にするため、ここでは
 //! scatter 固有のフレームを自前で組む。共有できる凡例/定数/テーマは `common` を再利用する。
 
@@ -8,7 +8,8 @@ use super::common::{
     legend_band_width_vertical_styled, legend_horizontal_band_height, legend_label_font_size,
 };
 use crate::ir::{
-    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, Point, ScaleKind,
+    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, DatasetPointStyle, LegendPos, Point,
+    ScaleKind,
 };
 use crate::scale::{LinearScale, NiceTicks, ValueScale};
 use crate::scene::{Anchor, Prim, Scene};
@@ -18,10 +19,13 @@ use crate::text::TextMeasurer;
 /// scatter のマーカー既定半径。chart.js scatter の pointRadius 既定値 ~3.0。
 const DEFAULT_POINT_R: f64 = 3.0;
 
+/// Vega-Lite's default square size is 30px²; `PointBox.r` stores half the side.
+const DEFAULT_SQUARE_HALF_SIDE: f64 = 2.738_612_787_525_830_6;
+
 /// bubble で `point.r` が無い場合の既定半径。bubble は通常 r を持つが保険。
 const DEFAULT_BUBBLE_R: f64 = 5.0;
 
-/// 単一データ点の画素空間情報（scatter/line/bubble 共用）。
+/// 単一データ点の画素空間情報（scatter/line/bubble/square 共用）。
 /// モデル geometry とレンダラが共有する単一の真実源。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PointBox {
@@ -51,7 +55,7 @@ pub struct ScatterLayout {
     pub plot_bottom: f64,
 }
 
-/// scatter/bubble チャートのフレームを計算して返す。
+/// scatter/bubble/square チャートのフレームを計算して返す。
 /// `build` のインライン計算と同一の式（単一の真実源）。
 pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayout {
     let label_font = spec.theme.font_size;
@@ -350,10 +354,11 @@ fn scatter_line_segments(points: &[Point], layout: &ScatterLayout) -> Vec<Vec<(f
 
 /// scatter/bubble の全点を返す（renderer とモデルの単一の真実源）。
 /// 非有限座標と hard axis domain の範囲外の点はスキップする。bubble は `PointBox.r` に
-/// 実ピクセル半径を格納。
+/// 実ピクセル半径、square は正方形の半辺長を格納する。
 pub fn scatter_points(spec: &ChartSpec, layout: &ScatterLayout) -> Vec<PointBox> {
     let kind = match &spec.kind {
         ChartKind::Bubble => "bubble",
+        ChartKind::Square => "square",
         _ => "scatter",
     };
     let mut pts = Vec::new();
@@ -380,10 +385,10 @@ pub fn scatter_points(spec: &ChartSpec, layout: &ScatterLayout) -> Vec<PointBox>
     pts
 }
 
-/// 1 点の半径を返す。bubble はデータの第3次元 `point.r` を優先し、無ければ
-/// dataset の `pointRadius`、それも無ければ既定値。scatter は dataset の `pointRadius`
-/// (chart.js の指定)を使い、無指定なら既定値。非有限/負の半径は不正な SVG を避けるため
-/// それぞれの既定値にフォールバックする。
+/// マーカーの半径/半辺長を返す。bubble はデータの第3次元 `point.r` を優先し、無ければ
+/// dataset の `pointRadius`、それも無ければ既定値。square は `point.r` に面積から変換した
+/// 半辺長を持つ。scatter は dataset の `pointRadius` を使い、無指定なら既定値。
+/// 非有限/負の値は不正な SVG を避けるためそれぞれの既定値にフォールバックする。
 fn point_radius(kind: &ChartKind, point: &Point, dataset_radius: Option<f64>) -> f64 {
     let valid = |r: f64, fallback: f64| {
         if r.is_finite() && r >= 0.0 {
@@ -396,6 +401,10 @@ fn point_radius(kind: &ChartKind, point: &Point, dataset_radius: Option<f64>) ->
         ChartKind::Bubble => {
             let r = point.r.or(dataset_radius).unwrap_or(DEFAULT_BUBBLE_R);
             valid(r, DEFAULT_BUBBLE_R)
+        }
+        ChartKind::Square => {
+            let half_side = point.r.unwrap_or(DEFAULT_SQUARE_HALF_SIDE);
+            valid(half_side, DEFAULT_SQUARE_HALF_SIDE)
         }
         _ => valid(dataset_radius.unwrap_or(DEFAULT_POINT_R), DEFAULT_POINT_R),
     }
@@ -721,6 +730,11 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 6. 点。共有 scatter_points(単一真実源)から描画。
     for b in scatter_points(spec, &layout) {
         let ser = &spec.series[b.series];
+        let point_style = if matches!(spec.kind, ChartKind::Square) {
+            Some(DatasetPointStyle::Rect)
+        } else {
+            ser.line_style.as_ref().and_then(|style| style.point_style)
+        };
         super::common::dataset_point_marker(
             &mut items,
             b.cx,
@@ -729,7 +743,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             ser.fill_at(b.index),
             ser.stroke_at(b.index),
             ser.stroke_width,
-            ser.line_style.as_ref().and_then(|style| style.point_style),
+            point_style,
         );
     }
 

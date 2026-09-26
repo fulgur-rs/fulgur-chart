@@ -15,6 +15,7 @@ pub enum VegaLiteSpec {
     CategoricalArea(VlCategoricalAreaSpec),
     Point(VlPointSpec),
     Circle(VlCircleSpec),
+    Square(VlSquareSpec),
     Arc(VlArcSpec),
     Rect(VlRectSpec),
 }
@@ -37,7 +38,7 @@ pub struct VlChannel {
     /// Name of the field in each record of data.values.
     pub field: String,
     /// Type hint (e.g. "quantitative", "nominal"). Rendering infers types from data;
-    /// point size additionally requires "quantitative" when this hint is present.
+    /// point/square size additionally requires "quantitative" when this hint is present.
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub field_type: Option<String>,
 }
@@ -163,6 +164,26 @@ pub struct MarkCircleObject {
 pub enum MarkCircle {
     String(MarkCircleName),
     Object(MarkCircleObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkSquareName {
+    Square,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkSquareObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkSquareName,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkSquare {
+    String(MarkSquareName),
+    Object(MarkSquareObject),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -553,7 +574,7 @@ pub struct VlPointEncoding {
     pub size: Option<VlPointSizeChannel>,
 }
 
-/// Quantitative point size channel. Omitted `type` is inferred from the data.
+/// Quantitative point/square size channel. Omitted `type` is inferred from the data.
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct VlPointSizeChannel {
@@ -595,6 +616,38 @@ pub struct VlCircleEncoding {
     pub y: VlChannel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<VlChannel>,
+}
+
+// ────────────────────────────────────────────────
+// Square plot (mark: "square")
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlSquareSpec {
+    pub mark: MarkSquare,
+    pub data: VlData,
+    pub encoding: VlSquareEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+}
+
+/// Encoding for `mark: "square"`. The mark shape is fixed; `size` maps to pixel area.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlSquareEncoding {
+    pub x: VlChannel,
+    pub y: VlChannel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<VlPointSizeChannel>,
 }
 
 // ────────────────────────────────────────────────

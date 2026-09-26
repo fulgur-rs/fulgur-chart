@@ -195,7 +195,7 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
                 elements,
             })
         }
-        ChartKind::Scatter | ChartKind::Bubble => {
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => {
             let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
             let pw = layout.plot_right - layout.plot_left;
             let ph = layout.plot_bottom - layout.plot_top;
@@ -216,8 +216,12 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
                     kind: b.kind.to_string(),
                     nx: (b.cx - layout.plot_left) / pw,
                     ny: (b.cy - layout.plot_top) / ph,
-                    nw: if b.kind == "bubble" { b.r / pw } else { 0.0 },
-                    nh: 0.0,
+                    nw: if matches!(b.kind, "bubble" | "square") {
+                        b.r / pw
+                    } else {
+                        0.0
+                    },
+                    nh: if b.kind == "square" { b.r / ph } else { 0.0 },
                 })
                 .collect();
             Some(Geometry {
@@ -302,6 +306,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Pie { .. } => "pie",
         ChartKind::Scatter => "scatter",
         ChartKind::Bubble => "bubble",
+        ChartKind::Square => "square",
         ChartKind::Radar => "radar",
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",
@@ -573,8 +578,8 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
             };
             Some((index_axis, value_model, t.ticks.len()))
         }
-        // scatter/bubble: x・y とも数値軸。renderer と同じ layout/ticks を共有する。
-        ChartKind::Scatter | ChartKind::Bubble => {
+        // scatter/bubble/square: x・y とも数値軸。renderer と同じ layout/ticks を共有する。
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => {
             let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
             let x = if matches!(
                 spec.x_axis.scale_kind,
@@ -643,6 +648,7 @@ mod tests {
     use super::*;
     use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
+    use crate::frontend::vegalite;
     use crate::ir::Color;
     use crate::text::TextMeasurer;
 
@@ -1250,6 +1256,40 @@ mod tests {
             assert!(e.nw > 0.0, "bubble の nw(正規化半径)は正: nw={}", e.nw);
         }
         assert!(g.elements[1].nw > g.elements[0].nw, "大きい r は大きい nw");
+    }
+
+    #[test]
+    fn square_has_normalized_geometry_and_linear_axes() {
+        let json = r#"{
+          "mark":"square",
+          "data":{"values":[{"x":1,"y":2},{"x":3,"y":4}]},
+          "encoding":{"x":{"field":"x"},"y":{"field":"y"}}
+        }"#;
+        let spec = vegalite::parse(json, true).unwrap();
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let model = build_model(&spec, &m);
+
+        assert_eq!(model.meta.r#type, "square");
+        let axes = model.axes.expect("square exposes numeric axes");
+        assert_eq!(axes.x.kind, "linear");
+        assert_eq!(axes.y.kind, "linear");
+
+        let geometry = model.geometry.expect("square exposes point geometry");
+        assert_eq!(geometry.elements.len(), 2);
+        for element in &geometry.elements {
+            assert_eq!(element.kind, "square");
+            assert!(element.nw > 0.0);
+            assert!(element.nh > 0.0);
+        }
+
+        let layout = crate::layout::scatter::compute_scatter_layout(&spec, &m);
+        let plot_width = layout.plot_right - layout.plot_left;
+        let plot_height = layout.plot_bottom - layout.plot_top;
+        for element in &geometry.elements {
+            let width = element.nw * plot_width;
+            let height = element.nh * plot_height;
+            assert!((width - height).abs() < 1e-10, "marker is not square");
+        }
     }
 
     #[test]
