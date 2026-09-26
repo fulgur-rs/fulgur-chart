@@ -1347,8 +1347,8 @@ pub(crate) fn x_index_band(
     count: usize,
 ) -> (f64, f64, f64) {
     let XPositions::Temporal { unix_millis } = &spec.x_positions else {
-        let size = band_width(frame, count);
-        let center = category_center(frame, index, count);
+        let size = category_spacing(spec, frame, count);
+        let center = category_x(spec, frame, index, count);
         return (center, center - size / 2.0, size);
     };
     let value = *unix_millis.get(index).unwrap_or(&0);
@@ -1420,38 +1420,53 @@ pub(crate) fn temporal_position_band(
     (center, center - size / 2.0, size)
 }
 
-/// line/area の x 座標。chart.js の category スケール offset:false(edge-to-edge)に合わせ、
+/// カテゴリ軸の edge-to-edge x 座標。chart.js の category スケール offset:false に合わせ、
 /// n 個のカテゴリを [plot_left, plot_right] へ i/(n-1) で等間隔配置する(先頭=左端・末尾=右端)。
-/// bar の band 中心(category_center)とは異なる。n<=1 は (n-1)=0 で NaN になるため
-/// プロット中央へフォールバックする(縮退ケース; 単一カテゴリの line fixture は存在しない)。
-fn line_edge_x(frame: &Frame, i: usize, n: usize) -> f64 {
+/// offset:true の band 中心(category_center)とは異なる。n<=1 は (n-1)=0 で NaN になるため
+/// プロット中央へフォールバックする。
+fn category_edge_x(frame: &Frame, i: usize, n: usize) -> f64 {
     if n <= 1 {
         return frame.plot_left + (frame.plot_right - frame.plot_left) / 2.0;
     }
     frame.plot_left + i as f64 * (frame.plot_right - frame.plot_left) / (n - 1) as f64
 }
 
-/// line/area の category x 座標を x 軸の offset 設定に応じて選ぶ単一窓口。
-/// offset:true → category_center(bar 同様の band 中心)、false → line_x(edge-to-edge)。
-/// line.rs の点計算と draw_frame の x ラベル(いずれも ChartKind::Line 経路)が共有し、
-/// offset 判定の分岐を一元化する。mixed は mixed::build が category_center を直接使い
-/// この関数を呼ばないため、ここで ChartKind を分岐する必要はない。
-///
-/// `category_center`/`line_x` が純粋な幾何プリミティブ(外部からの利用に意味がある)なのに対し、
-/// これは spec.kind/offset を読む種別ディスパッチのラッパーであり、line レイアウトの内部都合。
-/// 公開 API に晒すと「mixed 幾何にも使える」という誤解と契約を生むため `pub(crate)` に限定する。
-pub(crate) fn line_category_x(spec: &ChartSpec, frame: &Frame, i: usize, n: usize) -> f64 {
-    if spec.x_axis.offset {
+fn supports_x_category_offset(spec: &ChartSpec) -> bool {
+    matches!(
+        spec.kind,
+        ChartKind::Line { .. }
+            | ChartKind::Bar {
+                horizontal: false,
+                ..
+            }
+    )
+}
+
+/// カテゴリ x 座標を x 軸の offset 設定に応じて選ぶ共有 helper。
+/// offset:true は band 中心、false はプロット端を含む edge-to-edge 配置。
+/// line の点・縦棒の box・対応する x ラベルとグリッドが同じ位置を参照する。
+pub(crate) fn category_x(spec: &ChartSpec, frame: &Frame, i: usize, n: usize) -> f64 {
+    if spec.x_axis.offset || !supports_x_category_offset(spec) {
         category_center(frame, i, n)
     } else {
-        line_edge_x(frame, i, n)
+        category_edge_x(frame, i, n)
+    }
+}
+
+/// カテゴリ位置間隔。offset:false の複数カテゴリは両端を含むため n-1 区間になる。
+pub(crate) fn category_spacing(spec: &ChartSpec, frame: &Frame, n: usize) -> f64 {
+    let plot_width = frame.plot_right - frame.plot_left;
+    if supports_x_category_offset(spec) && !spec.x_axis.offset && n > 1 {
+        plot_width / (n - 1) as f64
+    } else {
+        plot_width / n.max(1) as f64
     }
 }
 
 /// line/area の x 座標。カテゴリは従来どおり等間隔、temporal は経過時間に比例させる。
 pub fn line_x(spec: &ChartSpec, frame: &Frame, index: usize) -> f64 {
     match &spec.x_positions {
-        XPositions::Category => line_category_x(spec, frame, index, spec.categories.len().max(1)),
+        XPositions::Category => category_x(spec, frame, index, spec.categories.len().max(1)),
         XPositions::Temporal { unix_millis } => {
             let value = unix_millis
                 .get(index)
@@ -1586,12 +1601,12 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
     // 3. カテゴリカル x grid。baseline より先に置き、交点を border が覆うようにする。
     if matches!(spec.x_positions, XPositions::Category) && spec.x_axis.grid.display {
         let n = spec.categories.len().max(1);
-        let slot_w = (frame.plot_right - frame.plot_left) / n as f64;
+        let slot_w = category_spacing(spec, frame, n);
         let step = categorical_tick_step(&spec.categories, slot_w, m, label_font);
         let mut grid_path = String::new();
         for i in (0..spec.categories.len()).step_by(step) {
-            let x = if matches!(spec.kind, ChartKind::Line { .. }) {
-                line_x(spec, frame, i)
+            let x = if supports_x_category_offset(spec) {
+                category_x(spec, frame, i, n)
             } else {
                 category_center(frame, i, n)
             };
@@ -1663,16 +1678,16 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
         XPositions::Category => {
             // 4a. x カテゴリラベル（auto-skip は表示 tick に適用）。
             let n = spec.categories.len().max(1);
-            let slot_w = (frame.plot_right - frame.plot_left) / n as f64;
+            let slot_w = category_spacing(spec, frame, n);
             let step = categorical_tick_step(&spec.categories, slot_w, m, label_font);
             for (i, cat) in spec.categories.iter().enumerate() {
                 if i % step != 0 {
                     continue;
                 }
-                // line は点と同じ配置(offset:false=edge-to-edge / offset:true=band 中心)で
-                // grid/ラベルを点の真下に置く。bar/その他はバンド中心。mixed は band 中心。
-                let x = if matches!(spec.kind, ChartKind::Line { .. }) {
-                    line_x(spec, frame, i)
+                // line と縦棒は x 軸 offset に応じたカテゴリ位置へ grid/ラベルを揃える。
+                // mixed とその他は従来どおり band 中心を使う。
+                let x = if supports_x_category_offset(spec) {
+                    category_x(spec, frame, i, n)
                 } else {
                     category_center(frame, i, n)
                 };
@@ -4014,6 +4029,7 @@ mod tests {
     #[test]
     fn categorical_x_grid_uses_category_centers_and_style() {
         let mut spec = make_bar_spec(3, 400.0);
+        spec.x_axis.offset = true;
         let grid = Color {
             r: 12,
             g: 34,

@@ -2036,9 +2036,16 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     let suggested_max_y = y_opts.and_then(|a| a.suggested_max);
     let suggested_min_x = x_opts.and_then(|a| a.suggested_min);
     let suggested_max_x = x_opts.and_then(|a| a.suggested_max);
-    // category スケールの offset。明示時のみ尊重(既定 false=edge-to-edge)。
-    // line レイアウトの x 軸のみが消費する(y は line の値軸)。
-    let x_offset = x_opts.and_then(|a| a.offset).unwrap_or(false);
+    // category スケールの offset。縦棒の index 軸は Chart.js 既定が true、line は false。
+    // temporal 軸と横棒の x 軸は index 軸ではないため、既定 false を保つ。
+    let default_x_offset = matches!(
+        &kind,
+        ChartKind::Bar {
+            horizontal: false,
+            ..
+        }
+    ) && matches!(&x_positions, XPositions::Category);
+    let x_offset = x_opts.and_then(|a| a.offset).unwrap_or(default_x_offset);
     let y_offset = y_opts.and_then(|a| a.offset).unwrap_or(false);
 
     // scales.r: radar / polarArea かつ scales.r にドメインキーが明示されているときのみ populate。
