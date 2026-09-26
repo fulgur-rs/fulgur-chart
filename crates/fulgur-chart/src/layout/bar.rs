@@ -1063,19 +1063,7 @@ fn build_horizontal_with_geometry_using_temporal_values(
             Vec::new(),
         )
     } else if is_log {
-        let log = crate::scale::log_ticks_within(dmin, dmax);
-        (
-            NiceTicks {
-                min: log.min,
-                max: log.max,
-                // 対数軸では decade 間隔が一定でない(1,10,100,...)ため "step" は
-                // 意味を持たない。0.0 は Task 9(common.rs::compute())と同じ log 専用の
-                // 番兵(nice_ticks は常に step>0 を返す)。
-                step: 0.0,
-                ticks: log.major,
-            },
-            log.minor,
-        )
+        crate::scale::log_axis_ticks(dmin, dmax)
     } else {
         (configured_axis_ticks(dmin, dmax, &spec.x_axis), Vec::new())
     };

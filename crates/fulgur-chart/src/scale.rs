@@ -602,6 +602,21 @@ pub fn log_ticks_within(domain_min: f64, domain_max: f64) -> LogTicks {
     }
 }
 
+/// LogTicks を layout/model 共通の NiceTicks 形式と minor 目盛りへ変換する。
+/// 対数軸では一定間隔の step がないため、対数軸用 `NiceTicks` の `step: 0.0` はここだけで設定する。
+pub(crate) fn log_axis_ticks(domain_min: f64, domain_max: f64) -> (NiceTicks, Vec<f64>) {
+    let log = log_ticks_within(domain_min, domain_max);
+    (
+        NiceTicks {
+            min: log.min,
+            max: log.max,
+            step: 0.0,
+            ticks: log.major,
+        },
+        log.minor,
+    )
+}
+
 /// Vega-Lite のdogfood line chart用に、ゼロ基準と半step余白を持つ目盛りを返す。
 pub fn vega_nice_ticks(data_min: f64, data_max: f64, plot_height: f64) -> NiceTicks {
     let target = if plot_height.is_finite() && plot_height > 0.0 {
@@ -1637,6 +1652,22 @@ mod tests {
             assert_eq!(t.min, domain_min, "domain {domain_min}..{domain_max}");
             assert_eq!(t.max, domain_max, "domain {domain_min}..{domain_max}");
         }
+    }
+
+    #[test]
+    fn log_axis_ticks_returns_nice_ticks_and_minor_ticks() {
+        let (major, minor) = log_axis_ticks(40.0, 4000.0);
+
+        assert_eq!((major.min, major.max), (40.0, 4000.0));
+        assert_eq!(major.step, 0.0);
+        assert_eq!(major.ticks, vec![100.0, 1000.0]);
+        assert_eq!(
+            minor,
+            vec![
+                40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0,
+                800.0, 900.0, 2000.0, 3000.0, 4000.0,
+            ]
+        );
     }
 
     #[test]
