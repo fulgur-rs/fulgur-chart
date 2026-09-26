@@ -3,10 +3,11 @@
 //! 対応する上位形:
 //! `{ "mark": ..., "data": {"values": [ {..}, .. ]}, "encoding": {..} }`
 //!
-//! - `mark`: 文字列 `"bar"|"line"|"point"|"arc"` または `{"type": "<同左>"}`。
+//! - `mark`: 文字列 `"bar"|"line"|"point"|"circle"|"square"|"arc"` または
+//!   `{"type": "<同左>"}`。
 //! - `data.values`: インラインのレコード配列（JSON オブジェクトの配列）のみ対応。
 //!   `data.url` や values 欠落は明確なメッセージで Err。
-//! - `encoding`: `x`/`y`/`color`/`theta`。point は `size` も受理する。
+//! - `encoding`: `x`/`y`/`color`/`theta`。point/square は `size` も受理する。
 //!   各チャネルは `{ "field", "type"? }`。
 //!
 //! すべて決定的（distinct 値の抽出は first-seen 順、HashMap 不使用）でパニックしない。
@@ -69,15 +70,19 @@ pub fn parse_with_limits(
     let x_field = channel_field(encoding, "x");
     let y_field = channel_field(encoding, "y");
     let color_field = channel_field(encoding, "color");
-    let point_mark = read_mark_name(top) == Some("point");
-    let size_field = if point_mark {
+    let mark_name = read_mark_name(top);
+    let point_size_mark = matches!(mark_name, Some("point" | "square"));
+    let square_mark = mark_name == Some("square");
+    let size_field = if point_size_mark {
         point_size_field(encoding)?
     } else {
         None
     };
     if size_field.is_some() {
         validate_point_size_type(encoding)?;
-        kind = ChartKind::Bubble;
+        if !square_mark {
+            kind = ChartKind::Bubble;
+        }
     }
     // Vega-Lite の実際のデフォルト: mark:"area" は color channel があり、かつ
     // encoding.y.stack が明示的に null でない限り積み上げになる。
@@ -109,7 +114,7 @@ pub fn parse_with_limits(
                 }
             }
         }
-        ChartKind::Scatter | ChartKind::Bubble => {
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => {
             let xf = require_field(&x_field, "x")?;
             let yf = require_field(&y_field, "y")?;
             validate_numeric(&records, xf)?;
@@ -302,13 +307,14 @@ pub fn parse_with_limits(
                     None,
                 )
             }
-            ChartKind::Scatter | ChartKind::Bubble => (
+            ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => (
                 build_scatter(
                     &records,
                     &x_field,
                     &y_field,
                     &color_field,
                     size_field.as_deref(),
+                    square_mark,
                     &theme,
                 ),
                 vec![],
@@ -328,12 +334,15 @@ pub fn parse_with_limits(
         }
     }
 
-    // scatter/bubble/rect は両軸ゼロ起点を強制しない。bar/line/pie は y のみゼロ起点。
+    // scatter/bubble/square/rect は両軸ゼロ起点を強制しない。bar/line/pie は y のみ。
     let y_begin_at_zero = !matches!(
         kind,
-        ChartKind::Scatter | ChartKind::Bubble | ChartKind::VegaRect { .. }
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square | ChartKind::VegaRect { .. }
     );
-    let scatter = matches!(&kind, ChartKind::Scatter | ChartKind::Bubble);
+    let scatter = matches!(
+        &kind,
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square
+    );
     let grid = if temporal_line {
         Some(temporal_axis_grid(top, theme.grid_color)?)
     } else {
@@ -507,6 +516,7 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
         }),
         "point" => Ok(ChartKind::Scatter),
         "circle" => Ok(ChartKind::Scatter),
+        "square" => Ok(ChartKind::Square),
         "rect" => Ok(ChartKind::VegaRect {
             x_labels: Vec::new(),
             y_labels: Vec::new(),
@@ -1483,6 +1493,7 @@ fn build_scatter(
     y_field: &Option<String>,
     color_field: &Option<String>,
     size_field: Option<&str>,
+    square_mark: bool,
     theme: &Theme,
 ) -> Vec<Series> {
     let size_domain = size_field.and_then(|field| numeric_domain(records, field));
@@ -1504,8 +1515,14 @@ fn build_scatter(
                 .map(|r| Point {
                     x: field_f64(r, x_field.as_deref()),
                     y: field_f64(r, y_field.as_deref()),
-                    r: size_domain
-                        .map(|(min, max)| point_size_radius(field_f64(r, size_field), min, max)),
+                    r: size_domain.map(|(min, max)| {
+                        let value = field_f64(r, size_field);
+                        if square_mark {
+                            square_size_half_side(value, min, max)
+                        } else {
+                            point_size_radius(value, min, max)
+                        }
+                    }),
                 })
                 .collect();
             let color = palette_pick(&theme.palette, si);
@@ -1552,9 +1569,8 @@ fn numeric_domain(records: &[Map<String, Value>], field: &str) -> Option<(f64, f
 const VEGA_LITE_POINT_SIZE_MIN_AREA: f64 = 4.0;
 const VEGA_LITE_POINT_SIZE_MAX_AREA: f64 = 361.0;
 
-/// Map the quantitative size domain to Vega-Lite's default area range, then
-/// convert the circle area to the radius consumed by ChartKind::Bubble.
-fn point_size_radius(value: f64, domain_min: f64, domain_max: f64) -> f64 {
+/// Map a quantitative size value to Vega-Lite's default 4..361 px² area range.
+fn point_size_area(value: f64, domain_min: f64, domain_max: f64) -> f64 {
     let fraction = if domain_min == domain_max {
         0.5
     } else {
@@ -1563,9 +1579,18 @@ fn point_size_radius(value: f64, domain_min: f64, domain_max: f64) -> f64 {
         ((value / scale - domain_min / scale) / (domain_max / scale - domain_min / scale))
             .clamp(0.0, 1.0)
     };
-    let area = VEGA_LITE_POINT_SIZE_MIN_AREA
-        + fraction * (VEGA_LITE_POINT_SIZE_MAX_AREA - VEGA_LITE_POINT_SIZE_MIN_AREA);
-    (area / std::f64::consts::PI).sqrt()
+    VEGA_LITE_POINT_SIZE_MIN_AREA
+        + fraction * (VEGA_LITE_POINT_SIZE_MAX_AREA - VEGA_LITE_POINT_SIZE_MIN_AREA)
+}
+
+/// Convert pixel area to the circle radius consumed by ChartKind::Bubble.
+fn point_size_radius(value: f64, domain_min: f64, domain_max: f64) -> f64 {
+    (point_size_area(value, domain_min, domain_max) / std::f64::consts::PI).sqrt()
+}
+
+/// Convert pixel area to the square half-side stored in `Point.r`.
+fn square_size_half_side(value: f64, domain_min: f64, domain_max: f64) -> f64 {
+    point_size_area(value, domain_min, domain_max).sqrt() / 2.0
 }
 
 /// arc（pie）の単一系列を組む。カテゴリは color.field 優先（なければ x.field）。
@@ -1671,6 +1696,14 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
     };
     check_object(top, top_allowed, "")?;
 
+    // Keep the strict parser aligned with VlSquareSpec's mark-definition schema.
+    if matches!(read_mark_name(top), Some("square"))
+        && let Some(mark) = top.get("mark").and_then(Value::as_object)
+    {
+        check_line_object(mark, &["type"], "mark")?;
+        check_line_string(mark, "type", "mark.type")?;
+    }
+
     if let Some(encoding) = top.get("encoding").and_then(Value::as_object) {
         if matches!(read_mark_name(top), Some("line")) {
             check_line_keys(top, encoding)?;
@@ -1681,7 +1714,7 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         // 現状挙動(全キー拒否せずスルー)を保つ = 後段パースに委ねる。
         let allowed: &[&str] = match read_mark_name(top) {
             Some("bar" | "line" | "circle" | "area") => &["x", "y", "color"],
-            Some("point") => &["x", "y", "color", "size"],
+            Some("point" | "square") => &["x", "y", "color", "size"],
             Some("arc") => &["theta", "color", "x", "y"],
             Some("rect") => &["x", "y", "color"],
             _ => return Ok(()),

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "mark": "square",
+  "title": "Square mark with area encoding",
+  "data": {
+    "values": [
+      { "x": 1, "y": 2, "group": "A", "size": 12 },
+      { "x": 2, "y": 5, "group": "A", "size": 24 },
+      { "x": 3, "y": 3, "group": "B", "size": 36 },
+      { "x": 4, "y": 6, "group": "B", "size": 48 }
+    ]
+  },
+  "encoding": {
+    "x": { "field": "x", "type": "quantitative" },
+    "y": { "field": "y", "type": "quantitative" },
+    "color": { "field": "group", "type": "nominal" },
+    "size": { "field": "size", "type": "quantitative" }
+  }
+}

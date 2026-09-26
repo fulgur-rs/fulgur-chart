@@ -32,8 +32,8 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::Line { .. } => line::build(spec, m),
         ChartKind::Pie { .. } => pie::build(spec, m),
         ChartKind::PolarArea => polar_area::build(spec, m),
-        // bubble は scatter と同じレイアウト。半径だけ point.r を使う(scatter.rs 内で分岐)。
-        ChartKind::Scatter | ChartKind::Bubble => scatter::build(spec, m),
+        // scatter/bubble/square は同じレイアウト。マーカー形状・サイズは scatter.rs で分岐。
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => scatter::build(spec, m),
         ChartKind::Radar => radar::build(spec, m),
         ChartKind::Mixed => mixed::build(spec, m),
         ChartKind::Matrix { .. } => matrix::build(spec, m),

@@ -1934,6 +1934,121 @@ fn circle_mark_renders_svg() {
 }
 
 #[test]
+fn square_mark_schema_and_size_encoding_use_square_area() {
+    let json = r#"{
+        "mark": "square",
+        "data": {"values": [
+            {"x":1,"y":2,"group":"A","size":10},
+            {"x":3,"y":4,"group":"A","size":20},
+            {"x":5,"y":6,"group":"B","size":30}
+        ]},
+        "encoding": {
+            "x": {"field":"x","type":"quantitative"},
+            "y": {"field":"y","type":"quantitative"},
+            "color": {"field":"group","type":"nominal"},
+            "size": {"field":"size","type":"quantitative"}
+        }
+    }"#;
+
+    let spec = vegalite::parse(json, true).unwrap();
+    assert!(!spec.y_axis.begin_at_zero);
+    assert_eq!(spec.series.len(), 2);
+    assert_eq!(spec.series[0].name, "A");
+    assert_eq!(spec.series[1].name, "B");
+    assert_eq!(spec.series[0].points.len(), 2);
+    assert_eq!(spec.series[1].points.len(), 1);
+
+    // Vega-Lite size is pixel area. The default 4..361 range is mapped to a
+    // square's half-side, so (2 * r)^2 recovers the encoded area.
+    for (series, point, expected_area) in [
+        (&spec.series[0], 0, 4.0),
+        (&spec.series[0], 1, 182.5),
+        (&spec.series[1], 0, 361.0),
+    ] {
+        let half_side = series.points[point].r.unwrap();
+        assert!(
+            ((2.0 * half_side).powi(2) - expected_area).abs() < 1e-10,
+            "expected square area {expected_area}, got half-side {half_side}"
+        );
+    }
+
+    let _: fulgur_chart::schema::VegaLiteSpec = serde_json::from_str(json).unwrap();
+}
+
+#[test]
+fn square_mark_object_form_renders_filled_squares_with_default_area() {
+    let json = r#"{
+        "mark": {"type":"square"},
+        "data": {"values": [{"x":1,"y":2},{"x":3,"y":4}]},
+        "encoding": {
+            "x": {"field":"x","type":"quantitative"},
+            "y": {"field":"y","type":"quantitative"}
+        }
+    }"#;
+
+    let spec = vegalite::parse(json, true).unwrap();
+    let _: fulgur_chart::schema::VegaLiteSpec = serde_json::from_str(json).unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+    assert!(svg.starts_with("<svg"));
+    assert_eq!(svg.matches("<circle ").count(), 0);
+
+    let paths: Vec<&str> = svg
+        .split("<path d=\"")
+        .skip(1)
+        .filter_map(|part| part.split('\"').next())
+        .collect();
+    assert_eq!(paths.len(), 2, "each square should render as one path");
+    for path in paths {
+        let coordinates: Vec<f64> = path
+            .split_whitespace()
+            .filter_map(|token| token.parse().ok())
+            .collect();
+        assert_eq!(coordinates.len(), 8, "unexpected square path: {path}");
+        let width = coordinates[2] - coordinates[0];
+        let height = coordinates[5] - coordinates[1];
+        assert!((width - height).abs() < 0.01, "not square: {path}");
+        assert!(
+            (width - 30.0_f64.sqrt()).abs() < 0.01,
+            "default size should be 30px²: {path}"
+        );
+    }
+}
+
+#[test]
+fn square_mark_ignores_shape_channel_in_non_strict_and_rejects_it_in_strict() {
+    let json = r#"{
+        "mark": "square",
+        "data": {"values": [{"x":1,"y":2,"shape":"triangle"}]},
+        "encoding": {
+            "x": {"field":"x"},
+            "y": {"field":"y"},
+            "shape": {"field":"shape"}
+        }
+    }"#;
+
+    let spec = vegalite::parse(json, false).unwrap();
+    assert_eq!(spec.series[0].points.len(), 1);
+    assert!(vegalite::parse(json, true).is_err());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(json).is_err());
+
+    let mark_property = r#"{
+        "mark": {"type":"square","shape":"triangle"},
+        "data": {"values": [{"x":1,"y":2}]},
+        "encoding": {"x": {"field":"x"}, "y": {"field":"y"}}
+    }"#;
+    assert!(vegalite::parse(mark_property, true).is_err());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(mark_property).is_err());
+}
+
+#[test]
+fn square_example_spec_parses() {
+    let json = include_str!("../../../examples/specs/vegalite-square.json");
+    let spec = vegalite::parse(json, true).unwrap();
+    assert!(matches!(spec.kind, ChartKind::Square));
+    assert_eq!(spec.series.len(), 2);
+}
+
+#[test]
 fn strict_circle_rejects_shape_encoding() {
     // 構造的 shape 非対応の invariant を strict パーサで pin する。
     // 現状 check_unknown_keys の encoding allow-list は shape を含まない

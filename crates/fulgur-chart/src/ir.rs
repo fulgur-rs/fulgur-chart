@@ -11,8 +11,8 @@ pub struct Color {
     pub a: f32, // 0.0–1.0
 }
 
-/// 散布図(scatter)/バブル(bubble)の点データ。`x`/`y` は各軸の scale で写像される数値、
-/// `r` は任意の半径。
+/// 散布図(scatter)/バブル(bubble)/square の点データ。`x`/`y` は各軸の scale で写像される数値、
+/// `r` は任意のマーカー半径。square では frontend が面積から変換した半辺長を格納する。
 /// カテゴリ系チャート(bar/line/pie)はこれを使わず `values` を使う。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point {
@@ -648,6 +648,7 @@ pub enum ChartKind {
     }, // zero cutout = pie, positive cutout = doughnut
     Scatter, // 線形 x × 線形 y。点データ(Series.points)を使う
     Bubble,  // scatter と同じ枠組み。半径は point.r(第3次元)を使う
+    Square,  // Vega-Lite square mark。scatter と同じ軸で正方形マーカーを描く
     Radar,   // 極座標。カテゴリ=スポーク、系列ごとに多角形を重ねる
     Mixed,   // 共有カテゴリ x・線形 y に bar+line を重ねる。種別は Series.series_type
     Matrix {
