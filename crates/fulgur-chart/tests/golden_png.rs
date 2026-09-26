@@ -22,6 +22,7 @@ const NAMES: &[&str] = &[
     "area",
     "pie",
     "line_decimated",
+    "sparkline_decimated",
     "line_decimated_lttb",
     "line_with_null",
     "bar_with_null",
