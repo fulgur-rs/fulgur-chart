@@ -6,6 +6,127 @@
 
 ## [Unreleased]
 
+## [0.1.22](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.21...fulgur-chart-cli-v0.1.22) - 2026-09-26
+
+### Added
+
+- add Vega-Lite square mark size encoding
+- *(chart)* support Chart.js temporal scales
+
+### Other
+
+- add violin examples and golden coverage
+
+## [0.13.3](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.13.2...fulgur-chart-v0.13.3) - 2026-09-26
+
+### Added
+
+- add Vega-Lite square mark size encoding
+- *(bar)* honor x-axis offset false
+- *(vegalite)* support point size encoding
+- support pie rotation and circumference
+- integrate violin model and input guards
+- render vertical and horizontal violin charts
+- parse QuickChart violin chart inputs
+- *(wasm)* add no-default-font build
+- *(mixed)* decimate large line datasets
+- *(chart)* support Chart.js temporal scales
+- *(chartjs)* support linear axis tick options
+- *(chartjs)* support line dataset styles
+- *(chartjs)* support monotone cubic interpolation
+- *(chartjs)* support pie arc geometry options
+- *(chartjs)* support per-dataset bar border radius
+- *(chartjs)* add per-dataset bar geometry options
+- *(chartjs)* support area fill targets
+- *(chartjs)* support mixed dataset ordering
+- support Chart.js legend styling
+- *(chartjs)* support logarithmic scatter and bubble axes
+
+### Fixed
+
+- *(vegalite)* guard stacked area dimensions
+- *(vegalite)* prioritize area point rejection
+- *(vegalite)* reject point overlays on area
+- *(vegalite)* constrain point size schema type
+- normalize pie angles and skip empty labels
+- render overfull pie circumferences
+- align violin groups with temporal categories
+- count empty violin groups in input limits
+- preserve horizontal violin timeseries scale
+- honor violin axis scales and raster bounds
+- retain large violin stroke extents
+- preserve violin strokes at hard bounds
+- clip violin rendering to plot bounds
+- *(wasm)* enforce slim font behavior
+- *(mixed)* align labels with decimated marker radius
+- *(chart)* address temporal review findings
+- *(chart)* preserve exact compact tick decimals
+- *(chart)* use scientific labels for tiny compact ticks
+- *(chart-server)* preserve compact tick precision
+- *(chartjs)* bound tick label rendering
+- *(chartjs)* preserve stepSize tick spacing
+- *(chartjs)* honor linear tick option semantics
+- *(chartjs)* scope default tick limit to chartjs axes
+- *(chartjs)* retain markers when showLine is false
+- *(chartjs)* preserve permissive bar parsing
+- *(chartjs)* align cubic mode null validation
+- *(chartjs)* cover mixed monotone interpolation
+- *(chartjs)* preserve stacked line gaps
+- *(chartjs)* honor stacked line value axis
+- *(layout)* include stacked lines in log domains
+- *(vegalite)* reject ignored interpolate on categorical area
+- *(chartjs)* handle narrow arc and cutout boundaries
+- *(chartjs)* preserve finite cutout schema boundary
+- *(chartjs)* align pie corner limits and cutout schema
+- *(chartjs)* skip arcs for oversized pie spacing
+- *(schema)* restrict pie arc options to pie charts
+- *(chartjs)* ignore clipped stack tails when rounding
+- *(chartjs)* validate bar radius only on bar datasets
+- *(chartjs)* satisfy clippy for rounded bars
+- *(chartjs)* preserve rounded stack endpoints
+- *(chartjs)* skip min lengths outside axis bounds
+- *(chartjs)* carry minimum bar length through stacks
+- *(chartjs)* place short bar labels by value sign
+- *(chartjs)* keep mixed dataset bar slots aligned
+- *(chartjs)* align fills to target series geometry
+- *(chartjs)* align area fills with line geometry
+- *(chartjs)* accept fractional dataset order
+- center horizontal legend title baseline
+- keep styled legend text out of prim storage
+- *(chartjs)* widen degenerate log domains downward
+- *(chartjs)* support stacked logarithmic bars
+- *(layout)* skip clipped stacked bar labels
+- *(layout)* clip data to hard axis bounds
+- *(chartjs)* honor axis min and max bounds
+
+### Other
+
+- share RGBA fixture with Rust
+- add decimated sparkline fixture
+- cover horizontal linear baseline at hard bounds
+- stabilize vertical log stack fixture
+- cover vertical stacked log labels
+- *(scale)* centralize log axis tick adaptation
+- cover temporal line logarithmic y axis
+- allow targeted golden PNG updates
+- *(bar)* limit stacked endpoint scan to category
+- box violin clip rectangle
+- satisfy workspace clippy checks
+- add violin examples and golden coverage
+- *(chart)* reduce temporal parser allocations
+- box optional dataset line styles
+- *(chartjs)* assert monotone ignores tension
+- *(chartjs)* cover stacked fill target gaps
+- *(chartjs)* keep pie options allocation compact
+- *(chartjs)* cover pie geometry edge paths
+- *(chartjs)* assert parsed bar geometry values
+- Reuse stack domain accumulators
+- Add Chart.js stack group IDs
+- *(chartjs)* skip empty dataset area fills
+- *(chartjs)* index area fill target ranges
+- *(chartjs)* cache span gap fill targets
+- *(chartjs)* scan fill geometry linearly
+
 ## [0.1.21](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.20...fulgur-chart-cli-v0.1.21) - 2026-08-30
 
 ### Other
