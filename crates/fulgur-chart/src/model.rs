@@ -518,20 +518,14 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
         }
         // 横棒: 値軸は描画上 x だが照合のため y に載せる。値域は build_horizontal と
         // 同じく x_axis から読む。カテゴリ=x。対数軸の場合も build_horizontal と同じ
-        // log_ticks_within 経路(tight ドメイン、P1 修正済み)を使い、step=0.0 番兵は
-        // そのまま logarithmic_axis で None に潰す。
+        // log_axis_ticks 経路(tight ドメイン、P1 修正済み)を使い、対数軸の step は
+        // logarithmic_axis で None として公開する。
         ChartKind::Bar {
             horizontal: true, ..
         } => {
             let (lo, hi) = crate::layout::common::value_domain(spec, &spec.x_axis);
             let (t, value_model) = if spec.x_axis.scale_kind == ScaleKind::Logarithmic {
-                let log = crate::scale::log_ticks_within(lo, hi);
-                let nt = crate::scale::NiceTicks {
-                    min: log.min,
-                    max: log.max,
-                    step: 0.0,
-                    ticks: log.major,
-                };
+                let (nt, _) = crate::scale::log_axis_ticks(lo, hi);
                 let model = logarithmic_axis(&nt);
                 (nt, model)
             } else if matches!(

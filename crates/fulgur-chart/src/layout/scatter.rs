@@ -10,7 +10,7 @@ use super::common::{
 use crate::ir::{
     AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, LegendPos, Point, ScaleKind,
 };
-use crate::scale::{LinearScale, NiceTicks, ValueScale, log_ticks_within};
+use crate::scale::{LinearScale, NiceTicks, ValueScale};
 use crate::scene::{Anchor, Prim, Scene};
 use crate::temporal::{TemporalScale, TemporalTick};
 use crate::text::TextMeasurer;
@@ -151,17 +151,8 @@ fn axis_ticks(
     pixel_extent: f64,
 ) -> (NiceTicks, Vec<f64>, Vec<TemporalTick>) {
     if axis.scale_kind == ScaleKind::Logarithmic {
-        let log = log_ticks_within(data_min, data_max);
-        (
-            NiceTicks {
-                min: log.min,
-                max: log.max,
-                step: 0.0,
-                ticks: log.major,
-            },
-            log.minor,
-            Vec::new(),
-        )
+        let (ticks, minor_ticks) = crate::scale::log_axis_ticks(data_min, data_max);
+        (ticks, minor_ticks, Vec::new())
     } else if super::common::is_temporal_scale(axis) {
         let temporal_ticks = super::common::temporal_axis_ticks(
             axis,

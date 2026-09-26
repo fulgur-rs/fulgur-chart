@@ -979,22 +979,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             Vec::new(),
         )
     } else if is_log {
-        let log = crate::scale::log_ticks_within(domain_min, domain_max);
-        (
-            NiceTicks {
-                min: log.min,
-                max: log.max,
-                // 対数軸では decade 間隔が一定でない(1,10,100,...)ため "step" は
-                // 意味を持たない。0.0 は「非対数の step とは値域が異なる」ことを示す
-                // 番兵(nice_ticks/vega_nice_ticks は常に step>0 を返すため 0.0 は
-                // log 専用の合図になる)。model.rs の introspection API はこの番兵を
-                // 外部に漏らさないよう `step: None` に変換して公開する
-                // (`model.rs::logarithmic_axis` 参照)。
-                step: 0.0,
-                ticks: log.major,
-            },
-            log.minor,
-        )
+        crate::scale::log_axis_ticks(domain_min, domain_max)
     } else if matches!(spec.size_mode, SizeMode::PlotArea)
         && matches!(spec.kind, ChartKind::Line { .. })
         && matches!(spec.x_positions, XPositions::Temporal { .. })
