@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { fmtAlpha } from './color-util.mjs';
 
 // Rust fmt_alpha と JS fmtAlpha が byte-for-byte 一致することを保証する
-// クロス言語フィクスチャ。同じ JSON を Rust 側テストも(インライン化して)読む。
+// クロス言語フィクスチャ。同じ JSON を Rust 側テストも include_str! で直接読む。
 const fixturePath = fileURLToPath(new URL('./rgba-fixture.json', import.meta.url));
 const rows = JSON.parse(readFileSync(fixturePath, 'utf8'));
 
