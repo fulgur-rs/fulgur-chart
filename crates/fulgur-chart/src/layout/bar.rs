@@ -3762,6 +3762,70 @@ mod horizontal_axis_style_tests {
     }
 
     #[test]
+    fn horizontal_linear_baseline_stays_at_plot_left_when_zero_is_outside_domain() {
+        let spec = parse(
+            r##"{"type":"bar","data":{"labels":["A"],
+                "datasets":[{"data":[50],"backgroundColor":"#ff7f0e"}]},
+                "options":{"indexAxis":"y","scales":{"x":{
+                    "min":13,"max":87,"beginAtZero":false
+                }}}}"##,
+        );
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let bar_fill = spec.series[0].fill_at(0);
+        let bar_left = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Rect { x, fill, .. } if *fill == bar_fill => Some(*x),
+                _ => None,
+            })
+            .expect("missing horizontal bar");
+        let plot_left = scene
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Prim::Line {
+                    x1,
+                    x2,
+                    y1,
+                    y2,
+                    stroke,
+                    ..
+                } if (*x1 - *x2).abs() < 1e-9
+                    && (*y2 - *y1).abs() > 10.0
+                    && *stroke == spec.theme.text_color =>
+                {
+                    Some(*x1)
+                }
+                _ => None,
+            })
+            .expect("missing left category-axis border");
+        let axis_labels: Vec<&str> = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Text { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            axis_labels.contains(&"13"),
+            "hard x-axis minimum should render"
+        );
+        assert!(
+            axis_labels.contains(&"87"),
+            "hard x-axis maximum should render"
+        );
+        assert!(
+            (bar_left - plot_left).abs() < 0.5,
+            "positive horizontal bar should start at the plot's left border: \
+             bar_left={bar_left} plot_left={plot_left}"
+        );
+    }
+
+    #[test]
     fn horizontal_x_grid_draw_ticks_true_adds_bottom_tick_marks() {
         let spec = parse(
             r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
