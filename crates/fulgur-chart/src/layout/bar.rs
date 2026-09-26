@@ -3282,11 +3282,12 @@ mod geom_tests {
         // 積み上げ縦棒 + 対数 y 軸、2 系列 [10, 90](単一カテゴリ)。
         // 系列2のセグメントは値空間で [10, 100]。対数写像では、値空間の中点 55 を
         // map した位置と、描画済みセグメントのピクセル中点は一致しない。
-        let json = r#"{"type":"bar","data":{"labels":["A"],
-            "datasets":[{"data":[10]},{"data":[90]}]},
+        let json = r##"{"type":"bar","data":{"labels":["A"],
+            "datasets":[{"data":[10],"backgroundColor":"#1f77b4"},
+                {"data":[90],"backgroundColor":"#ff7f0e"}]},
             "options":{"scales":{"x":{"stacked":true},
                 "y":{"stacked":true,"type":"logarithmic","min":1,"max":100,"beginAtZero":false}},
-                "plugins":{"datalabels":{"display":true}}}}"#;
+                "plugins":{"datalabels":{"display":true}}}}"##;
         let mut spec = chartjs::parse(json, false).unwrap();
         spec.height = 800.0;
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
@@ -3296,7 +3297,7 @@ mod geom_tests {
             scene.items.iter().any(|item| matches!(item,
                 Prim::Text { content, .. } if content == "100"
             )),
-            "the vertical log domain should include the stacked total"
+            "the explicitly bounded log y axis should render its 100 tick"
         );
 
         // 第2系列の Rect が値空間 [10, 100] のセグメント。
