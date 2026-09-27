@@ -36,23 +36,33 @@ struct Counts {
 const MAX_PROJECTED_GEO_VERTICES: usize = 1_000_000;
 const MAX_PROJECTED_GEO_PRIMITIVES: usize = 1_000_000;
 const MAX_RESAMPLED_VERTICES_PER_SEGMENT: usize = 1 << 16;
+pub(crate) const MAX_GEOSHAPE_PATH_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_PROJECTION_PRECISION: f64 = std::f64::consts::FRAC_1_SQRT_2;
+const MAX_PRECISION_FIT_ITERATIONS: usize = 8;
+const PRECISION_FIT_SAFETY_FACTOR: f64 = 0.95;
 
 #[derive(Clone, Debug, PartialEq)]
 struct ProjectionBudget {
     vertices: Rc<Cell<usize>>,
     primitives: Rc<Cell<usize>>,
+    max_primitives: usize,
 }
 
 impl Default for ProjectionBudget {
     fn default() -> Self {
-        Self {
-            vertices: Rc::new(Cell::new(0)),
-            primitives: Rc::new(Cell::new(0)),
-        }
+        Self::with_primitive_limit(MAX_PROJECTED_GEO_PRIMITIVES)
     }
 }
 
 impl ProjectionBudget {
+    fn with_primitive_limit(max_primitives: usize) -> Self {
+        Self {
+            vertices: Rc::new(Cell::new(0)),
+            primitives: Rc::new(Cell::new(0)),
+            max_primitives: max_primitives.min(MAX_PROJECTED_GEO_PRIMITIVES),
+        }
+    }
+
     fn add_vertex(&self) -> Result<(), String> {
         let count = self.vertices.get();
         if count >= MAX_PROJECTED_GEO_VERTICES {
@@ -66,9 +76,10 @@ impl ProjectionBudget {
 
     fn add_primitive(&self) -> Result<(), String> {
         let count = self.primitives.get();
-        if count >= MAX_PROJECTED_GEO_PRIMITIVES {
+        if count >= self.max_primitives {
             return Err(format!(
-                "projected primitive count exceeds limit {MAX_PROJECTED_GEO_PRIMITIVES}"
+                "projected primitive count exceeds limit {}",
+                self.max_primitives
             ));
         }
         self.primitives.set(count + 1);
@@ -84,11 +95,17 @@ pub struct ProjectedFeature {
     pub clip: Option<ClipRect>,
 }
 
-/// A path or point ready for the common Scene layout.
+/// A projected path or point; path coordinates stay as f64 until Scene creation.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProjectedGeometry {
-    Path { d: String, fillable: bool },
-    Point { x: f64, y: f64 },
+    Path {
+        subpaths: Vec<Vec<[f64; 2]>>,
+        fillable: bool,
+    },
+    Point {
+        x: f64,
+        y: f64,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -192,9 +209,10 @@ impl Stream for GeoPathEndpoint {
             self.error = Some(error);
             return;
         }
-        for (index, ring) in self.polygon_rings.iter_mut().enumerate() {
-            normalize_ring_winding(ring, index == 0);
-        }
+        // The clipper can emit fully visible holes during ring_end, before it emits a
+        // clipped shell at polygon_end. Source rings are normalized before projection,
+        // so preserve the winding the clipping stream gives us rather than assigning
+        // shell/hole roles from output order.
         self.output.push(RawProjectedGeometry::Path {
             subpaths: std::mem::take(&mut self.polygon_rings),
             fillable: true,
@@ -217,11 +235,105 @@ fn normalize_ring_winding(ring: &mut [[f64; 2]], positive: bool) {
     }
 }
 
+fn signed_spherical_ring_area(ring: &[[f64; 2]]) -> f64 {
+    let Some(first) = ring.first() else {
+        return 0.0;
+    };
+    if ring.len() < 3 {
+        return 0.0;
+    }
+
+    let latitude_from_south_pole =
+        |latitude: f64| latitude.to_radians() / 2.0 + std::f64::consts::FRAC_PI_4;
+    let first_lambda = first[0].to_radians();
+    let first_phi = latitude_from_south_pole(first[1]);
+    let (mut sin_phi0, mut cos_phi0) = first_phi.sin_cos();
+    let mut lambda0 = first_lambda;
+    let mut area = 0.0;
+
+    // Match d3-geo's spherical area accumulator. Unlike planar shoelace area,
+    // this keeps the ring orientation stable when longitude wraps at ±180°.
+    for point in ring.iter().skip(1).chain(std::iter::once(first)) {
+        let lambda = point[0].to_radians();
+        let phi = latitude_from_south_pole(point[1]);
+        let d_lambda = lambda - lambda0;
+        let sd_lambda = if d_lambda >= 0.0 { 1.0 } else { -1.0 };
+        let ad_lambda = d_lambda.abs();
+        let (ad_lambda_sin, ad_lambda_cos) = ad_lambda.sin_cos();
+        let (sin_phi, cos_phi) = phi.sin_cos();
+        let k = sin_phi0 * sin_phi;
+        let u = cos_phi0 * cos_phi + k * ad_lambda_cos;
+        let v = k * sd_lambda * ad_lambda_sin;
+        area += v.atan2(u);
+        lambda0 = lambda;
+        sin_phi0 = sin_phi;
+        cos_phi0 = cos_phi;
+    }
+    area
+}
+
+fn normalize_geojson_ring_roles(rings: &mut [Vec<[f64; 2]>]) {
+    for (index, ring) in rings.iter_mut().enumerate() {
+        // d3-geo's spherical polygon stream expects positive spherical winding
+        // for exterior rings and negative winding for holes.
+        let area = signed_spherical_ring_area(ring);
+        let should_be_positive = index == 0;
+        if area.is_finite() && area != 0.0 && (area > 0.0) != should_be_positive {
+            ring.reverse();
+        }
+    }
+}
+
 /// Project all features using one fit computed from the complete input collection.
 pub fn project_features(
     shape: &GeoShape,
     viewport: ClipRect,
 ) -> Result<Vec<ProjectedFeature>, String> {
+    project_features_with_primitive_limit(shape, viewport, MAX_PROJECTED_GEO_PRIMITIVES)
+}
+
+pub(crate) fn project_features_with_primitive_limit(
+    shape: &GeoShape,
+    viewport: ClipRect,
+    max_geo_primitives: usize,
+) -> Result<Vec<ProjectedFeature>, String> {
+    check_zero_precision_resample_budget(shape)?;
+    let requested_precision = shape
+        .projection
+        .precision
+        .unwrap_or(DEFAULT_PROJECTION_PRECISION);
+    if !requested_precision.is_finite() || requested_precision < 0.0 {
+        return Err("projection precision must be finite and non-negative".to_string());
+    }
+
+    let mut backend_precision = requested_precision;
+    for _ in 0..MAX_PRECISION_FIT_ITERATIONS {
+        let (projected, fit_factor) = project_features_with_precision(
+            shape,
+            viewport,
+            backend_precision,
+            max_geo_primitives,
+        )?;
+        if shape.projection.projection_type == GeoProjectionType::Identity
+            || fit_factor == 0.0
+            || backend_precision * fit_factor <= requested_precision
+        {
+            return Ok(projected);
+        }
+        backend_precision = requested_precision / fit_factor * PRECISION_FIT_SAFETY_FACTOR;
+        if !backend_precision.is_finite() || backend_precision <= 0.0 {
+            return Err("effective projection precision is too small to represent".to_string());
+        }
+    }
+    Err("projection precision did not converge after fitting".to_string())
+}
+
+fn project_features_with_precision(
+    shape: &GeoShape,
+    viewport: ClipRect,
+    backend_precision: f64,
+    max_geo_primitives: usize,
+) -> Result<(Vec<ProjectedFeature>, f64), String> {
     if !viewport.x.is_finite()
         || !viewport.y.is_finite()
         || !viewport.w.is_finite()
@@ -232,15 +344,16 @@ pub fn project_features(
         return Err("geoshape viewport must have finite non-negative dimensions".to_string());
     }
 
-    check_zero_precision_resample_budget(shape)?;
-    let budget = ProjectionBudget::default();
+    let mut projection = shape.projection.clone();
+    projection.precision = Some(backend_precision);
+    let budget = ProjectionBudget::with_primitive_limit(max_geo_primitives);
     let mut projected = Vec::with_capacity(shape.features.len());
     let mut default_scale = None;
     let mut default_translate = None;
     for feature in &shape.features {
         let mut geometries = Vec::new();
         if let Some(geometry) = &feature.geometry {
-            let output = project_geometry(&shape.projection, geometry, &budget)?;
+            let output = project_geometry(&projection, geometry, &budget)?;
             if default_scale.is_none() {
                 default_scale = Some(output.default_scale);
                 default_translate = Some(output.default_translate);
@@ -258,7 +371,7 @@ pub fn project_features(
     }
 
     let Some(default_scale) = default_scale else {
-        return Ok(projected);
+        return Ok((projected, 1.0));
     };
     let default_translate = default_translate.unwrap_or([0.0, 0.0]);
     let mut bounds = [
@@ -270,9 +383,9 @@ pub fn project_features(
     for feature in &projected {
         for geometry in &feature.geometries {
             match geometry {
-                ProjectedGeometry::Path { d, .. } => {
-                    for (x, y) in path_coordinates(d)? {
-                        extend_bounds(&mut bounds, x, y);
+                ProjectedGeometry::Path { subpaths, .. } => {
+                    for [x, y] in subpaths.iter().flatten() {
+                        extend_bounds(&mut bounds, *x, *y);
                     }
                 }
                 ProjectedGeometry::Point { x, y } => extend_bounds(&mut bounds, *x, *y),
@@ -280,10 +393,10 @@ pub fn project_features(
         }
     }
     if !bounds[0].is_finite() {
-        return Ok(projected);
+        return Ok((projected, 1.0));
     }
 
-    let auto_scale = shape.projection.scale.is_none();
+    let auto_scale = projection.scale.is_none();
     let has_points = projected.iter().any(|feature| {
         feature
             .geometries
@@ -292,7 +405,7 @@ pub fn project_features(
     });
     let fit_margin =
         8.0 + if has_points {
-            shape.projection.point_radius
+            projection.point_radius
         } else {
             0.0
         } + shape.style.stroke_width.max(0.0) / 2.0;
@@ -313,12 +426,12 @@ pub fn project_features(
         };
         x_factor.min(y_factor).min(1.0e9)
     } else {
-        shape.projection.scale.unwrap_or(default_scale) / default_scale
+        projection.scale.unwrap_or(default_scale) / default_scale
     };
     if !factor.is_finite() || factor < 0.0 {
         return Err("projection scale must be finite and non-negative".to_string());
     }
-    let fitted_translate = if auto_scale && shape.projection.translate.is_none() {
+    let fitted_translate = if auto_scale && projection.translate.is_none() {
         [
             viewport.x + viewport.w / 2.0
                 - ((bounds[0] + bounds[2]) / 2.0 - default_translate[0]) * factor,
@@ -326,17 +439,22 @@ pub fn project_features(
                 - ((bounds[1] + bounds[3]) / 2.0 - default_translate[1]) * factor,
         ]
     } else {
-        shape
-            .projection
+        projection
             .translate
             .unwrap_or([viewport.x + viewport.w / 2.0, viewport.y + viewport.h / 2.0])
     };
-    let clip = projection_clip(shape.projection.clip_extent, viewport);
+    let clip = projection_clip(projection.clip_extent, viewport);
     for feature in &mut projected {
         for geometry in &mut feature.geometries {
             match geometry {
-                ProjectedGeometry::Path { d, .. } => {
-                    *d = transform_path(d, default_translate, factor, fitted_translate)?;
+                ProjectedGeometry::Path { subpaths, .. } => {
+                    for point in subpaths.iter_mut().flatten() {
+                        point[0] = (point[0] - default_translate[0]) * factor + fitted_translate[0];
+                        point[1] = (point[1] - default_translate[1]) * factor + fitted_translate[1];
+                        if !point[0].is_finite() || !point[1].is_finite() {
+                            return Err("projection produced a non-finite coordinate".to_string());
+                        }
+                    }
                 }
                 ProjectedGeometry::Point { x, y } => {
                     *x = (*x - default_translate[0]) * factor + fitted_translate[0];
@@ -349,7 +467,7 @@ pub fn project_features(
         }
         feature.clip = clip;
     }
-    Ok(projected)
+    Ok((projected, factor))
 }
 
 fn check_zero_precision_resample_budget(shape: &GeoShape) -> Result<(), String> {
@@ -405,10 +523,7 @@ impl ProjectedGeometry {
     fn from_raw(raw: RawProjectedGeometry) -> Self {
         match raw {
             RawProjectedGeometry::Point([x, y]) => Self::Point { x, y },
-            RawProjectedGeometry::Path { subpaths, fillable } => Self::Path {
-                d: write_path(&subpaths, fillable),
-                fillable,
-            },
+            RawProjectedGeometry::Path { subpaths, fillable } => Self::Path { subpaths, fillable },
         }
     }
 }
@@ -709,15 +824,21 @@ fn to_geo_geometry(geometry: &GeoGeometry) -> Geometry<f64> {
         GeoGeometry::Polygon(rings) if rings.is_empty() => {
             Geometry::GeometryCollection(GeometryCollection(Vec::new()))
         }
-        GeoGeometry::Polygon(rings) => Geometry::Polygon(Polygon::new(
-            line(&rings[0]),
-            rings[1..].iter().map(|ring| line(ring)).collect(),
-        )),
+        GeoGeometry::Polygon(rings) => {
+            let mut rings = rings.clone();
+            normalize_geojson_ring_roles(&mut rings);
+            Geometry::Polygon(Polygon::new(
+                line(&rings[0]),
+                rings[1..].iter().map(|ring| line(ring)).collect(),
+            ))
+        }
         GeoGeometry::MultiPolygon(polygons) => Geometry::MultiPolygon(MultiPolygon(
             polygons
                 .iter()
                 .filter(|rings| !rings.is_empty())
                 .map(|rings| {
+                    let mut rings = rings.clone();
+                    normalize_geojson_ring_roles(&mut rings);
                     Polygon::new(
                         line(&rings[0]),
                         rings[1..].iter().map(|ring| line(ring)).collect(),
@@ -1058,107 +1179,58 @@ fn project_albers_usa(
     })
 }
 
-fn write_path(paths: &[Vec<[f64; 2]>], closed: bool) -> String {
-    let mut output = String::new();
-    for points in paths.iter().filter(|points| !points.is_empty()) {
-        if !output.is_empty() {
-            output.push(' ');
-        }
-        output.push_str("M ");
-        output.push_str(&fmt_num(points[0][0]));
-        output.push(' ');
-        output.push_str(&fmt_num(points[0][1]));
-        for point in &points[1..] {
-            output.push_str(" L ");
-            output.push_str(&fmt_num(point[0]));
-            output.push(' ');
-            output.push_str(&fmt_num(point[1]));
-        }
-        if closed && points.len() >= 3 {
-            output.push_str(" Z");
-        }
-    }
-    output
-}
-
-fn path_coordinates(path: &str) -> Result<Vec<(f64, f64)>, String> {
-    let mut output = Vec::new();
-    let mut numbers = Vec::new();
-    for token in path.split_whitespace() {
-        if matches!(token, "M" | "L" | "Z") {
-            if numbers.len() == 2 {
-                output.push((numbers[0], numbers[1]));
-                numbers.clear();
-            }
-        } else {
-            let value = token
-                .parse::<f64>()
-                .map_err(|_| "projected path contains an invalid number".to_string())?;
-            if !value.is_finite() {
-                return Err("projection produced a non-finite coordinate".to_string());
-            }
-            numbers.push(value);
-        }
-    }
-    if numbers.len() == 2 {
-        output.push((numbers[0], numbers[1]));
-    }
-    if numbers.len() > 2 {
-        return Err("projected path contains an incomplete coordinate".to_string());
-    }
-    Ok(output)
-}
-
-fn transform_path(
-    path: &str,
-    default_translate: [f64; 2],
-    factor: f64,
-    translate: [f64; 2],
+pub(crate) fn write_path(
+    paths: &[Vec<[f64; 2]>],
+    closed: bool,
+    remaining_bytes: &mut usize,
 ) -> Result<String, String> {
     let mut output = String::new();
-    let mut numbers: Vec<f64> = Vec::new();
-    for token in path.split_whitespace() {
-        if matches!(token, "M" | "L" | "Z") {
-            if numbers.len() == 2 {
-                let x = (numbers[0] - default_translate[0]) * factor + translate[0];
-                let y = (numbers[1] - default_translate[1]) * factor + translate[1];
-                if !x.is_finite() || !y.is_finite() {
-                    return Err("projection produced a non-finite coordinate".to_string());
-                }
-                output.push_str(&fmt_num(x));
-                output.push(' ');
-                output.push_str(&fmt_num(y));
-                output.push(' ');
-                numbers.clear();
-            }
-            if !output.is_empty() {
-                output.push(' ');
-            }
-            output.push_str(token);
-            output.push(' ');
-        } else {
-            let value = token
-                .parse::<f64>()
-                .map_err(|_| "projected path contains an invalid number".to_string())?;
-            if !value.is_finite() {
-                return Err("projection produced a non-finite coordinate".to_string());
-            }
-            numbers.push(value);
+    for points in paths.iter().filter(|points| !points.is_empty()) {
+        validate_raster_coordinate(points[0])?;
+        push_path_token(&mut output, "M", remaining_bytes)?;
+        push_path_token(&mut output, &fmt_num(points[0][0]), remaining_bytes)?;
+        push_path_token(&mut output, &fmt_num(points[0][1]), remaining_bytes)?;
+        for point in &points[1..] {
+            validate_raster_coordinate(*point)?;
+            push_path_token(&mut output, "L", remaining_bytes)?;
+            push_path_token(&mut output, &fmt_num(point[0]), remaining_bytes)?;
+            push_path_token(&mut output, &fmt_num(point[1]), remaining_bytes)?;
         }
-    }
-    if numbers.len() == 2 {
-        let x = (numbers[0] - default_translate[0]) * factor + translate[0];
-        let y = (numbers[1] - default_translate[1]) * factor + translate[1];
-        if !x.is_finite() || !y.is_finite() {
-            return Err("projection produced a non-finite coordinate".to_string());
+        if closed && points.len() >= 3 {
+            push_path_token(&mut output, "Z", remaining_bytes)?;
         }
-        output.push_str(&fmt_num(x));
-        output.push(' ');
-        output.push_str(&fmt_num(y));
-    } else if !numbers.is_empty() {
-        return Err("projected path contains an incomplete coordinate".to_string());
     }
     Ok(output)
+}
+
+pub(crate) fn validate_raster_coordinate(point: [f64; 2]) -> Result<(), String> {
+    if point
+        .iter()
+        .any(|coordinate| !coordinate.is_finite() || !(*coordinate as f32).is_finite())
+    {
+        return Err("geoshape coordinate exceeds the finite raster range".to_string());
+    }
+    Ok(())
+}
+
+fn push_path_token(
+    output: &mut String,
+    token: &str,
+    remaining_bytes: &mut usize,
+) -> Result<(), String> {
+    let delimiter_bytes = usize::from(!output.is_empty());
+    let token_bytes = delimiter_bytes.saturating_add(token.len());
+    if token_bytes > *remaining_bytes {
+        return Err(format!(
+            "geoshape path data exceeds the {MAX_GEOSHAPE_PATH_BYTES}-byte output limit"
+        ));
+    }
+    if delimiter_bytes > 0 {
+        output.push(' ');
+    }
+    output.push_str(token);
+    *remaining_bytes -= token_bytes;
+    Ok(())
 }
 
 fn extend_bounds(bounds: &mut [f64; 4], x: f64, y: f64) {
@@ -1282,9 +1354,17 @@ fn preflight_root_item(
     counts: &mut Counts,
     path: &str,
 ) -> Result<(), String> {
+    if let (Some(field), Some(record)) = (shape_field, value.as_object())
+        && let Some(shape) = record.get(field)
+    {
+        return preflight_shape(shape, limits, counts, &format!("{path}.{field}"));
+    }
+
     match value.get("type").and_then(Value::as_str) {
-        Some("Feature") => preflight_feature(value, limits, counts, path),
-        Some("FeatureCollection") => preflight_feature_collection(value, limits, counts, path),
+        Some("Feature") => preflight_feature(value, limits, counts, path, shape_field),
+        Some("FeatureCollection") => {
+            preflight_feature_collection(value, limits, counts, path, shape_field)
+        }
         Some(_) if shape_field.is_none() => {
             Err(at(path, "expected a GeoJSON Feature or a record object"))
         }
@@ -1314,8 +1394,10 @@ fn preflight_shape(
     path: &str,
 ) -> Result<(), String> {
     match value.get("type").and_then(Value::as_str) {
-        Some("Feature") => preflight_feature(value, limits, counts, path),
-        Some("FeatureCollection") => preflight_feature_collection(value, limits, counts, path),
+        Some("Feature") => preflight_feature(value, limits, counts, path, None),
+        Some("FeatureCollection") => {
+            preflight_feature_collection(value, limits, counts, path, None)
+        }
         Some(
             "Point" | "MultiPoint" | "LineString" | "MultiLineString" | "Polygon" | "MultiPolygon"
             | "GeometryCollection",
@@ -1342,6 +1424,7 @@ fn preflight_feature_collection(
     limits: &InputLimits,
     counts: &mut Counts,
     path: &str,
+    shape_field: Option<&str>,
 ) -> Result<(), String> {
     let features = value
         .get("features")
@@ -1349,7 +1432,7 @@ fn preflight_feature_collection(
         .ok_or_else(|| at(&format!("{path}.features"), "expected an array"))?;
     for (index, feature) in features.iter().enumerate() {
         let feature_path = format!("{path}.features[{index}]");
-        preflight_feature(feature, limits, counts, &feature_path)?;
+        preflight_feature(feature, limits, counts, &feature_path, shape_field)?;
     }
     Ok(())
 }
@@ -1359,6 +1442,7 @@ fn preflight_feature(
     limits: &InputLimits,
     counts: &mut Counts,
     path: &str,
+    shape_field: Option<&str>,
 ) -> Result<(), String> {
     let object = value
         .as_object()
@@ -1367,26 +1451,37 @@ fn preflight_feature(
         return Err(at(path, "expected type \"Feature\""));
     }
     let properties_path = format!("{path}.properties");
-    match object.get("properties") {
-        Some(Value::Object(_)) | Some(Value::Null) => {}
+    let properties = match object.get("properties") {
+        Some(Value::Object(properties)) => Some(properties),
+        Some(Value::Null) => None,
         Some(_) => return Err(at(&properties_path, "expected an object or null")),
         None => return Err(at(&properties_path, "required property is missing")),
-    }
-    add_limit(
-        &mut counts.features,
-        1,
-        limits.max_geo_features,
-        "feature count",
-        path,
-    )?;
+    };
     let geometry_path = format!("{path}.geometry");
     let geometry = object
         .get("geometry")
         .ok_or_else(|| at(&geometry_path, "required property is missing"))?;
-    if !geometry.is_null() {
-        preflight_geometry(geometry, limits, counts, &geometry_path, 0)?;
+    if let Some(shape) = shape_field.and_then(|field| properties.and_then(|props| props.get(field)))
+    {
+        preflight_shape(
+            shape,
+            limits,
+            counts,
+            &format!("{properties_path}.{}", shape_field.unwrap()),
+        )
+    } else {
+        add_limit(
+            &mut counts.features,
+            1,
+            limits.max_geo_features,
+            "feature count",
+            path,
+        )?;
+        if !geometry.is_null() {
+            preflight_geometry(geometry, limits, counts, &geometry_path, 0)?;
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 fn preflight_geometry(
@@ -1414,6 +1509,15 @@ fn preflight_geometry(
             .get("geometries")
             .and_then(Value::as_array)
             .ok_or_else(|| at(&format!("{path}.geometries"), "expected an array"))?;
+        if geometries.is_empty() {
+            add_limit(
+                &mut counts.primitives,
+                1,
+                limits.max_geo_primitives,
+                "primitive count",
+                path,
+            )?;
+        }
         for (index, geometry) in geometries.iter().enumerate() {
             preflight_geometry(
                 geometry,
@@ -1664,10 +1768,21 @@ fn parse_root_item(
     features: &mut Vec<RawGeoFeature>,
     path: &str,
 ) -> Result<(), String> {
+    if let (Some(field), Some(record)) = (shape_field, value.as_object())
+        && let Some(shape) = record.get(field)
+    {
+        return parse_shape(
+            shape,
+            Arc::new(record.clone()),
+            features,
+            &format!("{path}.{field}"),
+        );
+    }
+
     match value.get("type").and_then(Value::as_str) {
-        Some("Feature") => parse_feature(value, Arc::new(Map::new()), features, path),
+        Some("Feature") => parse_feature(value, Arc::new(Map::new()), shape_field, features, path),
         Some("FeatureCollection") => {
-            parse_feature_collection(value, Arc::new(Map::new()), features, path)
+            parse_feature_collection(value, Arc::new(Map::new()), shape_field, features, path)
         }
         Some(_) if shape_field.is_none() => {
             Err(at(path, "expected a GeoJSON Feature or a record object"))
@@ -1699,8 +1814,8 @@ fn parse_shape(
     path: &str,
 ) -> Result<(), String> {
     match value.get("type").and_then(Value::as_str) {
-        Some("Feature") => parse_feature(value, record, features, path),
-        Some("FeatureCollection") => parse_feature_collection(value, record, features, path),
+        Some("Feature") => parse_feature(value, record, None, features, path),
+        Some("FeatureCollection") => parse_feature_collection(value, record, None, features, path),
         Some(
             "Point" | "MultiPoint" | "LineString" | "MultiLineString" | "Polygon" | "MultiPolygon"
             | "GeometryCollection",
@@ -1723,6 +1838,7 @@ fn parse_shape(
 fn parse_feature_collection(
     value: &Value,
     record: Arc<Map<String, Value>>,
+    shape_field: Option<&str>,
     features: &mut Vec<RawGeoFeature>,
     path: &str,
 ) -> Result<(), String> {
@@ -1734,6 +1850,7 @@ fn parse_feature_collection(
         parse_feature(
             feature,
             record.clone(),
+            shape_field,
             features,
             &format!("{path}.features[{index}]"),
         )?;
@@ -1744,6 +1861,7 @@ fn parse_feature_collection(
 fn parse_feature(
     value: &Value,
     record: Arc<Map<String, Value>>,
+    shape_field: Option<&str>,
     features: &mut Vec<RawGeoFeature>,
     path: &str,
 ) -> Result<(), String> {
@@ -1763,6 +1881,32 @@ fn parse_feature(
     let geometry = object
         .get("geometry")
         .ok_or_else(|| at(&format!("{path}.geometry"), "required property is missing"))?;
+    if let Some(field) = shape_field
+        && let Some(shape) = properties.get(field)
+    {
+        let shape_path = format!("{path}.properties.{field}");
+        match shape.get("type").and_then(Value::as_str) {
+            Some(
+                "Point" | "MultiPoint" | "LineString" | "MultiLineString" | "Polygon"
+                | "MultiPolygon" | "GeometryCollection",
+            ) => {
+                features.push(RawGeoFeature {
+                    geometry: Some(parse_geometry(shape, &shape_path, 0)?),
+                    record,
+                    properties,
+                });
+                return Ok(());
+            }
+            _ => {
+                let source_record = if record.is_empty() {
+                    Arc::new(properties.clone())
+                } else {
+                    record
+                };
+                return parse_shape(shape, source_record, features, &shape_path);
+            }
+        }
+    }
     features.push(RawGeoFeature {
         geometry: if geometry.is_null() {
             None
@@ -1970,6 +2114,29 @@ mod tests {
     }
 
     #[test]
+    fn path_writer_enforces_the_shared_output_byte_budget() {
+        let paths = vec![vec![[1.0e20, 0.0], [1.0e20, 1.0]]];
+        let mut remaining_bytes = 16;
+        let error = super::write_path(&paths, false, &mut remaining_bytes).unwrap_err();
+        assert!(
+            error.contains("path data exceeds"),
+            "unexpected error: {error}"
+        );
+        assert!(remaining_bytes < 16);
+    }
+
+    #[test]
+    fn path_writer_rejects_coordinates_that_raster_cannot_represent() {
+        let paths = vec![vec![[1.0e39, 0.0], [1.0e39, 1.0]]];
+        let mut remaining_bytes = super::MAX_GEOSHAPE_PATH_BYTES;
+        let error = super::write_path(&paths, false, &mut remaining_bytes).unwrap_err();
+        assert!(
+            error.contains("finite raster range"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn record_shape_feature_collection_shares_its_source_record() {
         let records = json!([{
             "name":"region",
@@ -1986,6 +2153,45 @@ mod tests {
             parsed[1].record.storage_address(),
             "each expanded Feature must not deep-clone the full source record"
         );
+    }
+
+    #[test]
+    fn shape_field_takes_precedence_for_records_named_feature_or_feature_collection() {
+        let records = json!([
+            {"type":"Feature", "shape":{"type":"Point", "coordinates":[1,2]}},
+            {"type":"FeatureCollection", "shape":{"type":"Point", "coordinates":[3,4]}}
+        ]);
+        let parsed = super::parse_geojson(&records, Some("shape"), &InputLimits::default())
+            .expect("a selected shape field identifies these as records");
+
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].record["type"], "Feature");
+        assert_eq!(parsed[1].record["type"], "FeatureCollection");
+        assert_eq!(parsed[0].geometry.as_ref().unwrap().kind_name(), "Point");
+        assert_eq!(parsed[1].geometry.as_ref().unwrap().kind_name(), "Point");
+    }
+
+    #[test]
+    fn feature_shape_field_selects_geojson_property_and_falls_back_to_geometry() {
+        let values = json!({
+            "type":"FeatureCollection",
+            "features":[
+                {"type":"Feature",
+                 "properties":{"name":"selected","shape":{"type":"Point","coordinates":[1,2]}},
+                 "geometry":{"type":"LineString","coordinates":[[0,0],[2,2]]}},
+                {"type":"Feature",
+                 "properties":{"name":"fallback"},
+                 "geometry":{"type":"Point","coordinates":[3,4]}}
+            ]
+        });
+        let parsed = super::parse_geojson(&values, Some("shape"), &InputLimits::default())
+            .expect("Feature properties may select a geometry and otherwise use geometry");
+
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].geometry.as_ref().unwrap().kind_name(), "Point");
+        assert_eq!(parsed[1].geometry.as_ref().unwrap().kind_name(), "Point");
+        assert_eq!(parsed[0].properties["name"], "selected");
+        assert_eq!(parsed[1].properties["name"], "fallback");
     }
 
     #[test]
@@ -2091,6 +2297,19 @@ mod tests {
             error.contains("primitive count"),
             "unexpected error: {error}"
         );
+
+        let empty_collection = json!([{
+            "shape":{"type":"GeometryCollection", "geometries":[]}
+        }]);
+        let limits = InputLimits {
+            max_geo_primitives: 0,
+            ..InputLimits::default()
+        };
+        let error = super::parse_geojson(&empty_collection, Some("shape"), &limits).unwrap_err();
+        assert!(
+            error.contains("primitive count"),
+            "empty GeometryCollections must consume the bounded primitive budget: {error}"
+        );
     }
 
     #[test]
@@ -2166,20 +2385,15 @@ mod tests {
             for feature in projected {
                 for geometry in feature.geometries {
                     match geometry {
-                        super::ProjectedGeometry::Path { d, .. } => {
-                            for token in d.split_whitespace() {
-                                if matches!(token, "M" | "L" | "Z") {
-                                    continue;
-                                } else {
-                                    let value = token.parse::<f64>().unwrap_or_else(|error| {
-                                        panic!("{projection_type:?} path token {token:?} in {d:?}: {error}")
-                                    });
-                                    assert!(
-                                        value.is_finite(),
-                                        "{projection_type:?} emitted {value}"
-                                    );
-                                }
-                            }
+                        super::ProjectedGeometry::Path { subpaths, .. } => {
+                            assert!(
+                                subpaths
+                                    .iter()
+                                    .flatten()
+                                    .flatten()
+                                    .all(|value| value.is_finite()),
+                                "{projection_type:?} emitted non-finite path coordinates"
+                            );
                         }
                         super::ProjectedGeometry::Point { x, y } => {
                             assert!(x.is_finite() && y.is_finite(), "{projection_type:?}");
@@ -2222,8 +2436,108 @@ mod tests {
         )
         .expect("transverse Mercator clip and precision settings should be applied");
         assert!(projected.iter().flat_map(|feature| &feature.geometries).any(
-            |geometry| matches!(geometry, super::ProjectedGeometry::Path { d, .. } if !d.is_empty())
+            |geometry| matches!(geometry, super::ProjectedGeometry::Path { subpaths, .. } if !subpaths.is_empty())
         ));
+    }
+
+    fn final_precision_deviation(shape: &GeoShape, viewport: crate::scene::ClipRect) -> f64 {
+        let projected = super::project_features(shape, viewport).unwrap();
+        let mut reference_shape = shape.clone();
+        reference_shape.projection.precision = Some(0.0);
+        let reference = super::project_features(&reference_shape, viewport).unwrap();
+        let paths = |features: &[super::ProjectedFeature]| {
+            features
+                .iter()
+                .flat_map(|feature| &feature.geometries)
+                .filter_map(|geometry| match geometry {
+                    super::ProjectedGeometry::Path { subpaths, .. } => Some(subpaths.clone()),
+                    super::ProjectedGeometry::Point { .. } => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let projected_paths = paths(&projected);
+        let reference_paths = paths(&reference);
+        assert_eq!(projected_paths.len(), 1);
+        assert_eq!(reference_paths.len(), 1);
+        let projected_points = &projected_paths[0][0];
+        let distance_to_segment = |point: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+            let delta = [b[0] - a[0], b[1] - a[1]];
+            let length_squared = delta[0] * delta[0] + delta[1] * delta[1];
+            if length_squared == 0.0 {
+                return (point[0] - a[0]).hypot(point[1] - a[1]);
+            }
+            let t = (((point[0] - a[0]) * delta[0] + (point[1] - a[1]) * delta[1])
+                / length_squared)
+                .clamp(0.0, 1.0);
+            (point[0] - (a[0] + t * delta[0])).hypot(point[1] - (a[1] + t * delta[1]))
+        };
+        reference_paths[0][0]
+            .iter()
+            .map(|point| {
+                projected_points
+                    .windows(2)
+                    .map(|segment| distance_to_segment(*point, segment[0], segment[1]))
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn explicit_projection_scale_keeps_precision_in_final_pixels() {
+        let viewport = crate::scene::ClipRect {
+            x: 0.0,
+            y: 0.0,
+            w: 400.0,
+            h: 300.0,
+        };
+        let shape = GeoShape {
+            features: vec![GeoFeature {
+                geometry: Some(GeoGeometry::LineString(vec![[-60.0, 70.0], [60.0, 70.0]])),
+                fill: None,
+            }],
+            projection: GeoProjection {
+                projection_type: GeoProjectionType::Equirectangular,
+                scale: Some(15_000.0),
+                translate: Some([200.0, 150.0]),
+                precision: Some(0.25),
+                ..GeoProjection::default()
+            },
+            style: GeoShapeStyle::default(),
+        };
+        let max_deviation = final_precision_deviation(&shape, viewport);
+        assert!(
+            max_deviation <= 0.25 + 1e-6,
+            "final projected path deviates by {max_deviation}px"
+        );
+    }
+
+    #[test]
+    fn auto_fit_scale_keeps_precision_in_final_pixels() {
+        let shape = GeoShape {
+            features: vec![GeoFeature {
+                geometry: Some(GeoGeometry::LineString(vec![[-5.0, 70.0], [5.0, 70.0]])),
+                fill: None,
+            }],
+            projection: GeoProjection {
+                projection_type: GeoProjectionType::Equirectangular,
+                precision: Some(0.25),
+                ..GeoProjection::default()
+            },
+            style: GeoShapeStyle::default(),
+        };
+        let deviation = final_precision_deviation(
+            &shape,
+            crate::scene::ClipRect {
+                x: 0.0,
+                y: 0.0,
+                w: 400.0,
+                h: 300.0,
+            },
+        );
+        assert!(
+            deviation <= 0.25 + 1e-6,
+            "auto-fit path deviates by {deviation}px"
+        );
     }
 
     #[test]
@@ -2260,19 +2574,106 @@ mod tests {
             .iter()
             .flat_map(|feature| &feature.geometries)
             .filter_map(|geometry| match geometry {
-                super::ProjectedGeometry::Path { d, .. } => Some(d),
+                super::ProjectedGeometry::Path { subpaths, .. } => Some(subpaths),
                 super::ProjectedGeometry::Point { .. } => None,
             })
             .collect::<Vec<_>>();
         assert!(!paths.is_empty(), "visible polygon portion should remain");
         for path in paths {
             assert!(
-                path.split_whitespace()
-                    .filter(|token| !matches!(*token, "M" | "L" | "Z"))
-                    .all(|token| token.parse::<f64>().is_ok_and(f64::is_finite)),
-                "non-finite projected path: {path}"
+                path.iter()
+                    .flatten()
+                    .flatten()
+                    .all(|coordinate| coordinate.is_finite()),
+                "non-finite projected path: {path:?}"
             );
         }
+    }
+
+    #[test]
+    fn clipped_polygon_holes_keep_their_ring_roles_when_emitted_before_the_shell() {
+        let shape = GeoShape {
+            features: vec![GeoFeature {
+                geometry: Some(GeoGeometry::Polygon(vec![
+                    vec![
+                        [-50.0, -20.0],
+                        [50.0, -20.0],
+                        [50.0, 20.0],
+                        [-50.0, 20.0],
+                        [-50.0, -20.0],
+                    ],
+                    vec![
+                        [-10.0, -3.0],
+                        [-10.0, 3.0],
+                        [-4.0, 3.0],
+                        [-4.0, -3.0],
+                        [-10.0, -3.0],
+                    ],
+                    vec![
+                        [4.0, -3.0],
+                        [4.0, 3.0],
+                        [10.0, 3.0],
+                        [10.0, -3.0],
+                        [4.0, -3.0],
+                    ],
+                ])),
+                fill: None,
+            }],
+            projection: GeoProjection {
+                projection_type: GeoProjectionType::Orthographic,
+                clip_angle: Some(30.0),
+                scale: Some(150.0),
+                translate: Some([160.0, 100.0]),
+                ..GeoProjection::default()
+            },
+            style: GeoShapeStyle::default(),
+        };
+        let projected = super::project_features(
+            &shape,
+            crate::scene::ClipRect {
+                x: 0.0,
+                y: 0.0,
+                w: 320.0,
+                h: 200.0,
+            },
+        )
+        .unwrap();
+        let paths = projected
+            .iter()
+            .flat_map(|feature| &feature.geometries)
+            .filter_map(|geometry| match geometry {
+                super::ProjectedGeometry::Path {
+                    subpaths,
+                    fillable: true,
+                } => Some(subpaths),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(
+            paths[0].len(),
+            3,
+            "two holes and one clipped shell: {paths:?}"
+        );
+        let signed_area = |ring: &[[f64; 2]]| {
+            ring.iter()
+                .zip(ring.iter().cycle().skip(1))
+                .take(ring.len())
+                .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+                .sum::<f64>()
+        };
+        let ring_is_positive = paths[0]
+            .iter()
+            .map(|ring| signed_area(ring) > 0.0)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ring_is_positive[0], ring_is_positive[1],
+            "both holes must retain the same winding"
+        );
+        assert_ne!(
+            ring_is_positive[1], ring_is_positive[2],
+            "shell winding must oppose the holes"
+        );
     }
 
     #[test]
@@ -2307,7 +2708,7 @@ mod tests {
             .filter(|geometry| {
                 matches!(
                     geometry,
-                    super::ProjectedGeometry::Path { d, .. } if !d.is_empty()
+                    super::ProjectedGeometry::Path { subpaths, .. } if !subpaths.is_empty()
                 )
             })
             .count();

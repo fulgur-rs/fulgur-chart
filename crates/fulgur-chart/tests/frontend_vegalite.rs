@@ -3339,6 +3339,37 @@ fn geoshape_parses_record_and_feature_collection_inputs() {
 }
 
 #[test]
+fn geoshape_feature_collection_shape_field_selects_property_then_falls_back_to_geometry() {
+    let json = r##"{
+        "mark":"geoshape",
+        "data":{"values":{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"shape":{"type":"Point","coordinates":[1,2]},"value":1},"geometry":{"type":"LineString","coordinates":[[10,10],[20,20]]}},
+            {"type":"Feature","properties":{"value":3},"geometry":{"type":"LineString","coordinates":[[30,30],[40,40]]}}
+        ]}},
+        "encoding":{
+            "shape":{"field":"shape","type":"geojson"},
+            "color":{"field":"value","type":"quantitative"}
+        }
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert_eq!(data.features.len(), 2);
+    assert_eq!(
+        data.features[0].geometry.as_ref().unwrap().kind_name(),
+        "Point",
+        "shape.field in Feature properties should select the geometry"
+    );
+    assert_eq!(
+        data.features[1].geometry.as_ref().unwrap().kind_name(),
+        "LineString",
+        "features without the selected property should use geometry"
+    );
+    assert!(data.features.iter().all(|feature| feature.fill.is_some()));
+}
+
+#[test]
 fn geoshape_record_type_property_is_not_mistaken_for_geojson_type() {
     let json = r##"{
         "mark":"geoshape",
@@ -3400,6 +3431,86 @@ fn geoshape_choropleth_uses_record_before_feature_properties() {
 }
 
 #[test]
+fn geoshape_quantitative_color_handles_overflowing_domain_range() {
+    let json = r##"{
+        "mark":"geoshape",
+        "data":{"values":[
+            {"type":"Feature","properties":{"value":-1e308},"geometry":{"type":"Point","coordinates":[-10,0]}},
+            {"type":"Feature","properties":{"value":0},"geometry":{"type":"Point","coordinates":[0,0]}},
+            {"type":"Feature","properties":{"value":1e308},"geometry":{"type":"Point","coordinates":[10,0]}}
+        ]},
+        "encoding":{"color":{"field":"value","type":"quantitative"}}
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert_eq!(
+        data.features
+            .iter()
+            .map(|feature| feature.fill)
+            .collect::<Vec<_>>(),
+        [
+            Some(fulgur_chart::ir::Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 1.0
+            }),
+            Some(fulgur_chart::ir::Color {
+                r: 166,
+                g: 188,
+                b: 212,
+                a: 1.0
+            }),
+            Some(fulgur_chart::ir::Color {
+                r: 76,
+                g: 120,
+                b: 168,
+                a: 1.0
+            }),
+        ]
+    );
+}
+
+#[test]
+fn geoshape_projected_primitives_obey_custom_render_limits() {
+    let json = r##"{
+        "mark":"geoshape",
+        "data":{"values":[{"type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[-40,0],[40,0],[-40,10],[40,10],[-40,20]]}}]},
+        "encoding":{},
+        "projection":{"type":"orthographic","clipAngle":30,"scale":70,"translate":[160,100]},
+        "width":320,"height":200
+    }"##;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_geo_primitives: 3,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let spec = vegalite::parse_with_limits(json, true, &limits).unwrap();
+    let error = fulgur_chart::render::render_chart_with_font_and_limits(
+        &spec,
+        fulgur_chart::font::DEFAULT_FONT,
+        &limits,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("projected primitive count exceeds limit 3"),
+        "{error}"
+    );
+    let png_error = fulgur_chart::raster_direct::render_chart_to_png_with_limits(
+        &spec,
+        0.01,
+        fulgur_chart::font::DEFAULT_FONT,
+        &limits,
+    )
+    .unwrap_err();
+    assert!(
+        png_error.contains("projected primitive count exceeds limit 3"),
+        "{png_error}"
+    );
+}
+
+#[test]
 fn geoshape_uses_vega_lite_default_mark_color() {
     let json = r##"{
         "mark":"geoshape",
@@ -3412,9 +3523,9 @@ fn geoshape_uses_vega_lite_default_mark_color() {
     assert_eq!(
         data.style.fill,
         Some(fulgur_chart::ir::Color {
-            r: 70,
-            g: 130,
-            b: 180,
+            r: 76,
+            g: 120,
+            b: 168,
             a: 1.0
         })
     );
@@ -3538,6 +3649,21 @@ fn geoshape_projection_parses_common_projection_properties() {
 }
 
 #[test]
+fn geoshape_precision_is_accepted_for_albers_usa_and_identity() {
+    for projection_type in ["albersUsa", "identity"] {
+        let json = format!(
+            r#"{{"mark":"geoshape","data":{{"values":[]}},"encoding":{{}},"projection":{{"type":"{projection_type}","precision":0.25}}}}"#
+        );
+        let spec = vegalite::parse(&json, true)
+            .unwrap_or_else(|error| panic!("{projection_type} should accept precision: {error}"));
+        let ChartKind::GeoShape { data } = spec.kind else {
+            panic!("expected geoshape chart kind");
+        };
+        assert_eq!(data.projection.precision, Some(0.25));
+    }
+}
+
+#[test]
 fn geoshape_rejects_url_topojson_and_unknown_projection() {
     let cases = [
         (
@@ -3588,4 +3714,177 @@ fn geoshape_fixture_renders_svg_and_png() {
     .expect("geoshape PNG should render");
     let image = tiny_skia::Pixmap::decode_png(&png).expect("geoshape PNG should decode");
     assert_eq!((image.width(), image.height()), (480, 280));
+}
+
+#[test]
+fn clipped_geoshape_holes_stay_unfilled_in_svg_and_png() {
+    let json = r##"{
+        "mark":{"type":"geoshape","fill":"#0000ff"},
+        "data":{"values":[{
+            "type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[
+                [[-50,-20],[50,-20],[50,20],[-50,20],[-50,-20]],
+                [[-10,-3],[-10,3],[-4,3],[-4,-3],[-10,-3]],
+                [[4,-3],[4,3],[10,3],[10,-3],[4,-3]]
+            ]}
+        }]},
+        "encoding":{},
+        "projection":{"type":"orthographic","clipAngle":30,"scale":150,"translate":[160,100]},
+        "width":320,"height":200,"background":"white"
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+    assert!(svg.contains("<path"), "expected projected polygon output");
+
+    let png = fulgur_chart::raster_direct::render_chart_to_png(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .expect("clipped GeoJSON polygon should render");
+    let image = tiny_skia::Pixmap::decode_png(&png).expect("PNG should decode");
+    let land = image
+        .pixel(165, 100)
+        .expect("land sample is inside the image");
+    let hole = image
+        .pixel(178, 100)
+        .expect("hole sample is inside the image");
+    assert!(
+        land.blue() > land.red(),
+        "land between holes should be blue: {land:?}"
+    );
+    assert_eq!(
+        (hole.red(), hole.green(), hole.blue()),
+        (255, 255, 255),
+        "the second hole should expose the white background: {hole:?}"
+    );
+}
+
+#[test]
+fn antimeridian_polygon_does_not_fill_the_clipped_complement() {
+    let json = r##"{
+        "mark":{"type":"geoshape","fill":"#0000ff"},
+        "data":{"values":{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[
+                [[170,-20],[-170,-20],[-170,20],[170,20],[170,-20]]
+            ]}}
+        ]}},
+        "encoding":{},
+        "projection":{"type":"orthographic","rotate":[90,0,0],"scale":70,"translate":[160,100]},
+        "width":320,"height":200,"background":"white"
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let png = fulgur_chart::raster_direct::render_chart_to_png(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .expect("partially clipped date-line polygon should render");
+    let image = tiny_skia::Pixmap::decode_png(&png).expect("PNG should decode");
+    let shell_pixel = (80..110)
+        .flat_map(|x| (60..140).map(move |y| (x, y)))
+        .find_map(|(x, y)| {
+            let pixel = image.pixel(x, y)?;
+            (pixel.blue() > pixel.red()).then_some((x, y, pixel))
+        });
+    assert!(
+        shell_pixel.is_some(),
+        "the visible shell sliver should contain blue pixels"
+    );
+    let complement = image
+        .pixel(160, 100)
+        .expect("complement sample should be on canvas");
+    assert_eq!(
+        (complement.red(), complement.green(), complement.blue()),
+        (255, 255, 255),
+        "the clipped complement must not be filled: {complement:?}"
+    );
+}
+
+#[test]
+fn antimeridian_polygon_renders_only_its_small_spherical_region() {
+    let json = r##"{
+        "mark":{"type":"geoshape","fill":"#0000ff"},
+        "data":{"values":{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[
+                [[170,-20],[-170,-20],[-170,20],[170,20],[170,-20]],
+                [[175,-5],[175,5],[-175,5],[-175,-5],[175,-5]]
+            ]}}
+        ]}},
+        "encoding":{},
+        "projection":{"type":"orthographic","rotate":[180,0,0],"scale":70,"translate":[160,100]},
+        "width":320,"height":200,"background":"white"
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+    assert!(
+        svg.contains("<path"),
+        "the date-line polygon should produce a path"
+    );
+
+    let png = fulgur_chart::raster_direct::render_chart_to_png(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .expect("date-line polygon should render");
+    let image = tiny_skia::Pixmap::decode_png(&png).expect("PNG should decode");
+    let land = image
+        .pixel(160, 80)
+        .expect("land sample should be on canvas");
+    assert!(
+        land.blue() > land.red(),
+        "the polygon shell should be filled: {land:?}"
+    );
+    let hole = image
+        .pixel(160, 100)
+        .expect("hole sample should be on canvas");
+    assert_eq!(
+        (hole.red(), hole.green(), hole.blue()),
+        (255, 255, 255),
+        "the antimeridian hole should remain empty: {hole:?}"
+    );
+    let outside = image
+        .pixel(210, 100)
+        .expect("outside sample should be on canvas");
+    assert_eq!(
+        (outside.red(), outside.green(), outside.blue()),
+        (255, 255, 255),
+        "the exterior complement must not be filled: {outside:?}"
+    );
+}
+
+#[test]
+fn geoshape_zero_stroke_width_is_invisible_in_svg_and_png() {
+    let json = r##"{
+        "mark":{"type":"geoshape","stroke":"#ff0000","strokeWidth":0},
+        "data":{"values":[{
+            "type":"Feature","properties":{},"geometry":{"type":"LineString","coordinates":[[20,100],[300,100]]}
+        }]},
+        "encoding":{},
+        "projection":{"type":"identity","scale":1,"translate":[0,0]},
+        "width":320,"height":200,"background":"white"
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+    assert!(svg.contains("<path"), "expected line path output");
+    assert!(
+        !svg.contains("stroke=\"#ff0000\""),
+        "zero-width stroke must be omitted"
+    );
+
+    let png = fulgur_chart::raster_direct::render_chart_to_png(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .expect("zero-width line should render");
+    let image = tiny_skia::Pixmap::decode_png(&png).expect("PNG should decode");
+    let pixel = image
+        .pixel(100, 100)
+        .expect("line sample is inside the image");
+    assert_eq!(
+        (pixel.red(), pixel.green(), pixel.blue()),
+        (255, 255, 255),
+        "zero-width line must not draw a raster hairline: {pixel:?}"
+    );
 }

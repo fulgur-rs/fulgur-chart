@@ -201,7 +201,7 @@ fn render_chart_to_png_with_options(
         .map_err(|e| format!("text measurer init failed: {e}"))?;
     crate::guard::validate_marker_radii(spec)?;
     crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &measurer)?;
-    let scene = crate::layout::build_scene_checked(spec, &measurer)?;
+    let scene = crate::layout::build_scene_checked_with_limits(spec, &measurer, limits)?;
     scene_to_png_with_face(&scene, scale, &face, compression)
 }
 
@@ -248,7 +248,7 @@ pub fn render_chart_to_webp_with_limits(
         .map_err(|e| format!("text measurer init failed: {e}"))?;
     crate::guard::validate_marker_radii(spec)?;
     crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &measurer)?;
-    let scene = crate::layout::build_scene_checked(spec, &measurer)?;
+    let scene = crate::layout::build_scene_checked_with_limits(spec, &measurer, limits)?;
     // WebP 専用の上限(軸・面積)で pixmap 確保前に弾き OOM を防ぐ(→ WEBP_LIMITS)。
     let mut pixmap = scene_to_pixmap(&scene, scale, &face, &WEBP_LIMITS)?;
 

@@ -139,6 +139,28 @@ fn geoshape_svg_and_png_render_validly_and_deterministically() {
     assert_eq!((image.width(), image.height()), (480, 280));
 }
 
+/// Projection failures travel back as render errors in native and WASM builds.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn geoshape_projection_errors_are_returned_on_every_platform() {
+    let spec = vegalite::parse(
+        r#"{
+            "mark":"geoshape",
+            "data":{"values":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[2,0]}}]},
+            "encoding":{},
+            "projection":{"type":"identity","scale":1.7976931348623157e308}
+        }"#,
+        true,
+    )
+    .expect("geoshape spec parses");
+    let error = fulgur_chart::render::render_chart_with_limits(
+        &spec,
+        &fulgur_chart::guard::InputLimits::default(),
+    )
+    .expect_err("non-finite projected coordinates should be a render error");
+    assert!(error.contains("non-finite"), "{error}");
+}
+
 /// PNG: wasm32 と linux-x86_64 native で、linux-x86_64 の期待 byte と一致することを検証する。
 /// CI の wasm ジョブは ubuntu で走るため、ubuntu native と同一ビットになる。
 /// tiny-skia の浮動小数差は OS 跨ぎで出るため、この exact 比較は上記対象に限定する。

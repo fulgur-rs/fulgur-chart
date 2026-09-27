@@ -1,12 +1,24 @@
 //! Vega-Lite inline GeoJSON rendering through the shared projection pipeline.
 
 use super::common::{OUTER_PAD, TITLE_BAND, TITLE_FONT};
-use crate::geoshape::{ProjectedGeometry, project_features};
+use crate::geoshape::{ProjectedGeometry, project_features_with_primitive_limit, write_path};
 use crate::ir::{ChartKind, ChartSpec};
 use crate::scene::{Anchor, ClipRect, Prim, Scene};
 use crate::text::TextMeasurer;
 
 pub fn build(spec: &ChartSpec, _measurer: &TextMeasurer) -> Result<Scene, String> {
+    build_with_primitive_limit(
+        spec,
+        _measurer,
+        crate::guard::InputLimits::default().max_geo_primitives,
+    )
+}
+
+pub(crate) fn build_with_primitive_limit(
+    spec: &ChartSpec,
+    _measurer: &TextMeasurer,
+    max_geo_primitives: usize,
+) -> Result<Scene, String> {
     let ChartKind::GeoShape { data } = &spec.kind else {
         unreachable!("geoshape::build called on non-geoshape kind");
     };
@@ -35,14 +47,21 @@ pub fn build(spec: &ChartSpec, _measurer: &TextMeasurer) -> Result<Scene, String
         });
     }
 
-    let features = project_features(data, viewport)?;
+    let features = project_features_with_primitive_limit(data, viewport, max_geo_primitives)?;
+    let mut remaining_path_bytes = crate::geoshape::MAX_GEOSHAPE_PATH_BYTES;
     for feature in features {
         let fill = feature.fill.or(data.style.fill);
         for geometry in feature.geometries {
             match geometry {
-                ProjectedGeometry::Path { d, fillable } if !d.is_empty() => {
+                ProjectedGeometry::Path { subpaths, fillable } => {
+                    let d = write_path(&subpaths, fillable, &mut remaining_path_bytes)?;
+                    if d.is_empty() {
+                        continue;
+                    }
                     let fill = fillable.then_some(fill).flatten();
-                    let stroke = data.style.stroke;
+                    let stroke = (data.style.stroke_width > 0.0)
+                        .then_some(data.style.stroke)
+                        .flatten();
                     if let Some(clip) = feature.clip {
                         items.push(Prim::ClippedPath {
                             d,
@@ -61,6 +80,7 @@ pub fn build(spec: &ChartSpec, _measurer: &TextMeasurer) -> Result<Scene, String
                     }
                 }
                 ProjectedGeometry::Point { x, y } => {
+                    crate::geoshape::validate_raster_coordinate([x, y])?;
                     let clip_radius =
                         data.projection.point_radius + data.style.stroke_width.max(0.0) / 2.0;
                     if feature.clip.is_some_and(|clip| {
@@ -77,7 +97,16 @@ pub fn build(spec: &ChartSpec, _measurer: &TextMeasurer) -> Result<Scene, String
                         b: 0,
                         a: 0.0,
                     });
-                    let stroke = data.style.stroke.unwrap_or(fill);
+                    let stroke = if data.style.stroke_width > 0.0 {
+                        data.style.stroke.unwrap_or(fill)
+                    } else {
+                        crate::ir::Color {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 0.0,
+                        }
+                    };
                     if let Some(clip) = feature.clip {
                         items.push(Prim::ClippedCircle {
                             cx: x,
@@ -99,7 +128,6 @@ pub fn build(spec: &ChartSpec, _measurer: &TextMeasurer) -> Result<Scene, String
                         });
                     }
                 }
-                ProjectedGeometry::Path { .. } => {}
             }
         }
     }
@@ -114,6 +142,7 @@ pub fn build(spec: &ChartSpec, _measurer: &TextMeasurer) -> Result<Scene, String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geoshape::project_features;
     use crate::ir::{
         Color, GeoFeature, GeoGeometry, GeoProjection, GeoProjectionType, GeoShape, GeoShapeStyle,
     };
@@ -126,30 +155,8 @@ mod tests {
         Color { r, g, b, a: 1.0 }
     }
 
-    fn projected_coordinates(path: &str) -> Vec<Vec<[f64; 2]>> {
-        let mut paths = Vec::new();
-        let mut current = Vec::new();
-        let mut pair = Vec::new();
-        for token in path.split_whitespace() {
-            if matches!(token, "M" | "L" | "Z") {
-                if pair.len() == 2 {
-                    current.push([pair[0], pair[1]]);
-                    pair.clear();
-                }
-                if (token == "M" || token == "Z") && !current.is_empty() {
-                    paths.push(std::mem::take(&mut current));
-                }
-            } else {
-                pair.push(token.parse::<f64>().unwrap());
-            }
-        }
-        if pair.len() == 2 {
-            current.push([pair[0], pair[1]]);
-        }
-        if !current.is_empty() {
-            paths.push(current);
-        }
-        paths
+    fn projected_coordinates(subpaths: &[Vec<[f64; 2]>]) -> Vec<Vec<[f64; 2]>> {
+        subpaths.to_vec()
     }
 
     fn area(ring: &[[f64; 2]]) -> f64 {
@@ -187,7 +194,9 @@ mod tests {
             .iter()
             .flat_map(|feature| &feature.geometries)
             .filter_map(|geometry| match geometry {
-                ProjectedGeometry::Path { d, .. } => Some(projected_coordinates(d)),
+                ProjectedGeometry::Path { subpaths, .. } => {
+                    Some(projected_coordinates(subpaths.as_slice()))
+                }
                 ProjectedGeometry::Point { .. } => None,
             })
             .flatten()
@@ -234,7 +243,9 @@ mod tests {
                 .iter()
                 .flat_map(|feature| &feature.geometries)
                 .filter_map(|geometry| match geometry {
-                    ProjectedGeometry::Path { d, .. } => Some(projected_coordinates(d)),
+                    ProjectedGeometry::Path { subpaths, .. } => {
+                        Some(projected_coordinates(subpaths))
+                    }
                     ProjectedGeometry::Point { .. } => None,
                 })
                 .flatten()
@@ -269,6 +280,68 @@ mod tests {
             (default_bounds[3] - default_bounds[1] - (translated_bounds[3] - translated_bounds[1]))
                 .abs()
                 < 1e-6
+        );
+    }
+
+    #[test]
+    fn auto_fit_preserves_sub_centipixel_identity_geometry_extent() {
+        let shape = GeoShape {
+            features: vec![GeoFeature {
+                geometry: Some(GeoGeometry::Polygon(vec![vec![
+                    [0.0, 0.0],
+                    [0.004, 0.0],
+                    [0.004, 0.004],
+                    [0.0, 0.004],
+                    [0.0, 0.0],
+                ]])),
+                fill: None,
+            }],
+            projection: GeoProjection {
+                projection_type: GeoProjectionType::Identity,
+                ..GeoProjection::default()
+            },
+            style: GeoShapeStyle::default(),
+        };
+        let projected = project_features(
+            &shape,
+            ClipRect {
+                x: 0.0,
+                y: 0.0,
+                w: 320.0,
+                h: 200.0,
+            },
+        )
+        .unwrap();
+        let ProjectedGeometry::Path { subpaths, .. } = &projected[0].geometries[0] else {
+            panic!("identity polygon should remain a path");
+        };
+        let points = projected_coordinates(subpaths.as_slice())
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let width = points
+            .iter()
+            .map(|point| point[0])
+            .fold(f64::NEG_INFINITY, f64::max)
+            - points
+                .iter()
+                .map(|point| point[0])
+                .fold(f64::INFINITY, f64::min);
+        let height = points
+            .iter()
+            .map(|point| point[1])
+            .fold(f64::NEG_INFINITY, f64::max)
+            - points
+                .iter()
+                .map(|point| point[1])
+                .fold(f64::INFINITY, f64::min);
+        assert!(
+            width > 100.0,
+            "small geometry collapsed horizontally: {points:?}"
+        );
+        assert!(
+            height > 100.0,
+            "small geometry collapsed vertically: {points:?}"
         );
     }
 
@@ -322,10 +395,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             [Some(color(220, 10, 10)), Some(color(10, 20, 220))]
         );
-        let ProjectedGeometry::Path { d, fillable: true } = &projected[0].geometries[0] else {
+        let ProjectedGeometry::Path {
+            subpaths,
+            fillable: true,
+        } = &projected[0].geometries[0]
+        else {
             panic!("first feature should be a filled polygon path");
         };
-        let rings = projected_coordinates(d);
+        let rings = projected_coordinates(subpaths.as_slice());
         assert_eq!(rings.len(), 2, "outer ring and hole should remain separate");
         assert_ne!(
             area(&rings[0]).is_sign_positive(),

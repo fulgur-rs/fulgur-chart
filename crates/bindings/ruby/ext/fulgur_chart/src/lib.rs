@@ -258,7 +258,11 @@ fn render_pure(
             let svg = match font {
                 Some(bytes) => fulgur_chart::render::render_chart_with_font(ir, bytes)
                     .map_err(RenderFail::Parse)?,
-                None => fulgur_chart::render::render_chart(ir),
+                None => fulgur_chart::render::render_chart_with_limits(
+                    ir,
+                    &fulgur_chart::guard::InputLimits::default(),
+                )
+                .map_err(RenderFail::Parse)?,
             };
             Ok(Rendered::Svg(svg))
         }

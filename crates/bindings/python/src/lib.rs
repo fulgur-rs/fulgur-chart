@@ -93,7 +93,11 @@ fn render_svg(
         // SVG パスのフォントエラー → ParseError（binding-api-contract の非対称規約）
         fulgur_core::render::render_chart_with_font(&spec, font_bytes).map_err(parse_error)
     } else {
-        Ok(fulgur_core::render::render_chart(&spec))
+        fulgur_core::render::render_chart_with_limits(
+            &spec,
+            &fulgur_core::guard::InputLimits::default(),
+        )
+        .map_err(parse_error)
     }
 }
 

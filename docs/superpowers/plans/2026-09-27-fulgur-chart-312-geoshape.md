@@ -120,7 +120,7 @@ Expected: projection dispatcher が未実装で FAIL。
 
 - [ ] **Step 3: projection, clipping, fit, path endpoint を実装する**
 
-`d3_geo_rs` の streaming pipeline を使い、独自 path endpoint から Fulgur の空白区切り数値 token を直接出す。16 type を明示 dispatch し、backend にない raw formula はローカル projector として追加する。Identity は planar coordinates、scale/translate、reflectX/reflectY を適用する。scale と translate がどちらも未指定の場合に自動 fit し、指定された値はそのまま優先する。自動 fit は全可視 feature の bounds を使い8 px marginを確保する。projection result に非有限値があれば path 作成前に error にする。
+`d3_geo_rs` の streaming pipeline を使い、独自 path endpoint から Fulgur の空白区切り数値 token を直接出す。16 type を明示 dispatch し、backend にない raw formula はローカル projector として追加する。Identity は planar coordinates、scale/translate、reflectX/reflectY を適用する。scale と translate がどちらも未指定の場合に自動 fit し、指定された値はそのまま優先する。自動 fit は全可視 feature の bounds を使い8 px marginを確保する。path coordinates は bounds 計算と fit を f64 で行い、Scene 作成時に一度だけ文字列化する。projection result に非有限値があれば path 作成前に error にする。
 
 - [ ] **Step 4: projection test を通す**
 
@@ -173,7 +173,7 @@ Expected: geoshape mark が未対応で FAIL。
 
 - [ ] **Step 4: record/Feature properties と choropleth 色を実装する**
 
-`parse_geoshape_kind` で row field を優先し、未解決なら Feature properties field を参照する。Quantitative は data domain で continuous fill、nominal/ordinal は first-seen palette index とし、欠損色は color field が指定された場合に fill を省いて geometry/stroke を保つ。色 encoding がない場合は mark fill、次に mark color、最後に Vega-Lite geoshape の既定色 `#4682b4` を使う。色 channel の `value` は定数 fill として受理し、同一 channel の `field` と併記された場合はエラーにする。`mark.stroke` は独立した stroke とする。
+`parse_geoshape_kind` で row field を優先し、未解決なら Feature properties field を参照する。Quantitative は data domain で continuous fill、nominal/ordinal は first-seen palette index とし、欠損色は color field が指定された場合に fill を省いて geometry/stroke を保つ。色 encoding がない場合は mark fill、次に mark color、最後に Vega-Lite geoshape の既定色 `#4c78a8` を使う。色 channel の `value` は定数 fill として受理し、同一 channel の `field` と併記された場合はエラーにする。`mark.stroke` は独立した stroke とする。
 
 - [ ] **Step 5: parser/schema/color tests を通して commit する**
 

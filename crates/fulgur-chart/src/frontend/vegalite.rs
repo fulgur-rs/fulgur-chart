@@ -726,9 +726,9 @@ fn parse_geoshape_mark_style(mark: Option<&Value>) -> Result<GeoShapeStyle, Stri
 }
 
 const GEOSHAPE_DEFAULT_COLOR: Color = Color {
-    r: 70,
-    g: 130,
-    b: 180,
+    r: 76,
+    g: 120,
+    b: 168,
     a: 1.0,
 };
 
@@ -816,7 +816,7 @@ fn resolve_geoshape_colors(
                 return Ok(vec![None; values.len()]);
             };
             let range = max - min;
-            if range == 0.0 || !range.is_finite() {
+            if range == 0.0 {
                 return Ok(numbers
                     .into_iter()
                     .map(|value| value.map(|_| RECT_COLOR_HI))
@@ -824,7 +824,11 @@ fn resolve_geoshape_colors(
             }
             Ok(numbers
                 .into_iter()
-                .map(|value| value.map(|value| lerp_rect_color((value - min) / range)))
+                .map(|value| {
+                    value.map(|value| {
+                        lerp_rect_color(normalize_quantitative_value(value, min, max, range))
+                    })
+                })
                 .collect())
         }
         ColorType::Nominal => {
@@ -850,6 +854,17 @@ fn resolve_geoshape_colors(
                 .collect()
         }
     }
+}
+
+fn normalize_quantitative_value(value: f64, min: f64, max: f64, range: f64) -> f64 {
+    if range.is_finite() {
+        return (value - min) / range;
+    }
+
+    // Finite endpoints can still produce an infinite difference (for example -1e308..1e308).
+    // Scale the domain first so interpolation keeps the same relative positions without overflow.
+    let scale = min.abs().max(max.abs());
+    ((value / scale) - (min / scale)) / ((max / scale) - (min / scale))
 }
 
 fn geoshape_category(value: &Value) -> Option<String> {
@@ -947,8 +962,7 @@ fn parse_geoshape_projection(value: Option<&Value>) -> Result<GeoProjection, Str
         && (projection.center.is_some()
             || projection.rotate.is_some()
             || projection.clip_angle.is_some()
-            || projection.parallels.is_some()
-            || projection.precision.is_some())
+            || projection.parallels.is_some())
     {
         return Err(
             "identity supports scale, translate, reflectX, reflectY, and clipExtent only"
@@ -959,8 +973,7 @@ fn parse_geoshape_projection(value: Option<&Value>) -> Result<GeoProjection, Str
         && (projection.center.is_some()
             || projection.rotate.is_some()
             || projection.clip_angle.is_some()
-            || projection.parallels.is_some()
-            || projection.precision.is_some())
+            || projection.parallels.is_some())
     {
         return Err(
             "albersUsa supports scale, translate, pointRadius, and clipExtent only".to_string(),

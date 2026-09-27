@@ -5,15 +5,35 @@ use crate::font::DEFAULT_FONT;
 use crate::font::{DEFAULT_FAMILY, family_name};
 use crate::text::TextMeasurer;
 
-/// 既定フォント(Noto Sans JP)で描画する legacy の未検証 low-level 経路。
+/// 既定フォント(Noto Sans JP)で描画する legacy の low-level 経路。
 ///
-/// 後方互換と byte 一致のため [`crate::guard::validate_spec`] を内部では呼ばない。
-/// 入力検証を含む fallible な SVG 経路が必要なら
-/// [`render_chart_with_font`] に [`DEFAULT_FONT`] を渡す。
+/// `ChartSpec` が不正で layout が失敗すると panic する。ユーザー入力には
+/// [`render_chart_with_limits`] を使い、全入力 policy の検証には先に
+/// [`crate::guard::validate_spec`] を呼ぶ。
 #[cfg(feature = "default-font")]
 pub fn render_chart(spec: &crate::ir::ChartSpec) -> String {
     let m = TextMeasurer::new(DEFAULT_FONT).expect("bundled font parses");
-    render_with(spec, &m, "Noto Sans JP, sans-serif").expect("chart rendering failed")
+    render_with(
+        spec,
+        &m,
+        "Noto Sans JP, sans-serif",
+        &crate::guard::InputLimits::default(),
+    )
+    .expect("chart rendering failed")
+}
+
+/// 既定フォントで SVG を描画し、projection/layout のエラーを呼び出し元へ返す。
+/// marker 半径と PlotArea 外周の scene 検査も描画前に行う。その他の入力 policy は
+/// [`crate::guard::validate_spec`] で検証する。
+#[cfg(feature = "default-font")]
+pub fn render_chart_with_limits(
+    spec: &crate::ir::ChartSpec,
+    limits: &crate::guard::InputLimits,
+) -> Result<String, String> {
+    let m = TextMeasurer::new(DEFAULT_FONT).map_err(|e| format!("フォント読込失敗: {e}"))?;
+    crate::guard::validate_marker_radii(spec)?;
+    crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &m)?;
+    render_with(spec, &m, "Noto Sans JP, sans-serif", limits)
 }
 
 /// 任意フォントで描画。font_bytes がパース不能なら Err。
@@ -43,7 +63,12 @@ pub fn render_chart_with_font_and_limits(
     let fam = family_name(font_bytes).unwrap_or_else(|| DEFAULT_FAMILY.to_string());
     // family 名は CSS string としてクォートする。フォント name table はカンマや引用符を
     // 含み得るため、未クォートだと CSS が複数 family と解釈し計測/SVG/PNG の三者一致が崩れる。
-    render_with(spec, &m, &format!("{}, sans-serif", css_quote_family(&fam)))
+    render_with(
+        spec,
+        &m,
+        &format!("{}, sans-serif", css_quote_family(&fam)),
+        limits,
+    )
 }
 
 /// CSS font-family 値用に family 名を二重引用符で囲む。CSS 文字列規則に従い
@@ -57,8 +82,9 @@ fn render_with(
     spec: &crate::ir::ChartSpec,
     m: &TextMeasurer,
     font_family: &str,
+    limits: &crate::guard::InputLimits,
 ) -> Result<String, String> {
-    let scene = crate::layout::build_scene_checked(spec, m)?;
+    let scene = crate::layout::build_scene_checked_with_limits(spec, m, limits)?;
     Ok(crate::svg::render_svg(&scene, font_family))
 }
 
@@ -125,6 +151,29 @@ mod tests {
         };
         let error = render_chart_with_font(&spec, TEST_FONT)
             .expect_err("projection failures must reach the fallible render API");
+        assert!(error.contains("non-finite"), "{error}");
+    }
+
+    #[cfg(feature = "default-font")]
+    #[test]
+    fn default_font_fallible_svg_render_returns_geoshape_projection_errors() {
+        let mut spec = spec();
+        spec.kind = crate::ir::ChartKind::GeoShape {
+            data: Box::new(crate::ir::GeoShape {
+                features: vec![crate::ir::GeoFeature {
+                    geometry: Some(crate::ir::GeoGeometry::Point([2.0, 0.0])),
+                    fill: None,
+                }],
+                projection: crate::ir::GeoProjection {
+                    projection_type: crate::ir::GeoProjectionType::Identity,
+                    scale: Some(f64::MAX),
+                    ..crate::ir::GeoProjection::default()
+                },
+                style: crate::ir::GeoShapeStyle::default(),
+            }),
+        };
+        let error = render_chart_with_limits(&spec, &crate::guard::InputLimits::default())
+            .expect_err("default-font render failures must be returned to the caller");
         assert!(error.contains("non-finite"), "{error}");
     }
 

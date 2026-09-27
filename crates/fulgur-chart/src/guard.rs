@@ -975,6 +975,9 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                         add_primitives(polygons.len(), &mut primitives)?;
                     }
                     crate::ir::GeoGeometry::GeometryCollection(geometries) => {
+                        if geometries.is_empty() {
+                            add_primitives(1, &mut primitives)?;
+                        }
                         pending.extend(geometries.iter().map(|geometry| (geometry, depth + 1)));
                     }
                 }
@@ -2453,6 +2456,17 @@ mod tests {
         assert!(
             error.contains("primitive count"),
             "unexpected error: {error}"
+        );
+
+        let empty_collection_spec = make_spec(vec![Some(GeoGeometry::GeometryCollection(vec![]))]);
+        let empty_collection_limits = InputLimits {
+            max_geo_primitives: 0,
+            ..default_limits()
+        };
+        let error = validate_spec(&empty_collection_spec, &empty_collection_limits).unwrap_err();
+        assert!(
+            error.contains("primitive count"),
+            "empty GeometryCollections must consume the bounded primitive budget: {error}"
         );
     }
 

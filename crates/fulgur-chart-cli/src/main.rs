@@ -730,11 +730,15 @@ fn render_one(
 
     match format {
         Format::Svg => {
-            // SVG 経路は変更なし。
+            // SVG は fallible な既定フォント経路で投影エラーを呼び出し元へ返す。
             let svg = match font_bytes {
                 Some(bytes) => fulgur_chart::render::render_chart_with_font(&spec_ir, bytes)
                     .map_err(|e| (1, format!("error: render failed: {e}")))?,
-                None => fulgur_chart::render::render_chart(&spec_ir),
+                None => fulgur_chart::render::render_chart_with_limits(
+                    &spec_ir,
+                    &fulgur_chart::guard::InputLimits::default(),
+                )
+                .map_err(|e| (1, format!("error: render failed: {e}")))?,
             };
             Ok(svg.into_bytes())
         }
