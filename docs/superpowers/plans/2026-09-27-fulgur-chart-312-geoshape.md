@@ -42,7 +42,6 @@
 - Update: root `Cargo.lock` と `crates/bindings/wasm/Cargo.lock`
 
 **Interfaces:**
-- `ir::ChartKind::GeoShape { data: Box<ir::GeoShape> }`
 - `ir::GeoShape` は `features: Vec<GeoFeature>`, `projection: GeoProjection`, `style: GeoShapeStyle` を持つ。
 - `ir::GeoGeometry` は7 Geometry 種を表し、`GeoFeature` は `geometry: Option<GeoGeometry>` と解決済み `fill: Option<Color>` を持つ。
 - `GeoProjectionType` は16 projection 名、`GeoProjection` は型と common projection properties、`GeoShapeStyle` は定数 fill/stroke と線幅を保持する。これらの IR 型は Task 1 で定義し、初期値は Task 3 の parser が設定する。
@@ -98,6 +97,7 @@ Expected: PASS。Commit: `feat: add guarded GeoJSON geoshape model`。
 - Modify: `crates/fulgur-chart/src/guard.rs`
 
 **Interfaces:**
+- `ir::ChartKind::GeoShape { data: Box<ir::GeoShape> }` を追加し、layout/model/guard の dispatch に登録する。
 - `GeoProjectionType` は Vega-Lite v6 の16名を列挙する。
 - `GeoProjection` は共通 projection properties と identity reflection を保持する。
 - `geoshape::project_features(shape: &GeoShape, viewport: ClipRect) -> Result<Vec<ProjectedFeature>, String>` は全 Feature 共通の auto-fit を解決して path/point geometry を返し、source order と feature fill を維持する。
