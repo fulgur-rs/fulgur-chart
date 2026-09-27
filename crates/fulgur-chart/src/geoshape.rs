@@ -81,7 +81,10 @@ impl Stream for GeoPathEndpoint {
 
     fn point(&mut self, point: &Coord<f64>, _marker: Option<u8>) {
         if !point.x.is_finite() || !point.y.is_finite() {
-            self.error = Some("projection produced a non-finite coordinate".to_string());
+            self.error = Some(format!(
+                "projection produced a non-finite coordinate ({}, {})",
+                point.x, point.y
+            ));
             return;
         }
         let point = [point.x, point.y];
@@ -332,13 +335,6 @@ fn project_geometry(
             project_with_builder(&builder, geometry)
         }};
     }
-    macro_rules! run_default_projection {
-        ($builder:expr) => {{
-            let mut builder = $builder;
-            configure_builder(&mut builder, projection)?;
-            project_with_builder(&builder, geometry)
-        }};
-    }
     use GeoProjectionType as P;
     match projection.projection_type {
         P::Albers => project_conic_raw::<d3_geo_rs::projection::equal_area::EqualArea<f64>>(
@@ -411,13 +407,29 @@ fn project_geometry(
             d3_geo_rs::projection::stereographic::Stereographic::<f64>::builder::<GeoPathEndpoint>(
             )
         ),
-        // d3_geo_rs 3.0's transverse-Mercator builder does not expose clipAngle transitions.
-        P::TransverseMercator => run_default_projection!(
-            d3_geo_rs::projection::mercator_transverse::MercatorTransverse::builder::<
-                GeoPathEndpoint,
-            >()
-        ),
+        P::TransverseMercator => project_transverse_mercator(geometry, projection),
         P::AlbersUsa | P::Identity => unreachable!("handled above"),
+    }
+}
+
+fn project_transverse_mercator(
+    geometry: &GeoGeometry,
+    projection: &GeoProjection,
+) -> Result<GeometryProjection, String> {
+    let mut builder = d3_geo_rs::projection::mercator_transverse::MercatorTransverse::builder::<
+        GeoPathEndpoint,
+    >();
+    if let Some(angle) = projection.clip_angle {
+        let base = builder.base.clip_angle_set(angle);
+        let mut clipped_builder =
+            d3_geo_rs::projection::builder_mercator_transverse::Builder { base };
+        configure_builder(&mut clipped_builder, projection)?;
+        configure_precision(&mut clipped_builder.base, projection)?;
+        project_with_builder(&clipped_builder, geometry)
+    } else {
+        configure_builder(&mut builder, projection)?;
+        configure_precision(&mut builder.base, projection)?;
+        project_with_builder(&builder, geometry)
     }
 }
 
@@ -519,16 +531,23 @@ where
     if !scale.is_finite() || scale <= 0.0 {
         return Err("projection default scale must be finite and positive".to_string());
     }
-    let geo = to_geo_geometry(geometry);
-    let mut projector = builder.build();
-    let mut stream = projector.stream(&GeoPathEndpoint::default());
-    geo.to_stream(&mut stream);
-    let endpoint = stream.endpoint();
-    if let Some(error) = endpoint.error.clone() {
-        return Err(error);
+    let geos = to_geo_geometries(geometry);
+    let mut geometries = Vec::new();
+    for geo in &geos {
+        // The projection stream keeps clipping state between streamed objects. Give each
+        // GeoJSON geometry its own stream so a preceding polygon cannot affect a later
+        // point or line in the same GeometryCollection.
+        let mut projector = builder.build();
+        let mut stream = projector.stream(&GeoPathEndpoint::default());
+        geo.to_stream(&mut stream);
+        let endpoint = stream.endpoint();
+        if let Some(error) = endpoint.error.take() {
+            return Err(error);
+        }
+        geometries.extend(std::mem::take(&mut endpoint.output));
     }
     Ok(GeometryProjection {
-        geometries: endpoint.output.clone(),
+        geometries,
         default_scale: scale,
         default_translate: [translate.x, translate.y],
     })
@@ -574,6 +593,15 @@ fn to_geo_geometry(geometry: &GeoGeometry) -> Geometry<f64> {
         GeoGeometry::GeometryCollection(geometries) => Geometry::GeometryCollection(
             GeometryCollection(geometries.iter().map(to_geo_geometry).collect()),
         ),
+    }
+}
+
+fn to_geo_geometries(geometry: &GeoGeometry) -> Vec<Geometry<f64>> {
+    match geometry {
+        GeoGeometry::GeometryCollection(geometries) => {
+            geometries.iter().flat_map(to_geo_geometries).collect()
+        }
+        _ => vec![to_geo_geometry(geometry)],
     }
 }
 
@@ -1024,7 +1052,16 @@ fn preflight_shape(
         Some(
             "Point" | "MultiPoint" | "LineString" | "MultiLineString" | "Polygon" | "MultiPolygon"
             | "GeometryCollection",
-        ) => preflight_geometry(value, limits, counts, path, 0),
+        ) => {
+            add_limit(
+                &mut counts.features,
+                1,
+                limits.max_geo_features,
+                "feature count",
+                path,
+            )?;
+            preflight_geometry(value, limits, counts, path, 0)
+        }
         Some(kind) => Err(at(path, &format!("unsupported GeoJSON type {kind:?}"))),
         None => Err(at(
             path,
@@ -1708,6 +1745,17 @@ mod tests {
         let error = super::parse_geojson(&feature_collection, None, &limits).unwrap_err();
         assert!(error.contains("feature count"), "unexpected error: {error}");
 
+        let two_record_geometries = json!([
+            {"shape":{"type":"Point", "coordinates":[0,0]}},
+            {"shape":{"type":"Point", "coordinates":[1,1]}}
+        ]);
+        let error =
+            super::parse_geojson(&two_record_geometries, Some("shape"), &limits).unwrap_err();
+        assert!(
+            error.contains("feature count"),
+            "record geometry features must use the same cap: {error}"
+        );
+
         let one_point = json!({
             "type":"Feature", "properties":{},
             "geometry":{"type":"Point", "coordinates":[0,0]}
@@ -1834,6 +1882,42 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn transverse_mercator_applies_clip_angle_and_precision() {
+        let shape = GeoShape {
+            features: vec![GeoFeature {
+                geometry: Some(GeoGeometry::Polygon(vec![vec![
+                    [-5.0, -5.0],
+                    [5.0, -5.0],
+                    [5.0, 5.0],
+                    [-5.0, 5.0],
+                    [-5.0, -5.0],
+                ]])),
+                fill: None,
+            }],
+            projection: GeoProjection {
+                projection_type: GeoProjectionType::TransverseMercator,
+                clip_angle: Some(60.0),
+                precision: Some(0.25),
+                ..GeoProjection::default()
+            },
+            style: GeoShapeStyle::default(),
+        };
+        let projected = super::project_features(
+            &shape,
+            crate::scene::ClipRect {
+                x: 0.0,
+                y: 0.0,
+                w: 320.0,
+                h: 200.0,
+            },
+        )
+        .expect("transverse Mercator clip and precision settings should be applied");
+        assert!(projected.iter().flat_map(|feature| &feature.geometries).any(
+            |geometry| matches!(geometry, super::ProjectedGeometry::Path { d, .. } if !d.is_empty())
+        ));
     }
 
     #[test]

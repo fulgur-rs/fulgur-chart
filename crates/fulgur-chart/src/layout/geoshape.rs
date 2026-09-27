@@ -66,7 +66,12 @@ pub fn build(spec: &ChartSpec, _measurer: &TextMeasurer) -> Scene {
                         }) {
                             continue;
                         }
-                        let fill = fill.unwrap_or(spec.theme.text_color);
+                        let fill = fill.unwrap_or(crate::ir::Color {
+                            r: 0,
+                            g: 0,
+                            b: 0,
+                            a: 0.0,
+                        });
                         items.push(Prim::Circle {
                             cx: x,
                             cy: y,
@@ -312,6 +317,67 @@ mod tests {
     }
 
     #[test]
+    fn projects_every_geojson_geometry_kind() {
+        let line = vec![[-2.0, -2.0], [2.0, 2.0]];
+        let polygon = vec![vec![[-3.0, -3.0], [3.0, -3.0], [3.0, 3.0], [-3.0, -3.0]]];
+        let shape = GeoShape {
+            features: vec![GeoFeature {
+                geometry: Some(GeoGeometry::GeometryCollection(vec![
+                    GeoGeometry::Point([0.0, 0.0]),
+                    GeoGeometry::MultiPoint(vec![[1.0, 0.0], [2.0, 0.0]]),
+                    GeoGeometry::LineString(line.clone()),
+                    GeoGeometry::MultiLineString(vec![line]),
+                    GeoGeometry::Polygon(polygon.clone()),
+                    GeoGeometry::MultiPolygon(vec![polygon]),
+                    GeoGeometry::GeometryCollection(vec![GeoGeometry::Point([-1.0, 0.0])]),
+                ])),
+                fill: None,
+            }],
+            projection: GeoProjection::default(),
+            style: GeoShapeStyle::default(),
+        };
+        let projected = project_features(
+            &shape,
+            ClipRect {
+                x: 0.0,
+                y: 0.0,
+                w: 320.0,
+                h: 200.0,
+            },
+        )
+        .unwrap();
+        let geometries = &projected[0].geometries;
+        let point_count = geometries
+            .iter()
+            .filter(|geometry| matches!(geometry, ProjectedGeometry::Point { .. }))
+            .count();
+        assert!(point_count >= 4, "expected all points, got {geometries:?}");
+        assert!(
+            geometries
+                .iter()
+                .filter(|geometry| matches!(
+                    geometry,
+                    ProjectedGeometry::Path {
+                        fillable: false,
+                        ..
+                    }
+                ))
+                .count()
+                >= 2
+        );
+        assert!(
+            geometries
+                .iter()
+                .filter(|geometry| matches!(
+                    geometry,
+                    ProjectedGeometry::Path { fillable: true, .. }
+                ))
+                .count()
+                >= 2
+        );
+    }
+
+    #[test]
     fn builds_no_axis_scene_with_title_paths_and_points() {
         let mut spec = crate::frontend::chartjs::parse(
             r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#,
@@ -380,5 +446,38 @@ mod tests {
                 .iter()
                 .any(|item| matches!(item, Prim::Line { .. }))
         );
+    }
+
+    #[test]
+    fn missing_point_fill_is_transparent_and_keeps_the_feature_stroke() {
+        let mut spec = crate::frontend::chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        let stroke = color(10, 20, 30);
+        spec.kind = ChartKind::GeoShape {
+            data: Box::new(GeoShape {
+                features: vec![GeoFeature {
+                    geometry: Some(GeoGeometry::Point([0.0, 0.0])),
+                    fill: None,
+                }],
+                projection: GeoProjection::default(),
+                style: GeoShapeStyle {
+                    fill: None,
+                    stroke: Some(stroke),
+                    stroke_width: 1.0,
+                },
+            }),
+        };
+        spec.series.clear();
+        spec.categories.clear();
+        let measurer = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
+        let scene = build(&spec, &measurer);
+        assert!(scene.items.iter().any(|item| matches!(
+            item,
+            Prim::Circle { fill, stroke: actual_stroke, .. }
+                if fill.a == 0.0 && *actual_stroke == stroke
+        )));
     }
 }

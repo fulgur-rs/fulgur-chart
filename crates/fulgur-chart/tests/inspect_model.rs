@@ -217,3 +217,21 @@ fn temporal_line_model_omits_explicitly_hidden_point_markers() {
         "model geometry must not report markers omitted by the renderer"
     );
 }
+
+#[test]
+fn geoshape_model_reports_type_and_feature_count() {
+    let json = r##"{
+        "mark":"geoshape",
+        "data":{"values":[
+            {"type":"Feature","properties":{"name":"one"},"geometry":{"type":"Point","coordinates":[0,0]}},
+            {"type":"Feature","properties":{"name":"two"},"geometry":{"type":"Point","coordinates":[1,1]}}
+        ]}
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let model = build_model(&spec, &m);
+
+    assert_eq!(model.meta.r#type, "geoshape");
+    assert_eq!(model.counts.datasets, 2);
+    assert_eq!(model.axes, None);
+}

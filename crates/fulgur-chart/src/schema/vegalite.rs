@@ -18,6 +18,7 @@ pub enum VegaLiteSpec {
     Square(VlSquareSpec),
     Arc(VlArcSpec),
     Rect(VlRectSpec),
+    GeoShape(Box<VlGeoShapeSpec>),
 }
 
 // ────────────────────────────────────────────────
@@ -29,6 +30,27 @@ pub enum VegaLiteSpec {
 #[serde(deny_unknown_fields)]
 pub struct VlData {
     pub values: Vec<serde_json::Value>,
+}
+
+/// GeoJSON data may be an inline record array, a Feature array, or one FeatureCollection.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlGeoData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<VlGeoDataFormat>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlGeoDataFormat {
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub format_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feature: Option<String>,
 }
 
 /// An encoding channel: a data field reference with an optional type hint.
@@ -224,6 +246,34 @@ pub struct MarkRectObject {
 pub enum MarkRect {
     String(MarkRectName),
     Object(MarkRectObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkGeoShapeName {
+    Geoshape,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkGeoShapeObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkGeoShapeName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<String>,
+    #[serde(rename = "strokeWidth", skip_serializing_if = "Option::is_none")]
+    pub stroke_width: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkGeoShape {
+    String(MarkGeoShapeName),
+    Object(MarkGeoShapeObject),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -795,4 +845,138 @@ pub struct VlRectColorCategoricalChannel {
 pub enum VlRectColorChannel {
     Quantitative(VlRectColorQuantitativeChannel),
     Categorical(VlRectColorCategoricalChannel),
+}
+
+// ────────────────────────────────────────────────
+// GeoJSON geoshape and projection
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlGeoShapeType {
+    Geojson,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlGeoShapeFieldChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlGeoShapeType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlGeoColorType {
+    Quantitative,
+    Nominal,
+    Ordinal,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlGeoColorFieldChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlGeoColorType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlGeoColorValueChannel {
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlGeoColorChannel {
+    Field(VlGeoColorFieldChannel),
+    Value(VlGeoColorValueChannel),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlGeoShapeEncoding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<VlGeoShapeFieldChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlGeoColorChannel>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum VlProjectionType {
+    Albers,
+    AlbersUsa,
+    AzimuthalEqualArea,
+    AzimuthalEquidistant,
+    ConicConformal,
+    ConicEqualArea,
+    ConicEquidistant,
+    EqualEarth,
+    Equirectangular,
+    Gnomonic,
+    Identity,
+    Mercator,
+    NaturalEarth1,
+    Orthographic,
+    Stereographic,
+    TransverseMercator,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlProjectionRotate {
+    Two([f64; 2]),
+    Three([f64; 3]),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlProjection {
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub projection_type: Option<VlProjectionType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub center: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotate: Option<VlProjectionRotate>,
+    #[serde(rename = "clipAngle", skip_serializing_if = "Option::is_none")]
+    pub clip_angle: Option<f64>,
+    #[serde(rename = "clipExtent", skip_serializing_if = "Option::is_none")]
+    pub clip_extent: Option<[[f64; 2]; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallels: Option<[f64; 2]>,
+    #[serde(rename = "pointRadius", skip_serializing_if = "Option::is_none")]
+    pub point_radius: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub precision: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub translate: Option<[f64; 2]>,
+    #[serde(rename = "reflectX", skip_serializing_if = "Option::is_none")]
+    pub reflect_x: Option<bool>,
+    #[serde(rename = "reflectY", skip_serializing_if = "Option::is_none")]
+    pub reflect_y: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlGeoShapeSpec {
+    pub mark: MarkGeoShape,
+    pub data: VlGeoData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<VlGeoShapeEncoding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection: Option<VlProjection>,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
 }

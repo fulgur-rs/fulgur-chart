@@ -3220,3 +3220,330 @@ fn strict_categorical_area_still_rejects_x_title() {
         "typed schema must also reject title on categorical area's x channel"
     );
 }
+
+#[test]
+fn geoshape_schema_accepts_geojson_encoding_and_all_projection_names() {
+    let projection_types = [
+        "albers",
+        "albersUsa",
+        "azimuthalEqualArea",
+        "azimuthalEquidistant",
+        "conicConformal",
+        "conicEqualArea",
+        "conicEquidistant",
+        "equalEarth",
+        "equirectangular",
+        "gnomonic",
+        "identity",
+        "mercator",
+        "naturalEarth1",
+        "orthographic",
+        "stereographic",
+        "transverseMercator",
+    ];
+    for projection in projection_types {
+        let json = format!(
+            r#"{{
+                "mark":"geoshape",
+                "data":{{"values":[]}},
+                "encoding":{{"shape":{{"field":"geometry","type":"geojson"}}}},
+                "projection":{{"type":"{projection}","center":[0,0],"rotate":[0,0,0],
+                    "clipAngle":90,"clipExtent":[[0,0],[320,200]],"parallels":[20,40],
+                    "pointRadius":4.5,"precision":0.5,"scale":100,"translate":[160,100],
+                    "reflectX":false,"reflectY":false}},
+                "width":320,"height":200,"title":"Map","background":"white"
+            }}"#
+        );
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_ok(),
+            "typed schema rejected projection {projection}"
+        );
+        let runtime = format!(
+            r#"{{"mark":"geoshape","data":{{"values":[]}},"encoding":{{}},"projection":{{"type":"{projection}"}}}}"#
+        );
+        assert!(
+            vegalite::parse(&runtime, true).is_ok(),
+            "runtime parser rejected projection {projection}"
+        );
+    }
+}
+
+#[test]
+fn geoshape_parses_record_and_feature_collection_inputs() {
+    let record = r##"{
+        "mark":"geoshape",
+        "data":{"values":[
+            {"geometry":{"type":"Polygon","coordinates":[[[0,0],[5,0],[5,5],[0,0]]]},"name":"first"},
+            {"geometry":{"type":"Point","coordinates":[10,10]},"name":"second"}
+        ]},
+        "encoding":{"shape":{"field":"geometry","type":"geojson"}}
+    }"##;
+    let spec = vegalite::parse(record, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert_eq!(data.features.len(), 2);
+    assert_eq!(
+        data.features[0].geometry.as_ref().unwrap().kind_name(),
+        "Polygon"
+    );
+    assert_eq!(
+        data.features[1].geometry.as_ref().unwrap().kind_name(),
+        "Point"
+    );
+
+    let feature_array = r##"{
+        "mark":"geoshape",
+        "data":{"values":[
+            {"type":"Feature","properties":{"name":"first"},"geometry":{"type":"LineString","coordinates":[[0,0],[1,1]]}},
+            {"type":"Feature","properties":{"name":"second"},"geometry":null}
+        ]},
+        "encoding":{"color":{"field":"name","type":"nominal"}}
+    }"##;
+    let spec = vegalite::parse(feature_array, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert_eq!(data.features.len(), 2);
+    assert_eq!(
+        data.features[0].geometry.as_ref().unwrap().kind_name(),
+        "LineString"
+    );
+    assert!(data.features[1].geometry.is_none());
+
+    let collection = r##"{
+        "mark":"geoshape",
+        "data":{"values":{"type":"FeatureCollection","features":[
+            {"type":"Feature","properties":{"name":"first"},"geometry":{"type":"Point","coordinates":[1,2]}},
+            {"type":"Feature","properties":{"name":"second"},"geometry":null}
+        ]}},
+        "encoding":{"color":{"field":"name","type":"nominal"}}
+    }"##;
+    let spec = vegalite::parse(collection, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert_eq!(data.features.len(), 2);
+    assert_eq!(
+        data.features[0].geometry.as_ref().unwrap().kind_name(),
+        "Point"
+    );
+    assert!(data.features[1].geometry.is_none());
+    assert_eq!(
+        data.features
+            .iter()
+            .map(|feature| feature.fill)
+            .collect::<Vec<_>>(),
+        [Some(VEGALITE_PALETTE[0]), Some(VEGALITE_PALETTE[1])]
+    );
+}
+
+#[test]
+fn geoshape_choropleth_uses_record_before_feature_properties() {
+    let json = r##"{
+        "mark":"geoshape",
+        "data":{"values":[
+            {"geometry":{"type":"Feature","properties":{"value":100},"geometry":{"type":"Polygon","coordinates":[[[-20,-5],[-10,-5],[-10,5],[-20,-5]]]}},"value":0},
+            {"geometry":{"type":"Feature","properties":{"value":10},"geometry":{"type":"Polygon","coordinates":[[[10,-5],[20,-5],[20,5],[10,-5]]]}}}
+        ]},
+        "encoding":{
+            "shape":{"field":"geometry","type":"geojson"},
+            "color":{"field":"value","type":"quantitative"}
+        }
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert_eq!(
+        data.features
+            .iter()
+            .map(|feature| feature.fill)
+            .collect::<Vec<_>>(),
+        [
+            Some(fulgur_chart::ir::Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 1.0
+            }),
+            Some(fulgur_chart::ir::Color {
+                r: 76,
+                g: 120,
+                b: 168,
+                a: 1.0
+            }),
+        ],
+        "record.value=0 must win over the first feature's properties.value=100"
+    );
+    assert!(data.style.fill.is_none());
+}
+
+#[test]
+fn geoshape_uses_vega_lite_default_mark_color() {
+    let json = r##"{
+        "mark":"geoshape",
+        "data":{"values":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[0,0]}}]}
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert_eq!(
+        data.style.fill,
+        Some(fulgur_chart::ir::Color {
+            r: 70,
+            g: 130,
+            b: 180,
+            a: 1.0
+        })
+    );
+}
+
+#[test]
+fn geoshape_constant_color_and_mark_style_precedence_are_preserved() {
+    let json = r##"{
+        "mark":{"type":"geoshape","fill":"red","color":"green","stroke":"black","strokeWidth":2},
+        "data":{"values":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[0,0]}}]},
+        "encoding":{"color":{"value":"blue"}},
+        "width":321,"height":201,"title":{"text":"Map"},"background":"white"
+    }"##;
+    serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(json).unwrap();
+    let spec = vegalite::parse(json, true).unwrap();
+    assert_eq!((spec.width, spec.height), (321.0, 201.0));
+    assert_eq!(spec.title.as_deref(), Some("Map"));
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert_eq!(
+        data.style.fill,
+        Some(fulgur_chart::ir::Color {
+            r: 0,
+            g: 0,
+            b: 255,
+            a: 1.0
+        })
+    );
+    assert_eq!(
+        data.style.stroke,
+        Some(fulgur_chart::ir::Color {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 1.0
+        })
+    );
+    assert_eq!(data.style.stroke_width, 2.0);
+}
+
+#[test]
+fn geoshape_missing_choropleth_values_remain_unfilled() {
+    let json = r##"{
+        "mark":{"type":"geoshape","fill":"red","stroke":"black"},
+        "data":{"values":[
+            {"shape":{"type":"Polygon","coordinates":[[[0,0],[5,0],[5,5],[0,0]]]},"value":2},
+            {"shape":{"type":"Polygon","coordinates":[[[10,0],[15,0],[15,5],[10,0]]]}}
+        ]},
+        "encoding":{"shape":{"field":"shape"},"color":{"field":"value","type":"quantitative"}}
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert!(data.features[0].fill.is_some());
+    assert!(data.features[1].fill.is_none());
+    assert!(data.style.fill.is_none());
+    assert!(data.style.stroke.is_some());
+}
+
+#[test]
+fn geoshape_projection_names_are_case_insensitive_and_identity_reflection_is_parsed() {
+    let json = r#"{
+        "mark":"geoshape",
+        "data":{"values":[]},
+        "encoding":{},
+        "projection":{"type":"NATURALEARTH1"}
+    }"#;
+    let spec = vegalite::parse(json, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert_eq!(
+        data.projection.projection_type,
+        fulgur_chart::ir::GeoProjectionType::NaturalEarth1
+    );
+
+    let json = r#"{
+        "mark":"geoshape",
+        "data":{"values":[]},
+        "encoding":{},
+        "projection":{"type":"identity","reflectX":true,"reflectY":true,"scale":2,"translate":[3,4]}
+    }"#;
+    let spec = vegalite::parse(json, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert!(data.projection.reflect_x);
+    assert!(data.projection.reflect_y);
+    assert_eq!(data.projection.scale, Some(2.0));
+    assert_eq!(data.projection.translate, Some([3.0, 4.0]));
+}
+
+#[test]
+fn geoshape_projection_parses_common_projection_properties() {
+    let json = r#"{
+        "mark":"geoshape",
+        "data":{"values":[]},
+        "encoding":{},
+        "projection":{
+            "type":"conicEqualArea","center":[2,3],"rotate":[4,5],
+            "clipAngle":80,"clipExtent":[[0,0],[100,100]],"parallels":[10,20],
+            "pointRadius":2,"precision":1,"scale":100,"translate":[50,50]
+        }
+    }"#;
+    let spec = vegalite::parse(json, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    let projection = data.projection;
+    assert_eq!(projection.center, Some([2.0, 3.0]));
+    assert_eq!(projection.rotate, Some([4.0, 5.0, 0.0]));
+    assert_eq!(projection.clip_angle, Some(80.0));
+    assert_eq!(projection.clip_extent, Some([[0.0, 0.0], [100.0, 100.0]]));
+    assert_eq!(projection.parallels, Some([10.0, 20.0]));
+    assert_eq!(projection.point_radius, 2.0);
+    assert_eq!(projection.precision, Some(1.0));
+    assert_eq!(projection.scale, Some(100.0));
+    assert_eq!(projection.translate, Some([50.0, 50.0]));
+}
+
+#[test]
+fn geoshape_rejects_url_topojson_and_unknown_projection() {
+    let cases = [
+        (
+            r#"{"mark":"geoshape","data":{"url":"states.json"},"encoding":{}}"#,
+            "data.url",
+        ),
+        (
+            r#"{"mark":"geoshape","data":{"values":[],"format":{"type":"topojson"}},"encoding":{}}"#,
+            "TopoJSON",
+        ),
+        (
+            r#"{"mark":"geoshape","data":{"values":[]},"encoding":{},"projection":{"type":"mollweide"}}"#,
+            "projection.type",
+        ),
+        (
+            r#"{"mark":"geoshape","data":{"values":[]},"encoding":{},"projection":{"clipExtent":[[0,0],null]}}"#,
+            "projection.clipExtent[1]",
+        ),
+    ];
+    for (json, expected_error) in cases {
+        for strict in [false, true] {
+            let error = vegalite::parse(json, strict).unwrap_err();
+            assert!(
+                error.contains(expected_error),
+                "strict={strict} expected {expected_error:?} in {error:?}"
+            );
+        }
+    }
+}
