@@ -1612,6 +1612,9 @@ pub struct SankeySpec {
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SankeyOptions {
+    /// Fallback parsing key mapping used by datasets that do not override it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parsing: Option<SankeyParsingSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugins: Option<SankeyPlugins>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1638,7 +1641,8 @@ pub struct SankeyData {
     pub labels: Option<Vec<String>>,
 }
 
-/// dataset.parsing による from/to/flow キー再マップ。
+/// Chart-level `options.parsing` または dataset-level `dataset.parsing` による
+/// from/to/flow キー再マップ。dataset の値は options の値より優先する。
 ///
 /// 指定したキーがある場合、入力 JSON の flow 要素はそのキーから値を読む。
 /// 例: `parsing: { flow: "value" }` を与えると `{ from, to, value }` の形式で受理する。
@@ -1660,7 +1664,7 @@ pub struct SankeyParsing {
 
 /// `parsing` は object または `false` を受理する。`false` は chartjs-chart-sankey の
 /// 「remap しない」慣習で、fulgur-chart の内部 flow フォーマット({from,to,flow})が既に
-/// 期待形なので parsing 未指定と等価に扱う。
+/// 期待形なので標準キーを使う。dataset-level の `false` は chart-level 設定も無効にする。
 ///
 /// variant 順に注意: `Keys` を先に置くことで空オブジェクト `{}` は `SankeyParsing`
 /// (all-None) として通り、`Disabled` にフォールバックしない。
@@ -1681,7 +1685,7 @@ impl TryFrom<bool> for SankeyParsingDisabled {
     type Error = &'static str;
     fn try_from(b: bool) -> Result<Self, Self::Error> {
         if b {
-            Err("dataset.parsing accepts an object or `false`; `true` is not supported")
+            Err("sankey parsing accepts an object or `false`; `true` is not supported")
         } else {
             Ok(SankeyParsingDisabled)
         }
@@ -1804,8 +1808,8 @@ pub enum SankeySizeOption {
 #[cfg(test)]
 mod tests {
     use super::{
-        BarDataset, BoxplotDataset, ChartJsSpec, CubicMode, LineDataset, RadarOptions, Stepped,
-        SteppedMode,
+        BarDataset, BoxplotDataset, ChartJsSpec, CubicMode, LineDataset, RadarOptions,
+        SankeyOptions, SankeyParsing, SankeyParsingSpec, Stepped, SteppedMode,
     };
 
     #[test]
@@ -2204,5 +2208,26 @@ mod tests {
             .expect("expected pie to reject options.scales");
         let msg = format!("{err}");
         assert!(msg.contains("scales"), "err: {msg}");
+    }
+
+    #[test]
+    fn sankey_options_accepts_parsing_mapping_and_false() {
+        let mapping: SankeyOptions =
+            serde_json::from_str(r#"{"parsing":{"from":"src","to":"dst","flow":"value"}}"#)
+                .unwrap();
+        assert!(matches!(
+            mapping.parsing,
+            Some(SankeyParsingSpec::Keys(SankeyParsing {
+                from: Some(_),
+                to: Some(_),
+                flow: Some(_),
+            }))
+        ));
+
+        let disabled: SankeyOptions = serde_json::from_str(r#"{"parsing":false}"#).unwrap();
+        assert!(matches!(
+            disabled.parsing,
+            Some(SankeyParsingSpec::Disabled(_))
+        ));
     }
 }

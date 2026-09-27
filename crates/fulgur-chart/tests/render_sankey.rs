@@ -326,6 +326,55 @@ fn sankey_parsing_all_three_keys() {
 }
 
 #[test]
+fn sankey_options_parsing_maps_all_three_keys() {
+    let json = r#"{"type":"sankey","options":{"parsing":{"from":"src","to":"dst","flow":"value"}},"data":{"datasets":[{
+        "data":[{"src":"A","dst":"B","value":3},{"src":"B","dst":"C","value":2}]
+    }]}}"#;
+    let svg = render(json);
+    assert!(svg.starts_with("<svg"));
+    assert!(!svg.contains("NaN"));
+}
+
+#[test]
+fn sankey_options_parsing_false_keeps_standard_keys() {
+    let baseline = r#"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"#;
+    let explicit_false = r#"{"type":"sankey","options":{"parsing":false},"data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1,"src":"IGNORED","dst":"IGNORED2","value":99}]
+    }]}}"#;
+    assert_eq!(render(baseline), render(explicit_false));
+}
+
+#[test]
+fn sankey_dataset_parsing_overrides_and_fills_from_options_parsing() {
+    // Dataset values override the same chart-level key and inherit the keys it omits.
+    let json = r#"{"type":"sankey","options":{"parsing":{"from":"chartFrom","to":"chartTo","flow":"chartFlow"}},"data":{"datasets":[{
+        "parsing":{"from":"datasetFrom","flow":"datasetFlow"},
+        "data":[{"datasetFrom":"A","chartFrom":"IGNORED","chartTo":"B","chartFlow":99,"datasetFlow":2}]
+    }]}}"#;
+    let svg = render(json);
+    assert!(svg.contains(">A<") && svg.contains(">B<"));
+    assert!(!svg.contains("IGNORED"));
+    assert!(!svg.contains("NaN"));
+}
+
+#[test]
+fn sankey_dataset_parsing_false_disables_options_parsing() {
+    let baseline = r#"{"type":"sankey","data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"#;
+    let with_options_mapping_and_dataset_false = r#"{"type":"sankey","options":{"parsing":{"from":"src","to":"dst","flow":"value"}},"data":{"datasets":[{
+        "parsing":false,
+        "data":[{"from":"A","to":"B","flow":1,"src":"IGNORED","dst":"IGNORED2","value":99}]
+    }]}}"#;
+    assert_eq!(
+        render(baseline),
+        render(with_options_mapping_and_dataset_false)
+    );
+}
+
+#[test]
 fn sankey_parsing_regression_no_parsing_matches_baseline() {
     // parsing なし: 既存 spec の描画が完全一致(regression 検証)。
     let baseline = r#"{"type":"sankey","data":{"datasets":[{
@@ -403,6 +452,29 @@ fn sankey_parsing_strict_accepts_mapped_keys() {
     assert!(
         chartjs::parse(json, true).is_ok(),
         "strict parser must accept parsing-mapped keys"
+    );
+}
+
+#[test]
+fn sankey_options_parsing_strict_accepts_mapped_keys() {
+    let json = r##"{"type":"sankey","options":{"parsing":{"from":"src","to":"dst","flow":"value"}},"data":{"datasets":[{
+        "data":[{"src":"A","dst":"B","value":1}]
+    }]}}"##;
+    assert!(
+        chartjs::parse(json, true).is_ok(),
+        "strict parser must accept chart-level parsing-mapped keys"
+    );
+}
+
+#[test]
+fn sankey_options_parsing_strict_rejects_unknown_key() {
+    let json = r##"{"type":"sankey","options":{"parsing":{"formm":"src"}},"data":{"datasets":[{
+        "data":[{"from":"A","to":"B","flow":1}]
+    }]}}"##;
+    let err = chartjs::parse(json, true).unwrap_err();
+    assert!(
+        err.contains("formm"),
+        "strict must report parsing typo: {err}"
     );
 }
 
