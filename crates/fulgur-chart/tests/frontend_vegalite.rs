@@ -3547,3 +3547,25 @@ fn geoshape_rejects_url_topojson_and_unknown_projection() {
         }
     }
 }
+
+#[test]
+fn geoshape_fixture_renders_svg_and_png() {
+    let spec = vegalite::parse(
+        include_str!("../../../examples/specs/vegalite_geoshape.json"),
+        true,
+    )
+    .unwrap();
+    let svg = fulgur_chart::render::render_chart(&spec);
+    assert!(svg.contains("<path"), "expected projected polygon paths");
+    assert!(svg.contains("d=\"M "), "expected finite SVG path data");
+    assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
+
+    let png = fulgur_chart::raster_direct::render_chart_to_png(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .expect("geoshape PNG should render");
+    let image = tiny_skia::Pixmap::decode_png(&png).expect("geoshape PNG should decode");
+    assert_eq!((image.width(), image.height()), (480, 280));
+}

@@ -24,7 +24,7 @@
 use wasm_bindgen_test::wasm_bindgen_test;
 
 use fulgur_chart::font::DEFAULT_FONT;
-use fulgur_chart::frontend::chartjs;
+use fulgur_chart::frontend::{chartjs, vegalite};
 use fulgur_chart::raster_direct::{render_chart_to_png_default, render_chart_to_webp};
 use fulgur_chart::render::render_chart;
 
@@ -55,6 +55,14 @@ fn sample_spec() -> fulgur_chart::ir::ChartSpec {
         }
     }"#;
     chartjs::parse(json, false).expect("spec parses")
+}
+
+fn sample_geoshape_spec() -> fulgur_chart::ir::ChartSpec {
+    vegalite::parse(
+        include_str!("../../../examples/specs/vegalite_geoshape.json"),
+        true,
+    )
+    .expect("geoshape fixture parses")
 }
 
 const PNG_SCALE: f32 = 2.0;
@@ -110,6 +118,25 @@ fn png_renders_validly_on_every_platform() {
         (PNG_WIDTH, PNG_HEIGHT),
         "PNG 寸法が期待値と不一致"
     );
+}
+
+/// Vega-Lite GeoJSON uses the shared native/WASM projection, path and raster pipelines.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn geoshape_svg_and_png_render_validly_and_deterministically() {
+    let spec = sample_geoshape_spec();
+    let svg = render_chart(&spec);
+    let svg_again = render_chart(&spec);
+    assert_eq!(svg, svg_again, "geoshape SVG should be deterministic");
+    assert!(svg.contains("<path") && svg.contains("d=\"M "));
+    assert!(!svg.contains("NaN") && !svg.contains("inf"));
+
+    let png = render_chart_to_png_default(&spec, 1.0).expect("geoshape PNG 生成成功");
+    let png_again = render_chart_to_png_default(&spec, 1.0).expect("geoshape PNG 生成成功(2回目)");
+    assert_eq!(png, png_again, "geoshape PNG should be deterministic");
+    assert_eq!(&png[..8], PNG_SIGNATURE);
+    let image = tiny_skia::Pixmap::decode_png(&png).expect("生成 PNG がデコード可能");
+    assert_eq!((image.width(), image.height()), (480, 280));
 }
 
 /// PNG: wasm32 と linux-x86_64 native で、linux-x86_64 の期待 byte と一致することを検証する。

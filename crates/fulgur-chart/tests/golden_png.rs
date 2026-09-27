@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 
-use fulgur_chart::frontend::chartjs;
+use fulgur_chart::frontend::{chartjs, vegalite};
 use fulgur_chart::raster_direct::render_chart_to_png;
 use tiny_skia::Pixmap;
 
@@ -30,6 +30,7 @@ const NAMES: &[&str] = &[
     "violin",
     "violin-horizontal",
     "bar_logarithmic",
+    "vegalite_geoshape",
 ];
 
 /// 1 チャンネルあたりの絶対差がこの値を超えたら「差分ピクセル」と数える。
@@ -96,8 +97,11 @@ fn render_to_png(name: &str) -> Vec<u8> {
     let path = spec_path(name);
     let json =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("spec 読み込み失敗 {path}: {e}"));
-    let spec =
-        chartjs::parse(&json, false).unwrap_or_else(|e| panic!("spec parse 失敗 {name}: {e}"));
+    let spec = if name == "vegalite_geoshape" {
+        vegalite::parse(&json, true).unwrap_or_else(|e| panic!("spec parse 失敗 {name}: {e}"))
+    } else {
+        chartjs::parse(&json, false).unwrap_or_else(|e| panic!("spec parse 失敗 {name}: {e}"))
+    };
     render_chart_to_png(&spec, 1.0, fulgur_chart::font::DEFAULT_FONT)
         .unwrap_or_else(|e| panic!("ラスタライズ失敗 {name}: {e}"))
 }
