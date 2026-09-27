@@ -122,6 +122,12 @@ pub struct InputLimits {
     pub max_categories: usize,
     /// series × categories の積の上限(bar/line チャートの SVG プリミティブ数を抑える)。
     pub max_categorical_primitives: usize,
+    /// geoshape の Feature 数の上限。
+    pub max_geo_features: usize,
+    /// geoshape の総座標頂点数の上限。
+    pub max_geo_vertices: usize,
+    /// geoshape の描画 primitive 数の上限。
+    pub max_geo_primitives: usize,
     /// ラベル・タイトル文字列の上限(バイト)。
     pub max_label_bytes: usize,
     /// width/height の上限(px)。
@@ -137,6 +143,9 @@ impl Default for InputLimits {
             max_series: DEFAULT_MAX_SERIES,
             max_categories: DEFAULT_MAX_CATEGORIES,
             max_categorical_primitives: DEFAULT_MAX_CATEGORICAL_PRIMITIVES,
+            max_geo_features: 100_000,
+            max_geo_vertices: 1_000_000,
+            max_geo_primitives: 1_000_000,
             max_label_bytes: DEFAULT_MAX_LABEL_BYTES,
             max_dimension_px: DEFAULT_MAX_DIMENSION_PX,
             min_dimension_px: DEFAULT_MIN_DIMENSION_PX,

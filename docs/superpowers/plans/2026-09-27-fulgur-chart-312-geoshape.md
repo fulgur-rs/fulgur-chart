@@ -6,7 +6,7 @@
 
 **Architecture:** GeoJSON と projection 設定を専用 IR payload に保持する。純 Rust の d3-geo port で projection/clip/resample し、Fulgur の `Prim::Path`/`Prim::Circle` に変換する。Vega-Lite parser が record/Feature/FeatureCollection を解決し、機能に固有の上限を path 生成前に検査する。
 
-**Tech Stack:** Rust 2024 / serde_json / `geo` 0.31 / `d3_geo_rs` 3.1.4 (`default-features = false`) / existing SVG and tiny-skia renderers。
+**Tech Stack:** Rust 2024 / serde_json / `geo` 0.28 / `geo-types` 0.7.19 / `d3_geo_rs` 3.0.0 (`default-features = false`) / existing SVG and tiny-skia renderers。
 
 **Spec:** [`docs/superpowers/specs/2026-09-27-fulgur-chart-312-geoshape.md`](../specs/2026-09-27-fulgur-chart-312-geoshape.md)
 
@@ -69,7 +69,7 @@ Expected: `GeoGeometry` / `parse_geojson` が未実装で FAIL。
 
 `ir.rs` に GeoShape payload と Geometry enum を追加する。`geoshape.rs` は source の種類、geometry nesting、position、Feature properties を検査し、feature / vertex / subgeometry 数を数えて limits を確認してから typed geometry vectors を作る。Position は2個以上の有限 ordinates を要求し、3個目以降は無視する。ring は4点以上を要求する。
 
-依存を追加する前に `/tmp/fulgur-geoshape-dep-probe` の小さな crate で `d3_geo_rs = { version = "=3.1.4", default-features = false }` と `geo = { version = "0.31", default-features = false }` の WASM build を試す。backend 自身が `getrandom 0.2` の `js` feature を有効にしており、probe は `wasm32-unknown-unknown` で成功済み。成功した依存構成を chart crate に追加する。
+依存を追加する前に `/tmp/fulgur-geoshape-dep-probe-3` の小さな crate で `d3_geo_rs = { version = "=3.0.0", default-features = false }`, `geo = { version = "~0.28", default-features = false }`, `geo-types = "=0.7.19"` の WASM build を試す。probe は `wasm32-unknown-unknown` で成功済み。`geo-types` 0.7.19 を固定し、0.7.20 が導入する thiserror 範囲と既存 workspace dependency の衝突を避ける。
 
 - [ ] **Step 4: GeoJSON parser test を通す**
 

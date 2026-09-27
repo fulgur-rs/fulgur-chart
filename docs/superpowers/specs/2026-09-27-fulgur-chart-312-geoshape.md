@@ -33,7 +33,7 @@ Support the common projection properties used by those types: `center`, `rotate`
 
 Use a shared Rust projection/GeoJSON path layer and adapt its output to Fulgur's restricted SVG path syntax. The adapter must consume projected geometry/path events and emit explicit, whitespace-separated numeric path tokens accepted by both SVG serialization and the raster path parser; it must not forward compact third-party path strings. Keep any backend dependency pure Rust and usable without browser APIs so the same implementation compiles for WASM.
 
-The candidate backend is `d3_geo_rs` 3.1.4 (MIT), with default features disabled to omit its optional `web-sys` rendering feature. Its documented projection set covers the Vega-Lite enum except `naturalEarth1`, which must be supplied by a local projector or an equivalent backend. The current v6 enum's `identity` behavior can use a direct planar transform with the standard scale/translation/reflection settings. The crate declares `getrandom` 0.2.16 with its `js` feature enabled. Before adopting it, verify `wasm32-unknown-unknown` compilation; do not add a redundant target-specific `getrandom` feature if the pinned backend already supplies it.
+Use `d3_geo_rs` 3.0.0 (MIT), with default features disabled to omit its optional `web-sys` rendering feature. Its projection modules cover the Vega-Lite v6 enum except `naturalEarth1`, which will use a local raw projector; `identity` will use the backend's planar builder and standard scale/translation/reflection settings. Pair it with `geo` 0.28 and pin `geo-types` to 0.7.19: `geo-types` 0.7.20 requires `thiserror` 2.0.19, which conflicts with the workspace's `saphyr-parser-bw` upper bound of 2.0.18. The exact dependency set has passed a `wasm32-unknown-unknown` probe with the project-pinned toolchain.
 
 ## Internal design
 
@@ -64,5 +64,5 @@ The candidate backend is `d3_geo_rs` 3.1.4 (MIT), with default features disabled
 - [Vega-Lite projection documentation](https://vega.github.io/vega-lite/docs/projection.html)
 - [Vega-Lite v6 JSON schema projection enum](https://vega.github.io/schema/vega-lite/v6.json) (`definitions.ProjectionType`)
 - [Vega projections](https://vega.github.io/vega/docs/projections/)
-- [`d3_geo_rs` 3.1.4 API and feature documentation](https://docs.rs/d3_geo_rs/latest/d3_geo_rs/)
+- [`d3_geo_rs` 3.0.0 API and feature documentation](https://docs.rs/d3_geo_rs/3.0.0/d3_geo_rs/)
 - [`getrandom` 0.2.16 feature documentation](https://docs.rs/crate/getrandom/0.2.16/features)
