@@ -313,9 +313,9 @@ impl SchemaResult {
 /// Unknown DSL -> ParseError. Never throws.
 #[wasm_bindgen]
 pub fn schema(dsl: String) -> SchemaResult {
-    let s = match dsl.as_str() {
-        "chartjs" => schemars::schema_for!(fulgur_chart::schema::ChartJsSpec),
-        "vegalite" => schemars::schema_for!(fulgur_chart::schema::VegaLiteSpec),
+    let json = match dsl.as_str() {
+        "chartjs" => include_str!("chartjs-schema.json"),
+        "vegalite" => include_str!("vegalite-schema.json"),
         other => {
             return SchemaResult {
                 ok: false,
@@ -327,19 +327,11 @@ pub fn schema(dsl: String) -> SchemaResult {
             };
         }
     };
-    match serde_json::to_string(&s) {
-        Ok(json) => SchemaResult {
-            ok: true,
-            value: Some(json),
-            code: None,
-            message: None,
-        },
-        Err(e) => SchemaResult {
-            ok: false,
-            value: None,
-            code: Some(RENDER_ERROR.to_string()),
-            message: Some(format!("schema serialization: {e}")),
-        },
+    SchemaResult {
+        ok: true,
+        value: Some(json.to_string()),
+        code: None,
+        message: None,
     }
 }
 
@@ -347,4 +339,24 @@ pub fn schema(dsl: String) -> SchemaResult {
 #[wasm_bindgen]
 pub fn version() -> String {
     fulgur_chart::version().to_string()
+}
+
+#[cfg(test)]
+mod schema_fixture_tests {
+    #[test]
+    fn embedded_schemas_match_rust_schema_types() {
+        let chartjs =
+            serde_json::to_string(&schemars::schema_for!(fulgur_chart::schema::ChartJsSpec))
+                .unwrap();
+        let vegalite =
+            serde_json::to_string(&schemars::schema_for!(fulgur_chart::schema::VegaLiteSpec))
+                .unwrap();
+
+        for (dsl, actual, expected) in [
+            ("chartjs", chartjs, include_str!("chartjs-schema.json")),
+            ("vegalite", vegalite, include_str!("vegalite-schema.json")),
+        ] {
+            assert!(actual == expected, "embedded {dsl} schema is stale");
+        }
+    }
 }

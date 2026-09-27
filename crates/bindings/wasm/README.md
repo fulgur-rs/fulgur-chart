@@ -42,6 +42,12 @@ const svg = build('{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}
 
 Errors: `FulgurParseError`, `FulgurStrictError` (`< FulgurParseError`), `FulgurRenderError`.
 
+The JSON Schemas returned by `schema()` are embedded to keep schema generation code out
+of the WASM binary. After changing the Rust schema types, regenerate the JSON files with
+this command from the repository root:
+`cargo run --manifest-path crates/bindings/wasm/Cargo.toml --example regenerate_schemas`.
+The WASM crate test checks that the embedded files match the Rust schema types.
+
 Behavior (DSL auto-detection, options, error classification, determinism, font asymmetry)
 follows `docs/binding-api-contract.md`.
 

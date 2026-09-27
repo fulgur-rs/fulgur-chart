@@ -414,6 +414,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --manifest-path Cargo.toml --target wasm32-unknown-unknown --all-targets --locked -- -D warnings
 
+      - name: Rust unit tests (WASM binding)
+        run: cargo test --manifest-path Cargo.toml --locked
+
       - name: Install npm deps
         run: npm install
 
