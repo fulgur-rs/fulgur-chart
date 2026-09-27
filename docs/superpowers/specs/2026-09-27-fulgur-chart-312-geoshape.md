@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-27
 
-**Status:** Conversational design approved; awaiting written-spec review
+**Status:** Approved for implementation
 
 **Issue:** `fulgur-chart-312`
 
@@ -33,7 +33,7 @@ Support the common projection properties used by those types: `center`, `rotate`
 
 Use a shared Rust projection/GeoJSON path layer and adapt its output to Fulgur's restricted SVG path syntax. The adapter must consume projected geometry/path events and emit explicit, whitespace-separated numeric path tokens accepted by both SVG serialization and the raster path parser; it must not forward compact third-party path strings. Keep any backend dependency pure Rust and usable without browser APIs so the same implementation compiles for WASM.
 
-The candidate backend is `d3_geo_rs` 3.1.4 (MIT), with default features disabled to omit its optional `web-sys` rendering feature. Its documented projection set covers most of the Vega-Lite enum; `naturalEarth1` is absent and must be supplied by a local projector or an equivalent backend. The current v6 enum's `identity` behavior can use a direct planar transform with the standard scale/translation/reflection settings. The crate also declares `getrandom` 0.2.16 as a normal dependency. Before adopting it, verify `wasm32-unknown-unknown` compilation; enable the `getrandom` `js` feature only for that target if required. The implementation plan must establish this before adding the dependency.
+The candidate backend is `d3_geo_rs` 3.1.4 (MIT), with default features disabled to omit its optional `web-sys` rendering feature. Its documented projection set covers the Vega-Lite enum except `naturalEarth1`, which must be supplied by a local projector or an equivalent backend. The current v6 enum's `identity` behavior can use a direct planar transform with the standard scale/translation/reflection settings. The crate declares `getrandom` 0.2.16 with its `js` feature enabled. Before adopting it, verify `wasm32-unknown-unknown` compilation; do not add a redundant target-specific `getrandom` feature if the pinned backend already supplies it.
 
 ## Internal design
 
