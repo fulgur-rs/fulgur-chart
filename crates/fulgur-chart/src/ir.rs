@@ -774,6 +774,10 @@ pub enum ChartKind {
         /// row: y_labels の index、col: x_labels の index。
         cells: Vec<Vec<Option<Color>>>,
     },
+    /// Vega-Lite `mark: "geoshape"` with inline GeoJSON features.
+    GeoShape {
+        data: Box<GeoShape>,
+    },
     /// QuickChart 互換の progress バー。軸なし水平バー。
     /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。
     Progress,

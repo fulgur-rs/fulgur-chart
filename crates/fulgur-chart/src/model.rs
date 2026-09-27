@@ -311,6 +311,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",
         ChartKind::VegaRect { .. } => "vegaRect",
+        ChartKind::GeoShape { .. } => "geoshape",
         ChartKind::Progress => "progress",
         ChartKind::BoxPlot => "boxplot",
         ChartKind::Violin { horizontal: true } => "horizontalViolin",
@@ -382,6 +383,12 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
         counts.legend_items = 0; // rect には legend なし
         counts.x_ticks = x_labels.len();
         counts.y_ticks = y_labels.len();
+    }
+    if let ChartKind::GeoShape { data } = &spec.kind {
+        counts.datasets = data.features.len();
+        counts.legend_items = 0;
+        counts.x_ticks = 0;
+        counts.y_ticks = 0;
     }
     ChartModel {
         meta: Meta {
@@ -889,6 +896,39 @@ mod tests {
         );
         assert_eq!(model.counts.datasets, 1);
         assert_eq!(model.counts.x_ticks, 3);
+    }
+
+    #[test]
+    fn geoshape_model_reports_type_and_feature_count_without_axes() {
+        let mut spec = chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.series.clear();
+        spec.categories.clear();
+        spec.kind = ChartKind::GeoShape {
+            data: Box::new(crate::ir::GeoShape {
+                features: vec![
+                    crate::ir::GeoFeature {
+                        geometry: None,
+                        fill: None,
+                    },
+                    crate::ir::GeoFeature {
+                        geometry: None,
+                        fill: None,
+                    },
+                ],
+                projection: crate::ir::GeoProjection::default(),
+                style: crate::ir::GeoShapeStyle::default(),
+            }),
+        };
+        let model = build_model_core(&spec);
+        assert_eq!(model.meta.r#type, "geoshape");
+        assert_eq!(model.counts.datasets, 2);
+        assert_eq!(model.counts.legend_items, 0);
+        assert_eq!(model.counts.x_ticks, 0);
+        assert_eq!(model.axes, None);
     }
 
     #[test]

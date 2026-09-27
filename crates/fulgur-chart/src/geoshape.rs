@@ -1,5 +1,17 @@
 use crate::guard::InputLimits;
-use crate::ir::GeoGeometry;
+use crate::ir::{GeoGeometry, GeoProjection, GeoProjectionType, GeoShape};
+use crate::num::fmt_num;
+use crate::scene::ClipRect;
+use d3_geo_rs::Transform;
+use d3_geo_rs::projection::{
+    Build, BuilderTrait, CenterSet, ClipAngleAdjust, ClipAngleSet, PrecisionAdjust, Projector,
+    RawBase, RotateSet, ScaleGet, ScaleSet, TranslateGet,
+};
+use d3_geo_rs::stream::{Stream, Streamable};
+use geo_types::{
+    Coord, Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon,
+    Point, Polygon,
+};
 use serde_json::{Map, Value};
 
 const MAX_GEOMETRY_COLLECTION_DEPTH: usize = 64;
@@ -17,6 +29,926 @@ struct Counts {
     features: usize,
     vertices: usize,
     primitives: usize,
+}
+
+/// One projected feature. Its subpaths retain polygon fill eligibility for mixed collections.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProjectedFeature {
+    pub geometries: Vec<ProjectedGeometry>,
+    pub fill: Option<crate::ir::Color>,
+    pub clip: Option<ClipRect>,
+}
+
+/// A path or point ready for the common Scene layout.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProjectedGeometry {
+    Path { d: String, fillable: bool },
+    Point { x: f64, y: f64 },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum RawProjectedGeometry {
+    Path {
+        subpaths: Vec<Vec<[f64; 2]>>,
+        fillable: bool,
+    },
+    Point([f64; 2]),
+}
+
+/// Endpoint for d3-geo's clipping/resampling pipeline.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct GeoPathEndpoint {
+    output: Vec<RawProjectedGeometry>,
+    current_line: Vec<[f64; 2]>,
+    polygon_rings: Vec<Vec<[f64; 2]>>,
+    in_polygon: bool,
+    in_line: bool,
+    error: Option<String>,
+}
+
+impl Stream for GeoPathEndpoint {
+    type EP = Self;
+    type T = f64;
+
+    fn endpoint(&mut self) -> &mut Self::EP {
+        self
+    }
+
+    fn line_start(&mut self) {
+        self.current_line.clear();
+        self.in_line = true;
+    }
+
+    fn point(&mut self, point: &Coord<f64>, _marker: Option<u8>) {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            self.error = Some("projection produced a non-finite coordinate".to_string());
+            return;
+        }
+        let point = [point.x, point.y];
+        if self.in_line {
+            self.current_line.push(point);
+        } else {
+            self.output.push(RawProjectedGeometry::Point(point));
+        }
+    }
+
+    fn line_end(&mut self) {
+        self.in_line = false;
+        let line = std::mem::take(&mut self.current_line);
+        if self.in_polygon {
+            if !line.is_empty() {
+                self.polygon_rings.push(line);
+            }
+        } else if line.len() >= 2 {
+            self.output.push(RawProjectedGeometry::Path {
+                subpaths: vec![line],
+                fillable: false,
+            });
+        }
+    }
+
+    fn polygon_start(&mut self) {
+        self.in_polygon = true;
+        self.polygon_rings.clear();
+    }
+
+    fn polygon_end(&mut self) {
+        self.in_polygon = false;
+        if self.polygon_rings.is_empty() {
+            return;
+        }
+        for (index, ring) in self.polygon_rings.iter_mut().enumerate() {
+            normalize_ring_winding(ring, index == 0);
+        }
+        self.output.push(RawProjectedGeometry::Path {
+            subpaths: std::mem::take(&mut self.polygon_rings),
+            fillable: true,
+        });
+    }
+}
+
+fn normalize_ring_winding(ring: &mut [[f64; 2]], positive: bool) {
+    if ring.len() < 3 {
+        return;
+    }
+    let area = ring
+        .iter()
+        .zip(ring.iter().cycle().skip(1))
+        .take(ring.len())
+        .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+        .sum::<f64>();
+    if (area > 0.0) != positive {
+        ring.reverse();
+    }
+}
+
+/// Project all features using one fit computed from the complete input collection.
+pub fn project_features(
+    shape: &GeoShape,
+    viewport: ClipRect,
+) -> Result<Vec<ProjectedFeature>, String> {
+    if !viewport.x.is_finite()
+        || !viewport.y.is_finite()
+        || !viewport.w.is_finite()
+        || !viewport.h.is_finite()
+        || viewport.w < 0.0
+        || viewport.h < 0.0
+    {
+        return Err("geoshape viewport must have finite non-negative dimensions".to_string());
+    }
+
+    let mut projected = Vec::with_capacity(shape.features.len());
+    let mut default_scale = None;
+    let mut default_translate = None;
+    for feature in &shape.features {
+        let mut geometries = Vec::new();
+        if let Some(geometry) = &feature.geometry {
+            let output = project_geometry(&shape.projection, geometry)?;
+            if default_scale.is_none() {
+                default_scale = Some(output.default_scale);
+                default_translate = Some(output.default_translate);
+            }
+            geometries = output.geometries;
+        }
+        projected.push(ProjectedFeature {
+            geometries: geometries
+                .into_iter()
+                .map(ProjectedGeometry::from_raw)
+                .collect(),
+            fill: feature.fill,
+            clip: None,
+        });
+    }
+
+    let Some(default_scale) = default_scale else {
+        return Ok(projected);
+    };
+    let default_translate = default_translate.unwrap_or([0.0, 0.0]);
+    let mut bounds = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    for feature in &projected {
+        for geometry in &feature.geometries {
+            match geometry {
+                ProjectedGeometry::Path { d, .. } => {
+                    for (x, y) in path_coordinates(d)? {
+                        extend_bounds(&mut bounds, x, y);
+                    }
+                }
+                ProjectedGeometry::Point { x, y } => extend_bounds(&mut bounds, *x, *y),
+            }
+        }
+    }
+    if !bounds[0].is_finite() {
+        return Ok(projected);
+    }
+
+    let auto_scale = shape.projection.scale.is_none();
+    let has_points = projected.iter().any(|feature| {
+        feature
+            .geometries
+            .iter()
+            .any(|geometry| matches!(geometry, ProjectedGeometry::Point { .. }))
+    });
+    let fit_margin =
+        8.0 + if has_points {
+            shape.projection.point_radius
+        } else {
+            0.0
+        } + shape.style.stroke_width.max(0.0) / 2.0;
+    let factor = if auto_scale {
+        let available_width = (viewport.w - 2.0 * fit_margin).max(0.0);
+        let available_height = (viewport.h - 2.0 * fit_margin).max(0.0);
+        let width = bounds[2] - bounds[0];
+        let height = bounds[3] - bounds[1];
+        let x_factor = if width > 0.0 {
+            available_width / width
+        } else {
+            f64::INFINITY
+        };
+        let y_factor = if height > 0.0 {
+            available_height / height
+        } else {
+            f64::INFINITY
+        };
+        x_factor.min(y_factor).min(1.0e9)
+    } else {
+        shape.projection.scale.unwrap_or(default_scale) / default_scale
+    };
+    if !factor.is_finite() || factor < 0.0 {
+        return Err("projection scale must be finite and non-negative".to_string());
+    }
+    let fitted_translate = if auto_scale && shape.projection.translate.is_none() {
+        [
+            viewport.x + viewport.w / 2.0
+                - ((bounds[0] + bounds[2]) / 2.0 - default_translate[0]) * factor,
+            viewport.y + viewport.h / 2.0
+                - ((bounds[1] + bounds[3]) / 2.0 - default_translate[1]) * factor,
+        ]
+    } else {
+        shape
+            .projection
+            .translate
+            .unwrap_or([viewport.x + viewport.w / 2.0, viewport.y + viewport.h / 2.0])
+    };
+    let clip = projection_clip(shape.projection.clip_extent, viewport);
+    for feature in &mut projected {
+        for geometry in &mut feature.geometries {
+            match geometry {
+                ProjectedGeometry::Path { d, .. } => {
+                    *d = transform_path(d, default_translate, factor, fitted_translate)?;
+                }
+                ProjectedGeometry::Point { x, y } => {
+                    *x = (*x - default_translate[0]) * factor + fitted_translate[0];
+                    *y = (*y - default_translate[1]) * factor + fitted_translate[1];
+                    if !x.is_finite() || !y.is_finite() {
+                        return Err("projection produced a non-finite coordinate".to_string());
+                    }
+                }
+            }
+        }
+        feature.clip = clip;
+    }
+    Ok(projected)
+}
+
+impl ProjectedGeometry {
+    fn from_raw(raw: RawProjectedGeometry) -> Self {
+        match raw {
+            RawProjectedGeometry::Point([x, y]) => Self::Point { x, y },
+            RawProjectedGeometry::Path { subpaths, fillable } => Self::Path {
+                d: write_path(&subpaths, fillable),
+                fillable,
+            },
+        }
+    }
+}
+
+struct GeometryProjection {
+    geometries: Vec<RawProjectedGeometry>,
+    default_scale: f64,
+    default_translate: [f64; 2],
+}
+
+fn project_geometry(
+    projection: &GeoProjection,
+    geometry: &GeoGeometry,
+) -> Result<GeometryProjection, String> {
+    if projection.projection_type == GeoProjectionType::Identity {
+        return Ok(GeometryProjection {
+            geometries: project_identity(geometry, projection)?,
+            default_scale: 1.0,
+            default_translate: [0.0, 0.0],
+        });
+    }
+    if projection.projection_type == GeoProjectionType::AlbersUsa {
+        return project_albers_usa(geometry);
+    }
+
+    macro_rules! run_projection {
+        ($builder:expr) => {{
+            let mut builder = $builder;
+            configure_builder(&mut builder, projection)?;
+            configure_precision(&mut builder, projection)?;
+            if let Some(angle) = projection.clip_angle {
+                let clipped = ClipAngleSet::clip_angle_set(&builder, angle);
+                project_with_builder(&clipped, geometry)
+            } else {
+                project_with_builder(&builder, geometry)
+            }
+        }};
+    }
+    macro_rules! run_circle_projection {
+        ($builder:expr) => {{
+            let mut builder = $builder;
+            configure_builder(&mut builder, projection)?;
+            configure_precision(&mut builder, projection)?;
+            if let Some(angle) = projection.clip_angle {
+                ClipAngleAdjust::clip_angle(&mut builder, angle);
+            }
+            project_with_builder(&builder, geometry)
+        }};
+    }
+    macro_rules! run_default_projection {
+        ($builder:expr) => {{
+            let mut builder = $builder;
+            configure_builder(&mut builder, projection)?;
+            project_with_builder(&builder, geometry)
+        }};
+    }
+    use GeoProjectionType as P;
+    match projection.projection_type {
+        P::Albers => project_conic_raw::<d3_geo_rs::projection::equal_area::EqualArea<f64>>(
+            geometry,
+            projection,
+            [29.5, 45.5],
+            1070.0,
+            [-0.6, 38.7],
+            [96.0, 0.0],
+        ),
+        P::AzimuthalEqualArea => run_circle_projection!(
+            d3_geo_rs::projection::azimuthal_equal_area::AzimuthalEqualArea::<f64>::builder::<
+                GeoPathEndpoint,
+            >()
+        ),
+        P::AzimuthalEquidistant => run_circle_projection!(
+            d3_geo_rs::projection::azimuthal_equidistant::AzimuthalEquiDistant::<f64>::builder::<
+                GeoPathEndpoint,
+            >()
+        ),
+        P::ConicConformal => project_conic_raw::<d3_geo_rs::projection::conformal::Conformal>(
+            geometry,
+            projection,
+            [30.0, 30.0],
+            109.5,
+            [0.0, 0.0],
+            [0.0, 0.0],
+        ),
+        P::ConicEqualArea => {
+            project_conic_raw::<d3_geo_rs::projection::equal_area::EqualArea<f64>>(
+                geometry,
+                projection,
+                [0.0, 60.0],
+                155.424,
+                [0.0, 33.6442],
+                [0.0, 0.0],
+            )
+        }
+        P::ConicEquidistant => {
+            project_conic_raw::<d3_geo_rs::projection::equidistant::Equidistant>(
+                geometry,
+                projection,
+                [0.0, 60.0],
+                131.154,
+                [0.0, 13.9389],
+                [0.0, 0.0],
+            )
+        }
+        P::EqualEarth => run_projection!(
+            d3_geo_rs::projection::equal_earth::EqualEarth::<f64>::builder::<GeoPathEndpoint>()
+        ),
+        P::Equirectangular => run_projection!(
+            d3_geo_rs::projection::equirectangular::Equirectangular::<f64>::builder::<
+                GeoPathEndpoint,
+            >()
+        ),
+        P::Gnomonic => {
+            run_circle_projection!(d3_geo_rs::projection::gnomic::Gnomic::<f64>::builder::<
+                GeoPathEndpoint,
+            >())
+        }
+        P::Mercator => run_projection!(d3_geo_rs::projection::mercator::Mercator::builder::<
+            GeoPathEndpoint,
+        >()),
+        P::NaturalEarth1 => run_projection!(NaturalEarth1::builder::<GeoPathEndpoint>()),
+        P::Orthographic => run_circle_projection!(
+            d3_geo_rs::projection::orthographic::Orthographic::<f64>::builder::<GeoPathEndpoint>()
+        ),
+        P::Stereographic => run_circle_projection!(
+            d3_geo_rs::projection::stereographic::Stereographic::<f64>::builder::<GeoPathEndpoint>(
+            )
+        ),
+        // d3_geo_rs 3.0's transverse-Mercator builder does not expose clipAngle transitions.
+        P::TransverseMercator => run_default_projection!(
+            d3_geo_rs::projection::mercator_transverse::MercatorTransverse::builder::<
+                GeoPathEndpoint,
+            >()
+        ),
+        P::AlbersUsa | P::Identity => unreachable!("handled above"),
+    }
+}
+
+fn configure_builder<B>(builder: &mut B, projection: &GeoProjection) -> Result<(), String>
+where
+    B: CenterSet<T = f64> + RotateSet<T = f64> + ScaleGet<T = f64> + TranslateGet<T = f64>,
+{
+    if let Some(center) = projection.center {
+        builder.center_set(&Coord {
+            x: center[0],
+            y: center[1],
+        });
+    }
+    if let Some(rotate) = projection.rotate {
+        builder.rotate3_set(&rotate);
+    }
+    Ok(())
+}
+
+fn project_conic_raw<PR>(
+    geometry: &GeoGeometry,
+    projection: &GeoProjection,
+    default_parallels: [f64; 2],
+    default_scale: f64,
+    default_center: [f64; 2],
+    default_rotate: [f64; 2],
+) -> Result<GeometryProjection, String>
+where
+    PR: d3_geo_rs::projection::builder_conic::PRConic<T = f64> + Default + Clone,
+    d3_geo_rs::projection::builder::types::BuilderAntimeridianResampleNoClip<
+        GeoPathEndpoint,
+        PR,
+        f64,
+    >: CenterSet<T = f64>
+        + RotateSet<T = f64>
+        + ScaleSet<T = f64>
+        + ScaleGet<T = f64>
+        + TranslateGet<T = f64>
+        + PrecisionAdjust<T = f64>
+        + Build,
+    <d3_geo_rs::projection::builder::types::BuilderAntimeridianResampleNoClip<
+        GeoPathEndpoint,
+        PR,
+        f64,
+    > as Build>::Projector: Projector<EP = GeoPathEndpoint>,
+    <<d3_geo_rs::projection::builder::types::BuilderAntimeridianResampleNoClip<
+        GeoPathEndpoint,
+        PR,
+        f64,
+    > as Build>::Projector as Projector>::Transformer: Stream<EP = GeoPathEndpoint, T = f64>,
+{
+    let parallels = projection.parallels.unwrap_or(default_parallels);
+    let raw = PR::default().generate(parallels[0].to_radians(), parallels[1].to_radians());
+    let mut builder = <d3_geo_rs::projection::builder::types::BuilderAntimeridianResampleNoClip<
+        GeoPathEndpoint,
+        PR,
+        f64,
+    > as BuilderTrait>::new(raw);
+    builder.scale_set(default_scale);
+    builder.center_set(&Coord {
+        x: default_center[0],
+        y: default_center[1],
+    });
+    builder.rotate2_set(&default_rotate);
+    configure_builder(&mut builder, projection)?;
+    configure_precision(&mut builder, projection)?;
+    if let Some(angle) = projection.clip_angle {
+        let clipped = ClipAngleSet::clip_angle_set(&builder, angle);
+        project_with_builder(&clipped, geometry)
+    } else {
+        project_with_builder(&builder, geometry)
+    }
+}
+
+fn configure_precision<B>(builder: &mut B, projection: &GeoProjection) -> Result<(), String>
+where
+    B: PrecisionAdjust<T = f64>,
+{
+    if let Some(precision) = projection.precision {
+        if !precision.is_finite() || precision < 0.0 {
+            return Err("projection precision must be finite and non-negative".to_string());
+        }
+        builder.precision_set(&precision);
+    }
+    Ok(())
+}
+
+fn project_with_builder<B>(
+    builder: &B,
+    geometry: &GeoGeometry,
+) -> Result<GeometryProjection, String>
+where
+    B: Build + ScaleGet<T = f64> + TranslateGet<T = f64>,
+    B::Projector: Projector<EP = GeoPathEndpoint>,
+    <B::Projector as Projector>::Transformer: Stream<EP = GeoPathEndpoint, T = f64>,
+{
+    let scale = builder.scale();
+    let translate = builder.translate();
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err("projection default scale must be finite and positive".to_string());
+    }
+    let geo = to_geo_geometry(geometry);
+    let mut projector = builder.build();
+    let mut stream = projector.stream(&GeoPathEndpoint::default());
+    geo.to_stream(&mut stream);
+    let endpoint = stream.endpoint();
+    if let Some(error) = endpoint.error.clone() {
+        return Err(error);
+    }
+    Ok(GeometryProjection {
+        geometries: endpoint.output.clone(),
+        default_scale: scale,
+        default_translate: [translate.x, translate.y],
+    })
+}
+
+fn to_geo_geometry(geometry: &GeoGeometry) -> Geometry<f64> {
+    let line = |coords: &[[f64; 2]]| {
+        LineString(
+            coords
+                .iter()
+                .map(|xy| Coord { x: xy[0], y: xy[1] })
+                .collect(),
+        )
+    };
+    match geometry {
+        GeoGeometry::Point(xy) => Geometry::Point(Point::new(xy[0], xy[1])),
+        GeoGeometry::MultiPoint(points) => Geometry::MultiPoint(MultiPoint(
+            points.iter().map(|xy| Point::new(xy[0], xy[1])).collect(),
+        )),
+        GeoGeometry::LineString(points) => Geometry::LineString(line(points)),
+        GeoGeometry::MultiLineString(lines) => Geometry::MultiLineString(MultiLineString(
+            lines.iter().map(|coords| line(coords)).collect(),
+        )),
+        GeoGeometry::Polygon(rings) if rings.is_empty() => {
+            Geometry::GeometryCollection(GeometryCollection(Vec::new()))
+        }
+        GeoGeometry::Polygon(rings) => Geometry::Polygon(Polygon::new(
+            line(&rings[0]),
+            rings[1..].iter().map(|ring| line(ring)).collect(),
+        )),
+        GeoGeometry::MultiPolygon(polygons) => Geometry::MultiPolygon(MultiPolygon(
+            polygons
+                .iter()
+                .filter(|rings| !rings.is_empty())
+                .map(|rings| {
+                    Polygon::new(
+                        line(&rings[0]),
+                        rings[1..].iter().map(|ring| line(ring)).collect(),
+                    )
+                })
+                .collect(),
+        )),
+        GeoGeometry::GeometryCollection(geometries) => Geometry::GeometryCollection(
+            GeometryCollection(geometries.iter().map(to_geo_geometry).collect()),
+        ),
+    }
+}
+
+fn project_identity(
+    geometry: &GeoGeometry,
+    projection: &GeoProjection,
+) -> Result<Vec<RawProjectedGeometry>, String> {
+    fn visit(
+        geometry: &GeoGeometry,
+        projection: &GeoProjection,
+        output: &mut Vec<RawProjectedGeometry>,
+    ) {
+        let point = |xy: [f64; 2]| {
+            [
+                if projection.reflect_x { -xy[0] } else { xy[0] },
+                if projection.reflect_y { -xy[1] } else { xy[1] },
+            ]
+        };
+        let path = |paths: Vec<Vec<[f64; 2]>>, fillable| {
+            let mut subpaths = paths
+                .into_iter()
+                .map(|p| p.into_iter().map(point).collect())
+                .collect::<Vec<Vec<[f64; 2]>>>();
+            if fillable {
+                for (index, ring) in subpaths.iter_mut().enumerate() {
+                    normalize_ring_winding(ring, index == 0);
+                }
+            }
+            RawProjectedGeometry::Path { subpaths, fillable }
+        };
+        match geometry {
+            GeoGeometry::Point(xy) => output.push(RawProjectedGeometry::Point(point(*xy))),
+            GeoGeometry::MultiPoint(points) => output.extend(
+                points
+                    .iter()
+                    .map(|xy| RawProjectedGeometry::Point(point(*xy))),
+            ),
+            GeoGeometry::LineString(points) if points.len() >= 2 => {
+                output.push(path(vec![points.clone()], false));
+            }
+            GeoGeometry::MultiLineString(lines) => {
+                for line in lines.iter().filter(|line| line.len() >= 2) {
+                    output.push(path(vec![line.clone()], false));
+                }
+            }
+            GeoGeometry::Polygon(rings) if !rings.is_empty() => {
+                output.push(path(rings.clone(), true));
+            }
+            GeoGeometry::MultiPolygon(polygons) => {
+                for polygon in polygons.iter().filter(|polygon| !polygon.is_empty()) {
+                    output.push(path(polygon.clone(), true));
+                }
+            }
+            GeoGeometry::GeometryCollection(geometries) => {
+                for geometry in geometries {
+                    visit(geometry, projection, output);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut output = Vec::new();
+    visit(geometry, projection, &mut output);
+    if output.iter().any(|geometry| match geometry {
+        RawProjectedGeometry::Point([x, y]) => !x.is_finite() || !y.is_finite(),
+        RawProjectedGeometry::Path { subpaths, .. } => subpaths
+            .iter()
+            .flatten()
+            .any(|point| !point[0].is_finite() || !point[1].is_finite()),
+    }) {
+        return Err("identity projection produced a non-finite coordinate".to_string());
+    }
+    Ok(output)
+}
+
+fn project_albers_usa(geometry: &GeoGeometry) -> Result<GeometryProjection, String> {
+    fn project_xy(
+        projector: &mut d3_geo_rs::projection::albers_usa::AlbersUsa<
+            d3_geo_rs::stream::DrainStub<f64>,
+            f64,
+        >,
+        xy: [f64; 2],
+    ) -> Option<[f64; 2]> {
+        let point = projector.transform(&Coord { x: xy[0], y: xy[1] });
+        (point.x.is_finite() && point.y.is_finite()).then_some([point.x, point.y])
+    }
+
+    fn visit_line(
+        points: &[[f64; 2]],
+        projector: &mut d3_geo_rs::projection::albers_usa::AlbersUsa<
+            d3_geo_rs::stream::DrainStub<f64>,
+            f64,
+        >,
+        output: &mut Vec<RawProjectedGeometry>,
+    ) {
+        let mut line = Vec::new();
+        for xy in points {
+            if let Some(point) = project_xy(projector, *xy) {
+                line.push(point);
+            } else {
+                if line.len() >= 2 {
+                    output.push(RawProjectedGeometry::Path {
+                        subpaths: vec![std::mem::take(&mut line)],
+                        fillable: false,
+                    });
+                } else {
+                    line.clear();
+                }
+            }
+        }
+        if line.len() >= 2 {
+            output.push(RawProjectedGeometry::Path {
+                subpaths: vec![line],
+                fillable: false,
+            });
+        }
+    }
+
+    fn visit(
+        geometry: &GeoGeometry,
+        projector: &mut d3_geo_rs::projection::albers_usa::AlbersUsa<
+            d3_geo_rs::stream::DrainStub<f64>,
+            f64,
+        >,
+        output: &mut Vec<RawProjectedGeometry>,
+    ) {
+        match geometry {
+            GeoGeometry::Point(xy) => {
+                if let Some(point) = project_xy(projector, *xy) {
+                    output.push(RawProjectedGeometry::Point(point));
+                }
+            }
+            GeoGeometry::MultiPoint(points) => {
+                for xy in points {
+                    visit(&GeoGeometry::Point(*xy), projector, output);
+                }
+            }
+            GeoGeometry::LineString(points) => visit_line(points, projector, output),
+            GeoGeometry::MultiLineString(lines) => {
+                for line in lines {
+                    visit_line(line, projector, output);
+                }
+            }
+            GeoGeometry::Polygon(rings) => {
+                let mut projected_rings = Vec::with_capacity(rings.len());
+                for ring in rings {
+                    let Some(points) = ring
+                        .iter()
+                        .map(|xy| project_xy(projector, *xy))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+                    projected_rings.push(points);
+                }
+                if !projected_rings.is_empty() {
+                    for (index, ring) in projected_rings.iter_mut().enumerate() {
+                        normalize_ring_winding(ring, index == 0);
+                    }
+                    output.push(RawProjectedGeometry::Path {
+                        subpaths: projected_rings,
+                        fillable: true,
+                    });
+                }
+            }
+            GeoGeometry::MultiPolygon(polygons) => {
+                for polygon in polygons {
+                    visit(&GeoGeometry::Polygon(polygon.clone()), projector, output);
+                }
+            }
+            GeoGeometry::GeometryCollection(geometries) => {
+                for geometry in geometries {
+                    visit(geometry, projector, output);
+                }
+            }
+        }
+    }
+
+    let mut projector = d3_geo_rs::projection::albers_usa::AlbersUsa::<
+        d3_geo_rs::stream::DrainStub<f64>,
+        f64,
+    >::default();
+    let mut geometries = Vec::new();
+    visit(geometry, &mut projector, &mut geometries);
+    Ok(GeometryProjection {
+        geometries,
+        default_scale: 1070.0,
+        default_translate: [480.0, 250.0],
+    })
+}
+
+fn write_path(paths: &[Vec<[f64; 2]>], closed: bool) -> String {
+    let mut output = String::new();
+    for points in paths.iter().filter(|points| !points.is_empty()) {
+        if !output.is_empty() {
+            output.push(' ');
+        }
+        output.push_str("M ");
+        output.push_str(&fmt_num(points[0][0]));
+        output.push(' ');
+        output.push_str(&fmt_num(points[0][1]));
+        for point in &points[1..] {
+            output.push_str(" L ");
+            output.push_str(&fmt_num(point[0]));
+            output.push(' ');
+            output.push_str(&fmt_num(point[1]));
+        }
+        if closed && points.len() >= 3 {
+            output.push_str(" Z");
+        }
+    }
+    output
+}
+
+fn path_coordinates(path: &str) -> Result<Vec<(f64, f64)>, String> {
+    let mut output = Vec::new();
+    let mut numbers = Vec::new();
+    for token in path.split_whitespace() {
+        if matches!(token, "M" | "L" | "Z") {
+            if numbers.len() == 2 {
+                output.push((numbers[0], numbers[1]));
+                numbers.clear();
+            }
+        } else {
+            let value = token
+                .parse::<f64>()
+                .map_err(|_| "projected path contains an invalid number".to_string())?;
+            if !value.is_finite() {
+                return Err("projection produced a non-finite coordinate".to_string());
+            }
+            numbers.push(value);
+        }
+    }
+    if numbers.len() == 2 {
+        output.push((numbers[0], numbers[1]));
+    }
+    if numbers.len() > 2 {
+        return Err("projected path contains an incomplete coordinate".to_string());
+    }
+    Ok(output)
+}
+
+fn transform_path(
+    path: &str,
+    default_translate: [f64; 2],
+    factor: f64,
+    translate: [f64; 2],
+) -> Result<String, String> {
+    let mut output = String::new();
+    let mut numbers: Vec<f64> = Vec::new();
+    for token in path.split_whitespace() {
+        if matches!(token, "M" | "L" | "Z") {
+            if numbers.len() == 2 {
+                let x = (numbers[0] - default_translate[0]) * factor + translate[0];
+                let y = (numbers[1] - default_translate[1]) * factor + translate[1];
+                if !x.is_finite() || !y.is_finite() {
+                    return Err("projection produced a non-finite coordinate".to_string());
+                }
+                output.push_str(&fmt_num(x));
+                output.push(' ');
+                output.push_str(&fmt_num(y));
+                output.push(' ');
+                numbers.clear();
+            }
+            if !output.is_empty() {
+                output.push(' ');
+            }
+            output.push_str(token);
+            output.push(' ');
+        } else {
+            let value = token
+                .parse::<f64>()
+                .map_err(|_| "projected path contains an invalid number".to_string())?;
+            if !value.is_finite() {
+                return Err("projection produced a non-finite coordinate".to_string());
+            }
+            numbers.push(value);
+        }
+    }
+    if numbers.len() == 2 {
+        let x = (numbers[0] - default_translate[0]) * factor + translate[0];
+        let y = (numbers[1] - default_translate[1]) * factor + translate[1];
+        if !x.is_finite() || !y.is_finite() {
+            return Err("projection produced a non-finite coordinate".to_string());
+        }
+        output.push_str(&fmt_num(x));
+        output.push(' ');
+        output.push_str(&fmt_num(y));
+    } else if !numbers.is_empty() {
+        return Err("projected path contains an incomplete coordinate".to_string());
+    }
+    Ok(output)
+}
+
+fn extend_bounds(bounds: &mut [f64; 4], x: f64, y: f64) {
+    bounds[0] = bounds[0].min(x);
+    bounds[1] = bounds[1].min(y);
+    bounds[2] = bounds[2].max(x);
+    bounds[3] = bounds[3].max(y);
+}
+
+fn projection_clip(extent: Option<[[f64; 2]; 2]>, viewport: ClipRect) -> Option<ClipRect> {
+    let [[x0, y0], [x1, y1]] = extent?;
+    let left = viewport.x.max(x0);
+    let top = viewport.y.max(y0);
+    let right = (viewport.x + viewport.w).min(x1);
+    let bottom = (viewport.y + viewport.h).min(y1);
+    Some(ClipRect {
+        x: left,
+        y: top,
+        w: (right - left).max(0.0),
+        h: (bottom - top).max(0.0),
+    })
+}
+
+/// d3-geo's v3 port omits Natural Earth 1; this is the standard raw formula.
+#[derive(Clone, Copy, Debug, Default)]
+struct NaturalEarth1;
+
+impl d3_geo_rs::Transform for NaturalEarth1 {
+    type T = f64;
+
+    fn transform(&self, point: &Coord<f64>) -> Coord<f64> {
+        let y2 = point.y * point.y;
+        let y6 = y2 * y2 * y2;
+        let x = point.x
+            * (0.8707 + y2 * (-0.131_979 + y6 * (-0.013_791 + y2 * (0.003_971 - 0.001_529 * y2))));
+        let y = point.y
+            * (1.007_226
+                + y2 * (0.015_085 + y2 * (-0.044_475 + y2 * (0.028_874 - 0.005_916 * y2))));
+        Coord { x, y }
+    }
+
+    fn invert(&self, point: &Coord<f64>) -> Coord<f64> {
+        let mut y = point.y;
+        for _ in 0..12 {
+            let projected = self.transform(&Coord { x: 0.0, y }).y;
+            let step = 1.0e-6 * y.abs().max(1.0);
+            let derivative = (self
+                .transform(&Coord {
+                    x: 0.0,
+                    y: y + step,
+                })
+                .y
+                - self
+                    .transform(&Coord {
+                        x: 0.0,
+                        y: y - step,
+                    })
+                    .y)
+                / (2.0 * step);
+            let delta = (projected - point.y) / derivative;
+            y -= delta;
+            if delta.abs() < 1.0e-12 {
+                break;
+            }
+        }
+        let y2 = y * y;
+        let y6 = y2 * y2 * y2;
+        let factor =
+            0.8707 + y2 * (-0.131_979 + y6 * (-0.013_791 + y2 * (0.003_971 - 0.001_529 * y2)));
+        Coord {
+            x: point.x / factor,
+            y,
+        }
+    }
+}
+
+impl RawBase for NaturalEarth1 {
+    type Builder<DRAIN: Clone> =
+        d3_geo_rs::projection::builder::types::BuilderAntimeridianResampleNoClip<DRAIN, Self, f64>;
+
+    fn builder<DRAIN: Clone>() -> Self::Builder<DRAIN> {
+        <Self::Builder<DRAIN> as BuilderTrait>::new(Self)
+    }
 }
 
 /// Parse inline GeoJSON or rows containing a GeoJSON field, checking resource limits first.
@@ -637,6 +1569,9 @@ fn at(path: &str, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use crate::guard::InputLimits;
+    use crate::ir::{
+        GeoFeature, GeoGeometry, GeoProjection, GeoProjectionType, GeoShape, GeoShapeStyle,
+    };
     use serde_json::json;
 
     #[test]
@@ -802,5 +1737,151 @@ mod tests {
             error.contains("primitive count"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn all_vl_projection_types_return_finite_coordinates() {
+        use GeoProjectionType as P;
+
+        let projections = [
+            P::Albers,
+            P::AlbersUsa,
+            P::AzimuthalEqualArea,
+            P::AzimuthalEquidistant,
+            P::ConicConformal,
+            P::ConicEqualArea,
+            P::ConicEquidistant,
+            P::EqualEarth,
+            P::Equirectangular,
+            P::Gnomonic,
+            P::Identity,
+            P::Mercator,
+            P::NaturalEarth1,
+            P::Orthographic,
+            P::Stereographic,
+            P::TransverseMercator,
+        ];
+        assert_eq!(projections.len(), 16);
+
+        for projection_type in projections {
+            let coordinates = if projection_type == P::AlbersUsa {
+                vec![
+                    [-122.0, 30.0],
+                    [-110.0, 30.0],
+                    [-110.0, 42.0],
+                    [-122.0, 42.0],
+                    [-122.0, 30.0],
+                ]
+            } else {
+                vec![
+                    [-5.0, -5.0],
+                    [5.0, -5.0],
+                    [5.0, 5.0],
+                    [-5.0, 5.0],
+                    [-5.0, -5.0],
+                ]
+            };
+            let shape = GeoShape {
+                features: vec![GeoFeature {
+                    geometry: Some(GeoGeometry::Polygon(vec![coordinates])),
+                    fill: None,
+                }],
+                projection: GeoProjection {
+                    projection_type,
+                    ..GeoProjection::default()
+                },
+                style: GeoShapeStyle::default(),
+            };
+            let projected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                super::project_features(
+                    &shape,
+                    crate::scene::ClipRect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 320.0,
+                        h: 200.0,
+                    },
+                )
+            }))
+            .unwrap_or_else(|_| panic!("{projection_type:?} projection panicked"))
+            .unwrap_or_else(|error| panic!("{projection_type:?}: {error}"));
+            assert!(
+                !projected.is_empty(),
+                "{projection_type:?} emitted no feature"
+            );
+            for feature in projected {
+                for geometry in feature.geometries {
+                    match geometry {
+                        super::ProjectedGeometry::Path { d, .. } => {
+                            for token in d.split_whitespace() {
+                                if matches!(token, "M" | "L" | "Z") {
+                                    continue;
+                                } else {
+                                    let value = token.parse::<f64>().unwrap_or_else(|error| {
+                                        panic!("{projection_type:?} path token {token:?} in {d:?}: {error}")
+                                    });
+                                    assert!(
+                                        value.is_finite(),
+                                        "{projection_type:?} emitted {value}"
+                                    );
+                                }
+                            }
+                        }
+                        super::ProjectedGeometry::Point { x, y } => {
+                            assert!(x.is_finite() && y.is_finite(), "{projection_type:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn clips_projection_horizon_without_non_finite_path() {
+        let shape = GeoShape {
+            features: vec![GeoFeature {
+                geometry: Some(GeoGeometry::Polygon(vec![vec![
+                    [30.0, -20.0],
+                    [60.0, -20.0],
+                    [60.0, 20.0],
+                    [30.0, 20.0],
+                    [30.0, -20.0],
+                ]])),
+                fill: None,
+            }],
+            projection: GeoProjection {
+                projection_type: GeoProjectionType::Orthographic,
+                clip_angle: Some(45.0),
+                ..GeoProjection::default()
+            },
+            style: GeoShapeStyle::default(),
+        };
+        let projected = super::project_features(
+            &shape,
+            crate::scene::ClipRect {
+                x: 0.0,
+                y: 0.0,
+                w: 320.0,
+                h: 200.0,
+            },
+        )
+        .expect("horizon clipping must return a finite path");
+        let paths = projected
+            .iter()
+            .flat_map(|feature| &feature.geometries)
+            .filter_map(|geometry| match geometry {
+                super::ProjectedGeometry::Path { d, .. } => Some(d),
+                super::ProjectedGeometry::Point { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!paths.is_empty(), "visible polygon portion should remain");
+        for path in paths {
+            assert!(
+                path.split_whitespace()
+                    .filter(|token| !matches!(*token, "M" | "L" | "Z"))
+                    .all(|token| token.parse::<f64>().is_ok_and(f64::is_finite)),
+                "non-finite projected path: {path}"
+            );
+        }
     }
 }

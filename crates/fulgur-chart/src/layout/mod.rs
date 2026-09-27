@@ -5,6 +5,7 @@ pub mod boxplot;
 pub mod common;
 mod decimate;
 pub mod gauge;
+pub mod geoshape;
 pub mod line;
 pub mod matrix;
 pub mod mixed;
@@ -38,6 +39,7 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::Mixed => mixed::build(spec, m),
         ChartKind::Matrix { .. } => matrix::build(spec, m),
         ChartKind::VegaRect { .. } => vega_rect::build(spec, m),
+        ChartKind::GeoShape { .. } => geoshape::build(spec, m),
         ChartKind::Progress => progress::build(spec, m),
         ChartKind::BoxPlot => boxplot::build(spec, m),
         ChartKind::Violin { .. } => violin::build(spec, m),
