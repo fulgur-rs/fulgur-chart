@@ -1123,6 +1123,16 @@ fn build_horizontal_with_geometry_using_temporal_values(
         XPositions::Temporal { unix_millis } => Some(unix_millis.as_slice()),
         XPositions::Category => None,
     };
+    let y_tick_margin = if y_temporal_positions.is_some() && spec.y_axis.grid.draw_ticks {
+        spec.y_axis.grid.tick_length.max(0.0)
+    } else {
+        0.0
+    };
+    let x_tick_margin = if spec.x_axis.grid.draw_ticks {
+        spec.x_axis.grid.tick_length.max(0.0)
+    } else {
+        0.0
+    };
     let y_temporal_domain =
         y_temporal_positions.map(|positions| temporal_index_domain(positions, &spec.y_axis, true));
     let y_temporal_ticks = y_temporal_domain
@@ -1205,7 +1215,7 @@ fn build_horizontal_with_geometry_using_temporal_values(
     } else {
         0.0
     };
-    let base_left = OUTER_PAD + cat_w + y_title_w + legend_left;
+    let base_left = OUTER_PAD + cat_w + y_title_w + y_tick_margin + legend_left;
     let (plot_left, plot_right) = horizontal_plot_bounds(
         base_left,
         spec.width - OUTER_PAD - legend_right,
@@ -1219,7 +1229,8 @@ fn build_horizontal_with_geometry_using_temporal_values(
         },
     );
     let plot_top = OUTER_PAD + title_band + legend_top;
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
+    let plot_bottom =
+        spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h - x_tick_margin;
     let y_temporal_scale =
         y_temporal_positions
             .zip(y_temporal_domain)
@@ -3582,7 +3593,7 @@ mod horizontal_axis_style_tests {
     };
     use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
-    use crate::ir::ChartSpec;
+    use crate::ir::{ChartSpec, Color, ScaleKind, TimeOptions, XPositions};
     use crate::layout::common::{OUTER_PAD, X_LABEL_BAND, value_domain};
     use crate::num::fmt_num;
     use crate::scale::nice_ticks;
@@ -4008,6 +4019,72 @@ mod horizontal_axis_style_tests {
         assert!(
             ticks > 0,
             "x_axis.grid.draw_ticks=true → 値軸 tick 短線が出る: 実際 {ticks}"
+        );
+    }
+
+    #[test]
+    fn horizontal_temporal_y_axis_uses_independent_tick_style() {
+        let mut spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y"}}"#,
+        );
+        spec.y_positions = XPositions::Temporal {
+            unix_millis: vec![0, 86_400_000],
+        };
+        spec.y_axis.scale_kind = ScaleKind::Time;
+        spec.y_axis.time = Some(TimeOptions::default());
+        spec.y_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.tick_color = Some(Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        });
+        spec.y_axis.grid.tick_width = Some(2.5);
+        spec.y_axis.grid.tick_length = 7.0;
+
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let has_tick_style = scene.items.iter().any(|item| {
+            matches!(item,
+                Prim::Line { x1, x2, y1, y2, stroke, stroke_width, .. }
+                    if (y1 - y2).abs() < 0.01
+                        && ((*x2 - *x1) - 7.0).abs() < 1e-9
+                        && stroke.r == 255
+                        && (*stroke_width - 2.5).abs() < 1e-9
+            )
+        });
+        assert!(has_tick_style);
+    }
+
+    #[test]
+    fn horizontal_tick_lengths_are_reserved_in_fixed_canvas_margins() {
+        let mut spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y"}}"#,
+        );
+        spec.y_positions = XPositions::Temporal {
+            unix_millis: vec![0, 86_400_000],
+        };
+        spec.y_axis.scale_kind = ScaleKind::Time;
+        spec.y_axis.time = Some(TimeOptions::default());
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let before = super::horizontal_bar_layout(&spec, &measurer);
+        spec.y_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.tick_length = 11.0;
+        spec.x_axis.grid.draw_ticks = true;
+        spec.x_axis.grid.tick_length = 16.0;
+        let after = super::horizontal_bar_layout(&spec, &measurer);
+
+        assert!((after.plot_left - before.plot_left - 11.0).abs() < 1e-9);
+        assert!((before.plot_bottom - after.plot_bottom - 16.0).abs() < 1e-9);
+        assert_eq!(
+            after.plot_right - after.plot_left,
+            before.plot_right - before.plot_left - 11.0
+        );
+        assert_eq!(
+            after.plot_bottom - after.plot_top,
+            before.plot_bottom - before.plot_top - 16.0
         );
     }
 

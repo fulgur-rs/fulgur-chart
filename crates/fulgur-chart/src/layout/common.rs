@@ -1022,7 +1022,12 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         .as_ref()
         .map(|t| t.font_size.unwrap_or(spec.theme.font_size * 1.1) + 6.0)
         .unwrap_or(0.0);
-    let y_axis_w = max_w as f64 + 10.0 + y_title_w;
+    let y_tick_margin = if spec.y_axis.grid.draw_ticks {
+        spec.y_axis.grid.tick_length.max(0.0)
+    } else {
+        0.0
+    };
+    let y_axis_w = max_w as f64 + 10.0 + y_title_w + y_tick_margin;
 
     // 凡例の有無。
     let legend = has_legend(spec);
@@ -1120,6 +1125,12 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
         .last()
         .map(|tick| m.width(&tick.label, spec.theme.font_size as f32) as f64 / 2.0)
         .unwrap_or(0.0);
+    let x_tick_margin =
+        if spec.x_axis.grid.draw_ticks && matches!(spec.x_positions, XPositions::Temporal { .. }) {
+            spec.x_axis.grid.tick_length.max(0.0)
+        } else {
+            0.0
+        };
     let (plot_area_title_left_overflow, plot_area_title_right_overflow) =
         if matches!(spec.size_mode, SizeMode::PlotArea) {
             let chart_title_side_overflow = spec
@@ -1196,10 +1207,12 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             } else {
                 1.0
             };
-            let plot_left = base_left.max(OUTER_PAD + legend_left + edge_pad_left * scale);
+            let plot_left =
+                base_left.max(OUTER_PAD + legend_left + edge_pad_left * scale + y_tick_margin);
             let plot_right = (base_right - edge_pad_right * scale).max(plot_left);
             let plot_top = OUTER_PAD + title_band + legend_top;
-            let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
+            let plot_bottom =
+                spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h - x_tick_margin;
             (
                 spec.width,
                 spec.height,
@@ -1225,6 +1238,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
             let scene_height = plot_bottom
                 + X_LABEL_BAND
                 + x_title_h
+                + x_tick_margin
                 + OUTER_PAD
                 + legend_bottom
                 + plot_area_bottom_overflow;
@@ -4471,6 +4485,71 @@ mod tests {
             })
             .count();
         assert_eq!(ticks, frame.ticks.ticks.len());
+    }
+
+    #[test]
+    fn tick_lengths_reserve_canvas_margins_and_expand_plot_area_scenes() {
+        let mut spec = temporal_spec(vec![0, 86_400_000, 2 * 86_400_000]);
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        spec.size_mode = SizeMode::Canvas;
+        let canvas_before = compute(&spec, &measurer);
+        spec.y_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.tick_length = 13.0;
+        spec.x_axis.grid.draw_ticks = true;
+        spec.x_axis.grid.tick_length = 17.0;
+        let canvas_after = compute(&spec, &measurer);
+
+        assert_eq!(canvas_after.scene_width, canvas_before.scene_width);
+        assert_eq!(canvas_after.scene_height, canvas_before.scene_height);
+        assert!((canvas_after.plot_left - canvas_before.plot_left - 13.0).abs() < 1e-9);
+        assert!((canvas_before.plot_bottom - canvas_after.plot_bottom - 17.0).abs() < 1e-9);
+
+        spec.size_mode = SizeMode::PlotArea;
+        let plot_area_before = compute(&spec, &measurer);
+        spec.y_axis.grid.draw_ticks = false;
+        spec.x_axis.grid.draw_ticks = false;
+        let plot_area_without_ticks = compute(&spec, &measurer);
+        spec.y_axis.grid.draw_ticks = true;
+        spec.x_axis.grid.draw_ticks = true;
+        let plot_area_after = compute(&spec, &measurer);
+
+        assert_eq!(
+            plot_area_after.plot_right - plot_area_after.plot_left,
+            plot_area_before.plot_right - plot_area_before.plot_left
+        );
+        assert_eq!(
+            plot_area_after.plot_bottom - plot_area_after.plot_top,
+            plot_area_before.plot_bottom - plot_area_before.plot_top
+        );
+        assert!(
+            (plot_area_after.scene_width - plot_area_without_ticks.scene_width - 13.0).abs() < 1e-9
+        );
+        assert!(
+            (plot_area_after.scene_height - plot_area_without_ticks.scene_height - 17.0).abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn y_tick_margin_is_added_outside_line_edge_label_padding() {
+        let mut spec = make_bar_spec(3, 700.0);
+        spec.kind = ChartKind::Line {
+            stacked: false,
+            stacked_missing_values_are_gaps: false,
+        };
+        spec.series[0].series_type = SeriesType::Line;
+        spec.categories = vec![
+            "edge-padding-label-a".into(),
+            "middle".into(),
+            "edge-padding-label-c".into(),
+        ];
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let before = compute(&spec, &measurer);
+        spec.y_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.tick_length = 11.0;
+        let after = compute(&spec, &measurer);
+
+        assert!((after.plot_left - before.plot_left - 11.0).abs() < 1e-9);
     }
 
     #[test]

@@ -84,7 +84,17 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
         .as_ref()
         .map(|t| t.font_size.unwrap_or(spec.theme.font_size * 1.1) + 6.0)
         .unwrap_or(0.0);
-    let y_axis_w = max_y_w as f64 + 10.0 + y_title_w;
+    let y_tick_margin = if spec.y_axis.grid.draw_ticks {
+        spec.y_axis.grid.tick_length.max(0.0)
+    } else {
+        0.0
+    };
+    let x_tick_margin = if spec.x_axis.grid.draw_ticks {
+        spec.x_axis.grid.tick_length.max(0.0)
+    } else {
+        0.0
+    };
+    let y_axis_w = max_y_w as f64 + 10.0 + y_title_w + y_tick_margin;
     let legend = has_legend(spec);
     let legend_title = super::common::legend_title(spec);
     let legend_font = legend_label_font_size(&spec.legend_options, label_font);
@@ -131,7 +141,8 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     let plot_left = OUTER_PAD + y_axis_w + legend_left;
     let plot_right = spec.width - OUTER_PAD - legend_right_w;
     let plot_top = OUTER_PAD + title_band + legend_top;
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
+    let plot_bottom =
+        spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h - x_tick_margin;
     ScatterLayout {
         xs: axis_scale(&spec.x_axis, &x_ticks, &x_values, plot_left, plot_right),
         ys: axis_scale(&spec.y_axis, &y_ticks, &y_values, plot_bottom, plot_top),
@@ -961,6 +972,29 @@ mod tests {
 
         assert_eq!((layout.x_ticks.min, layout.x_ticks.max), (13.0, 87.0));
         assert_eq!((layout.y_ticks.min, layout.y_ticks.max), (25.0, 175.0));
+    }
+
+    #[test]
+    fn scatter_tick_lengths_are_reserved_in_fixed_canvas_margins() {
+        let mut spec = make_scatter_spec(&[(1.0, 2.0), (100.0, 200.0)]);
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let before = compute_scatter_layout(&spec, &measurer);
+        spec.y_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.tick_length = 12.0;
+        spec.x_axis.grid.draw_ticks = true;
+        spec.x_axis.grid.tick_length = 15.0;
+        let after = compute_scatter_layout(&spec, &measurer);
+
+        assert!((after.plot_left - before.plot_left - 12.0).abs() < 1e-9);
+        assert!((before.plot_bottom - after.plot_bottom - 15.0).abs() < 1e-9);
+        assert_eq!(
+            after.plot_right - after.plot_left,
+            before.plot_right - before.plot_left - 12.0
+        );
+        assert_eq!(
+            after.plot_bottom - after.plot_top,
+            before.plot_bottom - before.plot_top - 15.0
+        );
     }
 
     #[test]
