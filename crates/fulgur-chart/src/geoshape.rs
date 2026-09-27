@@ -3,8 +3,8 @@ use crate::ir::{GeoGeometry, GeoProjection, GeoProjectionType, GeoShape};
 use crate::num::fmt_num;
 use crate::scene::ClipRect;
 use d3_geo_rs::projection::{
-    Build, BuilderTrait, CenterSet, ClipAngleAdjust, ClipAngleSet, PrecisionAdjust, Projector,
-    RawBase, RotateSet, ScaleGet, ScaleSet, TranslateGet, TranslateSet,
+    Build, BuilderTrait, CenterSet, ClipAngleAdjust, ClipAngleSet, PrecisionAdjust,
+    PrecisionBypass, Projector, RawBase, RotateSet, ScaleGet, ScaleSet, TranslateGet, TranslateSet,
 };
 use d3_geo_rs::stream::{Stream, Streamable};
 use geo_types::{
@@ -35,7 +35,6 @@ struct Counts {
 
 const MAX_PROJECTED_GEO_VERTICES: usize = 1_000_000;
 const MAX_PROJECTED_GEO_PRIMITIVES: usize = 1_000_000;
-const MAX_RESAMPLED_VERTICES_PER_SEGMENT: usize = 1 << 16;
 pub(crate) const MAX_GEOSHAPE_PATH_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_PROJECTION_PRECISION: f64 = std::f64::consts::FRAC_1_SQRT_2;
 const MAX_PRECISION_FIT_ITERATIONS: usize = 8;
@@ -297,7 +296,6 @@ pub(crate) fn project_features_with_primitive_limit(
     viewport: ClipRect,
     max_geo_primitives: usize,
 ) -> Result<Vec<ProjectedFeature>, String> {
-    check_zero_precision_resample_budget(shape)?;
     let requested_precision = shape
         .projection
         .precision
@@ -470,55 +468,6 @@ fn project_features_with_precision(
     Ok((projected, factor))
 }
 
-fn check_zero_precision_resample_budget(shape: &GeoShape) -> Result<(), String> {
-    if shape.projection.projection_type == GeoProjectionType::Identity
-        || shape.projection.precision != Some(0.0)
-    {
-        return Ok(());
-    }
-
-    let mut source_segments = 0usize;
-    let mut pending = shape
-        .features
-        .iter()
-        .filter_map(|feature| feature.geometry.as_ref())
-        .collect::<Vec<_>>();
-    while let Some(geometry) = pending.pop() {
-        let segments = match geometry {
-            GeoGeometry::Point(_) | GeoGeometry::MultiPoint(_) => 0,
-            GeoGeometry::LineString(points) => points.len().saturating_sub(1),
-            GeoGeometry::MultiLineString(lines) | GeoGeometry::Polygon(lines) => {
-                lines.iter().map(|line| line.len().saturating_sub(1)).sum()
-            }
-            GeoGeometry::MultiPolygon(polygons) => polygons
-                .iter()
-                .flatten()
-                .map(|ring| ring.len().saturating_sub(1))
-                .sum(),
-            GeoGeometry::GeometryCollection(geometries) => {
-                pending.extend(geometries);
-                0
-            }
-        };
-        source_segments = source_segments.saturating_add(segments);
-    }
-
-    let projection_copies = if shape.projection.projection_type == GeoProjectionType::AlbersUsa {
-        3
-    } else {
-        1
-    };
-    let possible_vertices = source_segments
-        .saturating_mul(MAX_RESAMPLED_VERTICES_PER_SEGMENT)
-        .saturating_mul(projection_copies);
-    if possible_vertices > MAX_PROJECTED_GEO_VERTICES {
-        return Err(format!(
-            "projection precision 0 may exceed projected coordinate vertex limit {MAX_PROJECTED_GEO_VERTICES}; increase precision or simplify the geometry"
-        ));
-    }
-    Ok(())
-}
-
 impl ProjectedGeometry {
     fn from_raw(raw: RawProjectedGeometry) -> Self {
         match raw {
@@ -557,9 +506,19 @@ fn project_geometry(
             configure_precision(&mut builder, projection)?;
             if let Some(angle) = projection.clip_angle {
                 let clipped = ClipAngleSet::clip_angle_set(&builder, angle);
-                project_with_builder(&clipped, geometry, budget)
+                project_with_precision_bypass(
+                    &clipped,
+                    geometry,
+                    budget,
+                    projection.precision == Some(0.0),
+                )
             } else {
-                project_with_builder(&builder, geometry, budget)
+                project_with_precision_bypass(
+                    &builder,
+                    geometry,
+                    budget,
+                    projection.precision == Some(0.0),
+                )
             }
         }};
     }
@@ -571,7 +530,12 @@ fn project_geometry(
             if let Some(angle) = projection.clip_angle {
                 ClipAngleAdjust::clip_angle(&mut builder, angle);
             }
-            project_with_builder(&builder, geometry, budget)
+            project_with_precision_bypass(
+                &builder,
+                geometry,
+                budget,
+                projection.precision == Some(0.0),
+            )
         }};
     }
     use GeoProjectionType as P;
@@ -669,11 +633,21 @@ fn project_transverse_mercator(
             d3_geo_rs::projection::builder_mercator_transverse::Builder { base };
         configure_builder(&mut clipped_builder, projection)?;
         configure_precision(&mut clipped_builder.base, projection)?;
-        project_with_builder(&clipped_builder, geometry, budget)
+        project_with_precision_bypass(
+            &clipped_builder,
+            geometry,
+            budget,
+            projection.precision == Some(0.0),
+        )
     } else {
         configure_builder(&mut builder, projection)?;
         configure_precision(&mut builder.base, projection)?;
-        project_with_builder(&builder, geometry, budget)
+        project_with_precision_bypass(
+            &builder,
+            geometry,
+            budget,
+            projection.precision == Some(0.0),
+        )
     }
 }
 
@@ -743,9 +717,19 @@ where
     configure_precision(&mut builder, projection)?;
     if let Some(angle) = projection.clip_angle {
         let clipped = ClipAngleSet::clip_angle_set(&builder, angle);
-        project_with_builder(&clipped, geometry, budget)
+        project_with_precision_bypass(
+            &clipped,
+            geometry,
+            budget,
+            projection.precision == Some(0.0),
+        )
     } else {
-        project_with_builder(&builder, geometry, budget)
+        project_with_precision_bypass(
+            &builder,
+            geometry,
+            budget,
+            projection.precision == Some(0.0),
+        )
     }
 }
 
@@ -760,6 +744,29 @@ where
         builder.precision_set(&precision);
     }
     Ok(())
+}
+
+fn project_with_precision_bypass<B>(
+    builder: &B,
+    geometry: &GeoGeometry,
+    budget: &ProjectionBudget,
+    bypass_resampling: bool,
+) -> Result<GeometryProjection, String>
+where
+    B: Build + ScaleGet<T = f64> + TranslateGet<T = f64> + PrecisionBypass<T = f64>,
+    B::Projector: Projector<EP = GeoPathEndpoint>,
+    <B::Projector as Projector>::Transformer: Stream<EP = GeoPathEndpoint, T = f64>,
+    <B as PrecisionBypass>::Output: Build + ScaleGet<T = f64> + TranslateGet<T = f64>,
+    <<B as PrecisionBypass>::Output as Build>::Projector: Projector<EP = GeoPathEndpoint>,
+    <<<B as PrecisionBypass>::Output as Build>::Projector as Projector>::Transformer:
+        Stream<EP = GeoPathEndpoint, T = f64>,
+{
+    if bypass_resampling {
+        let builder = builder.precision_bypass();
+        project_with_builder(&builder, geometry, budget)
+    } else {
+        project_with_builder(builder, geometry, budget)
+    }
 }
 
 fn project_with_builder<B>(
@@ -925,11 +932,16 @@ fn project_albers_component<B>(
     geometry: &GeoGeometry,
     region: [f64; 4],
     budget: &ProjectionBudget,
+    bypass_resampling: bool,
 ) -> Result<Vec<RawProjectedGeometry>, String>
 where
-    B: Build + ScaleGet<T = f64> + TranslateGet<T = f64>,
+    B: Build + ScaleGet<T = f64> + TranslateGet<T = f64> + PrecisionBypass<T = f64>,
     B::Projector: Projector<EP = GeoPathEndpoint>,
     <B::Projector as Projector>::Transformer: Stream<EP = GeoPathEndpoint, T = f64>,
+    <B as PrecisionBypass>::Output: Build + ScaleGet<T = f64> + TranslateGet<T = f64>,
+    <<B as PrecisionBypass>::Output as Build>::Projector: Projector<EP = GeoPathEndpoint>,
+    <<<B as PrecisionBypass>::Output as Build>::Projector as Projector>::Transformer:
+        Stream<EP = GeoPathEndpoint, T = f64>,
 {
     let mut output = Vec::new();
     let mut leaves = Vec::new();
@@ -945,7 +957,9 @@ where
         {
             continue;
         }
-        output.extend(project_with_builder(builder, leaf, budget)?.geometries);
+        output.extend(
+            project_with_precision_bypass(builder, leaf, budget, bypass_resampling)?.geometries,
+        );
     }
     Ok(output)
 }
@@ -1120,6 +1134,7 @@ fn project_albers_usa(
         geometry,
         [-130.0, 20.0, -60.0, 60.0],
         budget,
+        projection.precision == Some(0.0),
     )?);
 
     let mut alaska = component(
@@ -1145,6 +1160,7 @@ fn project_albers_usa(
         geometry,
         [-180.0, 48.0, -128.0, 75.0],
         budget,
+        projection.precision == Some(0.0),
     )?);
 
     let mut hawaii = component(
@@ -1170,6 +1186,7 @@ fn project_albers_usa(
         geometry,
         [-163.0, 18.0, -152.0, 25.0],
         budget,
+        projection.precision == Some(0.0),
     )?);
 
     Ok(GeometryProjection {
@@ -2443,7 +2460,8 @@ mod tests {
     fn final_precision_deviation(shape: &GeoShape, viewport: crate::scene::ClipRect) -> f64 {
         let projected = super::project_features(shape, viewport).unwrap();
         let mut reference_shape = shape.clone();
-        reference_shape.projection.precision = Some(0.0);
+        // Precision zero bypasses spherical resampling; use a dense curved-path reference.
+        reference_shape.projection.precision = Some(0.000_1);
         let reference = super::project_features(&reference_shape, viewport).unwrap();
         let paths = |features: &[super::ProjectedFeature]| {
             features
@@ -2688,6 +2706,7 @@ mod tests {
             }],
             projection: GeoProjection {
                 projection_type: GeoProjectionType::AlbersUsa,
+                precision: Some(0.0),
                 ..GeoProjection::default()
             },
             style: GeoShapeStyle::default(),
@@ -2719,7 +2738,7 @@ mod tests {
     }
 
     #[test]
-    fn precision_zero_is_bounded_by_the_projected_vertex_limit() {
+    fn precision_zero_bypasses_resampling_for_dense_source_lines() {
         let line = vec![[-20.0, -80.0], [20.0, 80.0]];
         let shape = GeoShape {
             features: vec![GeoFeature {
@@ -2733,7 +2752,7 @@ mod tests {
             },
             style: GeoShapeStyle::default(),
         };
-        let error = super::project_features(
+        let projected = super::project_features(
             &shape,
             crate::scene::ClipRect {
                 x: 0.0,
@@ -2742,10 +2761,17 @@ mod tests {
                 h: 200.0,
             },
         )
-        .expect_err("zero precision must not permit unbounded resampling output");
-        assert!(
-            error.contains("projection precision 0 may exceed projected coordinate vertex limit"),
-            "{error}"
-        );
+        .expect("zero precision must project source vertices without resampling");
+        let projected_vertices = projected
+            .iter()
+            .flat_map(|feature| &feature.geometries)
+            .map(|geometry| match geometry {
+                super::ProjectedGeometry::Path { subpaths, .. } => {
+                    subpaths.iter().map(Vec::len).sum::<usize>()
+                }
+                super::ProjectedGeometry::Point { .. } => 1,
+            })
+            .sum::<usize>();
+        assert_eq!(projected_vertices, 80);
     }
 }
