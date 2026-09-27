@@ -4466,7 +4466,7 @@ mod tests {
         });
         spec.y_axis.grid.tick_width = Some(2.5);
         spec.y_axis.grid.tick_length = 7.0;
-        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let m = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
