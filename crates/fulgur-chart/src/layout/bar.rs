@@ -1384,21 +1384,20 @@ fn build_horizontal_with_geometry_using_temporal_values(
     }
 
     // 3c. tick 短線(値軸=X)。x_axis.grid.draw_ticks が true のとき plot_bottom から下方向へ。
-    // 色は grid.color を継承(既定 ink)。カテゴリ軸(Y)側は Chart.js で通常 tick を描かないためスキップ。
-    // 対数軸では minor_ticks(mantissa 2..9)にも同じ短線を描く(2b の minor グリッド線と
-    // 1:1 対応させる。Task 9 で common.rs::compute() に施したのと同じ修正)。
-    const TICK_LEN: f64 = 4.0;
+    // tick 専用値があれば優先し、未指定なら grid 値を継承する。カテゴリ軸(Y)側は描画しない。
+    // 対数軸では major/minor のグリッド線に合わせて tick も両方描く。
     if x_grid_cfg.draw_ticks {
-        let tick_color = x_grid_cfg.color.unwrap_or(ink);
+        let tick_color = x_grid_cfg.resolved_tick_color(spec.theme.grid_color);
+        let tick_width = x_grid_cfg.resolved_tick_width();
         for &t in ticks.ticks.iter().chain(minor_ticks.iter()) {
             let x = xs.map(t);
             items.push(Prim::Line {
                 x1: x,
                 y1: plot_bottom,
                 x2: x,
-                y2: plot_bottom + TICK_LEN,
+                y2: plot_bottom + x_grid_cfg.tick_length,
                 stroke: tick_color,
-                stroke_width: x_grid_cfg.line_width,
+                stroke_width: tick_width,
                 dash: Vec::new(),
             });
         }
@@ -1431,12 +1430,12 @@ fn build_horizontal_with_geometry_using_temporal_values(
             });
             if y_grid_cfg.draw_ticks {
                 items.push(Prim::Line {
-                    x1: plot_left - TICK_LEN,
+                    x1: plot_left - y_grid_cfg.tick_length,
                     y1: y,
                     x2: plot_left,
                     y2: y,
-                    stroke: y_grid_color,
-                    stroke_width: y_grid_cfg.line_width,
+                    stroke: y_grid_cfg.resolved_tick_color(spec.theme.grid_color),
+                    stroke_width: y_grid_cfg.resolved_tick_width(),
                     dash: Vec::new(),
                 });
             }
@@ -3987,19 +3986,22 @@ mod horizontal_axis_style_tests {
     #[test]
     fn horizontal_x_grid_draw_ticks_true_adds_bottom_tick_marks() {
         let spec = parse(
-            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
-                "options":{"indexAxis":"y","scales":{"x":{"grid":{"drawTicks":true}}}}}"#,
+            r##"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"grid":{"drawTicks":true,"tickColor":"#123456","tickWidth":2.75,"tickLength":9}}}}}"##,
         );
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = build(&spec, &m);
-        // tick 短線: x1==x2, y2-y1==4.0 (プロット下側 plot_bottom→plot_bottom+4)。
+        // tick 短線: x1==x2, y2-y1==9.0。色と線幅は grid から独立して反映される。
         let ticks = scene
             .items
             .iter()
             .filter(|p| {
                 matches!(p,
-                    Prim::Line { x1, x2, y1, y2, .. }
-                        if (x1 - x2).abs() < 0.01 && ((*y2 - *y1) - 4.0).abs() < 1e-9
+                    Prim::Line { x1, x2, y1, y2, stroke, stroke_width, .. }
+                        if (x1 - x2).abs() < 0.01
+                            && ((*y2 - *y1) - 9.0).abs() < 1e-9
+                            && stroke.r == 0x12 && stroke.g == 0x34 && stroke.b == 0x56
+                            && (*stroke_width - 2.75).abs() < 1e-9
                 )
             })
             .count();
@@ -4570,7 +4572,8 @@ mod horizontal_log_scale_tests {
             .filter(|p| {
                 matches!(p,
                     Prim::Line { x1, x2, y1, y2, .. }
-                        if (x1 - x2).abs() < 0.01 && ((*y2 - *y1) - 4.0).abs() < 1e-9
+                        if (x1 - x2).abs() < 0.01
+                            && ((*y2 - *y1) - spec.x_axis.grid.tick_length).abs() < 1e-9
                 )
             })
             .count();

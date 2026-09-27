@@ -665,34 +665,35 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 
     // 4b. tick 短線。y_axis/x_axis の grid.draw_ticks が true のとき、プロット外側へ短線を描く。
-    // 色は grid.color を継承(既定 ink)、線幅は grid.line_width。Chart.js の既定に合わせた挙動。
-    const TICK_LEN: f64 = 4.0;
+    // tick 専用値があれば優先し、未指定なら grid 値を継承する。
     if y_grid_cfg.draw_ticks {
-        let tick_color = y_grid_cfg.color.unwrap_or(ink);
+        let tick_color = y_grid_cfg.resolved_tick_color(spec.theme.grid_color);
+        let tick_width = y_grid_cfg.resolved_tick_width();
         for &t in y_ticks.ticks.iter().chain(y_minor_ticks.iter()) {
             let y = ys.map(t);
             items.push(Prim::Line {
-                x1: plot_left - TICK_LEN,
+                x1: plot_left - y_grid_cfg.tick_length,
                 y1: y,
                 x2: plot_left,
                 y2: y,
                 stroke: tick_color,
-                stroke_width: y_grid_cfg.line_width,
+                stroke_width: tick_width,
                 dash: Vec::new(),
             });
         }
     }
     if x_grid_cfg.draw_ticks {
-        let tick_color = x_grid_cfg.color.unwrap_or(ink);
+        let tick_color = x_grid_cfg.resolved_tick_color(spec.theme.grid_color);
+        let tick_width = x_grid_cfg.resolved_tick_width();
         for &t in x_ticks.ticks.iter().chain(x_minor_ticks.iter()) {
             let x = xs.map(t);
             items.push(Prim::Line {
                 x1: x,
                 y1: plot_bottom,
                 x2: x,
-                y2: plot_bottom + TICK_LEN,
+                y2: plot_bottom + x_grid_cfg.tick_length,
                 stroke: tick_color,
-                stroke_width: x_grid_cfg.line_width,
+                stroke_width: tick_width,
                 dash: Vec::new(),
             });
         }
@@ -1004,6 +1005,54 @@ mod tests {
             axis_domain(&spec, &spec.x_axis, |point| point.x),
             (1_000.0, 10_000.0)
         );
+    }
+
+    #[test]
+    fn scatter_tick_styles_are_independent_on_both_axes() {
+        let mut spec = make_scatter_spec(&[(0.0, 0.0), (10.0, 20.0)]);
+        spec.x_axis.grid.draw_ticks = true;
+        spec.x_axis.grid.tick_color = Some(Color {
+            r: 0,
+            g: 128,
+            b: 0,
+            a: 1.0,
+        });
+        spec.x_axis.grid.tick_width = Some(3.0);
+        spec.x_axis.grid.tick_length = 6.0;
+        spec.y_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.tick_color = Some(Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        });
+        spec.y_axis.grid.tick_width = Some(2.0);
+        spec.y_axis.grid.tick_length = 7.0;
+
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let layout = compute_scatter_layout(&spec, &m);
+        let scene = build(&spec, &m);
+        let x_tick = scene.items.iter().any(|item| {
+            matches!(item,
+                Prim::Line { x1, x2, y1, y2, stroke, stroke_width, .. }
+                    if (x1 - x2).abs() < 0.01
+                        && (*y1 - layout.plot_bottom).abs() < 0.01
+                        && ((*y2 - *y1) - 6.0).abs() < 1e-9
+                        && stroke.g == 128
+                        && (*stroke_width - 3.0).abs() < 1e-9
+            )
+        });
+        let y_tick = scene.items.iter().any(|item| {
+            matches!(item,
+                Prim::Line { x1, x2, y1, y2, stroke, stroke_width, .. }
+                    if (y1 - y2).abs() < 0.01
+                        && (*x2 - layout.plot_left).abs() < 0.01
+                        && ((*x2 - *x1) - 7.0).abs() < 1e-9
+                        && stroke.r == 255
+                        && (*stroke_width - 2.0).abs() < 1e-9
+            )
+        });
+        assert!(x_tick && y_tick);
     }
 
     #[test]

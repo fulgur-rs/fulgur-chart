@@ -1647,28 +1647,21 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
     }
 
     // 3b. y 軸目盛(tick 刻み)。draw_ticks=true のとき、plot_left から外側へ短線を描く。
-    // 色は grid.color を継承する(Chart.js 既定と同じ挙動: grid.color が gridline と tick の両方を制御)。
-    // 対数軸では frame.minor_ticks(mantissa 2..9)にも同じ短線を描く。2b で minor
-    // グリッド線をラベルなしで描いているのと対称に、tick 刻みも major/minor を
-    // 揃えないと「グリッド線はあるのに対応する軸の刻みが無い」という見た目の
-    // 不整合が生じるため(gridline と tick 刻みは 1:1 対応させる)。
-    const TICK_LEN: f64 = 4.0;
+    // 色と線幅は tick 専用値があれば優先し、未指定なら grid 値を継承する。
     let ticks_cfg = &spec.y_axis.grid;
     if ticks_cfg.draw_ticks {
-        let tick_color = if matches!(spec.x_positions, XPositions::Temporal { .. }) {
-            ink
-        } else {
-            ticks_cfg.color.unwrap_or(ink)
-        };
+        let tick_color = ticks_cfg.resolved_tick_color(spec.theme.grid_color);
+        let tick_width = ticks_cfg.resolved_tick_width();
+        // 対数軸の minor gridline にも対応する tick を描く。
         for &t in frame.ticks.ticks.iter().chain(frame.minor_ticks.iter()) {
             let y = frame.ys.map(t);
             items.push(Prim::Line {
-                x1: frame.plot_left - TICK_LEN,
+                x1: frame.plot_left - ticks_cfg.tick_length,
                 y1: y,
                 x2: frame.plot_left,
                 y2: y,
                 stroke: tick_color,
-                stroke_width: ticks_cfg.line_width,
+                stroke_width: tick_width,
                 dash: Vec::new(),
             });
         }
@@ -1732,13 +1725,15 @@ pub fn draw_frame(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &Frame, m: &Te
                     });
                 }
                 if x_grid.draw_ticks {
+                    let tick_color = x_grid.resolved_tick_color(spec.theme.grid_color);
+                    let tick_width = x_grid.resolved_tick_width();
                     items.push(Prim::Line {
                         x1: x,
                         y1: frame.plot_bottom,
                         x2: x,
-                        y2: frame.plot_bottom + TICK_LEN,
-                        stroke: ink,
-                        stroke_width: x_grid.line_width,
+                        y2: frame.plot_bottom + x_grid.tick_length,
+                        stroke: tick_color,
+                        stroke_width: tick_width,
                         dash: Vec::new(),
                     });
                 }
@@ -2564,8 +2559,8 @@ mod tests {
     use super::*;
     use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::ir::{
-        AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, LegendPos,
-        LineInterpolation, Point, ScaleKind, Series, SeriesType, SizeMode, XPositions,
+        AxisBorder, AxisGrid, AxisSpec, AxisTitle, AxisTitleAlign, ChartKind, ChartSpec, Color,
+        LegendPos, LineInterpolation, Point, ScaleKind, Series, SeriesType, SizeMode, XPositions,
     };
     use crate::text::TextMeasurer;
 
@@ -2721,8 +2716,12 @@ mod tests {
         };
         spec.x_axis.grid.color = Some(grid);
         spec.x_axis.grid.draw_ticks = true;
+        spec.x_axis.grid.tick_color = Some(spec.theme.text_color);
+        spec.x_axis.grid.tick_length = 4.0;
         spec.y_axis.grid.color = Some(grid);
         spec.y_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.tick_color = Some(spec.theme.text_color);
+        spec.y_axis.grid.tick_length = 4.0;
         spec
     }
 
@@ -3894,7 +3893,7 @@ mod tests {
                 matches!(p,
                     Prim::Line { x1, x2, y1, y2, .. }
                         if (y1 - y2).abs() < 0.01
-                            && ((*x2 - *x1) - 4.0).abs() < 1e-9
+                            && ((*x2 - *x1) - spec.y_axis.grid.tick_length).abs() < 1e-9
                             && (*x2 - frame.plot_left).abs() < 0.01
                 )
             })
@@ -4411,14 +4410,14 @@ mod tests {
         let frame = compute(&spec, &m);
         let mut items = Vec::new();
         draw_frame(&mut items, &spec, &frame, &m);
-        // tick 短線: x1 = plot_left - 4, x2 = plot_left, y1 == y2
+        // tick 短線: x1 = plot_left - 8, x2 = plot_left, y1 == y2
         let tick_count = items
             .iter()
             .filter(|p| {
                 matches!(p,
                     Prim::Line { x1, x2, y1, y2, .. }
                         if (y1 - y2).abs() < 0.01
-                            && ((*x2 - *x1) - 4.0).abs() < 1e-9
+                            && ((*x2 - *x1) - 8.0).abs() < 1e-9
                             && (*x2 - frame.plot_left).abs() < 0.01
                 )
             })
@@ -4432,6 +4431,46 @@ mod tests {
             frame.ticks.ticks.len(),
             "tick 数は y ticks 数と一致"
         );
+    }
+
+    #[test]
+    fn grid_tick_style_fields_reach_common_tick_primitives() {
+        let mut spec = make_bar_spec(3, 400.0);
+        spec.y_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.color = Some(Color {
+            r: 0,
+            g: 0,
+            b: 255,
+            a: 1.0,
+        });
+        spec.y_axis.grid.line_width = 1.0;
+        spec.y_axis.grid.tick_color = Some(Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        });
+        spec.y_axis.grid.tick_width = Some(2.5);
+        spec.y_axis.grid.tick_length = 7.0;
+        let m = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let frame = compute(&spec, &m);
+        let mut items = Vec::new();
+        draw_frame(&mut items, &spec, &frame, &m);
+
+        let ticks = items
+            .iter()
+            .filter(|item| {
+                matches!(item,
+                    Prim::Line { x1, x2, y1, y2, stroke, stroke_width, .. }
+                        if (y1 - y2).abs() < 0.01
+                            && ((*x2 - *x1) - 7.0).abs() < 1e-9
+                            && (*x2 - frame.plot_left).abs() < 0.01
+                            && stroke.r == 255 && stroke.g == 0 && stroke.b == 0
+                            && (*stroke_width - 2.5).abs() < 1e-9
+                )
+            })
+            .count();
+        assert_eq!(ticks, frame.ticks.ticks.len());
     }
 
     #[test]
