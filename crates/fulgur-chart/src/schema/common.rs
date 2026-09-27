@@ -203,7 +203,7 @@ pub struct AxisTitleOptions {
 }
 
 /// options.scales.<axis>.grid (Chart.js 準拠)。
-/// tick_length/offset/color per-tick 配列などは v1 未描画(受理のみ)。
+/// per-tick 配列などは v1 では先頭値のみ描画する。
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GridLineOptions {
@@ -226,12 +226,12 @@ pub struct GridLineOptions {
     /// Chart.js `grid.z` (レンダリング Z-順)。v1 では受理のみ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub z: Option<serde_json::Value>,
-    /// Chart.js `grid.tickColor` (tick 短線色を gridline とは独立に指定)。v1 では受理のみ。
+    /// Chart.js `grid.tickColor`。配列は先頭要素だけ描画に使う。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tick_color: Option<serde_json::Value>,
-    /// Chart.js `grid.tickWidth` (tick 短線の太さを gridline とは独立に指定)。v1 では受理のみ。
+    pub tick_color: Option<ScalarOrArray<ColorString>>,
+    /// Chart.js `grid.tickWidth`。配列は先頭要素だけ描画に使う。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tick_width: Option<serde_json::Value>,
+    pub tick_width: Option<ScalarOrArray<f64>>,
     /// Chart.js `grid.tickBorderDash` / `tickBorderDashOffset` (tick 短線の破線)。v1 では受理のみ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tick_border_dash: Option<serde_json::Value>,
@@ -424,6 +424,38 @@ mod tests {
     }
 
     #[test]
+    fn grid_line_options_rejects_wrong_tick_style_types() {
+        for json in [
+            r#"{"tickColor":42}"#,
+            r#"{"tickWidth":"wide"}"#,
+            r#"{"tickLength":"long"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<GridLineOptions>(json).is_err(),
+                "invalid tick style must be rejected: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn grid_line_options_roundtrips_static_tick_style_shapes() {
+        let json = r##"{
+            "tickColor":["#ff0000","#00ff00"],
+            "tickWidth":[2.0,3.0],
+            "tickLength":6.0
+        }"##;
+        let parsed: GridLineOptions = serde_json::from_str(json).unwrap();
+        let value = serde_json::to_value(parsed).unwrap();
+
+        assert_eq!(
+            value["tickColor"],
+            serde_json::json!(["#ff0000", "#00ff00"])
+        );
+        assert_eq!(value["tickWidth"], serde_json::json!([2.0, 3.0]));
+        assert_eq!(value["tickLength"], serde_json::json!(6.0));
+    }
+
+    #[test]
     fn axis_border_options_accepts_dash_array() {
         let v: AxisBorderOptions =
             serde_json::from_str(r##"{"color":"#000","width":2,"dash":[4,4]}"##).unwrap();
@@ -440,8 +472,8 @@ mod tests {
         assert_eq!(f.size, Some(14.0));
         assert!(f.line_height.is_some());
 
-        // GridLineOptions: Chart.js docs で定義される z / tickColor / tickWidth /
-        // tickBorderDash{,Offset}。全て v1 では未描画だが parse 通過が必要。
+        // GridLineOptions: tickColor / tickWidth は typed static subset。
+        // z / tickBorderDash{,Offset} は引き続き v1 では未描画だが parse 通過が必要。
         let g: GridLineOptions = serde_json::from_str(
             r##"{"z":1,"tickColor":"#ccc","tickWidth":2,"tickBorderDash":[3,3],"tickBorderDashOffset":1.5}"##,
         )
