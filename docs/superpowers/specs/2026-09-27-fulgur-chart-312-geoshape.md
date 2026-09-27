@@ -31,7 +31,9 @@ The default projection is `equalEarth`, matching Vega-Lite.
 
 Support the common projection properties used by those types: `center`, `rotate`, `clipAngle`, `clipExtent`, `parallels`, `pointRadius`, `precision`, `scale`, and `translate`; support `reflectX` and `reflectY` for `identity`. When no explicit scale/translation fixes the view transform, fit the projected geometry bounds into the plot area with a small inner margin while preserving aspect ratio. Explicit projection values take precedence over the automatically computed values. Apply projection clipping before scene emission.
 
-Use a shared Rust projection/GeoJSON path layer and adapt its output to Fulgur's restricted SVG path syntax. The adapter must emit explicit, whitespace-separated numeric path tokens accepted by both SVG serialization and the raster path parser; it must not forward compact third-party path strings. Keep any backend dependency pure Rust and usable without browser APIs so the same implementation compiles for WASM. The current candidate is `d3_geo_rs` with default web features disabled; `naturalEarth1` needs a local implementation or an equivalent backend because it is present in the schema but not in the candidate's projection modules. The implementation plan must verify dependency and target compatibility before adding it.
+Use a shared Rust projection/GeoJSON path layer and adapt its output to Fulgur's restricted SVG path syntax. The adapter must consume projected geometry/path events and emit explicit, whitespace-separated numeric path tokens accepted by both SVG serialization and the raster path parser; it must not forward compact third-party path strings. Keep any backend dependency pure Rust and usable without browser APIs so the same implementation compiles for WASM.
+
+The candidate backend is `d3_geo_rs` 3.1.4 (MIT), with default features disabled to omit its optional `web-sys` rendering feature. Its documented projection set covers most of the Vega-Lite enum; `naturalEarth1` is absent and must be supplied by a local projector or an equivalent backend. The current v6 enum's `identity` behavior can use a direct planar transform with the standard scale/translation/reflection settings. The crate also declares `getrandom` 0.2.16 as a normal dependency. Before adopting it, verify `wasm32-unknown-unknown` compilation; enable the `getrandom` `js` feature only for that target if required. The implementation plan must establish this before adding the dependency.
 
 ## Internal design
 
@@ -62,3 +64,5 @@ Use a shared Rust projection/GeoJSON path layer and adapt its output to Fulgur's
 - [Vega-Lite projection documentation](https://vega.github.io/vega-lite/docs/projection.html)
 - [Vega-Lite v6 JSON schema projection enum](https://vega.github.io/schema/vega-lite/v6.json) (`definitions.ProjectionType`)
 - [Vega projections](https://vega.github.io/vega/docs/projections/)
+- [`d3_geo_rs` 3.1.4 API and feature documentation](https://docs.rs/d3_geo_rs/latest/d3_geo_rs/)
+- [`getrandom` 0.2.16 feature documentation](https://docs.rs/crate/getrandom/0.2.16/features)
