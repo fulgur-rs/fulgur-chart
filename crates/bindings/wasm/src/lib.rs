@@ -216,11 +216,10 @@ fn render_inner(
                 Some(bytes) => fulgur_chart::render::render_chart_with_font(&ir, bytes)
                     .map_err(|e| (PARSE_ERROR, e))?,
                 #[cfg(feature = "bundled-font")]
-                None => fulgur_chart::render::render_chart_with_limits(
-                    &ir,
-                    &InputLimits::default(),
-                )
-                .map_err(|e| (PARSE_ERROR, e))?,
+                None => {
+                    fulgur_chart::render::render_chart_with_limits(&ir, &InputLimits::default())
+                        .map_err(|e| (PARSE_ERROR, e))?
+                }
                 #[cfg(not(feature = "bundled-font"))]
                 None => {
                     return Err((

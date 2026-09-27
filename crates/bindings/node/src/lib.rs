@@ -171,11 +171,10 @@ fn render_inner(
             let svg = match font {
                 Some(bytes) => fulgur_chart::render::render_chart_with_font(&ir, bytes)
                     .map_err(|e| (PARSE_ERROR, e))?,
-                None => fulgur_chart::render::render_chart_with_limits(
-                    &ir,
-                    &InputLimits::default(),
-                )
-                .map_err(|e| (PARSE_ERROR, e))?,
+                None => {
+                    fulgur_chart::render::render_chart_with_limits(&ir, &InputLimits::default())
+                        .map_err(|e| (PARSE_ERROR, e))?
+                }
             };
             Ok(Output::Svg(svg))
         }
