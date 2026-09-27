@@ -44,6 +44,7 @@ Errors: `FulgurParseError`, `FulgurStrictError` (`< FulgurParseError`), `FulgurR
 
 The JSON Schemas returned by `schema()` are embedded to keep schema generation code out
 of the WASM binary. After changing the Rust schema types, regenerate the JSON files with
+this command from the repository root:
 `cargo run --manifest-path crates/bindings/wasm/Cargo.toml --example regenerate_schemas`.
 The WASM crate test checks that the embedded files match the Rust schema types.
 
