@@ -4,7 +4,8 @@ use crate::color::parse_color;
 use crate::ir::*;
 use crate::schema::chartjs::{
     BarThickness as SchemaBarThickness, BorderRadius as SchemaBorderRadius, CubicMode,
-    DatasetPointStyle as SchemaPointStyle, SchemaArcBorderRadius,
+    DatasetPointStyle as SchemaPointStyle, SankeyParsing as SchemaSankeyParsing,
+    SankeyParsingSpec as SchemaSankeyParsingSpec, SchemaArcBorderRadius,
 };
 use crate::schema::common::{
     AxisBorderOptions, AxisOptions, AxisTitleAlign as SchemaAxisTitleAlign, AxisTitleOptions,
@@ -70,6 +71,18 @@ struct RawOptions {
     // レベルのタイポ(例: `title.txt` / `border.colorr`)を deserialize 段で拒否する。
     #[serde(default)]
     scales: Option<RawScales>,
+}
+
+/// `options.parsing` is Sankey-only in this static subset, so keep it out of shared `RawOptions`.
+#[derive(Deserialize, Default)]
+struct RawSankeyOptions {
+    #[serde(default)]
+    parsing: Option<SchemaSankeyParsingSpec>,
+    // `options.plugins: null` is accepted as the default, as in other chart options.
+    #[serde(default, deserialize_with = "null_or_default")]
+    plugins: RawPlugins,
+    #[serde(default)]
+    theme: Option<RawTheme>,
 }
 
 /// `options.scales` の受け皿。x/y の直交 2 軸と r の動径軸を typed に扱う。
@@ -2866,6 +2879,10 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
         return Ok(());
     };
     check_object(top, &["type", "data", "options", "width", "height"], "")?;
+    let chart_parsing = top
+        .get("options")
+        .and_then(|v| v.get("parsing"))
+        .and_then(serde_json::Value::as_object);
     if let Some(data) = top.get("data").and_then(|v| v.as_object()) {
         check_object(data, &["datasets", "labels"], "data")?;
         if let Some(datasets) = data.get("datasets").and_then(|v| v.as_array()) {
@@ -2901,16 +2918,27 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
                     // parsing サブオブジェクト自身も strict 検証: schema (SankeyParsing)
                     // が deny_unknown_fields なので、`{"formm":"src"}` のようなタイプミスを
                     // 黙って fallback に流さず、strict モードで明示的に拒否する。
-                    let p = ds.get("parsing").and_then(|v| v.as_object());
-                    if let Some(p) = p {
+                    let dataset_parsing_value = ds.get("parsing");
+                    let dataset_parsing = dataset_parsing_value.and_then(|v| v.as_object());
+                    if let Some(p) = dataset_parsing {
                         check_object(
                             p,
                             &["from", "to", "flow"],
                             &format!("data.datasets[{i}].parsing"),
                         )?;
                     }
+                    let dataset_disables_inheritance =
+                        dataset_parsing_value.is_some_and(|v| v.as_bool() == Some(false));
                     let mapped = |k: &str, dflt: &'static str| -> String {
-                        p.and_then(|o| o.get(k))
+                        dataset_parsing
+                            .and_then(|o| o.get(k))
+                            .or_else(|| {
+                                if dataset_disables_inheritance {
+                                    None
+                                } else {
+                                    chart_parsing.and_then(|o| o.get(k))
+                                }
+                            })
                             .and_then(|v| v.as_str())
                             .map(str::to_owned)
                             .unwrap_or_else(|| dflt.to_string())
@@ -2941,7 +2969,10 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
         }
     }
     if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
-        check_object(options, &["plugins", "theme"], "options")?;
+        check_object(options, &["parsing", "plugins", "theme"], "options")?;
+        if let Some(parsing) = chart_parsing {
+            check_object(parsing, &["from", "to", "flow"], "options.parsing")?;
+        }
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             // sankey は legend を描画しないため title のみ受理する(schema と一致)。
             check_object(plugins, &["title"], "options.plugins")?;
@@ -3666,6 +3697,35 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
     })
 }
 
+fn resolve_sankey_parsing(
+    chart: Option<SchemaSankeyParsingSpec>,
+    dataset: Option<SchemaSankeyParsingSpec>,
+) -> (Option<SchemaSankeyParsing>, bool) {
+    let chart = chart.and_then(|parsing| match parsing {
+        SchemaSankeyParsingSpec::Keys(keys) => Some(keys),
+        SchemaSankeyParsingSpec::Disabled(_) => None,
+    });
+
+    match dataset {
+        Some(SchemaSankeyParsingSpec::Disabled(_)) => (None, false),
+        Some(SchemaSankeyParsingSpec::Keys(dataset)) => (
+            Some(SchemaSankeyParsing {
+                from: dataset
+                    .from
+                    .or_else(|| chart.as_ref().and_then(|keys| keys.from.clone())),
+                to: dataset
+                    .to
+                    .or_else(|| chart.as_ref().and_then(|keys| keys.to.clone())),
+                flow: dataset
+                    .flow
+                    .or_else(|| chart.as_ref().and_then(|keys| keys.flow.clone())),
+            }),
+            true,
+        ),
+        None => chart.map_or((None, false), |keys| (Some(keys), true)),
+    }
+}
+
 fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     use crate::ir::{ChartKind, SankeyColorMode, SankeyLink, SankeyModeX, SankeySize};
     use std::collections::HashMap;
@@ -3675,7 +3735,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         data: D,
         // Accept an explicit `options: null` as the default (schema renders options nullable).
         #[serde(default, deserialize_with = "null_or_default")]
-        options: RawOptions,
+        options: RawSankeyOptions,
         #[serde(default)]
         width: Option<f64>,
         #[serde(default)]
@@ -3722,39 +3782,8 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         priority: Option<HashMap<String, f64>>,
         #[serde(default)]
         column: Option<HashMap<String, u32>>,
-        #[serde(default, deserialize_with = "deserialize_sankey_parsing_opt")]
-        parsing: Option<Parsing>,
-    }
-    #[derive(Deserialize)]
-    struct Parsing {
         #[serde(default)]
-        from: Option<String>,
-        #[serde(default)]
-        to: Option<String>,
-        #[serde(default)]
-        flow: Option<String>,
-    }
-
-    // chartjs-chart-sankey は `parsing: false` を「remap しない」意で受け付ける。
-    // fulgur-chart の data は既に {from,to,flow} 形式なので false は parsing 未指定と
-    // 等価。object → Some(Parsing) / false → None / true → 明示エラー。
-    fn deserialize_sankey_parsing_opt<'de, D>(d: D) -> Result<Option<Parsing>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Object(Parsing),
-            Bool(bool),
-        }
-        match Option::<Repr>::deserialize(d)? {
-            None | Some(Repr::Bool(false)) => Ok(None),
-            Some(Repr::Object(p)) => Ok(Some(p)),
-            Some(Repr::Bool(true)) => Err(serde::de::Error::custom(
-                "dataset.parsing accepts an object or `false`; `true` is not supported",
-            )),
-        }
+        parsing: Option<SchemaSankeyParsingSpec>,
     }
 
     let raw: W = serde_json::from_str(json).map_err(|e| e.to_string())?;
@@ -3763,14 +3792,24 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     }
     let ds = raw.data.datasets.into_iter().next().unwrap();
 
+    // chart-level options.parsing を dataset.parsing がフィールド単位で上書きする。
+    // `dataset.parsing: false` は chart-level 設定の継承も止め、標準キーを使う。
+    let (parsing, parsing_active) = resolve_sankey_parsing(raw.options.parsing, ds.parsing);
     // parsing の effective key。未指定なら default 名 (from/to/flow) を使う。
     // 指定時は入力 JSON からそのキー名で値を取り出す(chartjs 挙動)。
     // per-link color/colorFrom/colorTo は parsing で remap しない(chartjs 互換)。
-    let parsing = ds.parsing.as_ref();
-    let parsing_active = ds.parsing.is_some();
-    let key_from = parsing.and_then(|p| p.from.as_deref()).unwrap_or("from");
-    let key_to = parsing.and_then(|p| p.to.as_deref()).unwrap_or("to");
-    let key_flow = parsing.and_then(|p| p.flow.as_deref()).unwrap_or("flow");
+    let key_from = parsing
+        .as_ref()
+        .and_then(|p| p.from.as_deref())
+        .unwrap_or("from");
+    let key_to = parsing
+        .as_ref()
+        .and_then(|p| p.to.as_deref())
+        .unwrap_or("to");
+    let key_flow = parsing
+        .as_ref()
+        .and_then(|p| p.flow.as_deref())
+        .unwrap_or("flow");
 
     // リンク構築: 各要素を Value としてパースし、parsing で指定された effective key で
     // from/to/flow を拾ってから正規化 Value を組み立てる。parsing 未指定なら key_* は
@@ -3786,7 +3825,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
             .ok_or_else(|| format!("sankey data[{i}] must be an object"))?;
         let take_str = |k: &str| -> Result<String, String> {
             let hint = if parsing_active {
-                " (mapped via dataset.parsing)"
+                " (mapped via parsing)"
             } else {
                 ""
             };
@@ -3799,7 +3838,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         };
         let take_num = |k: &str| -> Result<f64, String> {
             let hint = if parsing_active {
-                " (mapped via dataset.parsing)"
+                " (mapped via parsing)"
             } else {
                 ""
             };
