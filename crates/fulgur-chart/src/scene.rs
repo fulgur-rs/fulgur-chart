@@ -102,6 +102,16 @@ pub enum Prim {
         stroke: Color,
         stroke_width: f64,
     },
+    /// Circle whose fill and stroke are clipped to a user-space rectangle.
+    ClippedCircle {
+        cx: f64,
+        cy: f64,
+        r: f64,
+        fill: Color,
+        stroke: Color,
+        stroke_width: f64,
+        clip: Box<ClipRect>,
+    },
     Text {
         x: f64,
         y: f64,

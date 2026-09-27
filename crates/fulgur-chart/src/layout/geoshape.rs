@@ -6,7 +6,7 @@ use crate::ir::{ChartKind, ChartSpec};
 use crate::scene::{Anchor, ClipRect, Prim, Scene};
 use crate::text::TextMeasurer;
 
-pub fn build(spec: &ChartSpec, _measurer: &TextMeasurer) -> Scene {
+pub fn build(spec: &ChartSpec, _measurer: &TextMeasurer) -> Result<Scene, String> {
     let ChartKind::GeoShape { data } = &spec.kind else {
         unreachable!("geoshape::build called on non-geoshape kind");
     };
@@ -35,63 +35,80 @@ pub fn build(spec: &ChartSpec, _measurer: &TextMeasurer) -> Scene {
         });
     }
 
-    if let Ok(features) = project_features(data, viewport) {
-        for feature in features {
-            let fill = feature.fill.or(data.style.fill);
-            for geometry in feature.geometries {
-                match geometry {
-                    ProjectedGeometry::Path { d, fillable } if !d.is_empty() => {
-                        let fill = fillable.then_some(fill).flatten();
-                        let stroke = data.style.stroke;
-                        if let Some(clip) = feature.clip {
-                            items.push(Prim::ClippedPath {
-                                d,
-                                fill,
-                                stroke,
-                                stroke_width: data.style.stroke_width,
-                                clip: Box::new(clip),
-                            });
-                        } else {
-                            items.push(Prim::Path {
-                                d,
-                                fill,
-                                stroke,
-                                stroke_width: data.style.stroke_width,
-                            });
-                        }
-                    }
-                    ProjectedGeometry::Point { x, y } => {
-                        if feature.clip.is_some_and(|clip| {
-                            x < clip.x || x > clip.x + clip.w || y < clip.y || y > clip.y + clip.h
-                        }) {
-                            continue;
-                        }
-                        let fill = fill.unwrap_or(crate::ir::Color {
-                            r: 0,
-                            g: 0,
-                            b: 0,
-                            a: 0.0,
+    let features = project_features(data, viewport)?;
+    for feature in features {
+        let fill = feature.fill.or(data.style.fill);
+        for geometry in feature.geometries {
+            match geometry {
+                ProjectedGeometry::Path { d, fillable } if !d.is_empty() => {
+                    let fill = fillable.then_some(fill).flatten();
+                    let stroke = data.style.stroke;
+                    if let Some(clip) = feature.clip {
+                        items.push(Prim::ClippedPath {
+                            d,
+                            fill,
+                            stroke,
+                            stroke_width: data.style.stroke_width,
+                            clip: Box::new(clip),
                         });
+                    } else {
+                        items.push(Prim::Path {
+                            d,
+                            fill,
+                            stroke,
+                            stroke_width: data.style.stroke_width,
+                        });
+                    }
+                }
+                ProjectedGeometry::Point { x, y } => {
+                    let clip_radius =
+                        data.projection.point_radius + data.style.stroke_width.max(0.0) / 2.0;
+                    if feature.clip.is_some_and(|clip| {
+                        x + clip_radius < clip.x
+                            || x - clip_radius > clip.x + clip.w
+                            || y + clip_radius < clip.y
+                            || y - clip_radius > clip.y + clip.h
+                    }) {
+                        continue;
+                    }
+                    let fill = fill.unwrap_or(crate::ir::Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 0.0,
+                    });
+                    let stroke = data.style.stroke.unwrap_or(fill);
+                    if let Some(clip) = feature.clip {
+                        items.push(Prim::ClippedCircle {
+                            cx: x,
+                            cy: y,
+                            r: data.projection.point_radius,
+                            fill,
+                            stroke,
+                            stroke_width: data.style.stroke_width,
+                            clip: Box::new(clip),
+                        });
+                    } else {
                         items.push(Prim::Circle {
                             cx: x,
                             cy: y,
                             r: data.projection.point_radius,
                             fill,
-                            stroke: data.style.stroke.unwrap_or(fill),
+                            stroke,
                             stroke_width: data.style.stroke_width,
                         });
                     }
-                    ProjectedGeometry::Path { .. } => {}
                 }
+                ProjectedGeometry::Path { .. } => {}
             }
         }
     }
 
-    Scene {
+    Ok(Scene {
         width: spec.width,
         height: spec.height,
         items,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -418,7 +435,7 @@ mod tests {
         spec.width = 320.0;
         spec.height = 200.0;
         let measurer = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
-        let scene = build(&spec, &measurer);
+        let scene = build(&spec, &measurer).unwrap();
         assert_eq!((scene.width, scene.height), (320.0, 200.0));
         assert!(scene.items.iter().any(|item| matches!(
             item,
@@ -473,11 +490,53 @@ mod tests {
         spec.series.clear();
         spec.categories.clear();
         let measurer = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
-        let scene = build(&spec, &measurer);
+        let scene = build(&spec, &measurer).unwrap();
         assert!(scene.items.iter().any(|item| matches!(
             item,
             Prim::Circle { fill, stroke: actual_stroke, .. }
                 if fill.a == 0.0 && *actual_stroke == stroke
         )));
+    }
+
+    #[test]
+    fn point_radius_is_clipped_to_projection_clip_extent() {
+        let mut spec = crate::frontend::chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#,
+            false,
+        )
+        .unwrap();
+        spec.kind = ChartKind::GeoShape {
+            data: Box::new(GeoShape {
+                features: vec![GeoFeature {
+                    geometry: Some(GeoGeometry::Point([0.0, 0.0])),
+                    fill: Some(color(20, 120, 210)),
+                }],
+                projection: GeoProjection {
+                    clip_extent: Some([[160.0, 90.0], [180.0, 110.0]]),
+                    ..GeoProjection::default()
+                },
+                style: GeoShapeStyle::default(),
+            }),
+        };
+        spec.series.clear();
+        spec.categories.clear();
+        spec.width = 320.0;
+        spec.height = 200.0;
+        let measurer = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
+        let scene = build(&spec, &measurer).unwrap();
+        let svg = crate::svg::render_svg(&scene, "sans-serif");
+        assert!(
+            svg.contains("clip-path=\"url(#clip0)\""),
+            "a point radius crossing clipExtent must be clipped in the renderer: {svg}"
+        );
+        let png =
+            crate::raster_direct::render_chart_to_png(&spec, 1.0, crate::font::TEST_FONT).unwrap();
+        let decoder = png::Decoder::new(std::io::Cursor::new(png));
+        let mut reader = decoder.read_info().unwrap();
+        let mut bytes = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut bytes).unwrap();
+        let alpha_at = |x: usize, y: usize| bytes[(y * info.width as usize + x) * 4 + 3];
+        assert_eq!(alpha_at(159, 100), 0);
+        assert!(alpha_at(161, 100) > 0);
     }
 }

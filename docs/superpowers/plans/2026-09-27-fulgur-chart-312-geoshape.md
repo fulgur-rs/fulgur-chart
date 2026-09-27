@@ -130,7 +130,7 @@ Expected: PASS。
 
 - [ ] **Step 5: clipping / fit / ring test を追加する**
 
-`layout::geoshape::tests::auto_fit_contains_all_features_with_margin`, `geoshape::tests::clips_projection_horizon_without_non_finite_path`, `layout::geoshape::tests::normalizes_polygon_holes_and_preserves_feature_order` を追加する。Hole は外周と反対 winding、source feature 順は出力順、fit bounds は viewport から各辺8 px以上内側を assert する。
+`layout::geoshape::tests::auto_fit_contains_all_features_with_margin`, `geoshape::tests::clips_projection_horizon_without_non_finite_path`, `layout::geoshape::tests::normalizes_polygon_holes_and_preserves_feature_order`, `geoshape::tests::precision_zero_is_bounded_by_the_projected_vertex_limit` を追加する。Hole は外周と反対 winding、source feature 順は出力順、fit bounds は viewport から各辺8 px以上内側を assert する。`precision: 0` は resampler の最悪出力を事前見積もりし、上限超過なら投影前に拒否する。
 
 - [ ] **Step 6: direct IR guard test を追加する**
 

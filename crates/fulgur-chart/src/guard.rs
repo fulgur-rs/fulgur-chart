@@ -882,7 +882,8 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
             };
             let mut pending = vec![(geometry, 0usize)];
             while let Some((geometry, depth)) = pending.pop() {
-                if depth > 64 {
+                if matches!(geometry, crate::ir::GeoGeometry::GeometryCollection(_)) && depth >= 64
+                {
                     return Err(format!(
                         "geoshape GeometryCollection nesting exceeds 64 at feature {feature_index}"
                     ));
@@ -2451,6 +2452,34 @@ mod tests {
         let error = validate_spec(&primitive_spec, &primitive_limits).unwrap_err();
         assert!(
             error.contains("primitive count"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn geoshape_guard_matches_parser_collection_depth_limit() {
+        use crate::ir::{GeoFeature, GeoGeometry, GeoProjection, GeoShape, GeoShapeStyle};
+
+        let mut geometry = GeoGeometry::GeometryCollection(Vec::new());
+        for _ in 0..64 {
+            geometry = GeoGeometry::GeometryCollection(vec![geometry]);
+        }
+        let mut spec = base_spec();
+        spec.series.clear();
+        spec.categories.clear();
+        spec.kind = ChartKind::GeoShape {
+            data: Box::new(GeoShape {
+                features: vec![GeoFeature {
+                    geometry: Some(geometry),
+                    fill: None,
+                }],
+                projection: GeoProjection::default(),
+                style: GeoShapeStyle::default(),
+            }),
+        };
+        let error = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(
+            error.contains("GeometryCollection nesting exceeds 64"),
             "unexpected error: {error}"
         );
     }

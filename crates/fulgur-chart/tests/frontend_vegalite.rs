@@ -3339,6 +3339,26 @@ fn geoshape_parses_record_and_feature_collection_inputs() {
 }
 
 #[test]
+fn geoshape_record_type_property_is_not_mistaken_for_geojson_type() {
+    let json = r##"{
+        "mark":"geoshape",
+        "data":{"values":[
+            {"type":"county","geometry":{"type":"Polygon","coordinates":[[[0,0],[5,0],[5,5],[0,0]]]},"name":"first"}
+        ]},
+        "encoding":{"shape":{"field":"geometry","type":"geojson"}}
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let ChartKind::GeoShape { data } = spec.kind else {
+        panic!("expected geoshape chart kind");
+    };
+    assert_eq!(data.features.len(), 1);
+    assert_eq!(
+        data.features[0].geometry.as_ref().unwrap().kind_name(),
+        "Polygon"
+    );
+}
+
+#[test]
 fn geoshape_choropleth_uses_record_before_feature_properties() {
     let json = r##"{
         "mark":"geoshape",

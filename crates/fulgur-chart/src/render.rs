@@ -13,7 +13,7 @@ use crate::text::TextMeasurer;
 #[cfg(feature = "default-font")]
 pub fn render_chart(spec: &crate::ir::ChartSpec) -> String {
     let m = TextMeasurer::new(DEFAULT_FONT).expect("bundled font parses");
-    render_with(spec, &m, "Noto Sans JP, sans-serif")
+    render_with(spec, &m, "Noto Sans JP, sans-serif").expect("chart rendering failed")
 }
 
 /// 任意フォントで描画。font_bytes がパース不能なら Err。
@@ -43,11 +43,7 @@ pub fn render_chart_with_font_and_limits(
     let fam = family_name(font_bytes).unwrap_or_else(|| DEFAULT_FAMILY.to_string());
     // family 名は CSS string としてクォートする。フォント name table はカンマや引用符を
     // 含み得るため、未クォートだと CSS が複数 family と解釈し計測/SVG/PNG の三者一致が崩れる。
-    Ok(render_with(
-        spec,
-        &m,
-        &format!("{}, sans-serif", css_quote_family(&fam)),
-    ))
+    render_with(spec, &m, &format!("{}, sans-serif", css_quote_family(&fam)))
 }
 
 /// CSS font-family 値用に family 名を二重引用符で囲む。CSS 文字列規則に従い
@@ -57,9 +53,13 @@ fn css_quote_family(name: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-fn render_with(spec: &crate::ir::ChartSpec, m: &TextMeasurer, font_family: &str) -> String {
-    let scene = crate::layout::build_scene(spec, m);
-    crate::svg::render_svg(&scene, font_family)
+fn render_with(
+    spec: &crate::ir::ChartSpec,
+    m: &TextMeasurer,
+    font_family: &str,
+) -> Result<String, String> {
+    let scene = crate::layout::build_scene_checked(spec, m)?;
+    Ok(crate::svg::render_svg(&scene, font_family))
 }
 
 #[cfg(test)]
@@ -104,6 +104,28 @@ mod tests {
         assert_eq!(css_quote_family("IPAGothic"), "\"IPAGothic\"");
         // カンマ・引用符・バックスラッシュを安全に CSS 文字列化する。
         assert_eq!(css_quote_family(r#"A,"B\C"#), "\"A,\\\"B\\\\C\"");
+    }
+
+    #[test]
+    fn fallible_svg_render_returns_geoshape_projection_errors() {
+        let mut spec = spec();
+        spec.kind = crate::ir::ChartKind::GeoShape {
+            data: Box::new(crate::ir::GeoShape {
+                features: vec![crate::ir::GeoFeature {
+                    geometry: Some(crate::ir::GeoGeometry::Point([2.0, 0.0])),
+                    fill: None,
+                }],
+                projection: crate::ir::GeoProjection {
+                    projection_type: crate::ir::GeoProjectionType::Identity,
+                    scale: Some(f64::MAX),
+                    ..crate::ir::GeoProjection::default()
+                },
+                style: crate::ir::GeoShapeStyle::default(),
+            }),
+        };
+        let error = render_chart_with_font(&spec, TEST_FONT)
+            .expect_err("projection failures must reach the fallible render API");
+        assert!(error.contains("non-finite"), "{error}");
     }
 
     #[test]

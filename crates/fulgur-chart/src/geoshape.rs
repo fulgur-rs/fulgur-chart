@@ -2,10 +2,9 @@ use crate::guard::InputLimits;
 use crate::ir::{GeoGeometry, GeoProjection, GeoProjectionType, GeoShape};
 use crate::num::fmt_num;
 use crate::scene::ClipRect;
-use d3_geo_rs::Transform;
 use d3_geo_rs::projection::{
     Build, BuilderTrait, CenterSet, ClipAngleAdjust, ClipAngleSet, PrecisionAdjust, Projector,
-    RawBase, RotateSet, ScaleGet, ScaleSet, TranslateGet,
+    RawBase, RotateSet, ScaleGet, ScaleSet, TranslateGet, TranslateSet,
 };
 use d3_geo_rs::stream::{Stream, Streamable};
 use geo_types::{
@@ -13,6 +12,9 @@ use geo_types::{
     Point, Polygon,
 };
 use serde_json::{Map, Value};
+use std::cell::Cell;
+use std::rc::Rc;
+use std::sync::Arc;
 
 const MAX_GEOMETRY_COLLECTION_DEPTH: usize = 64;
 
@@ -20,7 +22,7 @@ const MAX_GEOMETRY_COLLECTION_DEPTH: usize = 64;
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawGeoFeature {
     pub geometry: Option<GeoGeometry>,
-    pub record: Map<String, Value>,
+    pub record: Arc<Map<String, Value>>,
     pub properties: Map<String, Value>,
 }
 
@@ -29,6 +31,49 @@ struct Counts {
     features: usize,
     vertices: usize,
     primitives: usize,
+}
+
+const MAX_PROJECTED_GEO_VERTICES: usize = 1_000_000;
+const MAX_PROJECTED_GEO_PRIMITIVES: usize = 1_000_000;
+const MAX_RESAMPLED_VERTICES_PER_SEGMENT: usize = 1 << 16;
+
+#[derive(Clone, Debug, PartialEq)]
+struct ProjectionBudget {
+    vertices: Rc<Cell<usize>>,
+    primitives: Rc<Cell<usize>>,
+}
+
+impl Default for ProjectionBudget {
+    fn default() -> Self {
+        Self {
+            vertices: Rc::new(Cell::new(0)),
+            primitives: Rc::new(Cell::new(0)),
+        }
+    }
+}
+
+impl ProjectionBudget {
+    fn add_vertex(&self) -> Result<(), String> {
+        let count = self.vertices.get();
+        if count >= MAX_PROJECTED_GEO_VERTICES {
+            return Err(format!(
+                "projected coordinate vertex count exceeds limit {MAX_PROJECTED_GEO_VERTICES}"
+            ));
+        }
+        self.vertices.set(count + 1);
+        Ok(())
+    }
+
+    fn add_primitive(&self) -> Result<(), String> {
+        let count = self.primitives.get();
+        if count >= MAX_PROJECTED_GEO_PRIMITIVES {
+            return Err(format!(
+                "projected primitive count exceeds limit {MAX_PROJECTED_GEO_PRIMITIVES}"
+            ));
+        }
+        self.primitives.set(count + 1);
+        Ok(())
+    }
 }
 
 /// One projected feature. Its subpaths retain polygon fill eligibility for mixed collections.
@@ -64,6 +109,7 @@ struct GeoPathEndpoint {
     in_polygon: bool,
     in_line: bool,
     error: Option<String>,
+    budget: ProjectionBudget,
 }
 
 impl Stream for GeoPathEndpoint {
@@ -80,6 +126,9 @@ impl Stream for GeoPathEndpoint {
     }
 
     fn point(&mut self, point: &Coord<f64>, _marker: Option<u8>) {
+        if self.error.is_some() {
+            return;
+        }
         if !point.x.is_finite() || !point.y.is_finite() {
             self.error = Some(format!(
                 "projection produced a non-finite coordinate ({}, {})",
@@ -87,10 +136,18 @@ impl Stream for GeoPathEndpoint {
             ));
             return;
         }
+        if let Err(error) = self.budget.add_vertex() {
+            self.error = Some(error);
+            return;
+        }
         let point = [point.x, point.y];
         if self.in_line {
             self.current_line.push(point);
         } else {
+            if let Err(error) = self.budget.add_primitive() {
+                self.error = Some(error);
+                return;
+            }
             self.output.push(RawProjectedGeometry::Point(point));
         }
     }
@@ -98,11 +155,18 @@ impl Stream for GeoPathEndpoint {
     fn line_end(&mut self) {
         self.in_line = false;
         let line = std::mem::take(&mut self.current_line);
+        if self.error.is_some() {
+            return;
+        }
         if self.in_polygon {
             if !line.is_empty() {
                 self.polygon_rings.push(line);
             }
         } else if line.len() >= 2 {
+            if let Err(error) = self.budget.add_primitive() {
+                self.error = Some(error);
+                return;
+            }
             self.output.push(RawProjectedGeometry::Path {
                 subpaths: vec![line],
                 fillable: false,
@@ -117,7 +181,15 @@ impl Stream for GeoPathEndpoint {
 
     fn polygon_end(&mut self) {
         self.in_polygon = false;
+        if self.error.is_some() {
+            self.polygon_rings.clear();
+            return;
+        }
         if self.polygon_rings.is_empty() {
+            return;
+        }
+        if let Err(error) = self.budget.add_primitive() {
+            self.error = Some(error);
             return;
         }
         for (index, ring) in self.polygon_rings.iter_mut().enumerate() {
@@ -160,13 +232,15 @@ pub fn project_features(
         return Err("geoshape viewport must have finite non-negative dimensions".to_string());
     }
 
+    check_zero_precision_resample_budget(shape)?;
+    let budget = ProjectionBudget::default();
     let mut projected = Vec::with_capacity(shape.features.len());
     let mut default_scale = None;
     let mut default_translate = None;
     for feature in &shape.features {
         let mut geometries = Vec::new();
         if let Some(geometry) = &feature.geometry {
-            let output = project_geometry(&shape.projection, geometry)?;
+            let output = project_geometry(&shape.projection, geometry, &budget)?;
             if default_scale.is_none() {
                 default_scale = Some(output.default_scale);
                 default_translate = Some(output.default_translate);
@@ -278,6 +352,55 @@ pub fn project_features(
     Ok(projected)
 }
 
+fn check_zero_precision_resample_budget(shape: &GeoShape) -> Result<(), String> {
+    if shape.projection.projection_type == GeoProjectionType::Identity
+        || shape.projection.precision != Some(0.0)
+    {
+        return Ok(());
+    }
+
+    let mut source_segments = 0usize;
+    let mut pending = shape
+        .features
+        .iter()
+        .filter_map(|feature| feature.geometry.as_ref())
+        .collect::<Vec<_>>();
+    while let Some(geometry) = pending.pop() {
+        let segments = match geometry {
+            GeoGeometry::Point(_) | GeoGeometry::MultiPoint(_) => 0,
+            GeoGeometry::LineString(points) => points.len().saturating_sub(1),
+            GeoGeometry::MultiLineString(lines) | GeoGeometry::Polygon(lines) => {
+                lines.iter().map(|line| line.len().saturating_sub(1)).sum()
+            }
+            GeoGeometry::MultiPolygon(polygons) => polygons
+                .iter()
+                .flatten()
+                .map(|ring| ring.len().saturating_sub(1))
+                .sum(),
+            GeoGeometry::GeometryCollection(geometries) => {
+                pending.extend(geometries);
+                0
+            }
+        };
+        source_segments = source_segments.saturating_add(segments);
+    }
+
+    let projection_copies = if shape.projection.projection_type == GeoProjectionType::AlbersUsa {
+        3
+    } else {
+        1
+    };
+    let possible_vertices = source_segments
+        .saturating_mul(MAX_RESAMPLED_VERTICES_PER_SEGMENT)
+        .saturating_mul(projection_copies);
+    if possible_vertices > MAX_PROJECTED_GEO_VERTICES {
+        return Err(format!(
+            "projection precision 0 may exceed projected coordinate vertex limit {MAX_PROJECTED_GEO_VERTICES}; increase precision or simplify the geometry"
+        ));
+    }
+    Ok(())
+}
+
 impl ProjectedGeometry {
     fn from_raw(raw: RawProjectedGeometry) -> Self {
         match raw {
@@ -299,16 +422,17 @@ struct GeometryProjection {
 fn project_geometry(
     projection: &GeoProjection,
     geometry: &GeoGeometry,
+    budget: &ProjectionBudget,
 ) -> Result<GeometryProjection, String> {
     if projection.projection_type == GeoProjectionType::Identity {
         return Ok(GeometryProjection {
-            geometries: project_identity(geometry, projection)?,
+            geometries: project_identity(geometry, projection, budget)?,
             default_scale: 1.0,
             default_translate: [0.0, 0.0],
         });
     }
     if projection.projection_type == GeoProjectionType::AlbersUsa {
-        return project_albers_usa(geometry);
+        return project_albers_usa(projection, geometry, budget);
     }
 
     macro_rules! run_projection {
@@ -318,9 +442,9 @@ fn project_geometry(
             configure_precision(&mut builder, projection)?;
             if let Some(angle) = projection.clip_angle {
                 let clipped = ClipAngleSet::clip_angle_set(&builder, angle);
-                project_with_builder(&clipped, geometry)
+                project_with_builder(&clipped, geometry, budget)
             } else {
-                project_with_builder(&builder, geometry)
+                project_with_builder(&builder, geometry, budget)
             }
         }};
     }
@@ -332,7 +456,7 @@ fn project_geometry(
             if let Some(angle) = projection.clip_angle {
                 ClipAngleAdjust::clip_angle(&mut builder, angle);
             }
-            project_with_builder(&builder, geometry)
+            project_with_builder(&builder, geometry, budget)
         }};
     }
     use GeoProjectionType as P;
@@ -340,6 +464,7 @@ fn project_geometry(
         P::Albers => project_conic_raw::<d3_geo_rs::projection::equal_area::EqualArea<f64>>(
             geometry,
             projection,
+            budget,
             [29.5, 45.5],
             1070.0,
             [-0.6, 38.7],
@@ -358,6 +483,7 @@ fn project_geometry(
         P::ConicConformal => project_conic_raw::<d3_geo_rs::projection::conformal::Conformal>(
             geometry,
             projection,
+            budget,
             [30.0, 30.0],
             109.5,
             [0.0, 0.0],
@@ -367,6 +493,7 @@ fn project_geometry(
             project_conic_raw::<d3_geo_rs::projection::equal_area::EqualArea<f64>>(
                 geometry,
                 projection,
+                budget,
                 [0.0, 60.0],
                 155.424,
                 [0.0, 33.6442],
@@ -377,6 +504,7 @@ fn project_geometry(
             project_conic_raw::<d3_geo_rs::projection::equidistant::Equidistant>(
                 geometry,
                 projection,
+                budget,
                 [0.0, 60.0],
                 131.154,
                 [0.0, 13.9389],
@@ -407,7 +535,7 @@ fn project_geometry(
             d3_geo_rs::projection::stereographic::Stereographic::<f64>::builder::<GeoPathEndpoint>(
             )
         ),
-        P::TransverseMercator => project_transverse_mercator(geometry, projection),
+        P::TransverseMercator => project_transverse_mercator(geometry, projection, budget),
         P::AlbersUsa | P::Identity => unreachable!("handled above"),
     }
 }
@@ -415,6 +543,7 @@ fn project_geometry(
 fn project_transverse_mercator(
     geometry: &GeoGeometry,
     projection: &GeoProjection,
+    budget: &ProjectionBudget,
 ) -> Result<GeometryProjection, String> {
     let mut builder = d3_geo_rs::projection::mercator_transverse::MercatorTransverse::builder::<
         GeoPathEndpoint,
@@ -425,11 +554,11 @@ fn project_transverse_mercator(
             d3_geo_rs::projection::builder_mercator_transverse::Builder { base };
         configure_builder(&mut clipped_builder, projection)?;
         configure_precision(&mut clipped_builder.base, projection)?;
-        project_with_builder(&clipped_builder, geometry)
+        project_with_builder(&clipped_builder, geometry, budget)
     } else {
         configure_builder(&mut builder, projection)?;
         configure_precision(&mut builder.base, projection)?;
-        project_with_builder(&builder, geometry)
+        project_with_builder(&builder, geometry, budget)
     }
 }
 
@@ -452,6 +581,7 @@ where
 fn project_conic_raw<PR>(
     geometry: &GeoGeometry,
     projection: &GeoProjection,
+    budget: &ProjectionBudget,
     default_parallels: [f64; 2],
     default_scale: f64,
     default_center: [f64; 2],
@@ -498,9 +628,9 @@ where
     configure_precision(&mut builder, projection)?;
     if let Some(angle) = projection.clip_angle {
         let clipped = ClipAngleSet::clip_angle_set(&builder, angle);
-        project_with_builder(&clipped, geometry)
+        project_with_builder(&clipped, geometry, budget)
     } else {
-        project_with_builder(&builder, geometry)
+        project_with_builder(&builder, geometry, budget)
     }
 }
 
@@ -520,6 +650,7 @@ where
 fn project_with_builder<B>(
     builder: &B,
     geometry: &GeoGeometry,
+    budget: &ProjectionBudget,
 ) -> Result<GeometryProjection, String>
 where
     B: Build + ScaleGet<T = f64> + TranslateGet<T = f64>,
@@ -538,7 +669,11 @@ where
         // GeoJSON geometry its own stream so a preceding polygon cannot affect a later
         // point or line in the same GeometryCollection.
         let mut projector = builder.build();
-        let mut stream = projector.stream(&GeoPathEndpoint::default());
+        let endpoint = GeoPathEndpoint {
+            budget: budget.clone(),
+            ..GeoPathEndpoint::default()
+        };
+        let mut stream = projector.stream(&endpoint);
         geo.to_stream(&mut stream);
         let endpoint = stream.endpoint();
         if let Some(error) = endpoint.error.take() {
@@ -605,10 +740,145 @@ fn to_geo_geometries(geometry: &GeoGeometry) -> Vec<Geometry<f64>> {
     }
 }
 
+fn geometry_leaves<'a>(geometry: &'a GeoGeometry, output: &mut Vec<&'a GeoGeometry>) {
+    if let GeoGeometry::GeometryCollection(geometries) = geometry {
+        for geometry in geometries {
+            geometry_leaves(geometry, output);
+        }
+    } else {
+        output.push(geometry);
+    }
+}
+
+fn geo_bounds(geometry: &GeoGeometry) -> Option<[f64; 4]> {
+    fn extend(bounds: &mut [f64; 4], point: [f64; 2]) {
+        bounds[0] = bounds[0].min(point[0]);
+        bounds[1] = bounds[1].min(point[1]);
+        bounds[2] = bounds[2].max(point[0]);
+        bounds[3] = bounds[3].max(point[1]);
+    }
+
+    fn visit(geometry: &GeoGeometry, bounds: &mut [f64; 4]) {
+        let mut extend_points = |points: &[[f64; 2]]| {
+            for point in points {
+                extend(bounds, *point);
+            }
+        };
+        match geometry {
+            GeoGeometry::Point(point) => extend(bounds, *point),
+            GeoGeometry::MultiPoint(points) | GeoGeometry::LineString(points) => {
+                extend_points(points)
+            }
+            GeoGeometry::MultiLineString(lines) | GeoGeometry::Polygon(lines) => {
+                for line in lines {
+                    extend_points(line);
+                }
+            }
+            GeoGeometry::MultiPolygon(polygons) => {
+                for polygon in polygons {
+                    for ring in polygon {
+                        extend_points(ring);
+                    }
+                }
+            }
+            GeoGeometry::GeometryCollection(geometries) => {
+                for geometry in geometries {
+                    visit(geometry, bounds);
+                }
+            }
+        }
+    }
+
+    let mut bounds = [
+        f64::INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NEG_INFINITY,
+    ];
+    visit(geometry, &mut bounds);
+    bounds[0].is_finite().then_some(bounds)
+}
+
+fn project_albers_component<B>(
+    builder: &B,
+    geometry: &GeoGeometry,
+    region: [f64; 4],
+    budget: &ProjectionBudget,
+) -> Result<Vec<RawProjectedGeometry>, String>
+where
+    B: Build + ScaleGet<T = f64> + TranslateGet<T = f64>,
+    B::Projector: Projector<EP = GeoPathEndpoint>,
+    <B::Projector as Projector>::Transformer: Stream<EP = GeoPathEndpoint, T = f64>,
+{
+    let mut output = Vec::new();
+    let mut leaves = Vec::new();
+    geometry_leaves(geometry, &mut leaves);
+    for leaf in leaves {
+        let Some(bounds) = geo_bounds(leaf) else {
+            continue;
+        };
+        if bounds[2] < region[0]
+            || bounds[0] > region[2]
+            || bounds[3] < region[1]
+            || bounds[1] > region[3]
+        {
+            continue;
+        }
+        output.extend(project_with_builder(builder, leaf, budget)?.geometries);
+    }
+    Ok(output)
+}
+
 fn project_identity(
     geometry: &GeoGeometry,
     projection: &GeoProjection,
+    budget: &ProjectionBudget,
 ) -> Result<Vec<RawProjectedGeometry>, String> {
+    fn count_geometry(geometry: &GeoGeometry, budget: &ProjectionBudget) -> Result<(), String> {
+        let add_path = |points: usize| -> Result<(), String> {
+            for _ in 0..points {
+                budget.add_vertex()?;
+            }
+            budget.add_primitive()
+        };
+        match geometry {
+            GeoGeometry::Point(_) => {
+                budget.add_vertex()?;
+                budget.add_primitive()
+            }
+            GeoGeometry::MultiPoint(points) => {
+                for _ in points {
+                    budget.add_vertex()?;
+                    budget.add_primitive()?;
+                }
+                Ok(())
+            }
+            GeoGeometry::LineString(points) if points.len() >= 2 => add_path(points.len()),
+            GeoGeometry::MultiLineString(lines) => {
+                for line in lines.iter().filter(|line| line.len() >= 2) {
+                    add_path(line.len())?;
+                }
+                Ok(())
+            }
+            GeoGeometry::Polygon(rings) if !rings.is_empty() => {
+                add_path(rings.iter().map(Vec::len).sum())
+            }
+            GeoGeometry::MultiPolygon(polygons) => {
+                for polygon in polygons.iter().filter(|polygon| !polygon.is_empty()) {
+                    add_path(polygon.iter().map(Vec::len).sum())?;
+                }
+                Ok(())
+            }
+            GeoGeometry::GeometryCollection(geometries) => {
+                for geometry in geometries {
+                    count_geometry(geometry, budget)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn visit(
         geometry: &GeoGeometry,
         projection: &GeoProjection,
@@ -664,6 +934,7 @@ fn project_identity(
         }
     }
     let mut output = Vec::new();
+    count_geometry(geometry, budget)?;
     visit(geometry, projection, &mut output);
     if output.iter().any(|geometry| match geometry {
         RawProjectedGeometry::Point([x, y]) => !x.is_finite() || !y.is_finite(),
@@ -677,119 +948,113 @@ fn project_identity(
     Ok(output)
 }
 
-fn project_albers_usa(geometry: &GeoGeometry) -> Result<GeometryProjection, String> {
-    fn project_xy(
-        projector: &mut d3_geo_rs::projection::albers_usa::AlbersUsa<
-            d3_geo_rs::stream::DrainStub<f64>,
-            f64,
-        >,
-        xy: [f64; 2],
-    ) -> Option<[f64; 2]> {
-        let point = projector.transform(&Coord { x: xy[0], y: xy[1] });
-        (point.x.is_finite() && point.y.is_finite()).then_some([point.x, point.y])
-    }
+fn project_albers_usa(
+    projection: &GeoProjection,
+    geometry: &GeoGeometry,
+    budget: &ProjectionBudget,
+) -> Result<GeometryProjection, String> {
+    use d3_geo_rs::projection::ClipExtentSet;
+    use d3_geo_rs::projection::builder_conic::PRConic;
 
-    fn visit_line(
-        points: &[[f64; 2]],
-        projector: &mut d3_geo_rs::projection::albers_usa::AlbersUsa<
-            d3_geo_rs::stream::DrainStub<f64>,
+    let scale = 1070.0;
+    let translate = [480.0, 250.0];
+    let coord = |x, y| Coord { x, y };
+    let extent = |x0, y0, x1, y1| [coord(x0, y0), coord(x1, y1)];
+    type ComponentBuilder =
+        d3_geo_rs::projection::builder::types::BuilderAntimeridianResampleNoClip<
+            GeoPathEndpoint,
+            d3_geo_rs::projection::equal_area::EqualArea<f64>,
             f64,
-        >,
-        output: &mut Vec<RawProjectedGeometry>,
-    ) {
-        let mut line = Vec::new();
-        for xy in points {
-            if let Some(point) = project_xy(projector, *xy) {
-                line.push(point);
-            } else {
-                if line.len() >= 2 {
-                    output.push(RawProjectedGeometry::Path {
-                        subpaths: vec![std::mem::take(&mut line)],
-                        fillable: false,
-                    });
-                } else {
-                    line.clear();
-                }
-            }
-        }
-        if line.len() >= 2 {
-            output.push(RawProjectedGeometry::Path {
-                subpaths: vec![line],
-                fillable: false,
-            });
-        }
-    }
-
-    fn visit(
-        geometry: &GeoGeometry,
-        projector: &mut d3_geo_rs::projection::albers_usa::AlbersUsa<
-            d3_geo_rs::stream::DrainStub<f64>,
-            f64,
-        >,
-        output: &mut Vec<RawProjectedGeometry>,
-    ) {
-        match geometry {
-            GeoGeometry::Point(xy) => {
-                if let Some(point) = project_xy(projector, *xy) {
-                    output.push(RawProjectedGeometry::Point(point));
-                }
-            }
-            GeoGeometry::MultiPoint(points) => {
-                for xy in points {
-                    visit(&GeoGeometry::Point(*xy), projector, output);
-                }
-            }
-            GeoGeometry::LineString(points) => visit_line(points, projector, output),
-            GeoGeometry::MultiLineString(lines) => {
-                for line in lines {
-                    visit_line(line, projector, output);
-                }
-            }
-            GeoGeometry::Polygon(rings) => {
-                let mut projected_rings = Vec::with_capacity(rings.len());
-                for ring in rings {
-                    let Some(points) = ring
-                        .iter()
-                        .map(|xy| project_xy(projector, *xy))
-                        .collect::<Option<Vec<_>>>()
-                    else {
-                        continue;
-                    };
-                    projected_rings.push(points);
-                }
-                if !projected_rings.is_empty() {
-                    for (index, ring) in projected_rings.iter_mut().enumerate() {
-                        normalize_ring_winding(ring, index == 0);
-                    }
-                    output.push(RawProjectedGeometry::Path {
-                        subpaths: projected_rings,
-                        fillable: true,
-                    });
-                }
-            }
-            GeoGeometry::MultiPolygon(polygons) => {
-                for polygon in polygons {
-                    visit(&GeoGeometry::Polygon(polygon.clone()), projector, output);
-                }
-            }
-            GeoGeometry::GeometryCollection(geometries) => {
-                for geometry in geometries {
-                    visit(geometry, projector, output);
-                }
-            }
-        }
-    }
-
-    let mut projector = d3_geo_rs::projection::albers_usa::AlbersUsa::<
-        d3_geo_rs::stream::DrainStub<f64>,
-        f64,
-    >::default();
+        >;
+    let component = |parallels: [f64; 2],
+                     component_scale: f64,
+                     center: [f64; 2],
+                     rotate: [f64; 2],
+                     component_translate: [f64; 2]| {
+        let raw = d3_geo_rs::projection::equal_area::EqualArea::<f64>::default()
+            .generate(parallels[0].to_radians(), parallels[1].to_radians());
+        let mut builder = <ComponentBuilder as BuilderTrait>::new(raw);
+        builder.scale_set(component_scale);
+        builder.center_set(&coord(center[0], center[1]));
+        builder.rotate2_set(&rotate);
+        builder.translate_set(&coord(component_translate[0], component_translate[1]));
+        builder
+    };
     let mut geometries = Vec::new();
-    visit(geometry, &mut projector, &mut geometries);
+
+    let mut lower48 = component([29.5, 45.5], scale, [-0.6, 38.7], [96.0, 0.0], translate);
+    configure_builder(&mut lower48, projection)?;
+    configure_precision(&mut lower48, projection)?;
+    let lower48_clip = ClipExtentSet::clip_extent_set(
+        &lower48,
+        &extent(
+            translate[0] - 0.455 * scale,
+            translate[1],
+            translate[0] + 0.455 * scale,
+            translate[1] + 0.234 * scale,
+        ),
+    );
+    geometries.extend(project_albers_component(
+        &lower48_clip,
+        geometry,
+        [-130.0, 20.0, -60.0, 60.0],
+        budget,
+    )?);
+
+    let mut alaska = component(
+        [55.0, 65.0],
+        0.35 * scale,
+        [-2.0, 58.5],
+        [154.0, 0.0],
+        [translate[0] - 0.307 * scale, translate[1] + 0.201 * scale],
+    );
+    configure_builder(&mut alaska, projection)?;
+    configure_precision(&mut alaska, projection)?;
+    let alaska_clip = ClipExtentSet::clip_extent_set(
+        &alaska,
+        &extent(
+            translate[0] - 0.425 * scale,
+            translate[1] + 0.120 * scale,
+            translate[0] - 0.214 * scale,
+            translate[1] + 0.234 * scale,
+        ),
+    );
+    geometries.extend(project_albers_component(
+        &alaska_clip,
+        geometry,
+        [-180.0, 48.0, -128.0, 75.0],
+        budget,
+    )?);
+
+    let mut hawaii = component(
+        [8.0, 18.0],
+        scale,
+        [-3.0, 19.9],
+        [157.0, 0.0],
+        [translate[0] - 0.205 * scale, translate[1] + 0.212 * scale],
+    );
+    configure_builder(&mut hawaii, projection)?;
+    configure_precision(&mut hawaii, projection)?;
+    let hawaii_clip = ClipExtentSet::clip_extent_set(
+        &hawaii,
+        &extent(
+            translate[0] - 0.214 * scale,
+            translate[1] + 0.166 * scale,
+            translate[0] - 0.115 * scale,
+            translate[1] + 0.234 * scale,
+        ),
+    );
+    geometries.extend(project_albers_component(
+        &hawaii_clip,
+        geometry,
+        [-163.0, 18.0, -152.0, 25.0],
+        budget,
+    )?);
+
     Ok(GeometryProjection {
         geometries,
-        default_scale: 1070.0,
-        default_translate: [480.0, 250.0],
+        default_scale: scale,
+        default_translate: translate,
     })
 }
 
@@ -1020,8 +1285,10 @@ fn preflight_root_item(
     match value.get("type").and_then(Value::as_str) {
         Some("Feature") => preflight_feature(value, limits, counts, path),
         Some("FeatureCollection") => preflight_feature_collection(value, limits, counts, path),
-        Some(_) => Err(at(path, "expected a GeoJSON Feature or a record object")),
-        None => {
+        Some(_) if shape_field.is_none() => {
+            Err(at(path, "expected a GeoJSON Feature or a record object"))
+        }
+        Some(_) | None => {
             let record = value
                 .as_object()
                 .ok_or_else(|| at(path, "expected a record object"))?;
@@ -1398,10 +1665,14 @@ fn parse_root_item(
     path: &str,
 ) -> Result<(), String> {
     match value.get("type").and_then(Value::as_str) {
-        Some("Feature") => parse_feature(value, Map::new(), features, path),
-        Some("FeatureCollection") => parse_feature_collection(value, Map::new(), features, path),
-        Some(_) => Err(at(path, "expected a GeoJSON Feature or a record object")),
-        None => {
+        Some("Feature") => parse_feature(value, Arc::new(Map::new()), features, path),
+        Some("FeatureCollection") => {
+            parse_feature_collection(value, Arc::new(Map::new()), features, path)
+        }
+        Some(_) if shape_field.is_none() => {
+            Err(at(path, "expected a GeoJSON Feature or a record object"))
+        }
+        Some(_) | None => {
             let record = value
                 .as_object()
                 .ok_or_else(|| at(path, "expected a record object"))?;
@@ -1416,14 +1687,14 @@ fn parse_root_item(
                 .get(field)
                 .ok_or_else(|| at(&shape_path, "shape field is missing"))?;
             let record = record.clone();
-            parse_shape(shape, record, features, &shape_path)
+            parse_shape(shape, Arc::new(record.clone()), features, &shape_path)
         }
     }
 }
 
 fn parse_shape(
     value: &Value,
-    record: Map<String, Value>,
+    record: Arc<Map<String, Value>>,
     features: &mut Vec<RawGeoFeature>,
     path: &str,
 ) -> Result<(), String> {
@@ -1451,7 +1722,7 @@ fn parse_shape(
 
 fn parse_feature_collection(
     value: &Value,
-    record: Map<String, Value>,
+    record: Arc<Map<String, Value>>,
     features: &mut Vec<RawGeoFeature>,
     path: &str,
 ) -> Result<(), String> {
@@ -1472,7 +1743,7 @@ fn parse_feature_collection(
 
 fn parse_feature(
     value: &Value,
-    record: Map<String, Value>,
+    record: Arc<Map<String, Value>>,
     features: &mut Vec<RawGeoFeature>,
     path: &str,
 ) -> Result<(), String> {
@@ -1611,6 +1882,22 @@ mod tests {
     };
     use serde_json::json;
 
+    trait RecordStorageAddress {
+        fn storage_address(&self) -> *const serde_json::Map<String, serde_json::Value>;
+    }
+
+    impl RecordStorageAddress for serde_json::Map<String, serde_json::Value> {
+        fn storage_address(&self) -> *const serde_json::Map<String, serde_json::Value> {
+            self
+        }
+    }
+
+    impl RecordStorageAddress for std::sync::Arc<serde_json::Map<String, serde_json::Value>> {
+        fn storage_address(&self) -> *const serde_json::Map<String, serde_json::Value> {
+            std::sync::Arc::as_ptr(self)
+        }
+    }
+
     #[test]
     fn parses_every_geometry_and_geojson_wrapper() {
         let records = json!([
@@ -1680,6 +1967,25 @@ mod tests {
             .expect("A single Feature should parse");
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].properties["id"], "single");
+    }
+
+    #[test]
+    fn record_shape_feature_collection_shares_its_source_record() {
+        let records = json!([{
+            "name":"region",
+            "shape":{"type":"FeatureCollection","features":[
+                {"type":"Feature","properties":{"id":1},"geometry":{"type":"Point","coordinates":[0,0]}},
+                {"type":"Feature","properties":{"id":2},"geometry":{"type":"Point","coordinates":[1,1]}}
+            ]}
+        }]);
+        let parsed = super::parse_geojson(&records, Some("shape"), &InputLimits::default())
+            .expect("record shapes can contain a FeatureCollection");
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0].record.storage_address(),
+            parsed[1].record.storage_address(),
+            "each expanded Feature must not deep-clone the full source record"
+        );
     }
 
     #[test]
@@ -1967,5 +2273,78 @@ mod tests {
                 "non-finite projected path: {path}"
             );
         }
+    }
+
+    #[test]
+    fn albers_usa_does_not_join_separate_inset_segments() {
+        let shape = GeoShape {
+            features: vec![GeoFeature {
+                geometry: Some(GeoGeometry::LineString(vec![
+                    [-149.0, 61.0],
+                    [-157.0, 21.0],
+                ])),
+                fill: None,
+            }],
+            projection: GeoProjection {
+                projection_type: GeoProjectionType::AlbersUsa,
+                ..GeoProjection::default()
+            },
+            style: GeoShapeStyle::default(),
+        };
+        let projected = super::project_features(
+            &shape,
+            crate::scene::ClipRect {
+                x: 0.0,
+                y: 0.0,
+                w: 320.0,
+                h: 200.0,
+            },
+        )
+        .expect("albersUsa should clip and project each inset independently");
+        let path_count = projected
+            .iter()
+            .flat_map(|feature| &feature.geometries)
+            .filter(|geometry| {
+                matches!(
+                    geometry,
+                    super::ProjectedGeometry::Path { d, .. } if !d.is_empty()
+                )
+            })
+            .count();
+        assert!(
+            path_count >= 2,
+            "the Alaska and Hawaii portions must stay as separate paths, got {path_count}"
+        );
+    }
+
+    #[test]
+    fn precision_zero_is_bounded_by_the_projected_vertex_limit() {
+        let line = vec![[-20.0, -80.0], [20.0, 80.0]];
+        let shape = GeoShape {
+            features: vec![GeoFeature {
+                geometry: Some(GeoGeometry::MultiLineString(vec![line; 40])),
+                fill: None,
+            }],
+            projection: GeoProjection {
+                projection_type: GeoProjectionType::Equirectangular,
+                precision: Some(0.0),
+                ..GeoProjection::default()
+            },
+            style: GeoShapeStyle::default(),
+        };
+        let error = super::project_features(
+            &shape,
+            crate::scene::ClipRect {
+                x: 0.0,
+                y: 0.0,
+                w: 320.0,
+                h: 200.0,
+            },
+        )
+        .expect_err("zero precision must not permit unbounded resampling output");
+        assert!(
+            error.contains("projection precision 0 may exceed projected coordinate vertex limit"),
+            "{error}"
+        );
     }
 }

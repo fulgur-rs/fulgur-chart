@@ -190,9 +190,10 @@ Supported subset: `mark` (`bar` / `line` / `area` / `point` → scatter / `circl
 `square` → square scatter / `arc` → pie / `rect` → heatmap / `geoshape`), inline `data.values`, and
 `encoding` fields `x` / `y` / `color` / `theta` / `shape`; `point` and `square` also support
 quantitative `size` mapped to marker area. `area` stacks by default when `color` is present
-(`encoding.y.stack: null` to disable), matching Vega-Lite. Geoshape accepts inline GeoJSON
-Geometry, Feature, FeatureCollection, and record shapes, with all 16 Vega-Lite v6 projections and
-automatic fitting. URL data and TopoJSON are not supported for geoshape. The Tableau10 color
+(`encoding.y.stack: null` to disable), matching Vega-Lite. Geoshape accepts Feature arrays and
+single Feature/FeatureCollection values directly; ordinary records put a GeoJSON Geometry,
+Feature, or FeatureCollection in `encoding.shape.field`. It supports all 16 Vega-Lite v6
+projections with automatic fitting. URL data and TopoJSON are not supported for geoshape. The Tableau10 color
 palette is applied automatically to categorical Vega-Lite encodings. Input is converted to a
 shared intermediate representation, so output determinism and Fulgur integration are identical
 to chart.js input.
