@@ -1001,30 +1001,47 @@ fn axis_title_from(opts: Option<&AxisTitleOptions>) -> Option<AxisTitle> {
 ///   (chart area 外だけに grid を残す挙動は v1 で未サポート)
 /// - `color` / `line_width` の [`ScalarOrArray`] は先頭要素だけを見る
 ///   (per-tick 配列は v1 未描画; 受理のみ)
+/// - `tickColor` / `tickWidth` も scalar/array を受け付け、配列は先頭値だけ使う
+/// - tick 色/幅の未指定値は grid の色/幅を描画時に継承する
 fn axis_grid_from(opts: Option<&GridLineOptions>) -> AxisGrid {
     use crate::schema::common::ScalarOrArray;
+    let defaults = AxisGrid::default();
     let Some(g) = opts else {
-        return AxisGrid::default();
+        return defaults;
     };
-    let display = g.display.unwrap_or(true) && g.draw_on_chart_area.unwrap_or(true);
+    let display =
+        g.display.unwrap_or(defaults.display) && g.draw_on_chart_area.unwrap_or(defaults.display);
     let color = match &g.color {
         Some(ScalarOrArray::One(s)) => parse_color(s),
         Some(ScalarOrArray::Many(v)) => v.first().and_then(|s| parse_color(s)),
-        None => None,
+        None => defaults.color,
     };
     let line_width = match &g.line_width {
         Some(ScalarOrArray::One(w)) => *w,
-        Some(ScalarOrArray::Many(v)) => *v.first().unwrap_or(&1.0),
-        None => 1.0,
+        Some(ScalarOrArray::Many(v)) => *v.first().unwrap_or(&defaults.line_width),
+        None => defaults.line_width,
+    };
+    let tick_color = match &g.tick_color {
+        Some(ScalarOrArray::One(s)) => parse_color(s),
+        Some(ScalarOrArray::Many(v)) => v.first().and_then(|s| parse_color(s)),
+        None => defaults.tick_color,
+    };
+    let tick_width = match &g.tick_width {
+        Some(ScalarOrArray::One(w)) => Some(*w),
+        Some(ScalarOrArray::Many(v)) => v.first().copied(),
+        None => defaults.tick_width,
     };
     // fulgur は Chart.js の既定 (true) から意図的に乖離: 未指定なら false。
     // 既存スナップショット保護のため。詳細は `AxisGrid::default` のドキュメント参照。
-    let draw_ticks = g.draw_ticks.unwrap_or(false);
+    let draw_ticks = g.draw_ticks.unwrap_or(defaults.draw_ticks);
     AxisGrid {
         display,
         color,
         line_width,
         draw_ticks,
+        tick_color,
+        tick_width,
+        tick_length: g.tick_length.unwrap_or(defaults.tick_length),
     }
 }
 
@@ -5627,6 +5644,30 @@ mod tests {
             ..Default::default()
         };
         assert!((axis_grid_from(Some(&opts)).line_width - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_grid_from_maps_tick_style_scalars_and_array_heads() {
+        use crate::schema::common::ScalarOrArray;
+
+        let opts = GridLineOptions {
+            color: Some(ScalarOrArray::One("#0000ff".into())),
+            line_width: Some(ScalarOrArray::One(2.0)),
+            draw_ticks: Some(true),
+            tick_color: Some(ScalarOrArray::Many(vec![
+                "#ff0000".into(),
+                "#00ff00".into(),
+            ])),
+            tick_width: Some(ScalarOrArray::Many(vec![3.0, 4.0])),
+            tick_length: Some(12.0),
+            ..Default::default()
+        };
+
+        let g = axis_grid_from(Some(&opts));
+        assert!(g.draw_ticks);
+        assert_eq!(g.tick_color.unwrap().r, 255);
+        assert_eq!(g.tick_width, Some(3.0));
+        assert!((g.tick_length - 12.0).abs() < 1e-9);
     }
 
     #[test]

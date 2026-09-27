@@ -344,7 +344,7 @@ pub fn parse_with_limits(
         ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square
     );
     let grid = if temporal_line {
-        Some(temporal_axis_grid(top, theme.grid_color)?)
+        Some(temporal_axis_grid(top, theme.grid_color, theme.text_color)?)
     } else {
         None
     };
@@ -1439,6 +1439,7 @@ fn validate_temporal_view(top: &Map<String, Value>) -> Result<(), String> {
 fn temporal_axis_grid(
     top: &Map<String, Value>,
     theme_grid_color: Color,
+    theme_text_color: Color,
 ) -> Result<AxisGrid, String> {
     let axis = temporal_config(top)?
         .and_then(|config| config.get("axis"))
@@ -1482,6 +1483,9 @@ fn temporal_axis_grid(
         color: opacity.map(|_| grid_color),
         line_width: 1.0,
         draw_ticks: true,
+        tick_color: Some(theme_text_color),
+        tick_width: None,
+        tick_length: 4.0,
     })
 }
 
