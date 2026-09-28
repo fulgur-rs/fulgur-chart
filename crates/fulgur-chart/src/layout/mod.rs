@@ -106,7 +106,7 @@ fn build_chart_scene(
 ) -> Result<Scene, String> {
     let scene = match spec.kind {
         ChartKind::Bar { .. } => bar::build(spec, m),
-        ChartKind::Line { .. } => line::build(spec, m),
+        ChartKind::Line { .. } | ChartKind::Trail => line::build(spec, m),
         ChartKind::Pie { .. } => pie::build(spec, m),
         ChartKind::PolarArea => polar_area::build(spec, m),
         // scatter/bubble/square は同じレイアウト。マーカー形状・サイズは scatter.rs で分岐。

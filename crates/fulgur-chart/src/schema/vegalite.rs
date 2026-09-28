@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 #[serde(untagged)]
 pub enum VegaLiteSpec {
     Bar(VlBarSpec),
+    TemporalTrail(VlTemporalTrailSpec),
+    CategoricalTrail(VlCategoricalTrailSpec),
     TemporalLine(VlTemporalLineSpec),
     CategoricalLine(VlCategoricalLineSpec),
     TemporalArea(VlTemporalAreaSpec),
@@ -132,6 +134,26 @@ pub struct MarkLineObject {
 pub enum MarkLine {
     String(MarkLineName),
     Object(MarkLineObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkTrailName {
+    Trail,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkTrailObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkTrailName,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkTrail {
+    String(MarkTrailName),
+    Object(MarkTrailObject),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -459,6 +481,77 @@ pub struct VlCategoricalLineEncoding {
     pub y: VlCategoricalYChannel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<VlCategoricalColorChannel>,
+}
+
+// ────────────────────────────────────────────────
+// Trail chart (mark: "trail")
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTemporalTrailSpec {
+    pub mark: MarkTrail,
+    pub data: VlData,
+    pub encoding: VlTemporalTrailEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<VlConfig>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTemporalTrailEncoding {
+    pub x: VlTemporalXChannel,
+    pub y: VlTemporalYChannel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlTemporalColorChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<VlTrailSizeChannel>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCategoricalTrailSpec {
+    pub mark: MarkTrail,
+    pub data: VlData,
+    pub encoding: VlCategoricalTrailEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCategoricalTrailEncoding {
+    pub x: VlCategoricalXChannel,
+    pub y: VlCategoricalYChannel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlCategoricalColorChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<VlTrailSizeChannel>,
+}
+
+/// Quantitative trail size channel. Unlike point/square size, this maps to path width.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTrailSizeChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlQuantitativeType>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

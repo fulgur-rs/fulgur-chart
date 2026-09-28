@@ -3888,3 +3888,274 @@ fn geoshape_zero_stroke_width_is_invisible_in_svg_and_png() {
         "zero-width line must not draw a raster hairline: {pixel:?}"
     );
 }
+#[test]
+fn vegalite_trail_schema_accepts_string_and_object_marks() {
+    let specs = [
+        r#"{"mark":"trail","data":{"values":[{"x":"a","y":1}]},
+           "encoding":{"x":{"field":"x","type":"nominal"},
+                       "y":{"field":"y","type":"quantitative"}}}"#,
+        r#"{"mark":{"type":"trail"},"data":{"values":[{"x":"a","y":1}]},
+           "encoding":{"x":{"field":"x","type":"nominal"},
+                       "y":{"field":"y","type":"quantitative"}}}"#,
+    ];
+
+    for json in specs {
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(json).is_ok(),
+            "typed schema should accept trail mark form: {json}"
+        );
+        assert!(
+            vegalite::parse(json, true).is_ok(),
+            "strict parser should accept trail mark form: {json}"
+        );
+    }
+}
+
+#[test]
+fn vegalite_trail_size_aggregates_per_point_and_scales_across_groups() {
+    let json = r#"{
+      "mark":"trail",
+      "data":{"values":[
+        {"x":"a","y":1,"group":"A","weight":10},
+        {"x":"a","y":2,"group":"A","weight":20},
+        {"x":"b","y":1,"group":"A","weight":10},
+        {"x":"a","y":1,"group":"B","weight":100},
+        {"x":"b","y":1,"group":"B","weight":10}
+      ]},
+      "encoding":{
+        "x":{"field":"x","type":"nominal"},
+        "y":{"field":"y","type":"quantitative"},
+        "color":{"field":"group","type":"nominal"},
+        "size":{"field":"weight","type":"quantitative"}
+      }
+    }"#;
+
+    let spec = vegalite::parse(json, true).expect("trail size encoding should parse");
+    assert!(matches!(spec.kind, ChartKind::Trail));
+    assert_eq!(
+        fulgur_chart::model::build_model_core(&spec).meta.r#type,
+        "trail"
+    );
+    assert_eq!(
+        spec.series[0].series_type,
+        fulgur_chart::ir::SeriesType::Line
+    );
+    assert_eq!(spec.categories, ["a", "b"]);
+    assert_eq!(spec.series.len(), 2);
+    assert_eq!(spec.series[0].values, [3.0, 1.0]);
+    assert_eq!(spec.series[0].trail_widths.len(), 2);
+    assert!((spec.series[0].trail_widths[0] - (1.0 + 20.0 / 90.0 * 3.0)).abs() < 1e-12);
+    assert_eq!(spec.series[0].trail_widths[1], 1.0);
+    assert_eq!(spec.series[1].trail_widths, [4.0, 1.0]);
+}
+
+#[test]
+fn vegalite_trail_size_defaults_to_one_and_constant_encoding_to_midpoint() {
+    let base = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1,"size":7},{"x":"b","y":2,"size":7}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"}}}"#;
+    let no_size = vegalite::parse(base, true).expect("trail without size should parse");
+    assert_eq!(no_size.series[0].trail_widths, [1.0, 1.0]);
+
+    let null_size = base.replace(
+        r#""y":{"field":"y","type":"quantitative"}"#,
+        r#""y":{"field":"y","type":"quantitative"},"size":null"#,
+    );
+    let null_size = vegalite::parse(&null_size, true).expect("null size should be omitted");
+    assert_eq!(null_size.series[0].trail_widths, [1.0, 1.0]);
+
+    let constant_size = base.replace(
+        r#""y":{"field":"y","type":"quantitative"}"#,
+        r#""y":{"field":"y","type":"quantitative"},"size":{"field":"size"}"#,
+    );
+    let constant_size = vegalite::parse(&constant_size, true).expect("constant size should parse");
+    assert_eq!(constant_size.series[0].trail_widths, [2.5, 2.5]);
+}
+
+#[test]
+fn vegalite_trail_rejects_unsupported_mark_and_size_options_in_both_modes() {
+    let base = r#"{"mark":MARK,"data":{"values":[{"x":"a","y":1,"size":2}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"},"size":SIZE}}"#;
+    for (mark, size, expected) in [
+        (r#"{"type":"trail","point":true}"#, "null", "mark.point"),
+        (
+            r#"{"type":"trail","interpolate":"monotone"}"#,
+            "null",
+            "mark.interpolate",
+        ),
+        (
+            "\"trail\"",
+            r#"{"field":"size","scale":{"zero":false}}"#,
+            "encoding.size.scale",
+        ),
+        (
+            "\"trail\"",
+            r#"{"field":"size","unknown":true}"#,
+            "encoding.size.unknown",
+        ),
+        (r#"{"type":"trail","unknown":true}"#, "null", "mark.unknown"),
+    ] {
+        let json = base.replace("MARK", mark).replace("SIZE", size);
+        for strict in [false, true] {
+            let error = vegalite::parse(&json, strict).expect_err("unsupported option must fail");
+            assert!(
+                error.contains(expected),
+                "expected {expected:?} in {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn vegalite_trail_rejects_y_stacking_in_both_modes() {
+    let json = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1}]} ,"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative","stack":"zero"}}}"#;
+    for strict in [false, true] {
+        let error = vegalite::parse(json, strict).expect_err("trail stacking is unsupported");
+        assert!(
+            error.contains("encoding.y.stack"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn vegalite_trail_rejects_non_finite_aggregated_size() {
+    let json = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1,"size":1e308},{"x":"a","y":1,"size":1e308}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"},"size":{"field":"size"}}}"#;
+    let error = vegalite::parse(json, true).expect_err("overflowing size aggregate must fail");
+    assert!(
+        error.contains("aggregate must be finite"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn vegalite_temporal_trail_sorts_timestamps_and_keeps_widths_aligned() {
+    let json = r#"{
+      "mark":"trail",
+      "data":{"values":[
+        {"date":"2024-01-02T00:00:00Z","y":2,"size":2},
+        {"date":"2024-01-01T00:00:00Z","y":1,"size":1},
+        {"date":"2024-01-02T00:00:00Z","y":3,"size":3}
+      ]},
+      "encoding":{
+        "x":{"field":"date","type":"temporal"},
+        "y":{"field":"y","type":"quantitative"},
+        "size":{"field":"size","type":"quantitative"}
+      }
+    }"#;
+
+    let spec = vegalite::parse(json, true).expect("temporal trail should parse");
+    assert!(matches!(spec.kind, ChartKind::Trail));
+    assert!(matches!(spec.x_positions, XPositions::Temporal { .. }));
+    assert!(matches!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(json),
+        Ok(fulgur_chart::schema::VegaLiteSpec::TemporalTrail(_))
+    ));
+    assert_eq!(spec.series[0].values, [1.0, 5.0]);
+    assert_eq!(spec.series[0].trail_widths, [1.0, 4.0]);
+    assert_eq!(spec.categories.len(), 2);
+}
+
+#[test]
+fn vegalite_temporal_trail_rejects_sparse_color_groups() {
+    let json = r#"{
+      "mark":"trail",
+      "data":{"values":[
+        {"date":"2024-01-01T00:00:00Z","y":1,"group":"A"},
+        {"date":"2024-01-02T00:00:00Z","y":2,"group":"A"},
+        {"date":"2024-01-01T00:00:00Z","y":3,"group":"B"}
+      ]},
+      "encoding":{
+        "x":{"field":"date","type":"temporal"},
+        "y":{"field":"y","type":"quantitative"},
+        "color":{"field":"group","type":"nominal"}
+      }
+    }"#;
+    let error = vegalite::parse(json, true).expect_err("sparse temporal groups should fail");
+    assert!(
+        error.contains("sparse timestamp/group pair"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn vegalite_trail_size_scales_finite_extreme_and_negative_values() {
+    let json = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1,"size":-1.7976931348623157e308},{"x":"b","y":2,"size":1.7976931348623157e308}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"},"size":{"field":"size"}}}"#;
+    let spec = vegalite::parse(json, true).expect("finite extreme size domain should parse");
+    assert_eq!(spec.series[0].trail_widths, [1.0, 4.0]);
+    assert!(
+        spec.series[0]
+            .trail_widths
+            .iter()
+            .all(|width| width.is_finite())
+    );
+}
+
+#[test]
+fn vegalite_trail_size_requires_quantitative_finite_values_and_existing_field() {
+    let base = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1,"size":"wide"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"},"size":SIZE}}"#;
+    for (size, expected) in [
+        (r#"{"field":"size","type":"nominal"}"#, "encoding.size.type"),
+        (r#"{"field":"missing"}"#, "size field missing"),
+        (
+            r#"{"field":"size"}"#,
+            "size field size must contain numbers",
+        ),
+    ] {
+        let json = base.replace("SIZE", size);
+        let error = vegalite::parse(&json, true).expect_err("invalid trail size must fail");
+        assert!(
+            error.contains(expected),
+            "expected {expected:?} in {error:?}"
+        );
+    }
+}
+
+#[test]
+fn vegalite_categorical_trail_rejects_sparse_color_groups() {
+    let json = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1,"group":"A"},{"x":"b","y":2,"group":"A"},{"x":"a","y":3,"group":"B"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}"#;
+    let error = vegalite::parse(json, true).expect_err("sparse color groups should fail");
+    assert!(error.contains("色分け trail"), "unexpected error: {error}");
+}
+
+#[test]
+fn vegalite_trail_preflights_dense_width_allocation() {
+    let json = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1},{"x":"b","y":2}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"}}}"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_categorical_primitives: 1,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("width allocation above the configured dense limit must fail");
+    assert!(
+        error.contains("trail dense product"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn vegalite_temporal_trail_rejects_non_finite_size_aggregate() {
+    let json = r#"{"mark":"trail","data":{"values":[{"date":"2024-01-01T00:00:00Z","y":1,"size":1.7976931348623157e308},{"date":"2024-01-01T00:00:00Z","y":1,"size":1.7976931348623157e308}]},"encoding":{"x":{"field":"date","type":"temporal"},"y":{"field":"y","type":"quantitative"},"size":{"field":"size"}}}"#;
+    let error =
+        vegalite::parse(json, true).expect_err("overflowing temporal size aggregate must fail");
+    assert!(
+        error.contains("temporal trail size aggregate must be finite"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn vegalite_trail_rejects_non_finite_y_aggregates_on_both_x_modes() {
+    let categorical = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1e308},{"x":"a","y":1e308}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"}}}"#;
+    let error = vegalite::parse(categorical, true)
+        .expect_err("categorical trail y aggregate overflow must fail");
+    assert!(
+        error.contains("trail y aggregate must be finite"),
+        "{error}"
+    );
+
+    let temporal = r#"{"mark":"trail","data":{"values":[{"date":"2024-01-01T00:00:00Z","y":1e308},{"date":"2024-01-01T00:00:00Z","y":1e308}]},"encoding":{"x":{"field":"date","type":"temporal"},"y":{"field":"y","type":"quantitative"}}}"#;
+    let error =
+        vegalite::parse(temporal, true).expect_err("temporal trail y aggregate overflow must fail");
+    assert!(
+        error.contains("temporal line aggregate must be finite"),
+        "{error}"
+    );
+}

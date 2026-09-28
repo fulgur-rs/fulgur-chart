@@ -186,10 +186,11 @@ fulgur-chart render chart.vl.json -o chart.svg --dsl vegalite
 fulgur-chart render chart.vl.json -o chart.svg
 ```
 
-Supported subset: `mark` (`bar` / `line` / `area` / `point` → scatter / `circle` → scatter /
+Supported subset: `mark` (`bar` / `line` / `area` / `trail` / `point` → scatter / `circle` → scatter /
 `square` → square scatter / `arc` → pie / `rect` → heatmap / `geoshape`), inline `data.values`, and
-`encoding` fields `x` / `y` / `color` / `theta` / `shape`; `point` and `square` also support
-quantitative `size` mapped to marker area. `area` stacks by default when `color` is present
+`encoding` fields `x` / `y` / `color` / `theta` / `shape`; `point` and `square` support quantitative
+`size` mapped to marker area, while `trail` uses quantitative `size` for a variable line width (1–4 px
+by default, or a uniform 1 px when omitted). `area` stacks by default when `color` is present
 (`encoding.y.stack: null` to disable), matching Vega-Lite. Geoshape accepts Feature arrays and
 single Feature/FeatureCollection values directly; ordinary records put a GeoJSON Geometry,
 Feature, or FeatureCollection in `encoding.shape.field`. It supports all 16 Vega-Lite v6
@@ -224,6 +225,12 @@ For example, a quantitative choropleth can provide GeoJSON features directly in 
 
 The [geoshape fixture](examples/specs/vegalite_geoshape.json) demonstrates a choropleth with a
 polygon hole and native/WASM rendering coverage.
+
+Render the categorical trail example with the CLI:
+
+```sh
+fulgur-chart render examples/specs/vegalite-trail-categorical.json -o trail.svg --dsl vegalite
+```
 
 ## Ruby binding
 

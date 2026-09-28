@@ -3,7 +3,7 @@
 use super::{common, monotone::monotone_path};
 use crate::ir::{AreaFillTarget, ChartKind, ChartSpec, LineInterpolation, StepMode};
 use crate::num::fmt_num;
-use crate::scene::{Anchor, Prim, Scene};
+use crate::scene::{Anchor, ClipRect, Prim, Scene};
 use crate::text::TextMeasurer;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -416,6 +416,9 @@ pub fn line_points(
     spec: &crate::ir::ChartSpec,
     frame: &common::Frame,
 ) -> Vec<crate::layout::scatter::PointBox> {
+    if matches!(spec.kind, ChartKind::Trail) {
+        return Vec::new();
+    }
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let stacked = matches!(spec.kind, ChartKind::Line { stacked: true, .. });
     let offsets = stacked.then(|| stack_offsets(spec));
@@ -1302,10 +1305,116 @@ fn area_path_between(source: &[(f64, f64)], target: &[(f64, f64)]) -> Option<Str
     Some(d)
 }
 
+#[derive(Clone, Copy)]
+struct TrailVertex {
+    x: f64,
+    y: f64,
+    half_width: f64,
+}
+
+/// Build one closed outline around a variable-width polyline. Consecutive duplicate
+/// coordinates collapse to the widest point; every join is bounded by a 4× miter limit.
+fn trail_outline_path(segment: &[(f64, f64, usize)], widths: &[f64]) -> Option<String> {
+    let mut vertices = Vec::<TrailVertex>::with_capacity(segment.len());
+    for &(x, y, index) in segment {
+        let width = *widths.get(index)?;
+        if !x.is_finite() || !y.is_finite() || !width.is_finite() || width <= 0.0 {
+            return None;
+        }
+        if let Some(last) = vertices.last_mut()
+            && last.x == x
+            && last.y == y
+        {
+            last.half_width = last.half_width.max(width / 2.0);
+            continue;
+        }
+        vertices.push(TrailVertex {
+            x,
+            y,
+            half_width: width / 2.0,
+        });
+    }
+    if vertices.len() < 2 {
+        return None;
+    }
+
+    let mut normals = Vec::with_capacity(vertices.len() - 1);
+    for edge in vertices.windows(2) {
+        let dx = edge[1].x - edge[0].x;
+        let dy = edge[1].y - edge[0].y;
+        let length = dx.hypot(dy);
+        if !length.is_finite() || length == 0.0 {
+            return None;
+        }
+        normals.push((-dy / length, dx / length));
+    }
+
+    let side_points = |side: f64| {
+        let mut points = Vec::with_capacity(vertices.len() + 2);
+        let first = vertices[0];
+        points.push((
+            first.x + normals[0].0 * first.half_width * side,
+            first.y + normals[0].1 * first.half_width * side,
+        ));
+        for index in 1..vertices.len() - 1 {
+            let point = vertices[index];
+            let previous = normals[index - 1];
+            let next = normals[index];
+            let sum = (previous.0 + next.0, previous.1 + next.1);
+            let sum_length = sum.0.hypot(sum.1);
+            let miter = if sum_length > f64::EPSILON {
+                (sum.0 / sum_length, sum.1 / sum_length)
+            } else {
+                (f64::NAN, f64::NAN)
+            };
+            let denominator = miter.0 * next.0 + miter.1 * next.1;
+            let miter_length = point.half_width / denominator;
+            if denominator.is_finite()
+                && denominator.abs() > 1e-9
+                && miter_length.is_finite()
+                && miter_length.abs() <= point.half_width * 4.0
+            {
+                points.push((
+                    point.x + miter.0 * miter_length * side,
+                    point.y + miter.1 * miter_length * side,
+                ));
+            } else {
+                // A bevel uses both incident edge offsets and cannot extend without bound.
+                points.push((
+                    point.x + previous.0 * point.half_width * side,
+                    point.y + previous.1 * point.half_width * side,
+                ));
+                points.push((
+                    point.x + next.0 * point.half_width * side,
+                    point.y + next.1 * point.half_width * side,
+                ));
+            }
+        }
+        let last = *vertices.last().expect("at least two trail vertices");
+        let normal = *normals.last().expect("at least one trail edge");
+        points.push((
+            last.x + normal.0 * last.half_width * side,
+            last.y + normal.1 * last.half_width * side,
+        ));
+        points
+    };
+
+    let left = side_points(1.0);
+    let right = side_points(-1.0);
+    let mut d = String::new();
+    write!(d, "M {} {} ", fmt_num(left[0].0), fmt_num(left[0].1)).unwrap();
+    for &(x, y) in left.iter().skip(1).chain(right.iter().rev()) {
+        write!(d, "L {} {} ", fmt_num(x), fmt_num(y)).unwrap();
+    }
+    d.push('Z');
+    Some(d)
+}
+
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let frame = common::compute(spec, m);
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let stacked = matches!(spec.kind, ChartKind::Line { stacked: true, .. });
+    let is_trail = matches!(spec.kind, ChartKind::Trail);
     // 積み上げは各カテゴリの累積値を共有するため、系列ごとの間引きは行わない。
     // 欠損値の線描画上の扱いはChartKindの設定に従い、累積計算では0として扱う。
     // 複数系列を独立に間引くと x 位置がずれてスタックが破綻するため意図的にスキップする。
@@ -1457,6 +1566,23 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let border_dash = line_style.map_or(&[][..], |style| style.border_dash.as_slice());
         let border_dash_offset = line_style.map_or(0.0, |style| style.border_dash_offset);
         for seg in &segments {
+            if is_trail {
+                if let Some(d) = trail_outline_path(seg, &ser.trail_widths) {
+                    items.push(Prim::ClippedPath {
+                        d,
+                        fill: Some(ser.fill_at(0)),
+                        stroke: None,
+                        stroke_width: 0.0,
+                        clip: Box::new(ClipRect {
+                            x: frame.plot_left,
+                            y: frame.plot_top,
+                            w: frame.plot_right - frame.plot_left,
+                            h: frame.plot_bottom - frame.plot_top,
+                        }),
+                    });
+                }
+                continue;
+            }
             if !show_line || seg.len() < 2 {
                 continue;
             }
@@ -1546,37 +1672,39 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         // pointRadius 明示時は全ての間引き後の点を描画する。
         // 非間引き時は従来どおり全点を MARKER_R で描画(バイト不変。segments を平坦化すると valid と
         // 同順・同内容)。
-        for seg in &segments {
-            let r = match (decimated, ser.point_radius) {
-                (_, Some(r)) if r > 0.0 => Some(r),
-                (_, Some(_)) => None,
-                (false, None) => Some(MARKER_R),
-                (true, None) if !show_line => Some(MARKER_R),
-                // 間引き既定: 線になる(≥2点)なら帯を抑制、単点(孤立点)は描画。
-                (true, None) if seg.len() < 2 => Some(MARKER_R),
-                (true, None) => None,
-            };
-            if let Some(r) = r {
-                for &(cx, cy, cat) in seg {
-                    let plot_y = offsets
-                        .as_ref()
-                        .map(|offsets| offsets[si][cat].1)
-                        .or_else(|| ser.values.get(cat).copied());
-                    if !plot_y
-                        .is_some_and(|value| common::axis_value_in_bounds(value, &frame.ticks))
-                    {
-                        continue;
+        if !is_trail {
+            for seg in &segments {
+                let r = match (decimated, ser.point_radius) {
+                    (_, Some(r)) if r > 0.0 => Some(r),
+                    (_, Some(_)) => None,
+                    (false, None) => Some(MARKER_R),
+                    (true, None) if !show_line => Some(MARKER_R),
+                    // 間引き既定: 線になる(≥2点)なら帯を抑制、単点(孤立点)は描画。
+                    (true, None) if seg.len() < 2 => Some(MARKER_R),
+                    (true, None) => None,
+                };
+                if let Some(r) = r {
+                    for &(cx, cy, cat) in seg {
+                        let plot_y = offsets
+                            .as_ref()
+                            .map(|offsets| offsets[si][cat].1)
+                            .or_else(|| ser.values.get(cat).copied());
+                        if !plot_y
+                            .is_some_and(|value| common::axis_value_in_bounds(value, &frame.ticks))
+                        {
+                            continue;
+                        }
+                        common::dataset_point_marker(
+                            &mut items,
+                            cx,
+                            cy,
+                            r,
+                            ser.stroke_at(0),
+                            ser.stroke_at(0),
+                            0.0,
+                            line_style.and_then(|style| style.point_style),
+                        );
                     }
-                    common::dataset_point_marker(
-                        &mut items,
-                        cx,
-                        cy,
-                        r,
-                        ser.stroke_at(0),
-                        ser.stroke_at(0),
-                        0.0,
-                        line_style.and_then(|style| style.point_style),
-                    );
                 }
             }
         }
@@ -1686,6 +1814,15 @@ mod tests {
 
     fn scene_for(json: &str) -> Scene {
         let spec = chartjs::parse(json, false).unwrap();
+        build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap())
+    }
+
+    fn trail_spec_for(json: &str) -> ChartSpec {
+        crate::frontend::vegalite::parse(json, true).unwrap()
+    }
+
+    fn trail_scene_for(json: &str) -> Scene {
+        let spec = trail_spec_for(json);
         build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap())
     }
 
@@ -2499,6 +2636,7 @@ mod tests {
                         bar_geometry: None,
                         series_type: crate::ir::SeriesType::Line,
                         point_radius: None,
+                        trail_widths: vec![],
                         violin_samples: vec![],
                         box_points: vec![],
                         tree: vec![],
@@ -3038,5 +3176,216 @@ mod tests {
                 "offset ラベルは band 中心: i={i} x={x} expect={expect}"
             );
         }
+    }
+    #[test]
+    fn trail_renders_one_filled_clipped_path_without_stroke_or_markers() {
+        let scene = trail_scene_for(
+            r##"{"mark":"trail","width":320,"height":220,
+                "data":{"values":[{"x":"a","y":1},{"x":"b","y":4},{"x":"c","y":2}]},
+                "encoding":{"x":{"field":"x","type":"nominal"},
+                           "y":{"field":"y","type":"quantitative"}}}"##,
+        );
+        let trails: Vec<_> = scene
+            .items
+            .iter()
+            .filter_map(|prim| match prim {
+                Prim::ClippedPath {
+                    d,
+                    fill,
+                    stroke,
+                    stroke_width,
+                    clip,
+                } => Some((d, fill, stroke, stroke_width, clip)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            trails.len(),
+            1,
+            "one continuous trail segment should emit one path"
+        );
+        assert!(trails[0].0.starts_with("M ") && trails[0].0.ends_with('Z'));
+        assert!(trails[0].1.is_some(), "trail uses its series fill color");
+        assert!(trails[0].2.is_none(), "trail outline has no stroke");
+        assert_eq!(*trails[0].3, 0.0);
+        let spec = trail_spec_for(
+            r##"{"mark":"trail","width":320,"height":220,
+                "data":{"values":[{"x":"a","y":1},{"x":"b","y":4},{"x":"c","y":2}]},
+                "encoding":{"x":{"field":"x","type":"nominal"},
+                           "y":{"field":"y","type":"quantitative"}}}"##,
+        );
+        assert_eq!(*trails[0].1, Some(spec.series[0].fill_at(0)));
+        let frame = common::compute(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        let clip = trails[0].4;
+        assert_eq!(
+            (clip.x, clip.y, clip.w, clip.h),
+            (
+                frame.plot_left,
+                frame.plot_top,
+                frame.plot_right - frame.plot_left,
+                frame.plot_bottom - frame.plot_top,
+            )
+        );
+        assert!(
+            !scene.items.iter().any(|prim| matches!(
+                prim,
+                Prim::Polyline { .. } | Prim::StyledPolyline { .. } | Prim::Circle { .. }
+            )),
+            "trail does not emit constant-width line or point markers"
+        );
+    }
+
+    #[test]
+    fn trail_encoded_size_changes_the_rendered_outline_width() {
+        let spec = trail_spec_for(
+            r#"{"mark":"trail","data":{"values":[{"x":"a","y":1,"size":10},{"x":"b","y":1,"size":20}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"},"size":{"field":"size"}}}"#,
+        );
+        assert_eq!(spec.series[0].trail_widths, [1.0, 4.0]);
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &measurer);
+        let x0 = common::line_x(&spec, &frame, 0);
+        let x1 = common::line_x(&spec, &frame, 1);
+        let y = frame.ys.map(common::clip_axis_value(
+            spec.series[0].values[0],
+            &frame.ticks,
+        ));
+        let scene = build(&spec, &measurer);
+        let trail = scene
+            .items
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::ClippedPath { d, .. } => Some(d),
+                _ => None,
+            })
+            .expect("encoded trail path");
+        let expected_prefix = format!(
+            "M {} {} L {} {} ",
+            fmt_num(x0),
+            fmt_num(y + 0.5),
+            fmt_num(x1),
+            fmt_num(y + 2.0),
+        );
+        assert!(
+            trail.starts_with(&expected_prefix),
+            "expected endpoint widths in {trail}"
+        );
+    }
+
+    #[test]
+    fn trail_single_point_segment_emits_no_filled_path_or_marker() {
+        let scene = trail_scene_for(
+            r#"{"mark":"trail","data":{"values":[{"x":"a","y":1}]},
+                "encoding":{"x":{"field":"x","type":"nominal"},
+                           "y":{"field":"y","type":"quantitative"}}}"#,
+        );
+        assert!(!scene.items.iter().any(|prim| matches!(
+            prim,
+            Prim::ClippedPath { fill: Some(_), .. } | Prim::Circle { .. }
+        )));
+    }
+
+    #[test]
+    fn trail_outline_uses_butt_caps_and_widest_duplicate_width() {
+        let straight = trail_outline_path(&[(0.0, 0.0, 0), (10.0, 0.0, 1)], &[2.0, 2.0])
+            .expect("two distinct points form a trail");
+        assert_eq!(straight, "M 0 1 L 10 1 L 10 -1 L 0 -1 Z");
+
+        let duplicate = trail_outline_path(
+            &[(0.0, 0.0, 0), (0.0, 0.0, 1), (10.0, 0.0, 2)],
+            &[1.0, 4.0, 2.0],
+        )
+        .expect("duplicate coordinates collapse");
+        assert!(
+            duplicate.starts_with("M 0 2 "),
+            "widest duplicate width is retained: {duplicate}"
+        );
+        assert_eq!(duplicate.matches("M ").count(), 1);
+        assert_eq!(duplicate.matches("Z").count(), 1);
+    }
+
+    #[test]
+    fn trail_outline_bevels_acute_turns_without_non_finite_geometry() {
+        let path = trail_outline_path(
+            &[(0.0, 0.0, 0), (10.0, 0.0, 1), (9.1, 0.1, 2)],
+            &[2.0, 2.0, 2.0],
+        )
+        .expect("acute turn still forms a path");
+        assert!(
+            path.matches("L ").count() >= 6,
+            "acute corner uses bevel offsets: {path}"
+        );
+        assert!(
+            !path.contains("NaN") && !path.contains("inf"),
+            "path must stay finite: {path}"
+        );
+    }
+
+    #[test]
+    fn trail_gap_segments_do_not_join_or_draw_markers() {
+        let json = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1},{"x":"b","y":2},{"x":"c","y":3}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"}}}"#;
+        let mut spec = crate::frontend::vegalite::parse(json, true).unwrap();
+        spec.series[0].values[1] = f64::NAN;
+        let scene = build(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap());
+        assert!(!scene.items.iter().any(|prim| matches!(
+            prim,
+            Prim::ClippedPath { fill: Some(_), .. } | Prim::Circle { .. }
+        )));
+    }
+
+    #[test]
+    fn trail_outline_widths_follow_points_after_line_decimation() {
+        let values = (0..1200)
+            .map(|index| format!(r#"{{"x":"{index}","y":{},"size":{index}}}"#, index % 2))
+            .collect::<Vec<_>>()
+            .join(",");
+        let json = format!(
+            r#"{{"mark":"trail","width":120,"height":120,"data":{{"values":[{values}]}},"encoding":{{"x":{{"field":"x"}},"y":{{"field":"y","type":"quantitative"}},"size":{{"field":"size"}}}}}}"#
+        );
+        let mut spec = trail_spec_for(&json);
+        spec.decimation.threshold = Some(3.0);
+        spec.decimation.samples = Some(3.0);
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let frame = common::compute(&spec, &measurer);
+        let source: Vec<_> = spec.series[0]
+            .values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                (
+                    common::line_x(&spec, &frame, index),
+                    frame.ys.map(common::clip_axis_value(*value, &frame.ticks)),
+                    index,
+                )
+            })
+            .collect();
+        let source_segments = segments_for_valid_points(&source, false);
+        let retained = crate::layout::decimate::decimate_segments(
+            &source_segments,
+            spec.decimation.algorithm,
+            3,
+        );
+        assert!(
+            retained[0].len() < source.len(),
+            "fixture must trigger decimation: retained={}, source={}, plot_width={}",
+            retained[0].len(),
+            source.len(),
+            frame.plot_right - frame.plot_left
+        );
+        let expected = trail_outline_path(&retained[0], &spec.series[0].trail_widths).unwrap();
+        let scene = build(&spec, &measurer);
+        let actual = scene
+            .items
+            .iter()
+            .find_map(|prim| match prim {
+                Prim::ClippedPath {
+                    d, fill: Some(_), ..
+                } => Some(d),
+                _ => None,
+            })
+            .expect("decimated trail path");
+        assert_eq!(
+            actual, &expected,
+            "retained source indices keep matching widths"
+        );
     }
 }
