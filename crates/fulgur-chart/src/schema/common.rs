@@ -30,14 +30,63 @@ pub struct ThemeOptions {
     pub font_size: Option<f64>,
 }
 
-/// options.plugins.title configuration.
+/// Horizontal alignment for Chart.js title and subtitle plugins.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TitleAlign {
+    Start,
+    Center,
+    End,
+}
+
+/// Side where a Chart.js title or subtitle is placed.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TitlePosition {
+    Top,
+    Left,
+    Bottom,
+    Right,
+}
+
+/// Chart.js title padding, either shared between top and bottom or set per side.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, PartialEq)]
+#[serde(untagged)]
+pub enum TitlePadding {
+    Number(#[schemars(range(min = 0.0))] f64),
+    Sides(TitlePaddingSides),
+}
+
+/// Per-side vertical padding for a Chart.js title or subtitle.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Default, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TitlePaddingSides {
+    #[schemars(range(min = 0.0))]
+    pub top: Option<f64>,
+    #[schemars(range(min = 0.0))]
+    pub bottom: Option<f64>,
+}
+
+/// options.plugins.title and options.plugins.subtitle configuration.
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TitlePlugin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
+    pub text: Option<ScalarOrArray<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub align: Option<TitleAlign>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<TitlePosition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<ColorString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font: Option<FontSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<TitlePadding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_size: Option<bool>,
 }
 
 /// options.plugins.legend configuration.

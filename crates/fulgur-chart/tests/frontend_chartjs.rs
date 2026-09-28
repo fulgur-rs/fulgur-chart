@@ -2506,3 +2506,160 @@ fn pie_arc_geometry_is_deterministic_in_svg_and_png() {
     assert_eq!(png_first, png_second);
     tiny_skia::Pixmap::decode_png(&png_first).expect("pie PNG should decode");
 }
+
+#[test]
+fn chartjs_title_schema_accepts_all_chart_kinds() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    use serde_json::{Value, json};
+
+    let cases = [
+        ("bar", include_str!("../../../examples/specs/bar.json")),
+        ("line", include_str!("../../../examples/specs/line.json")),
+        ("pie", include_str!("../../../examples/specs/pie.json")),
+        (
+            "doughnut",
+            include_str!("../../../examples/specs/doughnut.json"),
+        ),
+        (
+            "scatter",
+            include_str!("../../../examples/specs/scatter.json"),
+        ),
+        (
+            "bubble",
+            include_str!("../../../examples/specs/bubble.json"),
+        ),
+        ("radar", include_str!("../../../examples/specs/radar.json")),
+        (
+            "matrix",
+            include_str!("../../../examples/specs/matrix.json"),
+        ),
+        (
+            "treemap",
+            include_str!("../../../examples/specs/treemap.json"),
+        ),
+        (
+            "progress",
+            include_str!("../../../examples/specs/progress.json"),
+        ),
+        (
+            "progressBar",
+            include_str!("../../../examples/specs/progress.json"),
+        ),
+        (
+            "boxplot",
+            include_str!("../../../examples/specs/boxplot_with_null.json"),
+        ),
+        (
+            "violin",
+            include_str!("../../../examples/specs/violin.json"),
+        ),
+        (
+            "horizontalViolin",
+            include_str!("../../../examples/specs/violin-horizontal.json"),
+        ),
+        (
+            "sparkline",
+            include_str!("../../../examples/specs/sparkline_decimated.json"),
+        ),
+        ("gauge", include_str!("../../../examples/specs/gauge.json")),
+        (
+            "polarArea",
+            include_str!("../../../examples/specs/pie.json"),
+        ),
+        (
+            "radialGauge",
+            include_str!("../../../examples/specs/radial-gauge.json"),
+        ),
+        (
+            "outlabeledPie",
+            include_str!("../../../examples/specs/outlabeled_pie.json"),
+        ),
+        (
+            "outlabeledDoughnut",
+            include_str!("../../../examples/specs/outlabeled_doughnut.json"),
+        ),
+        (
+            "wordCloud",
+            include_str!("../../../examples/specs/wordcloud.json"),
+        ),
+        (
+            "sankey",
+            include_str!("../../../examples/specs/sankey.json"),
+        ),
+    ];
+
+    let title = json!({
+        "display": true,
+        "text": "",
+        "align": "start",
+        "position": "left",
+        "color": "#123456",
+        "font": {
+            "size": 14.0,
+            "family": "Inter, sans-serif",
+            "weight": "600",
+            "style": "italic",
+            "lineHeight": "125%"
+        },
+        "padding": 8.0,
+        "fullSize": false
+    });
+    let subtitle = json!({
+        "display": true,
+        "text": ["Line one", "Line two"],
+        "align": "end",
+        "position": "right",
+        "color": "#654321",
+        "font": {
+            "size": 10.0,
+            "family": "Fira Sans",
+            "weight": "normal",
+            "style": "normal",
+            "lineHeight": 1.1
+        },
+        "padding": {"top": 4.0, "bottom": 2.0},
+        "fullSize": true
+    });
+
+    for (kind, fixture) in cases {
+        let mut input: Value = serde_json::from_str(fixture).unwrap();
+        let root = input.as_object_mut().expect("chart fixture object");
+        root.insert("type".into(), Value::String(kind.into()));
+        let options = root
+            .entry("options")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("chart options object");
+        let plugins = options
+            .entry("plugins")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("chart plugins object");
+        plugins.insert("title".into(), title.clone());
+        plugins.insert("subtitle".into(), subtitle.clone());
+
+        let parsed: ChartJsSpec = serde_json::from_value(input.clone())
+            .unwrap_or_else(|error| panic!("{kind} schema rejected title options: {error}"));
+        let round_trip = serde_json::to_value(parsed).unwrap();
+        assert_eq!(
+            round_trip["options"]["plugins"]["title"], title,
+            "title fields did not round-trip for {kind}"
+        );
+        assert_eq!(
+            round_trip["options"]["plugins"]["subtitle"], subtitle,
+            "subtitle fields did not round-trip for {kind}"
+        );
+    }
+
+    let mut invalid: Value =
+        serde_json::from_str(include_str!("../../../examples/specs/bar.json")).unwrap();
+    invalid["options"]["plugins"]["title"] = json!({
+        "display": true,
+        "text": "unknown field",
+        "unexpected": true
+    });
+    assert!(
+        serde_json::from_value::<ChartJsSpec>(invalid).is_err(),
+        "unknown nested title fields must remain rejected"
+    );
+}

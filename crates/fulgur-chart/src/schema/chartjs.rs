@@ -226,6 +226,8 @@ pub struct BarPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub legend: Option<LegendPlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datalabels: Option<DataLabelsPlugin>,
@@ -524,6 +526,8 @@ pub struct CommonPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub legend: Option<LegendPlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datalabels: Option<DataLabelsPlugin>,
@@ -531,13 +535,15 @@ pub struct CommonPlugins {
     pub decimation: Option<DecimationPlugin>,
 }
 
-/// gauge / radialGauge が受け付ける plugins(title のみ)。
+/// gauge / radialGauge が受け付ける plugins(title/subtitle のみ)。
 /// 単一ゲージには凡例が描けないため legend は非公開(datalabels も非対応)。
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct GaugePlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<TitlePlugin>,
 }
 
 /// progress バーには凡例が描けないため legend は非公開。datalabels は % 表示制御に使用。
@@ -546,6 +552,8 @@ pub struct GaugePlugins {
 pub struct ProgressPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<TitlePlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datalabels: Option<DataLabelsPlugin>,
 }
@@ -999,12 +1007,14 @@ pub struct MatrixOptions {
 /// matrix は datalabels を描画しない(parse_matrix は theme のみ消費)ため strict パーサ
 /// (check_unknown_keys_matrix)は datalabels を弾く。schema 受理→strict 拒否の危険方向パリティ
 /// 破れを避けて matrix 専用に定義し datalabels を契約から外す(sankey #87 と同型)。
-/// title/legend/decimation は schema・strict とも受理する(decimation は no-op)。
+/// title/subtitle/legend/decimation は schema・strict とも受理する(decimation は no-op)。
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct MatrixPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<TitlePlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub legend: Option<LegendPlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1081,6 +1091,8 @@ pub struct TreemapOptions {
 pub struct TreemapPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<TitlePlugin>,
 }
 
 // ────────────────────────────────────────────────
@@ -1285,10 +1297,14 @@ pub struct SparklineDataset {
 }
 
 /// sparkline が受け付ける plugins。sparkline は title/legend/datalabels を描画しないため
-/// decimation のみ公開する（正直な最小 schema）。line と同じ巨大データ間引きを許可する。
+/// title/subtitle を共有 scene stage で描画し、line と同じ巨大データ間引きを許可する。
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SparklinePlugins {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<TitlePlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decimation: Option<DecimationPlugin>,
 }
@@ -1481,6 +1497,8 @@ pub struct OutlabeledPiePlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub legend: Option<LegendPlugin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outlabels: Option<OutlabelsPlugin>,
@@ -1584,6 +1602,8 @@ pub struct WordElementOptions {
 pub struct WordCloudPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<TitlePlugin>,
 }
 
 // ────────────────────────────────────────────────
@@ -1621,13 +1641,15 @@ pub struct SankeyOptions {
     pub theme: Option<ThemeOptions>,
 }
 
-/// sankey が受理する plugins(title のみ)。legend は描画されないため契約から外す。
+/// sankey が受理する plugins(title/subtitle のみ)。legend は描画されないため契約から外す。
 /// datalabels も持たない(strict パーサと一致)。
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SankeyPlugins {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<TitlePlugin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<TitlePlugin>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

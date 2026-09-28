@@ -362,4 +362,41 @@ mod schema_fixture_tests {
             assert!(actual == expected, "embedded {dsl} schema is stale");
         }
     }
+
+    #[test]
+    fn embedded_chartjs_schema_includes_title_and_subtitle_for_all_kinds() {
+        let embedded: serde_json::Value =
+            serde_json::from_str(include_str!("chartjs-schema.json")).unwrap();
+        let generated = serde_json::to_value(schemars::schema_for!(
+            fulgur_chart::schema::ChartJsSpec
+        ))
+        .unwrap();
+        assert_eq!(embedded, generated, "embedded Chart.js schema is stale");
+
+        let definitions = embedded["$defs"].as_object().expect("schema definitions");
+        for plugin_type in [
+            "BarPlugins",
+            "CommonPlugins",
+            "GaugePlugins",
+            "ProgressPlugins",
+            "MatrixPlugins",
+            "TreemapPlugins",
+            "SparklinePlugins",
+            "OutlabeledPiePlugins",
+            "WordCloudPlugins",
+            "SankeyPlugins",
+        ] {
+            let properties = definitions[plugin_type]["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("{plugin_type} schema properties missing"));
+            assert!(
+                properties.contains_key("title"),
+                "{plugin_type} schema must expose title"
+            );
+            assert!(
+                properties.contains_key("subtitle"),
+                "{plugin_type} schema must expose subtitle"
+            );
+        }
+    }
 }
