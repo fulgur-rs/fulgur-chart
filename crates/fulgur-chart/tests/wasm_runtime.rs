@@ -277,3 +277,38 @@ fn stamp_webp_renders_validly_and_deterministically() {
         "WebP 寸法が期待値と不一致"
     );
 }
+
+/// Chart.js title/subtitle shared layout survives the wasm32 SVG and direct-raster paths.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn chartjs_title_subtitle_render_through_wasm() {
+    let json = r##"{
+        "type":"bar",
+        "data":{"labels":["A","B","C"],"datasets":[{"data":[3,2,1]}]},
+        "options":{"plugins":{
+            "title":{"display":true,"text":["WASM title line one","WASM title line two"],"color":"#123456","font":{"size":20,"weight":"700"},"padding":0},
+            "subtitle":{"display":true,"text":"WASM subtitle","align":"end","position":"bottom","color":"#654321","font":{"size":12},"padding":0}
+        }}
+    }"##;
+    let spec = chartjs::parse(json, false).expect("WASM title spec parses");
+
+    let svg = render_chart(&spec);
+    assert!(svg.contains("WASM title line one"));
+    assert!(svg.contains("WASM title line two"));
+    assert!(svg.contains("WASM subtitle"));
+    assert!(svg.contains("fill=\"#123456\""));
+    assert!(svg.contains("fill=\"#654321\""));
+
+    let png = render_chart_to_png_default(&spec, 1.0).expect("WASM title PNG renders");
+    assert_eq!(
+        &png[..8],
+        PNG_SIGNATURE,
+        "WASM title PNG signature is invalid"
+    );
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("WASM title PNG decodes");
+    assert_eq!(
+        (pixmap.width(), pixmap.height()),
+        (800, 450),
+        "WASM title PNG dimensions are unchanged for Canvas sizing"
+    );
+}

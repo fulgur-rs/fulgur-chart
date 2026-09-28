@@ -337,6 +337,29 @@ fn bounded_output_sum(base: f64, first: f64, second: f64) -> f64 {
 }
 
 #[cfg(test)]
+trait TestPrimTranslate {
+    fn translate_x(&self) -> Option<f64>;
+    fn translate_y(&self) -> Option<f64>;
+}
+
+#[cfg(test)]
+impl TestPrimTranslate for Prim {
+    fn translate_x(&self) -> Option<f64> {
+        match self {
+            Prim::Group { translate_x, .. } => Some(*translate_x),
+            _ => None,
+        }
+    }
+
+    fn translate_y(&self) -> Option<f64> {
+        match self {
+            Prim::Group { translate_y, .. } => Some(*translate_y),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::frontend::chartjs;
@@ -584,28 +607,5 @@ mod tests {
         }
         assert!(layout.top <= crate::guard::DEFAULT_MAX_DIMENSION_PX);
         assert!(layout.bottom <= crate::guard::DEFAULT_MAX_DIMENSION_PX);
-    }
-}
-
-#[cfg(test)]
-trait TestPrimTranslate {
-    fn translate_x(&self) -> Option<f64>;
-    fn translate_y(&self) -> Option<f64>;
-}
-
-#[cfg(test)]
-impl TestPrimTranslate for Prim {
-    fn translate_x(&self) -> Option<f64> {
-        match self {
-            Prim::Group { translate_x, .. } => Some(*translate_x),
-            _ => None,
-        }
-    }
-
-    fn translate_y(&self) -> Option<f64> {
-        match self {
-            Prim::Group { translate_y, .. } => Some(*translate_y),
-            _ => None,
-        }
     }
 }
