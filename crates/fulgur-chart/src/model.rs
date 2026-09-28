@@ -148,10 +148,10 @@ fn compute_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry> {
         return None;
     }
     geometry.plot_area = RectN {
-        x: (geometry.plot_area.x * base_width + title_layout.left) / output_width,
-        y: (geometry.plot_area.y * base_height + title_layout.top) / output_height,
-        w: geometry.plot_area.w * base_width / output_width,
-        h: geometry.plot_area.h * base_height / output_height,
+        x: (geometry.plot_area.x * title_layout.viewport_width + title_layout.left) / output_width,
+        y: (geometry.plot_area.y * title_layout.viewport_height + title_layout.top) / output_height,
+        w: geometry.plot_area.w * title_layout.viewport_width / output_width,
+        h: geometry.plot_area.h * title_layout.viewport_height / output_height,
     };
     Some(geometry)
 }
@@ -1421,6 +1421,32 @@ mod tests {
         let model = build_model(&spec, &m);
 
         assert_eq!((model.meta.width, model.meta.height), (800.0, 450.0));
+    }
+
+    #[test]
+    fn chartjs_title_model_normalizes_plot_area_by_viewport_dimensions() {
+        let json = r#"{"type":"bar","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]},"options":{"plugins":{"title":{"display":true,"text":"Title","font":{"size":30},"padding":0}}}}"#;
+        let spec = chartjs::parse(json, false).unwrap();
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let (base_width, base_height) = base_model_dimensions(&spec, &measurer);
+        let title_layout =
+            crate::layout::chartjs_title::chartjs_title_layout(&spec, base_width, base_height)
+                .unwrap();
+        let child_spec = crate::layout::chartjs_title::chart_view_spec(&spec, &title_layout);
+        let child_geometry = compute_base_geometry(&child_spec, &measurer).unwrap();
+        assert!(title_layout.viewport_height < base_height);
+
+        let expected = RectN {
+            x: (child_geometry.plot_area.x * title_layout.viewport_width + title_layout.left)
+                / title_layout.scene_width,
+            y: (child_geometry.plot_area.y * title_layout.viewport_height + title_layout.top)
+                / title_layout.scene_height,
+            w: child_geometry.plot_area.w * title_layout.viewport_width / title_layout.scene_width,
+            h: child_geometry.plot_area.h * title_layout.viewport_height
+                / title_layout.scene_height,
+        };
+        let actual = compute_geometry(&spec, &measurer).unwrap().plot_area;
+        assert_eq!(actual, expected);
     }
 
     fn assert_plot_area_legacy_scene_model_dimensions(json: &str) {

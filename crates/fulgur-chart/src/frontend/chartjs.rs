@@ -406,8 +406,18 @@ fn raw_plugins_from_value(value: Option<&serde_json::Value>) -> Result<RawPlugin
     let Some(value) = value.and_then(serde_json::Value::as_object) else {
         return Ok(RawPlugins::default());
     };
-    serde_json::from_value(serde_json::Value::Object(value.clone()))
-        .map_err(|error| format!("options.plugins: {error}"))
+    let pick = |name: &str| -> Result<Option<RawTitle>, String> {
+        value
+            .get(name)
+            .map(|plugin| serde_json::from_value(plugin.clone()))
+            .transpose()
+            .map_err(|error| format!("options.plugins.{name}: {error}"))
+    };
+    Ok(RawPlugins {
+        title: pick("title")?,
+        subtitle: pick("subtitle")?,
+        ..RawPlugins::default()
+    })
 }
 
 #[derive(Deserialize)]

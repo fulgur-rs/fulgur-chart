@@ -242,9 +242,7 @@ fn violin_nonempty_group_count(spec: &ChartSpec) -> usize {
 
 pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     validate_spec_base(spec, limits)?;
-    if !matches!(spec.kind, ChartKind::Line { .. })
-        || !matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
-    {
+    if !matches!(spec.size_mode, crate::ir::SizeMode::PlotArea) {
         return Ok(());
     }
     #[cfg(feature = "default-font")]
@@ -1895,6 +1893,20 @@ mod tests {
         spec.chartjs_subtitle.as_mut().unwrap().text = vec![String::new(); 1_024];
 
         assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn chartjs_title_plot_area_dimension_limit_applies_to_non_line_kinds() {
+        let mut spec = chartjs_title_spec();
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        let title = spec.chartjs_title.as_mut().unwrap();
+        title.font_size = 2_000.0;
+        title.line_height = 2_400.0;
+        let mut limits = default_limits();
+        limits.max_dimension_px = 900.0;
+
+        let error = validate_spec(&spec, &limits).unwrap_err();
+        assert!(error.contains("scene height"), "unexpected error: {error}");
     }
 
     #[test]

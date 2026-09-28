@@ -478,6 +478,20 @@ fn title_from_plugins() {
 }
 
 #[test]
+fn non_strict_gauge_and_wordcloud_ignore_unrelated_plugin_shapes() {
+    let cases = [
+        r#"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4,6],"backgroundColor":["green","yellow","red"]}]},"options":{"plugins":{"legend":5}}}"#,
+        r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30]}]},"options":{"plugins":{"legend":5}}}"#,
+    ];
+    for json in cases {
+        assert!(
+            chartjs::parse(json, false).is_ok(),
+            "non-strict special parser should ignore unrelated plugin shape: {json}"
+        );
+    }
+}
+
+#[test]
 fn title_not_displayed_is_none() {
     let json = r#"{ "type":"bar","data":{"labels":[],"datasets":[]},
       "options":{"plugins":{"title":{"display":false,"text":"x"}}} }"#;

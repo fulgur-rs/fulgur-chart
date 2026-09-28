@@ -204,6 +204,14 @@ pub enum DecimationAlgorithmName {
     Lttb,
 }
 
+/// Chart.js font weight, represented by a CSS name or a numeric weight.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum FontWeightSchema {
+    Number(f64),
+    Name(String),
+}
+
 /// Chart.js の共通 font オブジェクト。v1 では size のみ描画に反映される。
 #[derive(Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -214,6 +222,7 @@ pub struct FontSpec {
     pub family: Option<String>,
     /// number | "bold" 等。v1 では受理のみ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<FontWeightSchema>")]
     pub weight: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
@@ -538,6 +547,20 @@ mod tests {
             serde_json::from_str(r##"{"width":2,"dash":[4,4],"dashOffset":1.5,"z":2}"##).unwrap();
         assert!(b.dash_offset.is_some());
         assert!(b.z.is_some());
+    }
+
+    #[test]
+    fn font_weight_schema_matches_chartjs_parser_types() {
+        let schema =
+            serde_json::to_value(schemars::schema_for!(crate::schema::chartjs::ChartJsSpec))
+                .unwrap();
+        let weight_types = schema["$defs"]["FontWeightSchema"]["anyOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|variant| variant["type"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(weight_types, ["number", "string"]);
     }
 
     /// `deny_unknown_fields` が sub-object タイポを検出し続けることの回帰テスト。
