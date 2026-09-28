@@ -141,6 +141,7 @@ struct RawTheme {
 #[derive(Deserialize, Default)]
 struct RawPlugins {
     title: Option<RawTitle>,
+    subtitle: Option<RawTitle>,
     legend: Option<RawLegend>,
     datalabels: Option<RawDataLabels>,
     outlabels: Option<RawOutlabels>,
@@ -173,12 +174,240 @@ struct RawOutlabels {
     stretch: Option<f64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct RawTitle {
     #[serde(default)]
     display: bool,
     #[serde(default)]
-    text: String,
+    text: Option<serde_json::Value>,
+    #[serde(default)]
+    align: Option<String>,
+    #[serde(default)]
+    position: Option<String>,
+    #[serde(default)]
+    color: Option<String>,
+    #[serde(default)]
+    font: Option<RawTitleFont>,
+    #[serde(default)]
+    padding: Option<serde_json::Value>,
+    #[serde(rename = "fullSize", default)]
+    full_size: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct RawTitleFont {
+    size: Option<f64>,
+    family: Option<String>,
+    weight: Option<serde_json::Value>,
+    style: Option<String>,
+    line_height: Option<serde_json::Value>,
+}
+
+fn resolve_chartjs_title(
+    raw: Option<&RawTitle>,
+    is_subtitle: bool,
+    theme: &Theme,
+) -> Result<Option<ChartJsTitle>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+
+    let plugin_name = if is_subtitle { "subtitle" } else { "title" };
+    let text = match raw.text.as_ref() {
+        Some(serde_json::Value::String(text)) => vec![text.clone()],
+        Some(serde_json::Value::Array(lines)) => lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| {
+                line.as_str().map(str::to_owned).ok_or_else(|| {
+                    format!("options.plugins.{plugin_name}.text[{index}] must be a string")
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        Some(_) => {
+            return Err(format!(
+                "options.plugins.{plugin_name}.text must be a string or an array of strings"
+            ));
+        }
+        None if raw.display => vec![String::new()],
+        None => Vec::new(),
+    };
+
+    let align = match raw.align.as_deref() {
+        None | Some("center") => ChartJsTitleAlign::Center,
+        Some("start") => ChartJsTitleAlign::Start,
+        Some("end") => ChartJsTitleAlign::End,
+        Some(_) => {
+            return Err(format!(
+                "options.plugins.{plugin_name}.align must be start, center, or end"
+            ));
+        }
+    };
+    let position = match raw.position.as_deref() {
+        None | Some("top") => ChartJsTitlePosition::Top,
+        Some("left") => ChartJsTitlePosition::Left,
+        Some("bottom") => ChartJsTitlePosition::Bottom,
+        Some("right") => ChartJsTitlePosition::Right,
+        Some(_) => {
+            return Err(format!(
+                "options.plugins.{plugin_name}.position must be top, left, bottom, or right"
+            ));
+        }
+    };
+
+    let max_metric = crate::guard::DEFAULT_MAX_DIMENSION_PX;
+    let configured_size = raw.font.as_ref().and_then(|font| font.size);
+    let font_size = configured_size.unwrap_or(theme.font_size);
+    if !font_size.is_finite() || font_size <= 0.0 {
+        return Err(format!(
+            "options.plugins.{plugin_name}.font.size must be finite and positive"
+        ));
+    }
+    let font_size = font_size.min(max_metric);
+
+    let line_height = resolve_title_line_height(
+        raw.font.as_ref().and_then(|font| font.line_height.as_ref()),
+        font_size,
+    );
+    let padding = resolve_title_padding(raw.padding.as_ref(), is_subtitle, plugin_name)?;
+    let font_weight = raw
+        .font
+        .as_ref()
+        .and_then(|font| font.weight.as_ref())
+        .map(|weight| match weight {
+            serde_json::Value::String(weight) => Ok(weight.clone()),
+            serde_json::Value::Number(weight) => Ok(weight.to_string()),
+            serde_json::Value::Null => Ok(if is_subtitle { "normal" } else { "bold" }.into()),
+            _ => Err(format!(
+                "options.plugins.{plugin_name}.font.weight must be a string or number"
+            )),
+        })
+        .transpose()?
+        .unwrap_or_else(|| if is_subtitle { "normal" } else { "bold" }.into());
+
+    Ok(Some(ChartJsTitle {
+        display: raw.display,
+        text,
+        align,
+        position,
+        color: raw
+            .color
+            .as_deref()
+            .and_then(parse_color)
+            .unwrap_or(theme.text_color),
+        font_size,
+        font_family: raw.font.as_ref().and_then(|font| font.family.clone()),
+        font_weight: Some(font_weight),
+        font_style: Some(
+            raw.font
+                .as_ref()
+                .and_then(|font| font.style.as_deref())
+                .unwrap_or("normal")
+                .to_owned(),
+        ),
+        line_height,
+        padding,
+        full_size: raw.full_size.unwrap_or(true),
+    }))
+}
+
+fn resolve_title_line_height(raw: Option<&serde_json::Value>, font_size: f64) -> f64 {
+    let maximum = crate::guard::DEFAULT_MAX_DIMENSION_PX;
+    let fallback = (font_size * 1.2).min(maximum);
+    let resolved = raw.and_then(|value| match value {
+        serde_json::Value::Number(value) => value.as_f64().map(|multiplier| multiplier * font_size),
+        serde_json::Value::String(value) => {
+            let value = value.trim();
+            if value == "normal" {
+                Some(font_size * 1.2)
+            } else if let Some(px) = value.strip_suffix("px") {
+                px.trim().parse::<f64>().ok()
+            } else if let Some(em) = value.strip_suffix("em") {
+                em.trim()
+                    .parse::<f64>()
+                    .ok()
+                    .map(|multiplier| multiplier * font_size)
+            } else if let Some(percent) = value.strip_suffix('%') {
+                percent
+                    .trim()
+                    .parse::<f64>()
+                    .ok()
+                    .map(|percent| percent / 100.0 * font_size)
+            } else {
+                value
+                    .parse::<f64>()
+                    .ok()
+                    .map(|multiplier| multiplier * font_size)
+            }
+        }
+        _ => None,
+    });
+
+    resolved
+        .filter(|height| height.is_finite() && *height > 0.0)
+        .unwrap_or(fallback)
+        .min(maximum)
+}
+
+fn resolve_title_padding(
+    raw: Option<&serde_json::Value>,
+    is_subtitle: bool,
+    plugin_name: &str,
+) -> Result<ChartJsTitlePadding, String> {
+    let default = if is_subtitle { 0.0 } else { 10.0 };
+    let maximum = crate::guard::DEFAULT_MAX_DIMENSION_PX;
+    let Some(raw) = raw else {
+        return Ok(ChartJsTitlePadding {
+            top: default,
+            bottom: default,
+        });
+    };
+
+    let nonnegative = |value: &serde_json::Value, path: &str| -> Result<f64, String> {
+        let value = value.as_f64().ok_or_else(|| {
+            format!("options.plugins.{plugin_name}.{path} must be a non-negative finite number")
+        })?;
+        if !value.is_finite() || value < 0.0 {
+            return Err(format!(
+                "options.plugins.{plugin_name}.{path} must be a non-negative finite number"
+            ));
+        }
+        Ok(value.min(maximum))
+    };
+
+    match raw {
+        serde_json::Value::Number(_) => {
+            let value = nonnegative(raw, "padding")?;
+            Ok(ChartJsTitlePadding {
+                top: value,
+                bottom: value,
+            })
+        }
+        serde_json::Value::Object(sides) => Ok(ChartJsTitlePadding {
+            top: sides
+                .get("top")
+                .map(|value| nonnegative(value, "padding.top"))
+                .transpose()?
+                .unwrap_or(0.0),
+            bottom: sides
+                .get("bottom")
+                .map(|value| nonnegative(value, "padding.bottom"))
+                .transpose()?
+                .unwrap_or(0.0),
+        }),
+        _ => Err(format!(
+            "options.plugins.{plugin_name}.padding must be a non-negative number or an object"
+        )),
+    }
+}
+
+fn raw_plugins_from_value(value: Option<&serde_json::Value>) -> Result<RawPlugins, String> {
+    let Some(value) = value.and_then(serde_json::Value::as_object) else {
+        return Ok(RawPlugins::default());
+    };
+    serde_json::from_value(serde_json::Value::Object(value.clone()))
+        .map_err(|error| format!("options.plugins: {error}"))
 }
 
 #[derive(Deserialize)]
@@ -2159,12 +2388,13 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         legend: legend_pos(&raw.options.plugins.legend),
         legend_options: legend_options(&raw.options.plugins.legend),
         legend_title: legend_title(&raw.options.plugins.legend),
-        title: raw
-            .options
-            .plugins
-            .title
-            .filter(|t| t.display)
-            .map(|t| t.text),
+        title: None,
+        chartjs_title: resolve_chartjs_title(raw.options.plugins.title.as_ref(), false, &theme)?,
+        chartjs_subtitle: resolve_chartjs_title(
+            raw.options.plugins.subtitle.as_ref(),
+            true,
+            &theme,
+        )?,
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         size_mode: SizeMode::Canvas,
@@ -2606,11 +2836,19 @@ fn check_unknown_keys(
         check_object(options, allowed_options, "options")?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             let allowed_plugins: &[&str] = if allow_outlabels {
-                &["title", "legend", "datalabels", "outlabels", "decimation"]
+                &[
+                    "title",
+                    "subtitle",
+                    "legend",
+                    "datalabels",
+                    "outlabels",
+                    "decimation",
+                ]
             } else {
-                &["title", "legend", "datalabels", "decimation"]
+                &["title", "subtitle", "legend", "datalabels", "decimation"]
             };
             check_object(plugins, allowed_plugins, "options.plugins")?;
+            check_title_plugin_keys(plugins, "options.plugins")?;
             if let Some(legend) = plugins.get("legend").and_then(|v| v.as_object()) {
                 check_object(
                     legend,
@@ -2836,15 +3074,16 @@ fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
     if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
         check_object(options, &["plugins", "theme"], "options")?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            // matrix の plugins は title/legend/decimation を受理する(schema 側 MatrixPlugins と一致)。
+            // matrix の plugins は title/subtitle/legend/decimation を受理する(schema 側 MatrixPlugins と一致)。
             // decimation は matrix では no-op だが Chart.js のグローバルプラグイン挙動どおり受理して
             // 無視する。datalabels は matrix が描画しないため schema・strict とも契約から外し、
             // 危険方向のパリティ破れ(schema 受理→strict 拒否)を起こさない(27k)。
             check_object(
                 plugins,
-                &["title", "legend", "decimation"],
+                &["title", "subtitle", "legend", "decimation"],
                 "options.plugins",
             )?;
+            check_title_plugin_keys(plugins, "options.plugins")?;
             if let Some(dec) = plugins.get("decimation").and_then(|v| v.as_object()) {
                 check_object(
                     dec,
@@ -2974,8 +3213,9 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
             check_object(parsing, &["from", "to", "flow"], "options.parsing")?;
         }
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            // sankey は legend を描画しないため title のみ受理する(schema と一致)。
-            check_object(plugins, &["title"], "options.plugins")?;
+            // sankey は legend を描画しないため title/subtitle のみ受理する(schema と一致)。
+            check_object(plugins, &["title", "subtitle"], "options.plugins")?;
+            check_title_plugin_keys(plugins, "options.plugins")?;
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
             check_object(
@@ -3042,7 +3282,8 @@ fn check_unknown_keys_gauge(json: &str) -> Result<(), String> {
         )?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             // 単一ゲージには凡例が描けないため legend は受け付けない(スキーマと一致)。
-            check_object(plugins, &["title"], "options.plugins")?;
+            check_object(plugins, &["title", "subtitle"], "options.plugins")?;
+            check_title_plugin_keys(plugins, "options.plugins")?;
         }
         if let Some(ca) = options.get("centerArea").and_then(|v| v.as_object()) {
             check_object(
@@ -3124,7 +3365,12 @@ fn check_unknown_keys_progress(json: &str) -> Result<(), String> {
     if let Some(options) = top.get("options").and_then(|v| v.as_object()) {
         check_object(options, &["plugins", "theme"], "options")?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            check_object(plugins, &["title", "datalabels"], "options.plugins")?;
+            check_object(
+                plugins,
+                &["title", "subtitle", "datalabels"],
+                "options.plugins",
+            )?;
+            check_title_plugin_keys(plugins, "options.plugins")?;
             if let Some(dl) = plugins.get("datalabels").and_then(|v| v.as_object()) {
                 check_object(dl, &["display"], "options.plugins.datalabels")?;
             }
@@ -3296,12 +3542,13 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         legend: crate::ir::LegendPos::None,
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
-        title: raw
-            .options
-            .plugins
-            .title
-            .filter(|t| t.display)
-            .map(|t| t.text),
+        title: None,
+        chartjs_title: resolve_chartjs_title(raw.options.plugins.title.as_ref(), false, &theme)?,
+        chartjs_subtitle: resolve_chartjs_title(
+            raw.options.plugins.subtitle.as_ref(),
+            true,
+            &theme,
+        )?,
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         size_mode: SizeMode::Canvas,
@@ -3423,7 +3670,8 @@ fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
         check_object(options, &["plugins", "theme"], "options")?;
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
             // treemap は凡例を描かない(LegendPos::None 固定)ため legend は許可しない。
-            check_object(plugins, &["title"], "options.plugins")?;
+            check_object(plugins, &["title", "subtitle"], "options.plugins")?;
+            check_title_plugin_keys(plugins, "options.plugins")?;
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
             check_object(
@@ -3479,7 +3727,8 @@ fn check_unknown_keys_wordcloud(json: &str) -> Result<(), String> {
             }
         }
         if let Some(plugins) = options.get("plugins").and_then(|v| v.as_object()) {
-            check_object(plugins, &["title"], "options.plugins")?;
+            check_object(plugins, &["title", "subtitle"], "options.plugins")?;
+            check_title_plugin_keys(plugins, "options.plugins")?;
         }
         if let Some(theme) = options.get("theme").and_then(|v| v.as_object()) {
             check_object(
@@ -3681,12 +3930,13 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         legend: legend_pos(&raw.options.plugins.legend),
         legend_options: legend_options(&raw.options.plugins.legend),
         legend_title: legend_title(&raw.options.plugins.legend),
-        title: raw
-            .options
-            .plugins
-            .title
-            .filter(|t| t.display)
-            .map(|t| t.text),
+        title: None,
+        chartjs_title: resolve_chartjs_title(raw.options.plugins.title.as_ref(), false, &theme)?,
+        chartjs_subtitle: resolve_chartjs_title(
+            raw.options.plugins.subtitle.as_ref(),
+            true,
+            &theme,
+        )?,
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         size_mode: SizeMode::Canvas,
@@ -4044,12 +4294,13 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         legend: crate::ir::LegendPos::None,
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
-        title: raw
-            .options
-            .plugins
-            .title
-            .filter(|t| t.display)
-            .map(|t| t.text),
+        title: None,
+        chartjs_title: resolve_chartjs_title(raw.options.plugins.title.as_ref(), false, &theme)?,
+        chartjs_subtitle: resolve_chartjs_title(
+            raw.options.plugins.subtitle.as_ref(),
+            true,
+            &theme,
+        )?,
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         size_mode: SizeMode::Canvas,
@@ -4100,17 +4351,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         .get("theme")
         .and_then(|t| serde_json::from_value(t.clone()).ok());
     let theme = build_theme(raw_theme);
-
-    // タイトル(options.plugins.title.display/text)。
-    let title = opt
-        .get("plugins")
-        .and_then(|p| p.get("title"))
-        .filter(|t| t.get("display").and_then(|d| d.as_bool()).unwrap_or(false))
-        .and_then(|t| {
-            t.get("text")
-                .and_then(|s| s.as_str())
-                .map(|s| s.to_string())
-        });
+    let plugins = raw_plugins_from_value(opt.get("plugins"))?;
 
     // 色解決ヘルパ(背景色配列を Color に)。
     let colors: Vec<crate::ir::Color> = ds
@@ -4285,7 +4526,9 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         legend: LegendPos::None,
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
-        title,
+        title: None,
+        chartjs_title: resolve_chartjs_title(plugins.title.as_ref(), false, &theme)?,
+        chartjs_subtitle: resolve_chartjs_title(plugins.subtitle.as_ref(), true, &theme)?,
         width: raw.width.unwrap_or(DEFAULT_CHART_WIDTH),
         height: raw.height.unwrap_or(DEFAULT_CHART_HEIGHT),
         size_mode: SizeMode::Canvas,
@@ -4425,20 +4668,6 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
     let rotation_steps = word_opts.and_then(|w| w.rotation_steps).unwrap_or(2).max(1);
     let padding = word_opts.and_then(|w| w.padding).unwrap_or(2.0);
 
-    // title
-    let title = raw
-        .options
-        .as_ref()
-        .and_then(|o| o.plugins.as_ref())
-        .and_then(|p| p.get("title"))
-        .and_then(|t| {
-            if t.get("display").and_then(|v| v.as_bool()).unwrap_or(false) {
-                t.get("text")?.as_str().map(|s| s.to_string())
-            } else {
-                None
-            }
-        });
-
     // theme
     let raw_theme = raw
         .options
@@ -4446,6 +4675,11 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         .and_then(|o| o.theme.as_ref())
         .and_then(|t| serde_json::from_value::<RawTheme>(t.clone()).ok());
     let theme = build_theme(raw_theme);
+    let plugins = raw_plugins_from_value(
+        raw.options
+            .as_ref()
+            .and_then(|options| options.plugins.as_ref()),
+    )?;
 
     Ok(ChartSpec {
         kind: ChartKind::WordCloud {
@@ -4464,7 +4698,9 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         legend: LegendPos::None,
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
-        title,
+        title: None,
+        chartjs_title: resolve_chartjs_title(plugins.title.as_ref(), false, &theme)?,
+        chartjs_subtitle: resolve_chartjs_title(plugins.subtitle.as_ref(), true, &theme)?,
         width: raw.width.unwrap_or(500.0),
         height: raw.height.unwrap_or(300.0),
         size_mode: SizeMode::Canvas,
@@ -4473,6 +4709,41 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         decimation: Decimation::default(),
         radial_axis: None,
     })
+}
+
+/// title/subtitle のネストした設定も strict モードで検証する。
+fn check_title_plugin_keys(
+    plugins: &serde_json::Map<String, serde_json::Value>,
+    path: &str,
+) -> Result<(), String> {
+    for name in ["title", "subtitle"] {
+        let Some(config) = plugins.get(name).and_then(serde_json::Value::as_object) else {
+            continue;
+        };
+        let plugin_path = format!("{path}.{name}");
+        check_object(
+            config,
+            &[
+                "display", "text", "align", "position", "color", "font", "padding", "fullSize",
+            ],
+            &plugin_path,
+        )?;
+        if let Some(font) = config.get("font").and_then(serde_json::Value::as_object) {
+            check_object(
+                font,
+                &["size", "family", "weight", "style", "lineHeight"],
+                &format!("{plugin_path}.font"),
+            )?;
+        }
+        if let Some(padding) = config.get("padding").and_then(serde_json::Value::as_object) {
+            check_object(
+                padding,
+                &["top", "bottom"],
+                &format!("{plugin_path}.padding"),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// `obj` のキーを `allowed` に照らし、最初の未知キーを `Err(パス)` で返す。
@@ -6042,5 +6313,12 @@ mod tests {
           "options":{"scales":{"x":{"stacked":true},"y":{"type":"logarithmic"}}} }"#;
         let spec = parse(json, false).expect("placement_stacked のみは対数軸と両立できる");
         assert!(matches!(spec.y_axis.scale_kind, ScaleKind::Logarithmic));
+    }
+
+    #[test]
+    fn chartjs_title_non_finite_line_height_falls_back_to_default_multiplier() {
+        let json = r#"{"type":"bar","data":{"datasets":[{"data":[1]}]},"options":{"plugins":{"title":{"display":true,"font":{"size":12,"lineHeight":"1e309"}}}}}"#;
+        let spec = parse(json, false).expect("invalid line height falls back");
+        assert!((spec.chartjs_title.unwrap().line_height - 14.4).abs() < 1e-9);
     }
 }

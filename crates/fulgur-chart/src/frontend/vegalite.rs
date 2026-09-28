@@ -451,6 +451,8 @@ pub fn parse_with_limits(
         legend_options: crate::ir::LegendOptions::default(),
         legend_title,
         title,
+        chartjs_title: None,
+        chartjs_subtitle: None,
         width,
         height,
         size_mode: if temporal_line {
