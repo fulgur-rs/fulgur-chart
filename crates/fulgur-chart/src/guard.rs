@@ -270,6 +270,191 @@ pub fn validate_spec_with_measurer(
     validate_plot_area_scene_with_measurer(spec, limits, measurer)
 }
 
+/// Validate normalized error-mark ranges and their worst-case Scene primitive count.
+pub(crate) fn validate_error_mark(spec: &ChartSpec, primitive_limit: usize) -> Result<(), String> {
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        return Ok(());
+    };
+    if data.ranges.is_empty() {
+        return Err("error mark must contain at least one range".to_string());
+    }
+    if !data.style.opacity.is_finite() || !(0.0..=1.0).contains(&data.style.opacity) {
+        return Err("error mark opacity must be finite and within 0..=1".to_string());
+    }
+    if !data.style.tension.is_finite() || !(0.0..=1.0).contains(&data.style.tension) {
+        return Err("error mark tension must be finite and within 0..=1".to_string());
+    }
+
+    let mut per_series = vec![0usize; spec.series.len()];
+    let measured_axis = if data.orient == crate::ir::ErrorMarkOrient::Vertical {
+        &spec.y_axis
+    } else {
+        &spec.x_axis
+    };
+    let independent_axis = if data.orient == crate::ir::ErrorMarkOrient::Vertical {
+        &spec.x_axis
+    } else {
+        &spec.y_axis
+    };
+    let mut series_cursors = vec![0usize; spec.series.len()];
+    let mut position_kind = None;
+    for (index, range) in data.ranges.iter().enumerate() {
+        if range.series_index >= spec.series.len() {
+            return Err(format!(
+                "error mark range {index} references missing series {}",
+                range.series_index
+            ));
+        }
+        per_series[range.series_index] = per_series[range.series_index].saturating_add(1);
+        let cursor = &mut series_cursors[range.series_index];
+        if spec.series[range.series_index]
+            .values
+            .get(*cursor)
+            .is_none_or(|value| *value != range.center)
+        {
+            return Err(format!(
+                "error mark range {index} center does not align with series {}",
+                range.series_index
+            ));
+        }
+        *cursor = cursor.saturating_add(1);
+        let current_position_kind = match range.position {
+            crate::ir::ErrorPosition::FullAxis => 0,
+            crate::ir::ErrorPosition::Category(_) => 1,
+            crate::ir::ErrorPosition::Quantitative(_) => 2,
+            crate::ir::ErrorPosition::Temporal(_) => 3,
+        };
+        if position_kind.is_some_and(|kind| kind != current_position_kind) {
+            return Err(
+                "error mark ranges must use one consistent independent position type".into(),
+            );
+        }
+        position_kind = Some(current_position_kind);
+        if !range.center.is_finite()
+            || !range.lower.is_finite()
+            || !range.upper.is_finite()
+            || range.lower > range.upper
+            || range.center < range.lower
+            || range.center > range.upper
+        {
+            return Err(format!(
+                "error mark range {index} must have finite ordered endpoints containing its center"
+            ));
+        }
+        match range.position {
+            crate::ir::ErrorPosition::FullAxis => {}
+            crate::ir::ErrorPosition::Category(category)
+                if category < spec.categories.len()
+                    && !crate::layout::common::is_temporal_scale(independent_axis) => {}
+            crate::ir::ErrorPosition::Category(category) => {
+                return Err(format!(
+                    "error mark range {index} category index {category} is outside the category domain"
+                ));
+            }
+            crate::ir::ErrorPosition::Quantitative(value)
+                if value.is_finite()
+                    && !crate::layout::common::is_temporal_scale(independent_axis) => {}
+            crate::ir::ErrorPosition::Quantitative(_) => {
+                return Err(format!(
+                    "error mark range {index} has a non-finite position"
+                ));
+            }
+            crate::ir::ErrorPosition::Temporal(value)
+                if (value as f64).abs() <= 8.64e15
+                    && crate::layout::common::is_temporal_scale(independent_axis) => {}
+            crate::ir::ErrorPosition::Temporal(_) => {
+                return Err(format!(
+                    "error mark range {index} has an unsupported timestamp"
+                ));
+            }
+        }
+        if measured_axis.scale_kind == crate::ir::ScaleKind::Logarithmic
+            && (range.lower <= 0.0 || range.upper <= 0.0)
+        {
+            return Err(format!(
+                "error mark range {index} has non-positive endpoints on a logarithmic measured axis"
+            ));
+        }
+        if independent_axis.scale_kind == crate::ir::ScaleKind::Logarithmic
+            && matches!(range.position, crate::ir::ErrorPosition::Quantitative(value) if value <= 0.0)
+        {
+            return Err(format!(
+                "error mark range {index} has a non-positive position on a logarithmic independent axis"
+            ));
+        }
+    }
+    for (index, (series, expected)) in spec.series.iter().zip(per_series).enumerate() {
+        if series.values.len() != expected {
+            return Err(format!(
+                "error mark series {index} has {} centers for {expected} ranges",
+                series.values.len()
+            ));
+        }
+        if series.values.iter().any(|value| !value.is_finite()) {
+            return Err(format!(
+                "error mark series {index} contains a non-finite center"
+            ));
+        }
+    }
+    for (name, style) in [
+        ("rule", &data.style.rule),
+        ("ticks", &data.style.ticks),
+        ("band", &data.style.band),
+        ("borders", &data.style.borders),
+    ] {
+        if [style.stroke_width, style.size]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_finite() || value < 0.0)
+        {
+            return Err(format!(
+                "error mark {name} dimensions must be finite and nonnegative"
+            ));
+        }
+        if style
+            .opacity
+            .is_some_and(|opacity| !opacity.is_finite() || !(0.0..=1.0).contains(&opacity))
+        {
+            return Err(format!("error mark {name}.opacity must be within 0..=1"));
+        }
+        if style
+            .stroke_dash
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(format!(
+                "error mark {name}.strokeDash must be finite and nonnegative"
+            ));
+        }
+        for color in [style.fill, style.stroke].into_iter().flatten() {
+            if !color.a.is_finite() || !(0.0..=1.0).contains(&color.a) {
+                return Err(format!(
+                    "error mark {name} color alpha must be within 0..=1"
+                ));
+            }
+        }
+    }
+    for series in &spec.series {
+        for color in series.fill.iter().chain(&series.stroke) {
+            if !color.a.is_finite() || !(0.0..=1.0).contains(&color.a) {
+                return Err("error mark series color alpha must be within 0..=1".to_string());
+            }
+        }
+    }
+    let per_range = match data.kind {
+        crate::ir::ErrorMarkKind::ErrorBar => usize::from(data.style.rule.visible)
+            .saturating_add(usize::from(data.style.ticks.visible).saturating_mul(2)),
+        crate::ir::ErrorMarkKind::ErrorBand => 3,
+    };
+    let generated = data.ranges.len().saturating_mul(per_range);
+    if generated > primitive_limit {
+        return Err(format!(
+            "error mark requires up to {generated} primitives, exceeding limit {primitive_limit}"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     // --- 寸法 ---
     if !spec.width.is_finite()
@@ -290,6 +475,8 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
             spec.height, limits.min_dimension_px, limits.max_dimension_px,
         ));
     }
+
+    validate_error_mark(spec, limits.max_categorical_primitives)?;
 
     // --- 系列数 ---
     if spec.series.len() > limits.max_series {
@@ -422,14 +609,18 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                 spec.categories.len()
             ));
         }
-        if spec
-            .series
-            .iter()
-            .any(|series| series.values.len() != unix_millis.len())
+        if !matches!(spec.kind, ChartKind::ErrorMark(_))
+            && spec
+                .series
+                .iter()
+                .any(|series| series.values.len() != unix_millis.len())
         {
             return Err("temporal x position count does not match every line series".to_string());
         }
-        if !x_is_temporal_scale && unix_millis.windows(2).any(|pair| pair[0] >= pair[1]) {
+        if !matches!(spec.kind, ChartKind::ErrorMark(_))
+            && !x_is_temporal_scale
+            && unix_millis.windows(2).any(|pair| pair[0] >= pair[1])
+        {
             return Err("temporal x positions must be strictly increasing".to_string());
         }
         let allowed = matches!(
@@ -441,7 +632,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                 horizontal: false,
                 ..
             }
-        );
+        ) || matches!(spec.kind, ChartKind::ErrorMark(_));
         if !allowed {
             return Err(
                 "temporal x positions are only supported on Cartesian index axes".to_string(),
@@ -456,21 +647,23 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                 spec.categories.len()
             ));
         }
-        if spec
-            .series
-            .iter()
-            .any(|series| series.values.len() != unix_millis.len())
+        if !matches!(spec.kind, ChartKind::ErrorMark(_))
+            && spec
+                .series
+                .iter()
+                .any(|series| series.values.len() != unix_millis.len())
         {
             return Err("temporal y position count does not match every bar series".to_string());
         }
-        if !y_is_temporal_scale
+        if (!y_is_temporal_scale
             || !matches!(
                 spec.kind,
                 ChartKind::Bar {
                     horizontal: true,
                     ..
                 }
-            )
+            ))
+            && !matches!(spec.kind, ChartKind::ErrorMark(_))
         {
             return Err(
                 "temporal y positions are only supported on horizontal bar index axes".to_string(),

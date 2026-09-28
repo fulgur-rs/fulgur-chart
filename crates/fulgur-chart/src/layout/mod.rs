@@ -5,6 +5,7 @@ pub mod boxplot;
 pub(crate) mod chartjs_title;
 pub mod common;
 mod decimate;
+pub(crate) mod error_mark;
 pub mod gauge;
 pub mod geoshape;
 pub mod line;
@@ -118,11 +119,9 @@ fn build_chart_scene(
         ChartKind::GeoShape { .. } => {
             geoshape::build_with_primitive_limit(spec, m, limits.max_geo_primitives)?
         }
-        ChartKind::ErrorMark(_) => Scene {
-            width: spec.width,
-            height: spec.height,
-            items: Vec::new(),
-        },
+        ChartKind::ErrorMark(_) => {
+            error_mark::build_checked(spec, m, limits.max_categorical_primitives)?
+        }
         ChartKind::Progress => progress::build(spec, m),
         ChartKind::BoxPlot => boxplot::build(spec, m),
         ChartKind::Violin { .. } => violin::build(spec, m),
