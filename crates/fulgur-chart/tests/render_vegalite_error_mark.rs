@@ -168,6 +168,68 @@ fn errorbar_ticks_are_optional_and_use_part_styles() {
 }
 
 #[test]
+fn temporal_error_marks_pass_guard_and_render_for_both_orientations() {
+    let specs = [
+        r##"{"width":320,"height":220,"mark":{"type":"errorbar"},
+        "data":{"values":[{"date":"2026-09-01","low":2,"high":4}]},
+        "encoding":{"x":{"field":"date","type":"temporal"},
+        "y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##,
+        r##"{"width":320,"height":220,"mark":{"type":"errorbar","orient":"horizontal"},
+        "data":{"values":[{"date":"2026-09-01","low":2,"high":4}]},
+        "encoding":{"x":{"field":"low","type":"quantitative"},"x2":{"field":"high"},
+        "y":{"field":"date","type":"temporal"}}}"##,
+        r##"{"width":320,"height":220,"mark":{"type":"errorband","extent":"stdev"},
+        "data":{"values":[{"date":"2026-09-01","value":2},{"date":"2026-09-01","value":4},
+        {"date":"2026-09-02","value":3},{"date":"2026-09-02","value":5}]},
+        "encoding":{"x":{"field":"date","type":"temporal"},
+        "y":{"field":"value","type":"quantitative"}}}"##,
+        r##"{"width":320,"height":220,"mark":{"type":"errorband","orient":"horizontal","extent":"stdev"},
+        "data":{"values":[{"date":"2026-09-01","value":2},{"date":"2026-09-01","value":4},
+        {"date":"2026-09-02","value":3},{"date":"2026-09-02","value":5}]},
+        "encoding":{"x":{"field":"value","type":"quantitative"},
+        "y":{"field":"date","type":"temporal"}}}"##,
+    ];
+
+    for json in specs {
+        let spec = parse(json);
+        validate_spec(&spec, &InputLimits::default()).unwrap();
+        let scene = layout::build_scene_checked(&spec, &measurer()).unwrap();
+        assert!(scene.items.iter().any(|item| matches!(
+            item,
+            Prim::Line { .. } | Prim::Path { .. } | Prim::ClippedPath { .. }
+        )));
+    }
+}
+
+#[test]
+fn error_mark_config_axis_grid_options_apply_to_both_axes() {
+    let spec = parse(
+        r##"{"mark":"errorbar","config":{"axis":{"grid":false,"gridOpacity":0}},
+        "data":{"values":[{"x":"a","low":1,"high":4}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},
+        "y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##,
+    );
+    for grid in [&spec.x_axis.grid, &spec.y_axis.grid] {
+        assert!(!grid.display);
+        assert_eq!(grid.color.unwrap().a, 0.0);
+    }
+}
+
+#[test]
+fn error_mark_default_axis_grid_keeps_theme_color_on_both_axes() {
+    let spec = parse(
+        r##"{"mark":"errorbar","data":{"values":[{"x":"a","low":1,"high":4}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},
+        "y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##,
+    );
+    assert!(spec.x_axis.grid.color.is_some());
+    assert!(spec.y_axis.grid.color.is_some());
+    assert!(!spec.x_axis.grid.draw_ticks);
+    assert!(!spec.y_axis.grid.draw_ticks);
+    assert_eq!(spec.x_axis.grid.color, spec.y_axis.grid.color);
+}
+
+#[test]
 fn error_mark_guard_rejects_misaligned_and_nonfinite_ranges() {
     let mut spec = parse(
         r##"{"mark":{"type":"errorbar","ticks":true},"data":{"values":[{"x":"A","low":2,"high":8}]},
@@ -368,6 +430,55 @@ fn errorband_styles_control_fill_and_boundaries() {
 }
 
 #[test]
+fn errorband_part_opacity_overrides_mark_opacity() {
+    let spec = parse(
+        r##"{"mark":{"type":"errorband","opacity":0.5,
+        "band":{"fill":"#0000ff","opacity":0.8}},
+        "data":{"values":[{"x":"a","low":1,"high":4},{"x":"b","low":2,"high":6}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},
+        "y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##,
+    );
+    let scene = layout::build_scene_checked(&spec, &measurer()).unwrap();
+    let fills = filled_paths(&scene);
+    assert_eq!(fills.len(), 1);
+    assert!((fills[0].1.a - 0.8).abs() < 1e-6);
+}
+
+#[test]
+fn errorband_band_stroke_style_renders_closed_outline() {
+    let spec = parse(
+        r##"{"mark":{"type":"errorband","clip":false,
+        "band":{"fill":"#0000ff","stroke":"red","strokeWidth":7,"strokeDash":[2,2]}},
+        "data":{"values":[{"x":"a","low":1,"high":4},{"x":"b","low":2,"high":6}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},
+        "y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##,
+    );
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("error-mark kind expected")
+    };
+    assert_eq!(data.style.band.stroke, Some(red()));
+    assert!(!data.style.clip);
+    assert_eq!(data.style.band.stroke_dash, vec![2.0, 2.0]);
+    let scene = layout::build_scene_checked(&spec, &measurer()).unwrap();
+    let outline = scene.items.iter().find_map(|item| match item {
+        Prim::StyledPath {
+            stroke,
+            stroke_width,
+            dash,
+            d,
+            ..
+        } if stroke.r == 255 && stroke.g == 0 && stroke.b == 0 => {
+            Some((*stroke_width, dash.clone(), d.clone()))
+        }
+        _ => None,
+    });
+    let (width, dash, path) = outline.expect("band stroke must outline the filled band");
+    assert_eq!(width, 7.0);
+    assert_eq!(dash, vec![2.0, 2.0]);
+    assert!(path.ends_with('Z'));
+}
+
+#[test]
 fn errorband_all_interpolations_emit_finite_paths() {
     for interpolation in [
         "linear",
@@ -385,10 +496,11 @@ fn errorband_all_interpolations_emit_finite_paths() {
         "monotone",
     ] {
         let json = format!(
-            r##"{{"mark":{{"type":"errorband","interpolate":"{interpolation}","tension":0.4}},"data":{{"values":[{{"x":"a","low":1,"high":4}},{{"x":"b","low":3,"high":7}},{{"x":"c","low":2,"high":8}}]}},"encoding":{{"x":{{"field":"x","type":"nominal"}},"y":{{"field":"low","type":"quantitative"}},"y2":{{"field":"high"}}}}}}"##
+            r##"{{"mark":{{"type":"errorband","interpolate":"{interpolation}","tension":0.4}},"data":{{"values":[{{"x":"a","low":1,"high":4}},{{"x":"b","low":3,"high":7}},{{"x":"c","low":2,"high":8}},{{"x":"d","low":6,"high":9}}]}},"encoding":{{"x":{{"field":"x","type":"nominal"}},"y":{{"field":"low","type":"quantitative"}},"y2":{{"field":"high"}}}}}}"##
         );
         let spec = parse(&json);
-        let scene = layout::build_scene_checked(&spec, &measurer()).unwrap();
+        let scene = layout::build_scene_checked(&spec, &measurer())
+            .unwrap_or_else(|error| panic!("{interpolation}: {error}"));
         let fills = filled_paths(&scene);
         assert_eq!(fills.len(), 1, "{interpolation}");
         let path = fills[0].0.to_ascii_lowercase();

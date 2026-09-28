@@ -568,15 +568,21 @@ pub(super) fn parse_error_mark_spec(
 
     let (categories, x_positions, y_positions) =
         domain.chart_positions(measure_axis, independent_kind);
+    let configured_grid = super::temporal_axis_grid(top, theme.grid_color, theme.text_color)?;
+    let grid = AxisGrid {
+        display: configured_grid.display,
+        color: configured_grid.color.or(Some(theme.grid_color)),
+        ..AxisGrid::default()
+    };
     let x_axis = make_axis(
         x_field.as_deref(),
         channel_kind_optional(&records, encoding, MeasureAxis::X, x_field.as_deref())?,
-        theme.grid_color,
+        grid.clone(),
     );
     let y_axis = make_axis(
         y_field.as_deref(),
         channel_kind_optional(&records, encoding, MeasureAxis::Y, y_field.as_deref())?,
-        theme.grid_color,
+        grid,
     );
     let width = top
         .get("width")
@@ -1232,7 +1238,8 @@ fn make_series(name: String, color: Color) -> Series {
     }
 }
 
-fn make_axis(field: Option<&str>, kind: Option<ChannelKind>, grid_color: Color) -> AxisSpec {
+fn make_axis(field: Option<&str>, kind: Option<ChannelKind>, grid: AxisGrid) -> AxisSpec {
+    let temporal = kind == Some(ChannelKind::Temporal);
     AxisSpec {
         title: field.map(|field| AxisTitle {
             text: field.to_owned(),
@@ -1246,17 +1253,14 @@ fn make_axis(field: Option<&str>, kind: Option<ChannelKind>, grid_color: Color) 
         suggested_max: None,
         begin_at_zero: false,
         offset: false,
-        grid: AxisGrid {
-            color: Some(grid_color),
-            ..AxisGrid::default()
-        },
+        grid,
         border: AxisBorder::default(),
-        scale_kind: if kind == Some(ChannelKind::Temporal) {
+        scale_kind: if temporal {
             ScaleKind::Time
         } else {
             ScaleKind::Linear
         },
-        time: None,
+        time: temporal.then(crate::ir::TimeOptions::default),
         ticks: AxisTickOptions::default(),
     }
 }

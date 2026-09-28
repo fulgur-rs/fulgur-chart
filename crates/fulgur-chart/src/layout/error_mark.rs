@@ -549,6 +549,42 @@ fn map_continuous(mapper: &AxisMapper, position: ErrorPosition) -> Option<f64> {
     }
 }
 
+fn map_position_with_clip(
+    frame: &ErrorMarkFrame,
+    axis: ErrorAxis,
+    position: ErrorPosition,
+    clip: bool,
+) -> Result<f64, String> {
+    if let ErrorPosition::Quantitative(value) = position {
+        let mapper = frame.mapper(axis);
+        let value = if clip && matches!(mapper, AxisMapper::Continuous(ValueScale::Linear(_))) {
+            let info = match axis {
+                ErrorAxis::X => &frame.x,
+                ErrorAxis::Y => &frame.y,
+            };
+            let min = info
+                .min
+                .ok_or_else(|| format!("error mark {axis:?} axis has no lower domain bound"))?;
+            let max = info
+                .max
+                .ok_or_else(|| format!("error mark {axis:?} axis has no upper domain bound"))?;
+            value.clamp(min, max)
+        } else {
+            value
+        };
+        let mapped = map_continuous(mapper, ErrorPosition::Quantitative(value))
+            .ok_or_else(|| format!("error mark position does not match {axis:?} axis"))?;
+        if !mapped.is_finite() {
+            return Err(format!(
+                "error mark position on {axis:?} axis maps to a non-finite coordinate"
+            ));
+        }
+        Ok(mapped)
+    } else {
+        frame.map_position(axis, position)
+    }
+}
+
 fn draw_axis(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &ErrorMarkFrame, axis: ErrorAxis) {
     let (info, axis_spec) = match axis {
         ErrorAxis::X => (&frame.x, &spec.x_axis),
@@ -933,10 +969,14 @@ fn push_segment(
     });
 }
 
-fn draw_errorbars(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &ErrorMarkFrame) {
+fn draw_errorbars(
+    items: &mut Vec<Prim>,
+    spec: &ChartSpec,
+    frame: &ErrorMarkFrame,
+) -> Result<(), String> {
     let data = error_data(spec);
     if data.kind != ErrorMarkKind::ErrorBar {
-        return;
+        return Ok(());
     }
     let measure_axis = if data.orient == crate::ir::ErrorMarkOrient::Vertical {
         ErrorAxis::Y
@@ -950,29 +990,26 @@ fn draw_errorbars(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &ErrorMarkFram
     };
     let clip = data.style.clip;
     for range in &data.ranges {
-        let cross = frame
-            .map_position(cross_axis, range.position)
-            .unwrap_or_else(|_| match frame.mapper(cross_axis) {
-                AxisMapper::FullAxis => {
-                    let (start, end) = frame.full_axis_extent(cross_axis);
-                    (start + end) / 2.0
-                }
-                _ => f64::NAN,
-            });
-        let (mut start_value, mut end_value) = match measure_axis {
-            ErrorAxis::X => (
-                map_continuous(&frame.x_mapper, ErrorPosition::Quantitative(range.lower)),
-                map_continuous(&frame.x_mapper, ErrorPosition::Quantitative(range.upper)),
-            ),
-            ErrorAxis::Y => (
-                map_continuous(&frame.y_mapper, ErrorPosition::Quantitative(range.lower)),
-                map_continuous(&frame.y_mapper, ErrorPosition::Quantitative(range.upper)),
-            ),
+        let cross = match frame.map_position(cross_axis, range.position) {
+            Ok(value) => value,
+            Err(_) if matches!(frame.mapper(cross_axis), AxisMapper::FullAxis) => {
+                let (start, end) = frame.full_axis_extent(cross_axis);
+                (start + end) / 2.0
+            }
+            Err(error) => return Err(error),
         };
-        let (Some(mut start_value), Some(mut end_value)) = (start_value.take(), end_value.take())
-        else {
-            continue;
-        };
+        let mut start_value = map_position_with_clip(
+            frame,
+            measure_axis,
+            ErrorPosition::Quantitative(range.lower),
+            clip,
+        )?;
+        let mut end_value = map_position_with_clip(
+            frame,
+            measure_axis,
+            ErrorPosition::Quantitative(range.upper),
+            clip,
+        )?;
         if range.lower == range.upper {
             start_value -= 0.5;
             end_value += 0.5;
@@ -1014,6 +1051,7 @@ fn draw_errorbars(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &ErrorMarkFram
             }
         }
     }
+    Ok(())
 }
 
 fn error_position_order(left: ErrorPosition, right: ErrorPosition) -> std::cmp::Ordering {
@@ -1084,27 +1122,20 @@ fn mapped_errorbands(
 
         let mut mapped = Vec::with_capacity(if full_axis { 2 } else { ranges.len() });
         for range in &ranges {
-            let independent = frame.map_position(independent_axis, range.position)?;
-            let lower = map_continuous(
-                match measure_axis {
-                    ErrorAxis::X => &frame.x_mapper,
-                    ErrorAxis::Y => &frame.y_mapper,
-                },
+            let independent =
+                map_position_with_clip(frame, independent_axis, range.position, data.style.clip)?;
+            let lower = map_position_with_clip(
+                frame,
+                measure_axis,
                 ErrorPosition::Quantitative(range.lower),
-            )
-            .ok_or_else(|| {
-                "errorband lower endpoint does not match the measured axis".to_string()
-            })?;
-            let upper = map_continuous(
-                match measure_axis {
-                    ErrorAxis::X => &frame.x_mapper,
-                    ErrorAxis::Y => &frame.y_mapper,
-                },
+                data.style.clip,
+            )?;
+            let upper = map_position_with_clip(
+                frame,
+                measure_axis,
                 ErrorPosition::Quantitative(range.upper),
-            )
-            .ok_or_else(|| {
-                "errorband upper endpoint does not match the measured axis".to_string()
-            })?;
+                data.style.clip,
+            )?;
             if ![independent, lower, upper]
                 .iter()
                 .all(|value| value.is_finite())
@@ -1147,6 +1178,15 @@ fn boundary_samples(
     interpolation: ErrorBandInterpolation,
     tension: f64,
 ) -> Vec<(f64, f64)> {
+    match interpolation {
+        ErrorBandInterpolation::BasisOpen => return basis_open_samples(points),
+        ErrorBandInterpolation::BasisClosed => return basis_closed_samples(points),
+        ErrorBandInterpolation::CardinalOpen => return cardinal_open_samples(points, tension),
+        ErrorBandInterpolation::CardinalClosed => {
+            return cardinal_closed_samples(points, tension);
+        }
+        _ => {}
+    }
     if points.len() < 2 {
         return points.to_vec();
     }
@@ -1166,22 +1206,146 @@ fn boundary_samples(
                     .collect()
             }
         }
-        ErrorBandInterpolation::Basis | ErrorBandInterpolation::BasisClosed => {
-            basis_samples(points)
-        }
-        ErrorBandInterpolation::BasisOpen if points.len() >= 4 => {
-            basis_samples(&points[1..points.len() - 1])
-        }
-        ErrorBandInterpolation::BasisOpen => basis_samples(points),
+        ErrorBandInterpolation::Basis => basis_samples(points),
         ErrorBandInterpolation::Bundle => bundle_samples(points, tension),
-        ErrorBandInterpolation::Cardinal | ErrorBandInterpolation::CardinalClosed => {
-            cardinal_samples(points, tension)
-        }
-        ErrorBandInterpolation::CardinalOpen if points.len() >= 4 => {
-            cardinal_samples(&points[1..points.len() - 1], tension)
-        }
-        ErrorBandInterpolation::CardinalOpen => cardinal_samples(points, tension),
+        ErrorBandInterpolation::Cardinal => cardinal_samples(points, tension),
+        ErrorBandInterpolation::BasisOpen
+        | ErrorBandInterpolation::BasisClosed
+        | ErrorBandInterpolation::CardinalOpen
+        | ErrorBandInterpolation::CardinalClosed => unreachable!("handled above"),
     }
+}
+
+fn basis_open_samples(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    const SAMPLES_PER_SEGMENT: usize = 8;
+    if points.len() < 3 {
+        return Vec::new();
+    }
+    let weighted = |p0: (f64, f64), p1: (f64, f64), p2: (f64, f64)| {
+        (
+            (p0.0 + 4.0 * p1.0 + p2.0) / 6.0,
+            (p0.1 + 4.0 * p1.1 + p2.1) / 6.0,
+        )
+    };
+    let mut current = weighted(points[0], points[1], points[2]);
+    let mut sampled = vec![current];
+    for index in 3..points.len() {
+        let p1 = points[index - 2];
+        let p2 = points[index - 1];
+        let p3 = points[index];
+        let control1 = ((2.0 * p1.0 + p2.0) / 3.0, (2.0 * p1.1 + p2.1) / 3.0);
+        let control2 = ((p1.0 + 2.0 * p2.0) / 3.0, (p1.1 + 2.0 * p2.1) / 3.0);
+        let end = weighted(p1, p2, p3);
+        append_cubic_samples(
+            &mut sampled,
+            current,
+            control1,
+            control2,
+            end,
+            SAMPLES_PER_SEGMENT,
+        );
+        current = end;
+    }
+    sampled
+}
+
+fn basis_closed_samples(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    const SAMPLES_PER_SEGMENT: usize = 8;
+    match points.len() {
+        0 => return Vec::new(),
+        1 => return points.to_vec(),
+        2 => {
+            let (p0, p1) = (points[0], points[1]);
+            return vec![
+                ((p0.0 + 2.0 * p1.0) / 3.0, (p0.1 + 2.0 * p1.1) / 3.0),
+                ((p1.0 + 2.0 * p0.0) / 3.0, (p1.1 + 2.0 * p0.1) / 3.0),
+            ];
+        }
+        _ => {}
+    }
+    let weighted = |p0: (f64, f64), p1: (f64, f64), p2: (f64, f64)| {
+        (
+            (p0.0 + 4.0 * p1.0 + p2.0) / 6.0,
+            (p0.1 + 4.0 * p1.1 + p2.1) / 6.0,
+        )
+    };
+    let count = points.len();
+    let mut current = weighted(points[count - 1], points[0], points[1]);
+    let mut sampled = vec![current];
+    for index in 0..count {
+        let p0 = points[index];
+        let p1 = points[(index + 1) % count];
+        let p2 = points[(index + 2) % count];
+        let control1 = ((2.0 * p0.0 + p1.0) / 3.0, (2.0 * p0.1 + p1.1) / 3.0);
+        let control2 = ((p0.0 + 2.0 * p1.0) / 3.0, (p0.1 + 2.0 * p1.1) / 3.0);
+        let end = weighted(p0, p1, p2);
+        append_cubic_samples(
+            &mut sampled,
+            current,
+            control1,
+            control2,
+            end,
+            SAMPLES_PER_SEGMENT,
+        );
+        current = end;
+    }
+    sampled
+}
+
+fn cardinal_open_samples(points: &[(f64, f64)], tension: f64) -> Vec<(f64, f64)> {
+    const SAMPLES_PER_SEGMENT: usize = 8;
+    if points.len() < 4 {
+        return Vec::new();
+    }
+    let k = (1.0 - tension) / 6.0;
+    let mut sampled = vec![points[1]];
+    for index in 1..points.len() - 2 {
+        let p0 = points[index - 1];
+        let p1 = points[index];
+        let p2 = points[index + 1];
+        let p3 = points[index + 2];
+        let control1 = (p1.0 + k * (p2.0 - p0.0), p1.1 + k * (p2.1 - p0.1));
+        let control2 = (p2.0 + k * (p1.0 - p3.0), p2.1 + k * (p1.1 - p3.1));
+        append_cubic_samples(
+            &mut sampled,
+            p1,
+            control1,
+            control2,
+            p2,
+            SAMPLES_PER_SEGMENT,
+        );
+    }
+    sampled
+}
+
+fn cardinal_closed_samples(points: &[(f64, f64)], tension: f64) -> Vec<(f64, f64)> {
+    const SAMPLES_PER_SEGMENT: usize = 8;
+    match points.len() {
+        0 => return Vec::new(),
+        1 => return vec![points[0], points[0]],
+        2 => return vec![points[0], points[1], points[0]],
+        _ => {}
+    }
+    let count = points.len();
+    let k = (1.0 - tension) / 6.0;
+    let mut sampled = vec![points[0]];
+    for index in 0..count {
+        let p0 = points[(index + count - 1) % count];
+        let p1 = points[index];
+        let p2 = points[(index + 1) % count];
+        let p3 = points[(index + 2) % count];
+        let control1 = (p1.0 + k * (p2.0 - p0.0), p1.1 + k * (p2.1 - p0.1));
+        let control2 = (p2.0 + k * (p1.0 - p3.0), p2.1 + k * (p1.1 - p3.1));
+        append_cubic_samples(
+            &mut sampled,
+            p1,
+            control1,
+            control2,
+            p2,
+            SAMPLES_PER_SEGMENT,
+        );
+    }
+    sampled
 }
 
 #[derive(Clone, Copy)]
@@ -1383,12 +1547,13 @@ fn errorband_paths(
         .collect::<Vec<_>>();
     let upper = boundary_samples(&upper, interpolation, tension);
     let lower = boundary_samples(&lower, interpolation, tension);
-    if upper.len() < 2
-        || lower.len() < 2
-        || upper
-            .iter()
-            .chain(&lower)
-            .any(|point| !point.0.is_finite() || !point.1.is_finite())
+    if upper.len() < 2 || lower.len() < 2 {
+        return Ok(None);
+    }
+    if upper
+        .iter()
+        .chain(&lower)
+        .any(|point| !point.0.is_finite() || !point.1.is_finite())
     {
         return Err("errorband interpolation produced a non-finite coordinate".into());
     }
@@ -1408,14 +1573,20 @@ fn errorband_paths(
         .collect::<Vec<_>>();
     let polygon = path_from_points(&polygon_points, true)
         .ok_or_else(|| "errorband polygon contains a non-finite coordinate".to_string())?;
+    let close_boundaries = matches!(
+        interpolation,
+        ErrorBandInterpolation::LinearClosed
+            | ErrorBandInterpolation::BasisClosed
+            | ErrorBandInterpolation::CardinalClosed
+    );
     let upper = path_from_points(
         &upper.iter().copied().map(convert).collect::<Vec<_>>(),
-        false,
+        close_boundaries,
     )
     .ok_or_else(|| "errorband upper boundary contains a non-finite coordinate".to_string())?;
     let lower = path_from_points(
         &lower.iter().copied().map(convert).collect::<Vec<_>>(),
-        false,
+        close_boundaries,
     )
     .ok_or_else(|| "errorband lower boundary contains a non-finite coordinate".to_string())?;
     Ok(Some((polygon, upper, lower)))
@@ -1457,10 +1628,8 @@ fn errorband_color(
         })
     }
     .unwrap_or(spec.theme.text_color);
-    let mark_opacity = error_data(spec).style.opacity;
-    let part_opacity = style.opacity.unwrap_or(1.0);
     Color {
-        a: base.a * (mark_opacity * part_opacity) as f32,
+        a: base.a * style.opacity.unwrap_or(error_data(spec).style.opacity) as f32,
         ..base
     }
 }
@@ -1564,6 +1733,7 @@ fn draw_errorbands(
             continue;
         };
         if data.style.band.visible {
+            let outline = data.style.band.stroke.is_some().then(|| polygon.clone());
             push_errorband_fill(
                 items,
                 polygon,
@@ -1571,6 +1741,17 @@ fn draw_errorbands(
                 data.style.clip,
                 frame,
             );
+            if let Some(outline) = outline {
+                push_errorband_border(
+                    items,
+                    outline,
+                    errorband_color(spec, &group.representative, &data.style.band, false),
+                    data.style.band.stroke_width.unwrap_or(DEFAULT_RULE_WIDTH),
+                    &data.style.band.stroke_dash,
+                    data.style.clip,
+                    frame,
+                );
+            }
         }
         if data.style.borders.visible {
             let color = errorband_color(spec, &group.representative, &data.style.borders, false);
@@ -1606,7 +1787,7 @@ fn build_with_bands(
     draw_axis(&mut items, spec, &frame, ErrorAxis::X);
     draw_axis(&mut items, spec, &frame, ErrorAxis::Y);
     draw_legend(&mut items, spec, &frame, m);
-    draw_errorbars(&mut items, spec, &frame);
+    draw_errorbars(&mut items, spec, &frame)?;
     draw_errorbands(&mut items, spec, &frame, &bands)?;
     Ok(Scene {
         width: frame.width,
@@ -1616,6 +1797,7 @@ fn build_with_bands(
 }
 
 /// Builds one error-mark Scene without applying the shared outer theme background pass.
+#[cfg(test)]
 pub(crate) fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let frame = compute_frame(spec, m);
     let bands = mapped_errorbands(spec, &frame).expect("errorband coordinates must be valid");
@@ -1628,9 +1810,6 @@ pub(crate) fn build_checked(
     primitive_limit: usize,
 ) -> Result<Scene, String> {
     crate::guard::validate_error_mark(spec, primitive_limit)?;
-    if error_data(spec).kind == ErrorMarkKind::ErrorBar {
-        return Ok(build(spec, m));
-    }
     let frame = compute_frame(spec, m);
     let bands = mapped_errorbands(spec, &frame)?;
     build_with_bands(spec, m, frame, bands)
@@ -1824,6 +2003,53 @@ mod tests {
     }
 
     #[test]
+    fn errorbar_extreme_endpoint_clips_before_pixel_mapping() {
+        let mut spec = parse(
+            r##"{"width":320,"height":220,"mark":{"type":"errorbar","color":"red"},"data":{"values":[{"x":"A","lo":1,"hi":1e308}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"lo","type":"quantitative"},"y2":{"field":"hi"}}}"##,
+        );
+        spec.y_axis.min = Some(1.0);
+        spec.y_axis.max = Some(2.0);
+        let frame = compute_frame(&spec, &measurer());
+
+        let scene = build_checked(&spec, &measurer(), 100)
+            .expect("clipping a finite endpoint to hard bounds should remain renderable");
+        let rule = red_rule(&scene);
+        let (rule_top, rule_bottom) = if rule.1 <= rule.3 {
+            (rule.1, rule.3)
+        } else {
+            (rule.3, rule.1)
+        };
+        assert!((rule_top - frame.plot_top).abs() < 1e-8);
+        assert!((rule_bottom - frame.plot_bottom).abs() < 1e-8);
+
+        if let ChartKind::ErrorMark(data) = &mut spec.kind {
+            data.style.clip = false;
+        }
+        assert!(
+            build_checked(&spec, &measurer(), 100).is_err(),
+            "an un-clipped endpoint that maps to infinity must return an error"
+        );
+    }
+
+    #[test]
+    fn errorband_extreme_endpoint_clips_before_pixel_mapping() {
+        let mut spec = parse(
+            r##"{"width":320,"height":220,"mark":"errorband","data":{"values":[{"x":0,"lo":1,"hi":1e308},{"x":1,"lo":1,"hi":1e308}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"lo","type":"quantitative"},"y2":{"field":"hi"}}}"##,
+        );
+        spec.y_axis.min = Some(1.0);
+        spec.y_axis.max = Some(2.0);
+
+        let scene = build_checked(&spec, &measurer(), 100)
+            .expect("clipping finite errorband endpoints to hard bounds should render");
+        assert!(
+            scene
+                .items
+                .iter()
+                .any(|item| matches!(item, Prim::ClippedPath { .. }))
+        );
+    }
+
+    #[test]
     fn errorbar_1d_uses_plot_center_on_the_other_axis() {
         let spec = parse(
             r##"{"mark":{"type":"errorbar","orient":"vertical","color":"red"},"data":{"values":[{"lo":2,"hi":8}]},"encoding":{"y":{"field":"lo","type":"quantitative"},"y2":{"field":"hi"}}}"##,
@@ -1864,5 +2090,81 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(caps.len(), 2);
         assert!(caps.iter().all(|(x1, _, x2, _)| (x1 - x2).abs() > 0.0));
+    }
+
+    #[test]
+    fn errorband_open_and_closed_interpolations_preserve_curve_end_conditions() {
+        let upper = vec![(0.0, 1.0), (1.0, 4.0), (2.0, 2.0), (3.0, 5.0), (4.0, 3.0)];
+        let lower = upper.iter().map(|(x, y)| (*x, y - 1.0)).collect::<Vec<_>>();
+        let ranges = upper
+            .iter()
+            .zip(&lower)
+            .map(|((independent, upper), (_, lower))| MappedErrorRange {
+                independent: *independent,
+                lower: *lower,
+                upper: *upper,
+                horizontal: false,
+            })
+            .collect::<Vec<_>>();
+        let short_ranges = ranges[..3].to_vec();
+        for interpolation in [
+            ErrorBandInterpolation::BasisOpen,
+            ErrorBandInterpolation::CardinalOpen,
+        ] {
+            assert!(
+                errorband_paths(&short_ranges, interpolation, 0.25)
+                    .unwrap()
+                    .is_none(),
+                "{interpolation:?} should produce no path with too few control points"
+            );
+        }
+
+        for (open, closed) in [
+            (
+                ErrorBandInterpolation::Linear,
+                ErrorBandInterpolation::LinearClosed,
+            ),
+            (
+                ErrorBandInterpolation::Basis,
+                ErrorBandInterpolation::BasisClosed,
+            ),
+            (
+                ErrorBandInterpolation::Cardinal,
+                ErrorBandInterpolation::CardinalClosed,
+            ),
+        ] {
+            let (_, open_upper, _) = errorband_paths(&ranges, open, 0.25).unwrap().unwrap();
+            let (_, closed_upper, _) = errorband_paths(&ranges, closed, 0.25).unwrap().unwrap();
+            assert!(!open_upper.ends_with('Z'), "{open:?} must remain open");
+            assert!(
+                closed_upper.ends_with('Z'),
+                "{closed:?} must close its boundary"
+            );
+            assert_ne!(open_upper, closed_upper, "{closed:?} must wrap the curve");
+        }
+
+        let basis_open = boundary_samples(&upper, ErrorBandInterpolation::BasisOpen, 0.25);
+        let basis_open_start = (
+            (upper[0].0 + 4.0 * upper[1].0 + upper[2].0) / 6.0,
+            (upper[0].1 + 4.0 * upper[1].1 + upper[2].1) / 6.0,
+        );
+        let basis_open_end = (
+            (upper[2].0 + 4.0 * upper[3].0 + upper[4].0) / 6.0,
+            (upper[2].1 + 4.0 * upper[3].1 + upper[4].1) / 6.0,
+        );
+        assert_eq!(basis_open.first(), Some(&basis_open_start));
+        assert_eq!(basis_open.last(), Some(&basis_open_end));
+
+        let cardinal_open = boundary_samples(&upper, ErrorBandInterpolation::CardinalOpen, 0.25);
+        let k = (1.0 - 0.25) / 6.0;
+        let (p0, p1, p2, p3) = (upper[0], upper[1], upper[2], upper[3]);
+        let cp1 = (p1.0 + k * (p2.0 - p0.0), p1.1 + k * (p2.1 - p0.1));
+        let cp2 = (p2.0 + k * (p1.0 - p3.0), p2.1 + k * (p1.1 - p3.1));
+        let expected_first_sample = cubic_point(p1, cp1, cp2, p2, 1.0 / 8.0);
+        assert_eq!(cardinal_open.first(), Some(&p1));
+        assert_eq!(cardinal_open.get(1), Some(&expected_first_sample));
+        let cardinal_closed =
+            boundary_samples(&upper, ErrorBandInterpolation::CardinalClosed, 0.25);
+        assert_eq!(cardinal_closed.first(), cardinal_closed.last());
     }
 }
