@@ -183,6 +183,76 @@ fn line_and_scatter_dataset_line_style_options_are_schema_and_strict_parseable()
 }
 
 #[test]
+fn dataset_border_dash_rejects_oversized_patterns() {
+    for chart_type in ["line", "scatter", "bar"] {
+        let dataset = if chart_type == "scatter" {
+            serde_json::json!({"data": [{"x": 1, "y": 2}, {"x": 2, "y": 3}]})
+        } else {
+            serde_json::json!({"type": "line", "data": [1, 2]})
+        };
+        let mut json = serde_json::json!({
+            "type": chart_type,
+            "data": {"labels": ["a", "b"], "datasets": [dataset]}
+        });
+        if chart_type == "scatter" {
+            json["data"].as_object_mut().unwrap().remove("labels");
+        }
+        json["data"]["datasets"][0]["borderDash"] = serde_json::json!(vec![1.0; 65]);
+        let json = json.to_string();
+        for strict in [false, true] {
+            let error = chartjs::parse(&json, strict).unwrap_err();
+            assert!(error.contains("borderDash must contain at most"), "{error}");
+        }
+        let error = serde_json::from_str::<fulgur_chart::schema::ChartJsSpec>(&json)
+            .err()
+            .expect("oversized borderDash must be rejected by typed deserialization");
+        assert!(error.to_string().contains("borderDash"), "{error}");
+    }
+}
+
+#[test]
+fn dataset_border_dash_schema_declares_length_bound() {
+    let schema =
+        serde_json::to_value(schemars::schema_for!(fulgur_chart::schema::ChartJsSpec)).unwrap();
+    for name in ["LineDataset", "ScatterDataset", "BarDataset"] {
+        let dash = &schema["$defs"][name]["properties"]["borderDash"];
+        assert_eq!(dash["maxItems"], 64, "{name}: {dash}");
+    }
+}
+
+#[test]
+fn dataset_border_dash_boundary_renders_gap_segments() {
+    for dash in [
+        serde_json::Value::Null,
+        serde_json::json!([]),
+        serde_json::json!(vec![1.0; 64]),
+    ] {
+        let json = serde_json::json!({
+            "type": "line",
+            "data": {
+                "labels": ["a", "b", "c", "d", "e"],
+                "datasets": [{"data": [1, 1, null, 1, 1], "pointRadius": 0, "borderDash": dash}]
+            }
+        })
+        .to_string();
+        assert!(serde_json::from_str::<fulgur_chart::schema::ChartJsSpec>(&json).is_ok());
+        let spec = chartjs::parse(&json, true).unwrap();
+        fulgur_chart::guard::validate_spec(&spec, &Default::default()).unwrap();
+        let svg = fulgur_chart::render::render_chart(&spec);
+        assert_eq!(
+            svg.matches("stroke-dasharray=").count(),
+            if dash.is_array() && !dash.as_array().unwrap().is_empty() {
+                2
+            } else {
+                0
+            }
+        );
+        let png = fulgur_chart::raster_direct::render_chart_to_png_default(&spec, 1.0).unwrap();
+        tiny_skia::Pixmap::decode_png(&png).unwrap();
+    }
+}
+
+#[test]
 fn line_dataset_accepts_each_documented_point_style_and_rejects_invalid_values() {
     use fulgur_chart::ir::DatasetPointStyle;
     use fulgur_chart::schema::chartjs::ChartJsSpec;

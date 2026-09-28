@@ -93,6 +93,10 @@ pub const DEFAULT_MAX_DIMENSION_PX: f64 = 32_768.0;
 /// backend-neutral な IR 契約として scene 寸法上限に揃える。
 pub const MAX_MARKER_RADIUS_PX: f64 = DEFAULT_MAX_DIMENSION_PX;
 
+/// Dataset `borderDash` の要素数上限。
+/// gap ごとの線分に dash を複製する際のメモリ・出力サイズ増幅を定数倍に制限する。
+pub const MAX_BORDER_DASH_ELEMENTS: usize = 64;
+
 /// spec の width/height 下限(px)。
 /// ゼロ・負値はレイアウトで除算異常を起こし得るため拒否する。
 pub const DEFAULT_MIN_DIMENSION_PX: f64 = 1.0;
@@ -296,6 +300,17 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         ));
     }
     validate_marker_radii(spec)?;
+    for (index, series) in spec.series.iter().enumerate() {
+        if series
+            .line_style
+            .as_ref()
+            .is_some_and(|style| style.border_dash.len() > MAX_BORDER_DASH_ELEMENTS)
+        {
+            return Err(format!(
+                "datasets[{index}].borderDash must contain at most {MAX_BORDER_DASH_ELEMENTS} numbers"
+            ));
+        }
+    }
 
     // --- カテゴリ数 ---
     if spec.categories.len() > limits.max_categories {
@@ -1454,6 +1469,23 @@ mod tests {
 
         let err = validate_spec(&spec, &default_limits()).unwrap_err();
         assert!(err.contains("temporal x axis max is outside the supported date range"));
+    }
+
+    #[test]
+    fn direct_ir_border_dash_is_bounded() {
+        let mut spec = chartjs::parse(
+            r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2],"borderDash":[1]}]}}"#,
+            false,
+        ).unwrap();
+        for length in [0, 64, 65, 28_500] {
+            spec.series[0].line_style.as_mut().unwrap().border_dash = vec![1.0; length];
+            let result = validate_spec(&spec, &default_limits());
+            if length <= 64 {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.unwrap_err().contains("borderDash"));
+            }
+        }
     }
 
     #[test]

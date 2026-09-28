@@ -768,6 +768,16 @@ fn parse_dataset_line_style(
         .as_deref()
         .filter(|value| !value.is_null())
         .map(|value| {
+            // 数値ベクトルへの変換・Value の複製より前に長さを確認する。
+            if value
+                .as_array()
+                .is_some_and(|values| values.len() > crate::guard::MAX_BORDER_DASH_ELEMENTS)
+            {
+                return Err(format!(
+                    "{prefix}.borderDash must contain at most {} numbers",
+                    crate::guard::MAX_BORDER_DASH_ELEMENTS
+                ));
+            }
             let values = serde_json::from_value::<Vec<f64>>(value.clone()).map_err(|_| {
                 format!("{prefix}.borderDash must be an array of finite non-negative numbers")
             })?;
