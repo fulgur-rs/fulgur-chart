@@ -26,7 +26,7 @@ use ttf_parser::OutlineBuilder;
 use crate::font::DEFAULT_FONT;
 use crate::guard::MAX_SAFE_DEVICE_CIRCLE_COORD_PX;
 use crate::ir::Color;
-use crate::scene::{Anchor, Prim, Scene, visit_prims};
+use crate::scene::{Anchor, ClipRect, Prim, Scene, visit_prims};
 
 type ClipMaskKey = (u64, u64, u64, u64, u32, u32);
 
@@ -495,6 +495,7 @@ fn scene_to_pixmap_with(
         &scene.items,
         transform,
         None,
+        None,
         face,
         &mut glyph_cache,
         &mut clip_masks,
@@ -510,6 +511,7 @@ fn render_items(
     items: &[Prim],
     transform: Transform,
     inherited_clip: Option<&Mask>,
+    inherited_clip_bounds: Option<DeviceClipBounds>,
     face: &ttf_parser::Face<'_>,
     glyph_cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
     clip_masks: &mut HashMap<ClipMaskKey, Mask>,
@@ -530,11 +532,17 @@ fn render_items(
                     if let Some(mask) =
                         group_clip_mask(pixmap, clip, child_transform, inherited_clip)
                     {
+                        let child_clip_bounds =
+                            device_clip_bounds(clip, child_transform).and_then(|child| {
+                                inherited_clip_bounds
+                                    .map_or(Some(child), |parent| parent.intersection(child))
+                            });
                         render_items(
                             pixmap,
                             children,
                             child_transform,
                             Some(&mask),
+                            child_clip_bounds,
                             face,
                             glyph_cache,
                             clip_masks,
@@ -547,6 +555,7 @@ fn render_items(
                         children,
                         child_transform,
                         inherited_clip,
+                        inherited_clip_bounds,
                         face,
                         glyph_cache,
                         clip_masks,
@@ -603,6 +612,7 @@ fn render_items(
                             prim,
                             transform,
                             inherited_clip,
+                            inherited_clip_bounds,
                             face,
                             glyph_cache,
                             clip_masks,
@@ -615,6 +625,7 @@ fn render_items(
                         &items[index],
                         transform,
                         inherited_clip,
+                        inherited_clip_bounds,
                         face,
                         glyph_cache,
                         clip_masks,
@@ -975,11 +986,13 @@ fn blit_stamp(pm: &mut Pixmap, set: &StampSet, cx_dev: f32, cy_dev: f32) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_prim(
     pixmap: &mut Pixmap,
     prim: &Prim,
     transform: Transform,
     inherited_clip: Option<&Mask>,
+    inherited_clip_bounds: Option<DeviceClipBounds>,
     face: &ttf_parser::Face<'_>,
     cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
     clip_masks: &mut HashMap<ClipMaskKey, Mask>,
@@ -1144,7 +1157,17 @@ fn render_prim(
             let Some(mask) = clip_masks.get(&key) else {
                 return;
             };
-            let combined_mask = inherited_clip.map(|parent| intersect_masks(mask, parent));
+            let combined_mask = match inherited_clip {
+                Some(parent)
+                    if !inherited_clip_bounds.is_some_and(|parent_bounds| {
+                        device_clip_bounds(clip, transform)
+                            .is_some_and(|local_bounds| parent_bounds.safely_contains(local_bounds))
+                    }) =>
+                {
+                    Some(intersect_masks(mask, parent))
+                }
+                _ => None,
+            };
             let mask = combined_mask.as_ref().unwrap_or(mask);
             let Some(path) = parse_path_data(d) else {
                 return;
@@ -1292,7 +1315,17 @@ fn render_prim(
             let Some(mask) = clip_masks.get(&key) else {
                 return;
             };
-            let combined_mask = inherited_clip.map(|parent| intersect_masks(mask, parent));
+            let combined_mask = match inherited_clip {
+                Some(parent)
+                    if !inherited_clip_bounds.is_some_and(|parent_bounds| {
+                        device_clip_bounds(clip, transform)
+                            .is_some_and(|local_bounds| parent_bounds.safely_contains(local_bounds))
+                    }) =>
+                {
+                    Some(intersect_masks(mask, parent))
+                }
+                _ => None,
+            };
             let mask = combined_mask.as_ref().unwrap_or(mask);
             let Some(path) = PathBuilder::from_circle(*cx as f32, *cy as f32, *r as f32) else {
                 return;
@@ -1361,6 +1394,62 @@ fn render_prim(
         }
         Prim::Group { .. } => unreachable!("groups are traversed by render_items"),
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DeviceClipBounds {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+impl DeviceClipBounds {
+    fn intersection(self, other: Self) -> Option<Self> {
+        let intersection = Self {
+            left: self.left.max(other.left),
+            top: self.top.max(other.top),
+            right: self.right.min(other.right),
+            bottom: self.bottom.min(other.bottom),
+        };
+        (intersection.right > intersection.left && intersection.bottom > intersection.top)
+            .then_some(intersection)
+    }
+
+    /// Require a one-device-pixel inset so antialiased edge pixels in the local mask are fully
+    /// covered by the inherited mask. This lets the local mask stand in for their intersection.
+    fn safely_contains(self, child: Self) -> bool {
+        const AA_MARGIN: f32 = 1.0;
+        child.left >= self.left + AA_MARGIN
+            && child.top >= self.top + AA_MARGIN
+            && child.right <= self.right - AA_MARGIN
+            && child.bottom <= self.bottom - AA_MARGIN
+    }
+}
+
+fn device_clip_bounds(clip: &ClipRect, transform: Transform) -> Option<DeviceClipBounds> {
+    Rect::from_xywh(clip.x as f32, clip.y as f32, clip.w as f32, clip.h as f32)?;
+    let x0 = clip.x as f32;
+    let y0 = clip.y as f32;
+    let x1 = x0 + clip.w as f32;
+    let y1 = y0 + clip.h as f32;
+    let mut top_left = Point::from_xy(x0, y0);
+    let mut bottom_right = Point::from_xy(x1, y1);
+    transform.map_point(&mut top_left);
+    transform.map_point(&mut bottom_right);
+    if !top_left.x.is_finite()
+        || !top_left.y.is_finite()
+        || !bottom_right.x.is_finite()
+        || !bottom_right.y.is_finite()
+    {
+        return None;
+    }
+    Some(DeviceClipBounds {
+        left: top_left.x.min(bottom_right.x),
+        top: top_left.y.min(bottom_right.y),
+        right: top_left.x.max(bottom_right.x),
+        bottom: top_left.y.max(bottom_right.y),
+    })
 }
 
 fn intersect_masks(first: &Mask, second: &Mask) -> Mask {
@@ -2896,6 +2985,7 @@ mod tests {
             },
             Transform::identity(),
             None,
+            None,
             &face,
             &mut cache,
             &mut HashMap::new(),
@@ -3910,6 +4000,65 @@ mod tests {
             assert!((2..10).contains(&y), "parent group clip leaked y={y}");
         }
         assert!(painted > 0, "clipped circle should paint inside both clips");
+    }
+
+    #[test]
+    fn nested_local_clip_inside_parent_with_aa_margin_needs_no_mask_intersection() {
+        let parent_clip = crate::scene::ClipRect {
+            x: 2.0,
+            y: 2.0,
+            w: 26.0,
+            h: 26.0,
+        };
+        let local_clip = crate::scene::ClipRect {
+            x: 7.0,
+            y: 7.0,
+            w: 12.0,
+            h: 12.0,
+        };
+        let transform = Transform::from_scale(2.0, 2.0).pre_translate(1.0, 1.0);
+        let parent_bounds = device_clip_bounds(&parent_clip, transform).unwrap();
+        let local_bounds = device_clip_bounds(&local_clip, transform).unwrap();
+        assert!(parent_bounds.safely_contains(local_bounds));
+
+        let mut parent_mask = Mask::new(64, 64).unwrap();
+        let parent_path = PathBuilder::from_rect(
+            Rect::from_xywh(
+                parent_clip.x as f32,
+                parent_clip.y as f32,
+                parent_clip.w as f32,
+                parent_clip.h as f32,
+            )
+            .unwrap(),
+        );
+        parent_mask.fill_path(&parent_path, FillRule::Winding, true, transform);
+
+        let mut local_mask = Mask::new(64, 64).unwrap();
+        let local_path = PathBuilder::from_rect(
+            Rect::from_xywh(
+                local_clip.x as f32,
+                local_clip.y as f32,
+                local_clip.w as f32,
+                local_clip.h as f32,
+            )
+            .unwrap(),
+        );
+        local_mask.fill_path(&local_path, FillRule::Winding, true, transform);
+        assert_eq!(
+            local_mask.data(),
+            intersect_masks(&local_mask, &parent_mask).data(),
+            "strictly contained local clips already carry the complete visible mask"
+        );
+
+        let near_edge_clip = crate::scene::ClipRect {
+            x: 2.25,
+            y: 7.0,
+            w: 12.0,
+            h: 12.0,
+        };
+        assert!(
+            !parent_bounds.safely_contains(device_clip_bounds(&near_edge_clip, transform).unwrap())
+        );
     }
 
     #[test]
