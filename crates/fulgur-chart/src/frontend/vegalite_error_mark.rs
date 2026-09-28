@@ -483,7 +483,9 @@ pub(super) fn parse_error_mark_spec(
         detail_field: detail_field.as_deref(),
     };
     let ranges = match mode {
-        InputMode::Raw => parse_raw_ranges(&records, measure_axis, &grouping, extent, &mut domain)?,
+        InputMode::Raw => {
+            parse_raw_ranges(&records, measure_field, &grouping, extent, &mut domain)?
+        }
         InputMode::LowerUpper(axis) => {
             parse_lower_upper_ranges(&records, encoding, axis, &grouping, &mut domain)?
         }
@@ -989,7 +991,7 @@ fn optional_bounded(
 
 fn parse_raw_ranges(
     records: &[Map<String, Value>],
-    axis: MeasureAxis,
+    measure_field: &str,
     grouping: &RangeGrouping<'_>,
     extent: super::super::vegalite_error::ErrorExtent,
     domain: &mut PositionDomain,
@@ -1013,7 +1015,7 @@ fn parse_raw_ranges(
             color,
             detail,
         };
-        let value = number(record, axis.channel())?;
+        let value = number(record, measure_field)?;
         let index = if let Some(index) = indexes.get(&key) {
             *index
         } else {

@@ -364,6 +364,55 @@ mod schema_fixture_tests {
     }
 
     #[test]
+    fn embedded_vegalite_schema_covers_error_marks_and_rejects_unknown_keys() {
+        use serde_json::Value;
+
+        for (name, example) in [
+            (
+                "raw errorbar",
+                include_str!("../../../../examples/specs/vegalite-errorbar-raw.json"),
+            ),
+            (
+                "pre-aggregated errorbar",
+                include_str!("../../../../examples/specs/vegalite-errorbar-preaggregated.json"),
+            ),
+            (
+                "raw errorband",
+                include_str!("../../../../examples/specs/vegalite-errorband-raw.json"),
+            ),
+            (
+                "pre-aggregated errorband",
+                include_str!("../../../../examples/specs/vegalite-errorband-preaggregated.json"),
+            ),
+        ] {
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(example)
+                .unwrap_or_else(|error| panic!("{name} example rejected by schema: {error}"));
+        }
+
+        let mut unsupported_style: Value = serde_json::from_str(include_str!(
+            "../../../../examples/specs/vegalite-errorband-preaggregated.json"
+        ))
+        .unwrap();
+        unsupported_style["mark"]["borders"]["futureOption"] = Value::Bool(true);
+        assert!(
+            serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(unsupported_style)
+                .is_err(),
+            "unsupported errorband part styles must be rejected"
+        );
+
+        let mut unsupported_channel: Value = serde_json::from_str(include_str!(
+            "../../../../examples/specs/vegalite-errorbar-raw.json"
+        ))
+        .unwrap();
+        unsupported_channel["encoding"]["size"] = serde_json::json!({"field":"value"});
+        assert!(
+            serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(unsupported_channel)
+                .is_err(),
+            "unsupported error mark encoding channels must be rejected"
+        );
+    }
+
+    #[test]
     fn embedded_chartjs_schema_includes_title_and_subtitle_for_all_kinds() {
         let embedded: serde_json::Value =
             serde_json::from_str(include_str!("chartjs-schema.json")).unwrap();

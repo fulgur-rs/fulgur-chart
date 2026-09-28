@@ -586,6 +586,37 @@ fn vegalite_errorbar_raw_aggregates_by_position_color_and_detail() {
 }
 
 #[test]
+fn vegalite_error_mark_raw_measure_uses_encoded_field() {
+    let vertical = r##"{
+        "mark":{"type":"errorbar","extent":"stdev"},
+        "data":{"values":[{"x":"a","reading":2},{"x":"a","reading":4}]},
+        "encoding":{
+            "x":{"field":"x","type":"nominal"},
+            "y":{"field":"reading","type":"quantitative"}
+        }
+    }"##;
+    let spec = vegalite::parse(vertical, true).unwrap();
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("vertical raw errorbar did not normalize to ErrorMark")
+    };
+    assert_eq!(data.ranges[0].center, 3.0);
+
+    let horizontal = r##"{
+        "mark":{"type":"errorbar","orient":"horizontal","extent":"stdev"},
+        "data":{"values":[{"score":2,"row":"a"},{"score":4,"row":"a"}]},
+        "encoding":{
+            "x":{"field":"score","type":"quantitative"},
+            "y":{"field":"row","type":"nominal"}
+        }
+    }"##;
+    let spec = vegalite::parse(horizontal, true).unwrap();
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("horizontal raw errorbar did not normalize to ErrorMark")
+    };
+    assert_eq!(data.ranges[0].center, 3.0);
+}
+
+#[test]
 fn vegalite_errorband_raw_builds_ordered_series_ranges() {
     let json = r##"{
         "mark":{"type":"errorband","extent":"iqr"},

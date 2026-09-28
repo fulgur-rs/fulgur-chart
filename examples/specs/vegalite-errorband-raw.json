@@ -1,0 +1,33 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 480,
+  "height": 280,
+  "title": "Daily temperature band",
+  "mark": {
+    "type": "errorband",
+    "extent": "stdev",
+    "interpolate": "monotone",
+    "borders": {"strokeWidth": 1, "strokeDash": [4, 2], "opacity": 0.8}
+  },
+  "data": {
+    "values": [
+      {"date": "2026-09-01", "station": "Hill", "temperature": 17},
+      {"date": "2026-09-01", "station": "Hill", "temperature": 19},
+      {"date": "2026-09-01", "station": "Harbor", "temperature": 21},
+      {"date": "2026-09-01", "station": "Harbor", "temperature": 23},
+      {"date": "2026-09-02", "station": "Hill", "temperature": 18},
+      {"date": "2026-09-02", "station": "Hill", "temperature": 20},
+      {"date": "2026-09-02", "station": "Harbor", "temperature": 22},
+      {"date": "2026-09-02", "station": "Harbor", "temperature": 24},
+      {"date": "2026-09-03", "station": "Hill", "temperature": 16},
+      {"date": "2026-09-03", "station": "Hill", "temperature": 19},
+      {"date": "2026-09-03", "station": "Harbor", "temperature": 20},
+      {"date": "2026-09-03", "station": "Harbor", "temperature": 23}
+    ]
+  },
+  "encoding": {
+    "x": {"field": "date", "type": "temporal"},
+    "y": {"field": "temperature", "type": "quantitative"},
+    "color": {"field": "station", "type": "nominal"}
+  }
+}
