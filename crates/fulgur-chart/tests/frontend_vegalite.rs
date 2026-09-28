@@ -4131,6 +4131,24 @@ fn vegalite_trail_preflights_dense_width_allocation() {
 }
 
 #[test]
+fn vegalite_trail_aggregates_a_large_categorical_domain() {
+    let point_count = 10_000;
+    let values = (0..point_count)
+        .map(|index| format!(r#"{{"x":"{index}","y":1,"size":{index}}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = format!(
+        r#"{{"mark":"trail","data":{{"values":[{values}]}},"encoding":{{"x":{{"field":"x"}},"y":{{"field":"y","type":"quantitative"}},"size":{{"field":"size"}}}}}}"#
+    );
+
+    let spec = vegalite::parse(&json, true).expect("large categorical Trail should parse");
+    assert_eq!(spec.categories.len(), point_count);
+    assert_eq!(spec.series[0].values.len(), point_count);
+    assert_eq!(spec.series[0].trail_widths[0], 1.0);
+    assert_eq!(spec.series[0].trail_widths[point_count - 1], 4.0);
+}
+
+#[test]
 fn vegalite_temporal_trail_rejects_non_finite_size_aggregate() {
     let json = r#"{"mark":"trail","data":{"values":[{"date":"2024-01-01T00:00:00Z","y":1,"size":1.7976931348623157e308},{"date":"2024-01-01T00:00:00Z","y":1,"size":1.7976931348623157e308}]},"encoding":{"x":{"field":"date","type":"temporal"},"y":{"field":"y","type":"quantitative"},"size":{"field":"size"}}}"#;
     let error =

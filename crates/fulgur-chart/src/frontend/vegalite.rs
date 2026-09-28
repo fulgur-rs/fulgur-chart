@@ -1463,41 +1463,81 @@ fn build_categorical(
     if is_trail {
         preflight_trail_shape(categories.len(), group_names.len(), limits)?;
     }
+    let mut value_sums = if is_trail {
+        vec![vec![0.0; categories.len()]; group_names.len()]
+    } else {
+        Vec::new()
+    };
     let mut size_values = if is_trail && trail_size_field.is_some() {
         vec![vec![0.0; categories.len()]; group_names.len()]
     } else {
         Vec::new()
     };
-    let mut series = Vec::with_capacity(group_names.len());
 
-    for (series_index, group) in group_names.iter().enumerate() {
-        let mut values = Vec::with_capacity(categories.len());
-        for (category_index, category) in categories.iter().enumerate() {
-            let mut value_sum = 0.0;
-            let mut size_sum = 0.0;
-            for record in records.iter().filter(|record| {
-                &field_category(record, x_field.as_deref()) == category
-                    && match color_field {
-                        Some(_) => &field_category(record, color_field.as_deref()) == group,
-                        None => true,
-                    }
-            }) {
-                value_sum += field_f64(record, y_field.as_deref());
-                if let Some(size_field) = trail_size_field {
-                    size_sum += field_f64(record, Some(size_field));
-                }
-            }
-            if is_trail && !value_sum.is_finite() {
+    if is_trail {
+        let category_indexes = categories
+            .iter()
+            .enumerate()
+            .map(|(index, category)| (category.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        let group_indexes = group_names
+            .iter()
+            .enumerate()
+            .map(|(index, group)| (group.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        for record in records {
+            let category = field_category(record, x_field.as_deref());
+            let Some(&category_index) = category_indexes.get(category.as_str()) else {
+                return Err("trail category index is inconsistent with input data".to_string());
+            };
+            let series_index = if color_field.is_some() {
+                let group = field_category(record, color_field.as_deref());
+                let Some(&series_index) = group_indexes.get(group.as_str()) else {
+                    return Err(
+                        "trail color group index is inconsistent with input data".to_string()
+                    );
+                };
+                series_index
+            } else {
+                0
+            };
+            let value_sum = &mut value_sums[series_index][category_index];
+            *value_sum += field_f64(record, y_field.as_deref());
+            if !value_sum.is_finite() {
                 return Err("trail y aggregate must be finite".to_string());
             }
-            if trail_size_field.is_some() {
+            if let Some(size_field) = trail_size_field {
+                let size_sum = &mut size_values[series_index][category_index];
+                *size_sum += field_f64(record, Some(size_field));
                 if !size_sum.is_finite() {
                     return Err("trail size aggregate must be finite".to_string());
                 }
-                size_values[series_index][category_index] = size_sum;
             }
-            values.push(value_sum);
         }
+    }
+
+    let mut series = Vec::with_capacity(group_names.len());
+
+    for (series_index, group) in group_names.iter().enumerate() {
+        let values = if is_trail {
+            std::mem::take(&mut value_sums[series_index])
+        } else {
+            let mut values = Vec::with_capacity(categories.len());
+            for category in &categories {
+                let mut value_sum = 0.0;
+                for record in records.iter().filter(|record| {
+                    &field_category(record, x_field.as_deref()) == category
+                        && match color_field {
+                            Some(_) => &field_category(record, color_field.as_deref()) == group,
+                            None => true,
+                        }
+                }) {
+                    value_sum += field_f64(record, y_field.as_deref());
+                }
+                values.push(value_sum);
+            }
+            values
+        };
         let color = palette_pick(&theme.palette, series_index);
         series.push(Series {
             name: group.clone(),
