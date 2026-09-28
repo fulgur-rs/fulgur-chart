@@ -745,6 +745,21 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                 limits.max_label_bytes,
             ));
         }
+        for (attribute, value) in [
+            ("font.family", title.font_family.as_deref()),
+            ("font.weight", title.font_weight.as_deref()),
+            ("font.style", title.font_style.as_deref()),
+        ] {
+            if let Some(value) = value
+                && value.len() > limits.max_label_bytes
+            {
+                return Err(format!(
+                    "Chart.js {name} {attribute} length {} bytes exceeds limit {}",
+                    value.len(),
+                    limits.max_label_bytes,
+                ));
+            }
+        }
     }
     if let Some(title) = &spec.legend_title
         && title.len() > limits.max_label_bytes
@@ -1940,6 +1955,72 @@ mod tests {
         spec.chartjs_subtitle.as_mut().unwrap().text = vec![String::new(); 1_024];
 
         assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn chartjs_title_and_subtitle_reject_oversized_font_attributes() {
+        for is_subtitle in [false, true] {
+            for attribute in ["family", "weight", "style"] {
+                let mut spec = chartjs_title_spec();
+                let title = if is_subtitle {
+                    spec.chartjs_subtitle.as_mut().unwrap()
+                } else {
+                    spec.chartjs_title.as_mut().unwrap()
+                };
+                let oversized = Some("x".repeat(DEFAULT_MAX_LABEL_BYTES + 1));
+                match attribute {
+                    "family" => title.font_family = oversized,
+                    "weight" => title.font_weight = oversized,
+                    "style" => title.font_style = oversized,
+                    _ => unreachable!(),
+                }
+
+                let error = validate_spec(&spec, &default_limits()).unwrap_err();
+                let plugin = if is_subtitle { "subtitle" } else { "title" };
+                assert!(
+                    error.contains(&format!("Chart.js {plugin} font.{attribute}")),
+                    "unexpected error: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chartjs_title_font_attributes_at_label_limit_are_accepted() {
+        let mut spec = chartjs_title_spec();
+        for title in [&mut spec.chartjs_title, &mut spec.chartjs_subtitle] {
+            let title = title.as_mut().unwrap();
+            title.font_family = Some("f".repeat(DEFAULT_MAX_LABEL_BYTES));
+            title.font_weight = Some("w".repeat(DEFAULT_MAX_LABEL_BYTES));
+            title.font_style = Some("s".repeat(DEFAULT_MAX_LABEL_BYTES));
+        }
+
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn chartjs_title_font_attributes_respect_custom_byte_limit() {
+        for plugin in ["title", "subtitle"] {
+            for attribute in ["family", "weight", "style"] {
+                let json = serde_json::json!({
+                    "type": "bar",
+                    "data": {"labels": ["a"], "datasets": [{"data": [1]}]},
+                    "options": {"plugins": {(plugin): {
+                        "display": true, "text": "x", "font": {(attribute): "日本語"}
+                    }}}
+                });
+                let spec = chartjs::parse(&json.to_string(), true).unwrap();
+                let mut limits = default_limits();
+                limits.max_label_bytes = 8;
+                let error = validate_spec(&spec, &limits).unwrap_err();
+                assert!(
+                    error.contains(&format!("Chart.js {plugin} font.{attribute}")),
+                    "unexpected error: {error}"
+                );
+                limits.max_label_bytes = 9;
+                assert!(validate_spec(&spec, &limits).is_ok());
+            }
+        }
     }
 
     #[test]
