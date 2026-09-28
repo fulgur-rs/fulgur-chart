@@ -15,6 +15,14 @@
 use crate::ir::{ChartKind, ChartSpec, XPositions};
 use crate::num::fmt_num;
 
+/// tiny-skia の AA scan converter に渡せる円・クリップ device 座標絶対値上限。
+///
+/// tiny-skia 0.11.4 の AA edge は user/device 座標を FDot6 へ変換する際、
+/// supersample shift 2 と fractional bits 6 により 256 倍して `i32` に保持し、
+/// 2 点の差分も `i32` で計算する。外縁を ±4,000,000px に制限すれば最悪 span は
+/// `8,000,000 * 256 = 2,048,000,000 < i32::MAX` となり、安全余裕を残せる。
+pub(crate) const MAX_SAFE_DEVICE_CIRCLE_COORD_PX: f64 = 4_000_000.0;
+
 // --- デフォルト上限定数 ---
 
 /// wordcloud の単語数上限 (DoS 対策)。

@@ -2,7 +2,7 @@
 
 use crate::ir::Color;
 use crate::num::fmt_num;
-use crate::scene::{Anchor, Prim, Scene};
+use crate::scene::{Anchor, ClipRect, Prim, Scene, visit_prims};
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -18,51 +18,29 @@ pub fn render_svg(scene: &Scene, font_family: &str) -> String {
     )
     .unwrap();
 
-    // defs: GradientPath を出現順に grad{n} で採番(userSpaceOnUse・水平)。
     let mut grad_defs = String::new();
     let mut gi = 0usize;
-    for item in &scene.items {
-        if let Prim::GradientPath {
+    let mut clip_defs = String::new();
+    let mut clip_ids = HashMap::<ClipKey, usize>::new();
+    visit_prims(&scene.items, 0.0, 0.0, &mut |item, _, _| match item {
+        Prim::GradientPath {
             x0,
             x1,
             stop0,
             stop1,
             ..
-        } = item
-        {
+        } => {
             write_linear_gradient(&mut grad_defs, gi, *x0, *x1, stop0, stop1);
             gi += 1;
         }
-    }
-    let mut clip_defs = String::new();
-    let mut clip_ids = HashMap::<ClipKey, usize>::new();
-    for item in &scene.items {
-        let clip = match item {
-            Prim::ClippedPath { clip, .. } | Prim::ClippedCircle { clip, .. } => Some(clip),
-            _ => None,
-        };
-        if let Some(clip) = clip {
-            let key = (
-                clip.x.to_bits(),
-                clip.y.to_bits(),
-                clip.w.to_bits(),
-                clip.h.to_bits(),
-            );
-            if !clip_ids.contains_key(&key) {
-                let idx = clip_ids.len();
-                clip_ids.insert(key, idx);
-                write!(
-                    clip_defs,
-                    r#"<clipPath id="clip{idx}" clipPathUnits="userSpaceOnUse"><rect x="{}" y="{}" width="{}" height="{}"/></clipPath>"#,
-                    fmt_num(clip.x),
-                    fmt_num(clip.y),
-                    fmt_num(clip.w),
-                    fmt_num(clip.h)
-                )
-                .unwrap();
-            }
+        Prim::ClippedPath { clip, .. } | Prim::ClippedCircle { clip, .. } => {
+            add_clip_def(clip, &mut clip_ids, &mut clip_defs)
         }
-    }
+        Prim::Group {
+            clip: Some(clip), ..
+        } => add_clip_def(clip, &mut clip_ids, &mut clip_defs),
+        _ => {}
+    });
     if gi > 0 || !clip_ids.is_empty() {
         s.push_str("<defs>");
         s.push_str(&grad_defs);
@@ -97,6 +75,33 @@ fn write_linear_gradient(
     write!(
         s,
         r#"<linearGradient id="grad{idx}" gradientUnits="userSpaceOnUse" x1="{x0f}" y1="0" x2="{x1f}" y2="0"><stop offset="0" stop-color="{c0}"{o0}/><stop offset="1" stop-color="{c1}"{o1}/></linearGradient>"#
+    )
+    .unwrap();
+}
+
+fn clip_key(clip: &ClipRect) -> ClipKey {
+    (
+        clip.x.to_bits(),
+        clip.y.to_bits(),
+        clip.w.to_bits(),
+        clip.h.to_bits(),
+    )
+}
+
+fn add_clip_def(clip: &ClipRect, clip_ids: &mut HashMap<ClipKey, usize>, clip_defs: &mut String) {
+    let key = clip_key(clip);
+    if clip_ids.contains_key(&key) {
+        return;
+    }
+    let idx = clip_ids.len();
+    clip_ids.insert(key, idx);
+    write!(
+        clip_defs,
+        r#"<clipPath id="clip{idx}" clipPathUnits="userSpaceOnUse"><rect x="{}" y="{}" width="{}" height="{}"/></clipPath>"#,
+        fmt_num(clip.x),
+        fmt_num(clip.y),
+        fmt_num(clip.w),
+        fmt_num(clip.h)
     )
     .unwrap();
 }
@@ -264,12 +269,7 @@ fn write_prim(
             stroke_width,
             clip,
         } => {
-            let key = (
-                clip.x.to_bits(),
-                clip.y.to_bits(),
-                clip.w.to_bits(),
-                clip.h.to_bits(),
-            );
+            let key = clip_key(clip);
             let clip_id = clip_ids.get(&key).expect("clipped path definition");
             let fill_attr = fill
                 .as_ref()
@@ -459,6 +459,31 @@ fn write_prim(
                 r#"<text x="{xv}" y="{yv}"{transform} font-family="{fam}" font-size="{size}"{weight}{style} text-anchor="{anchor}" fill="{hex}"{op}>{escaped}</text>"#
             )
             .unwrap();
+        }
+        Prim::Group {
+            translate_x,
+            translate_y,
+            clip,
+            children,
+        } => {
+            let translate_x = fmt_num(*translate_x);
+            let translate_y = fmt_num(*translate_y);
+            write!(
+                s,
+                r#"<g transform="translate({translate_x} {translate_y})""#
+            )
+            .unwrap();
+            if let Some(clip) = clip {
+                let id = clip_ids
+                    .get(&clip_key(clip))
+                    .expect("group clip definition");
+                write!(s, r#" clip-path="url(#clip{id})""#).unwrap();
+            }
+            s.push('>');
+            for child in children {
+                write_prim(s, child, font_family, grad_idx, clip_ids);
+            }
+            s.push_str("</g>");
         }
     }
 }
@@ -1087,5 +1112,177 @@ mod tests {
             svg.contains(r#"transform="rotate(45,10,20)""#),
             "got: {svg}"
         );
+    }
+
+    #[test]
+    fn translated_group_moves_each_primitive_kind_in_svg() {
+        let scene = Scene {
+            width: 100.0,
+            height: 80.0,
+            items: vec![Prim::Group {
+                translate_x: 13.0,
+                translate_y: 7.0,
+                clip: None,
+                children: vec![
+                    Prim::Rect {
+                        x: 1.0,
+                        y: 2.0,
+                        w: 3.0,
+                        h: 4.0,
+                        fill: blue(),
+                    },
+                    Prim::Line {
+                        x1: 1.0,
+                        y1: 2.0,
+                        x2: 3.0,
+                        y2: 4.0,
+                        stroke: black(),
+                        stroke_width: 1.0,
+                        dash: Vec::new(),
+                    },
+                    Prim::Polyline {
+                        points: vec![(1.0, 2.0), (3.0, 4.0)],
+                        stroke: blue(),
+                        stroke_width: 2.0,
+                    },
+                    Prim::StyledPolyline {
+                        points: vec![(1.0, 4.0), (3.0, 2.0)],
+                        stroke: black(),
+                        stroke_width: 1.0,
+                        dash: vec![2.0, 1.0],
+                        dash_offset: 0.5,
+                    },
+                    Prim::Path {
+                        d: "M1 2 L3 2 L3 4 Z".into(),
+                        fill: Some(blue()),
+                        stroke: None,
+                        stroke_width: 0.0,
+                    },
+                    Prim::ClippedPath {
+                        d: "M1 2 L3 2 L3 4 Z".into(),
+                        fill: Some(blue()),
+                        stroke: None,
+                        stroke_width: 0.0,
+                        clip: Box::new(ClipRect {
+                            x: 0.0,
+                            y: 0.0,
+                            w: 10.0,
+                            h: 10.0,
+                        }),
+                    },
+                    Prim::StyledPath {
+                        d: "M1 2 L3 4".into(),
+                        stroke: black(),
+                        stroke_width: 1.0,
+                        dash: vec![3.0, 2.0],
+                        dash_offset: 1.0,
+                    },
+                    Prim::GradientPath {
+                        d: "M1 2 L3 2 L3 4 Z".into(),
+                        x0: 1.0,
+                        x1: 3.0,
+                        stop0: blue(),
+                        stop1: black(),
+                    },
+                    Prim::Circle {
+                        cx: 4.0,
+                        cy: 5.0,
+                        r: 2.0,
+                        fill: blue(),
+                        stroke: black(),
+                        stroke_width: 1.0,
+                    },
+                    Prim::Text {
+                        x: 1.0,
+                        y: 20.0,
+                        size: 10.0,
+                        anchor: Anchor::Start,
+                        fill: black(),
+                        content: "text".into(),
+                        rotate_deg: None,
+                    },
+                    Prim::StyledText(Box::new(StyledText {
+                        x: 1.0,
+                        y: 30.0,
+                        size: 10.0,
+                        anchor: Anchor::Start,
+                        fill: blue(),
+                        content: "styled".into(),
+                        rotate_deg: None,
+                        font_family: Some("Test Sans".into()),
+                        font_weight: Some("bold".into()),
+                        font_style: Some("italic".into()),
+                    })),
+                ],
+            }],
+        };
+
+        let svg = render_svg(&scene, "sans-serif");
+        assert!(svg.contains(r#"<g transform="translate(13 7)">"#), "{svg}");
+        assert!(
+            svg.contains(r#"<rect x="1" y="2" width="3" height="4""#),
+            "{svg}"
+        );
+        assert!(
+            svg.contains(r#"<line x1="1" y1="2" x2="3" y2="4""#),
+            "{svg}"
+        );
+        assert!(svg.contains(r#"<polyline points="1,2 3,4""#), "{svg}");
+        assert!(svg.contains(r#"<path d="M1 2 L3 2 L3 4 Z""#), "{svg}");
+        assert!(svg.contains(r#"<circle cx="4" cy="5" r="2""#), "{svg}");
+        assert!(svg.contains(r#"<text x="1" y="20""#), "{svg}");
+        assert!(svg.contains("font-family=\"Test Sans\""), "{svg}");
+        assert!(svg.contains("stroke-dasharray=\"2 1\""), "{svg}");
+        assert!(svg.contains("url(#grad0)"), "{svg}");
+        assert!(svg.contains("</g></svg>"), "{svg}");
+    }
+
+    #[test]
+    fn translated_group_moves_clipped_and_gradient_paths_in_svg() {
+        let scene = Scene {
+            width: 100.0,
+            height: 80.0,
+            items: vec![Prim::Group {
+                translate_x: 13.0,
+                translate_y: 7.0,
+                clip: Some(Box::new(ClipRect {
+                    x: 1.0,
+                    y: 2.0,
+                    w: 10.0,
+                    h: 11.0,
+                })),
+                children: vec![
+                    Prim::ClippedPath {
+                        d: "M0 0 L5 0 L5 5 Z".into(),
+                        fill: Some(blue()),
+                        stroke: None,
+                        stroke_width: 0.0,
+                        clip: Box::new(ClipRect {
+                            x: 3.0,
+                            y: 4.0,
+                            w: 5.0,
+                            h: 6.0,
+                        }),
+                    },
+                    Prim::GradientPath {
+                        d: "M1 1 L5 1 L5 5 Z".into(),
+                        x0: 1.0,
+                        x1: 5.0,
+                        stop0: blue(),
+                        stop1: black(),
+                    },
+                ],
+            }],
+        };
+
+        let svg = render_svg(&scene, "sans-serif");
+        assert!(svg.contains(r#"<clipPath id="clip0" clipPathUnits="userSpaceOnUse"><rect x="1" y="2" width="10" height="11"/></clipPath>"#), "{svg}");
+        assert!(svg.contains(r#"<clipPath id="clip1" clipPathUnits="userSpaceOnUse"><rect x="3" y="4" width="5" height="6"/></clipPath>"#), "{svg}");
+        assert!(
+            svg.contains(r#"<g transform="translate(13 7)" clip-path="url(#clip0)">"#),
+            "{svg}"
+        );
+        assert!(svg.contains(r#"clip-path="url(#clip1)""#), "{svg}");
+        assert!(svg.contains(r#"fill="url(#grad0)""#), "{svg}");
     }
 }
