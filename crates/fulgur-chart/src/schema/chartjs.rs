@@ -174,7 +174,7 @@ pub struct BarDataset {
         deserialize_with = "deserialize_optional_border_dash",
         skip_serializing_if = "Option::is_none"
     )]
-    #[schemars(with = "Vec<NonNegativeDashValue>")]
+    #[schemars(with = "Vec<NonNegativeDashValue>", length(max = crate::guard::MAX_BORDER_DASH_ELEMENTS))]
     pub border_dash: Option<Vec<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_dash_offset: Option<f64>,
@@ -349,7 +349,7 @@ pub struct LineDataset {
         deserialize_with = "deserialize_optional_border_dash",
         skip_serializing_if = "Option::is_none"
     )]
-    #[schemars(with = "Vec<NonNegativeDashValue>")]
+    #[schemars(with = "Vec<NonNegativeDashValue>", length(max = crate::guard::MAX_BORDER_DASH_ELEMENTS))]
     pub border_dash: Option<Vec<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_dash_offset: Option<f64>,
@@ -417,6 +417,15 @@ where
     D: serde::Deserializer<'de>,
 {
     let values = Option::<Vec<f64>>::deserialize(deserializer)?;
+    if values
+        .as_ref()
+        .is_some_and(|values| values.len() > crate::guard::MAX_BORDER_DASH_ELEMENTS)
+    {
+        return Err(serde::de::Error::custom(format!(
+            "borderDash must contain at most {} numbers",
+            crate::guard::MAX_BORDER_DASH_ELEMENTS
+        )));
+    }
     if values.as_ref().is_some_and(|values| {
         values
             .iter()
@@ -793,7 +802,7 @@ pub struct ScatterDataset {
         deserialize_with = "deserialize_optional_border_dash",
         skip_serializing_if = "Option::is_none"
     )]
-    #[schemars(with = "Vec<NonNegativeDashValue>")]
+    #[schemars(with = "Vec<NonNegativeDashValue>", length(max = crate::guard::MAX_BORDER_DASH_ELEMENTS))]
     pub border_dash: Option<Vec<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_dash_offset: Option<f64>,
