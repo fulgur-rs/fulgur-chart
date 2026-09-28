@@ -274,19 +274,20 @@ fn chartjs_title_options_render_in_svg_and_png() {
         let png = render_chart_to_png(&spec, 1.0, DEFAULT_FONT).unwrap();
         let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("title PNG should decode");
         let width = pixmap.width() as usize;
-        let (red_top_pixels, green_side_pixels) = pixmap.data().chunks_exact(4).enumerate().fold(
-            (0usize, 0usize),
-            |(red, green), (index, rgba)| {
-                let x = index % width;
-                let y = index / width;
-                let is_title_red = y < 60 && rgba[0] > 180 && rgba[1] < 80 && rgba[2] < 80;
-                let is_subtitle_green = x < 30 && rgba[0] < 80 && rgba[1] > 100 && rgba[2] < 80;
-                (
-                    red + usize::from(is_title_red),
-                    green + usize::from(is_subtitle_green),
-                )
-            },
-        );
+        let (red_top_pixels, green_side_pixels) =
+            pixmap.data().as_chunks::<4>().0.iter().enumerate().fold(
+                (0usize, 0usize),
+                |(red, green), (index, rgba)| {
+                    let x = index % width;
+                    let y = index / width;
+                    let is_title_red = y < 60 && rgba[0] > 180 && rgba[1] < 80 && rgba[2] < 80;
+                    let is_subtitle_green = x < 30 && rgba[0] < 80 && rgba[1] > 100 && rgba[2] < 80;
+                    (
+                        red + usize::from(is_title_red),
+                        green + usize::from(is_subtitle_green),
+                    )
+                },
+            );
         assert!(
             red_top_pixels > 0,
             "{kind} PNG should paint red title pixels in the reserved top band"

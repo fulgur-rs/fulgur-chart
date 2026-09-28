@@ -367,10 +367,8 @@ mod schema_fixture_tests {
     fn embedded_chartjs_schema_includes_title_and_subtitle_for_all_kinds() {
         let embedded: serde_json::Value =
             serde_json::from_str(include_str!("chartjs-schema.json")).unwrap();
-        let generated = serde_json::to_value(schemars::schema_for!(
-            fulgur_chart::schema::ChartJsSpec
-        ))
-        .unwrap();
+        let generated =
+            serde_json::to_value(schemars::schema_for!(fulgur_chart::schema::ChartJsSpec)).unwrap();
         assert_eq!(embedded, generated, "embedded Chart.js schema is stale");
 
         let definitions = embedded["$defs"].as_object().expect("schema definitions");
