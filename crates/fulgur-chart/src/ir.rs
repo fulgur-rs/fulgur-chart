@@ -369,6 +369,21 @@ pub struct AxisGrid {
     pub color: Option<Color>,
     pub line_width: f64,
     pub draw_ticks: bool,
+    pub tick_color: Option<Color>,
+    pub tick_width: Option<f64>,
+    pub tick_length: f64,
+}
+
+impl AxisGrid {
+    pub fn resolved_tick_color(&self, fallback_grid_color: Color) -> Color {
+        self.tick_color
+            .or(self.color)
+            .unwrap_or(fallback_grid_color)
+    }
+
+    pub fn resolved_tick_width(&self) -> f64 {
+        self.tick_width.unwrap_or(self.line_width)
+    }
 }
 
 impl Default for AxisGrid {
@@ -380,6 +395,9 @@ impl Default for AxisGrid {
             // fulgur の後方互換: Chart.js の既定 (true) からの意図的乖離。
             // 既存チャートに tick 短線が突然生えるのを避けるための選択。
             draw_ticks: false,
+            tick_color: None,
+            tick_width: None,
+            tick_length: 8.0,
         }
     }
 }
@@ -1125,6 +1143,44 @@ mod tests {
         assert!((g.line_width - 1.0).abs() < 1e-9);
         assert!(!g.draw_ticks);
         assert!(g.color.is_none());
+        assert!(g.tick_color.is_none());
+        assert!(g.tick_width.is_none());
+        assert!((g.tick_length - 8.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn axis_grid_tick_style_resolves_override_then_grid_fallback() {
+        let grid = Color {
+            r: 1,
+            g: 2,
+            b: 3,
+            a: 1.0,
+        };
+        let theme = Color {
+            r: 4,
+            g: 5,
+            b: 6,
+            a: 1.0,
+        };
+        let tick = Color {
+            r: 7,
+            g: 8,
+            b: 9,
+            a: 1.0,
+        };
+        let mut g = AxisGrid {
+            color: Some(grid),
+            line_width: 2.5,
+            ..Default::default()
+        };
+
+        assert_eq!(g.resolved_tick_color(theme), grid);
+        assert!((g.resolved_tick_width() - 2.5).abs() < 1e-9);
+
+        g.tick_color = Some(tick);
+        g.tick_width = Some(3.5);
+        assert_eq!(g.resolved_tick_color(theme), tick);
+        assert!((g.resolved_tick_width() - 3.5).abs() < 1e-9);
     }
 
     #[test]

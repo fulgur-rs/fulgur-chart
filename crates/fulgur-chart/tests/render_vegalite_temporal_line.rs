@@ -128,6 +128,13 @@ fn grid_opacity_does_not_fade_temporal_tick_marks() {
         tick_strokes.iter().all(|stroke| stroke.a == 1.0),
         "gridOpacity must affect grid lines only: {tick_strokes:?}"
     );
+    assert!(
+        tick_strokes
+            .iter()
+            .all(|stroke| *stroke == spec.theme.text_color),
+        "temporal ticks must retain the theme text color: {tick_strokes:?}"
+    );
+    assert!((spec.x_axis.grid.tick_length - 4.0).abs() < 1e-9);
 }
 
 #[test]

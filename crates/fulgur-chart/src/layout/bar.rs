@@ -1123,6 +1123,16 @@ fn build_horizontal_with_geometry_using_temporal_values(
         XPositions::Temporal { unix_millis } => Some(unix_millis.as_slice()),
         XPositions::Category => None,
     };
+    let y_tick_margin = if y_temporal_positions.is_some() && spec.y_axis.grid.draw_ticks {
+        spec.y_axis.grid.tick_length.max(0.0)
+    } else {
+        0.0
+    };
+    let x_tick_margin = if spec.x_axis.grid.draw_ticks {
+        spec.x_axis.grid.tick_length.max(0.0)
+    } else {
+        0.0
+    };
     let y_temporal_domain =
         y_temporal_positions.map(|positions| temporal_index_domain(positions, &spec.y_axis, true));
     let y_temporal_ticks = y_temporal_domain
@@ -1205,7 +1215,7 @@ fn build_horizontal_with_geometry_using_temporal_values(
     } else {
         0.0
     };
-    let base_left = OUTER_PAD + cat_w + y_title_w + legend_left;
+    let base_left = OUTER_PAD + cat_w + y_title_w + y_tick_margin + legend_left;
     let (plot_left, plot_right) = horizontal_plot_bounds(
         base_left,
         spec.width - OUTER_PAD - legend_right,
@@ -1219,7 +1229,8 @@ fn build_horizontal_with_geometry_using_temporal_values(
         },
     );
     let plot_top = OUTER_PAD + title_band + legend_top;
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h;
+    let plot_bottom =
+        spec.height - OUTER_PAD - X_LABEL_BAND - legend_bottom - x_title_h - x_tick_margin;
     let y_temporal_scale =
         y_temporal_positions
             .zip(y_temporal_domain)
@@ -1384,21 +1395,20 @@ fn build_horizontal_with_geometry_using_temporal_values(
     }
 
     // 3c. tick 短線(値軸=X)。x_axis.grid.draw_ticks が true のとき plot_bottom から下方向へ。
-    // 色は grid.color を継承(既定 ink)。カテゴリ軸(Y)側は Chart.js で通常 tick を描かないためスキップ。
-    // 対数軸では minor_ticks(mantissa 2..9)にも同じ短線を描く(2b の minor グリッド線と
-    // 1:1 対応させる。Task 9 で common.rs::compute() に施したのと同じ修正)。
-    const TICK_LEN: f64 = 4.0;
+    // tick 専用値があれば優先し、未指定なら grid 値を継承する。カテゴリ軸(Y)側は描画しない。
+    // 対数軸では major/minor のグリッド線に合わせて tick も両方描く。
     if x_grid_cfg.draw_ticks {
-        let tick_color = x_grid_cfg.color.unwrap_or(ink);
+        let tick_color = x_grid_cfg.resolved_tick_color(spec.theme.grid_color);
+        let tick_width = x_grid_cfg.resolved_tick_width();
         for &t in ticks.ticks.iter().chain(minor_ticks.iter()) {
             let x = xs.map(t);
             items.push(Prim::Line {
                 x1: x,
                 y1: plot_bottom,
                 x2: x,
-                y2: plot_bottom + TICK_LEN,
+                y2: plot_bottom + x_grid_cfg.tick_length,
                 stroke: tick_color,
-                stroke_width: x_grid_cfg.line_width,
+                stroke_width: tick_width,
                 dash: Vec::new(),
             });
         }
@@ -1431,12 +1441,12 @@ fn build_horizontal_with_geometry_using_temporal_values(
             });
             if y_grid_cfg.draw_ticks {
                 items.push(Prim::Line {
-                    x1: plot_left - TICK_LEN,
+                    x1: plot_left - y_grid_cfg.tick_length,
                     y1: y,
                     x2: plot_left,
                     y2: y,
-                    stroke: y_grid_color,
-                    stroke_width: y_grid_cfg.line_width,
+                    stroke: y_grid_cfg.resolved_tick_color(spec.theme.grid_color),
+                    stroke_width: y_grid_cfg.resolved_tick_width(),
                     dash: Vec::new(),
                 });
             }
@@ -3583,7 +3593,7 @@ mod horizontal_axis_style_tests {
     };
     use crate::font::TEST_FONT as DEFAULT_FONT;
     use crate::frontend::chartjs;
-    use crate::ir::ChartSpec;
+    use crate::ir::{ChartSpec, Color, ScaleKind, TimeOptions, XPositions};
     use crate::layout::common::{OUTER_PAD, X_LABEL_BAND, value_domain};
     use crate::num::fmt_num;
     use crate::scale::nice_ticks;
@@ -3987,25 +3997,94 @@ mod horizontal_axis_style_tests {
     #[test]
     fn horizontal_x_grid_draw_ticks_true_adds_bottom_tick_marks() {
         let spec = parse(
-            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
-                "options":{"indexAxis":"y","scales":{"x":{"grid":{"drawTicks":true}}}}}"#,
+            r##"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y","scales":{"x":{"grid":{"drawTicks":true,"tickColor":"#123456","tickWidth":2.75,"tickLength":9}}}}}"##,
         );
         let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let scene = build(&spec, &m);
-        // tick 短線: x1==x2, y2-y1==4.0 (プロット下側 plot_bottom→plot_bottom+4)。
+        // tick 短線: x1==x2, y2-y1==9.0。色と線幅は grid から独立して反映される。
         let ticks = scene
             .items
             .iter()
             .filter(|p| {
                 matches!(p,
-                    Prim::Line { x1, x2, y1, y2, .. }
-                        if (x1 - x2).abs() < 0.01 && ((*y2 - *y1) - 4.0).abs() < 1e-9
+                    Prim::Line { x1, x2, y1, y2, stroke, stroke_width, .. }
+                        if (x1 - x2).abs() < 0.01
+                            && ((*y2 - *y1) - 9.0).abs() < 1e-9
+                            && stroke.r == 0x12 && stroke.g == 0x34 && stroke.b == 0x56
+                            && (*stroke_width - 2.75).abs() < 1e-9
                 )
             })
             .count();
         assert!(
             ticks > 0,
             "x_axis.grid.draw_ticks=true → 値軸 tick 短線が出る: 実際 {ticks}"
+        );
+    }
+
+    #[test]
+    fn horizontal_temporal_y_axis_uses_independent_tick_style() {
+        let mut spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y"}}"#,
+        );
+        spec.y_positions = XPositions::Temporal {
+            unix_millis: vec![0, 86_400_000],
+        };
+        spec.y_axis.scale_kind = ScaleKind::Time;
+        spec.y_axis.time = Some(TimeOptions::default());
+        spec.y_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.tick_color = Some(Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        });
+        spec.y_axis.grid.tick_width = Some(2.5);
+        spec.y_axis.grid.tick_length = 7.0;
+
+        let m = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let scene = build(&spec, &m);
+        let has_tick_style = scene.items.iter().any(|item| {
+            matches!(item,
+                Prim::Line { x1, x2, y1, y2, stroke, stroke_width, .. }
+                    if (y1 - y2).abs() < 0.01
+                        && ((*x2 - *x1) - 7.0).abs() < 1e-9
+                        && stroke.r == 255
+                        && (*stroke_width - 2.5).abs() < 1e-9
+            )
+        });
+        assert!(has_tick_style);
+    }
+
+    #[test]
+    fn horizontal_tick_lengths_are_reserved_in_fixed_canvas_margins() {
+        let mut spec = parse(
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[10,20]}]},
+                "options":{"indexAxis":"y"}}"#,
+        );
+        spec.y_positions = XPositions::Temporal {
+            unix_millis: vec![0, 86_400_000],
+        };
+        spec.y_axis.scale_kind = ScaleKind::Time;
+        spec.y_axis.time = Some(TimeOptions::default());
+        let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+        let before = super::horizontal_bar_layout(&spec, &measurer);
+        spec.y_axis.grid.draw_ticks = true;
+        spec.y_axis.grid.tick_length = 11.0;
+        spec.x_axis.grid.draw_ticks = true;
+        spec.x_axis.grid.tick_length = 16.0;
+        let after = super::horizontal_bar_layout(&spec, &measurer);
+
+        assert!((after.plot_left - before.plot_left - 11.0).abs() < 1e-9);
+        assert!((before.plot_bottom - after.plot_bottom - 16.0).abs() < 1e-9);
+        assert_eq!(
+            after.plot_right - after.plot_left,
+            before.plot_right - before.plot_left - 11.0
+        );
+        assert_eq!(
+            after.plot_bottom - after.plot_top,
+            before.plot_bottom - before.plot_top - 16.0
         );
     }
 
@@ -4570,7 +4649,8 @@ mod horizontal_log_scale_tests {
             .filter(|p| {
                 matches!(p,
                     Prim::Line { x1, x2, y1, y2, .. }
-                        if (x1 - x2).abs() < 0.01 && ((*y2 - *y1) - 4.0).abs() < 1e-9
+                        if (x1 - x2).abs() < 0.01
+                            && ((*y2 - *y1) - spec.x_axis.grid.tick_length).abs() < 1e-9
                 )
             })
             .count();
