@@ -3,11 +3,11 @@
 //! 対応する上位形:
 //! `{ "mark": ..., "data": {"values": [ {..}, .. ]}, "encoding": {..} }`
 //!
-//! - `mark`: 文字列 `"bar"|"line"|"point"|"circle"|"square"|"arc"` または
+//! - `mark`: 文字列 `"bar"|"line"|"trail"|"point"|"circle"|"square"|"arc"` または
 //!   `{"type": "<同左>"}`。
 //! - `data.values`: インラインのレコード配列（JSON オブジェクトの配列）のみ対応。
 //!   `data.url` や values 欠落は明確なメッセージで Err。
-//! - `encoding`: `x`/`y`/`color`/`theta`。point/square は `size` も受理する。
+//! - `encoding`: `x`/`y`/`color`/`theta`。point/square は面積、trail は幅として `size` を受理する。
 //!   各チャネルは `{ "field", "type"? }`。
 //!
 //! すべて決定的（distinct 値の抽出は first-seen 順、HashMap 不使用）でパニックしない。
@@ -66,8 +66,11 @@ pub fn parse_with_limits(
         .get("encoding")
         .and_then(Value::as_object)
         .ok_or_else(|| "encoding がありません".to_string())?;
-    if matches!(kind, ChartKind::Line { .. }) {
+    if matches!(kind, ChartKind::Line { .. } | ChartKind::Trail) {
         validate_line_channel_types(encoding)?;
+    }
+    if matches!(kind, ChartKind::Trail) {
+        validate_trail_options(top, encoding)?;
     }
 
     let x_field = channel_field(encoding, "x");
@@ -76,6 +79,14 @@ pub fn parse_with_limits(
     let mark_name = read_mark_name(top);
     let point_size_mark = matches!(mark_name, Some("point" | "square"));
     let square_mark = mark_name == Some("square");
+    let trail_size_field = if mark_name == Some("trail") {
+        point_size_field(encoding)?
+    } else {
+        None
+    };
+    if trail_size_field.is_some() {
+        validate_trail_size_type(encoding)?;
+    }
     let size_field = if point_size_mark {
         point_size_field(encoding)?
     } else {
@@ -100,13 +111,14 @@ pub fn parse_with_limits(
         };
     }
     let theta_field = channel_field(encoding, "theta");
-    let temporal_line =
-        matches!(kind, ChartKind::Line { .. }) && channel_type(encoding, "x") == Some("temporal");
+    let temporal_line = matches!(kind, ChartKind::Line { .. } | ChartKind::Trail)
+        && channel_type(encoding, "x") == Some("temporal");
+    let is_trail = matches!(kind, ChartKind::Trail);
 
     // 必須 encoding field の指定・存在・型を検証する。これを通せば field_f64/
     // field_category が 0/空へ黙って丸めることはなくなる(typo・欠損・型違いを明示エラーに)。
     match &kind {
-        ChartKind::Bar { .. } | ChartKind::Line { .. } => {
+        ChartKind::Bar { .. } | ChartKind::Line { .. } | ChartKind::Trail => {
             let xf = require_field(&x_field, "x")?;
             let yf = require_field(&y_field, "y")?;
             if !temporal_line {
@@ -115,6 +127,9 @@ pub fn parse_with_limits(
                 if let Some(cf) = color_field.as_deref() {
                     validate_category(&records, cf)?;
                 }
+            }
+            if let Some(sf) = trail_size_field.as_deref() {
+                validate_point_size_values(&records, sf)?;
             }
         }
         ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => {
@@ -176,23 +191,65 @@ pub fn parse_with_limits(
 
     // 色分け line で疎なカテゴリ(一部 (category,color) 組が欠落)は、欠損を 0 埋めすると
     // 実在しないゼロ点へ折れ線が接続され誤りになる。IR は欠損表現を持たないため拒否する。
-    if matches!(kind, ChartKind::Line { .. }) && color_field.is_some() && !temporal_line {
+    if matches!(kind, ChartKind::Line { .. } | ChartKind::Trail)
+        && color_field.is_some()
+        && !temporal_line
+    {
         let cats = distinct_categories(&records, x_field.as_deref());
         let groups = distinct_categories(&records, color_field.as_deref());
         if is_area && matches!(kind, ChartKind::Line { stacked: true, .. }) {
             preflight_stacked_area_shape(cats.len(), groups.len(), limits)?;
         }
-        for group in &groups {
-            for cat in &cats {
-                let present = records.iter().any(|r| {
-                    &field_category(r, x_field.as_deref()) == cat
-                        && &field_category(r, color_field.as_deref()) == group
-                });
-                if !present {
+        if is_trail {
+            preflight_trail_shape(cats.len(), groups.len(), limits)?;
+            let category_indexes = cats
+                .iter()
+                .enumerate()
+                .map(|(index, category)| (category.as_str(), index))
+                .collect::<HashMap<_, _>>();
+            let group_indexes = groups
+                .iter()
+                .enumerate()
+                .map(|(index, group)| (group.as_str(), index))
+                .collect::<HashMap<_, _>>();
+            let product = cats.len().saturating_mul(groups.len());
+            let mut present_pairs = HashSet::with_capacity(records.len().min(product));
+            for record in &records {
+                let category = field_category(record, x_field.as_deref());
+                let group = field_category(record, color_field.as_deref());
+                let Some(&category_index) = category_indexes.get(category.as_str()) else {
+                    return Err("trail category index is inconsistent with input data".to_string());
+                };
+                let Some(&group_index) = group_indexes.get(group.as_str()) else {
                     return Err(
-                        "色分け折れ線(line + color)は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
-                            .to_string(),
+                        "trail color group index is inconsistent with input data".to_string()
                     );
+                };
+                present_pairs.insert((category_index, group_index));
+            }
+            for group_index in 0..groups.len() {
+                for category_index in 0..cats.len() {
+                    if !present_pairs.contains(&(category_index, group_index)) {
+                        return Err(
+                            "色分け trail は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        } else {
+            for group in &groups {
+                for cat in &cats {
+                    let present = records.iter().any(|r| {
+                        &field_category(r, x_field.as_deref()) == cat
+                            && &field_category(r, color_field.as_deref()) == group
+                    });
+                    if !present {
+                        return Err(
+                            "色分け折れ線(line + color)は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
+                                .to_string(),
+                        );
+                    }
                 }
             }
         }
@@ -281,8 +338,18 @@ pub fn parse_with_limits(
             &y_field,
             &color_field,
             &theme,
-            line_point_enabled(top)?,
-            line_interpolation(top)?,
+            if is_trail {
+                false
+            } else {
+                line_point_enabled(top)?
+            },
+            if is_trail {
+                LineInterpolation::Linear
+            } else {
+                line_interpolation(top)?
+            },
+            trail_size_field.as_deref(),
+            is_trail,
             limits,
         )?)
     } else {
@@ -325,7 +392,16 @@ pub fn parse_with_limits(
             ),
             ChartKind::VegaRect { .. } => (vec![], vec![], None),
             _ => (
-                build_categorical(&kind, &records, &x_field, &y_field, &color_field, &theme),
+                build_categorical(
+                    &kind,
+                    &records,
+                    &x_field,
+                    &y_field,
+                    &color_field,
+                    trail_size_field.as_deref(),
+                    &theme,
+                    limits,
+                )?,
                 distinct_categories(&records, x_field.as_deref()),
                 None,
             ),
@@ -1112,6 +1188,7 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
             placement_stacked: false,
             value_stacked: false,
         }),
+        "trail" => Ok(ChartKind::Trail),
         "line" => Ok(ChartKind::Line {
             stacked: false,
             stacked_missing_values_are_gaps: false,
@@ -1175,6 +1252,57 @@ fn channel_field(encoding: &Map<String, Value>, channel: &str) -> Option<String>
         .and_then(|o| o.get("field"))
         .and_then(Value::as_str)
         .map(str::to_owned)
+}
+
+fn validate_trail_options(
+    top: &Map<String, Value>,
+    encoding: &Map<String, Value>,
+) -> Result<(), String> {
+    if let Some(mark) = top.get("mark").and_then(Value::as_object) {
+        for key in mark.keys() {
+            if key != "type" {
+                return Err(format!("mark.{key} is not supported for trail charts"));
+            }
+        }
+    }
+    if encoding
+        .get("y")
+        .and_then(Value::as_object)
+        .is_some_and(|channel| channel.contains_key("stack"))
+    {
+        return Err("encoding.y.stack is not supported for trail charts".to_string());
+    }
+    if let Some(size) = encoding.get("size").filter(|value| !value.is_null()) {
+        let Some(channel) = size.as_object() else {
+            return Err(format!(
+                "encoding.size must be an object, got {}",
+                json_value_type(size)
+            ));
+        };
+        for key in channel.keys() {
+            if key != "field" && key != "type" {
+                return Err(format!(
+                    "encoding.size.{key} is not supported for trail charts"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_trail_size_type(encoding: &Map<String, Value>) -> Result<(), String> {
+    let Some(channel) = encoding.get("size").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    match channel.get("type") {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(value)) if value == "quantitative" => Ok(()),
+        Some(Value::String(_)) => Err("encoding.size.type must be \"quantitative\"".to_string()),
+        Some(other) => Err(format!(
+            "encoding.size.type must be a string, got {}",
+            json_value_type(other)
+        )),
+    }
 }
 
 fn point_size_field(encoding: &Map<String, Value>) -> Result<Option<String>, String> {
@@ -1342,17 +1470,21 @@ fn palette_pick(palette: &[Color], i: usize) -> Color {
 /// bar/line（カテゴリ系）の系列を組む。
 /// color.field があれば色値ごとに 1 系列、なければ単一系列。
 /// `series.values[k]` = x==categories[k] かつ color が一致するレコードの y 合計。
+#[allow(clippy::too_many_arguments)]
 fn build_categorical(
     kind: &ChartKind,
     records: &[Map<String, Value>],
     x_field: &Option<String>,
     y_field: &Option<String>,
     color_field: &Option<String>,
+    trail_size_field: Option<&str>,
     theme: &Theme,
-) -> Vec<Series> {
+    limits: &crate::guard::InputLimits,
+) -> Result<Vec<Series>, String> {
     let categories = distinct_categories(records, x_field.as_deref());
+    let is_trail = matches!(kind, ChartKind::Trail);
     let series_type = match kind {
-        ChartKind::Line { .. } => SeriesType::Line,
+        ChartKind::Line { .. } | ChartKind::Trail => SeriesType::Line,
         _ => SeriesType::Bar,
     };
     let stroke_width = match series_type {
@@ -1360,57 +1492,188 @@ fn build_categorical(
         SeriesType::Bar => 1.0,
     };
 
-    // 系列名（= color 値）の集合。color なしなら y.field 名（なければ ""）の単一系列。
     let group_names: Vec<String> = match color_field {
         Some(_) => distinct_categories(records, color_field.as_deref()),
         None => vec![y_field.clone().unwrap_or_default()],
     };
+    if is_trail {
+        preflight_trail_shape(categories.len(), group_names.len(), limits)?;
+    }
+    let mut value_sums = if is_trail {
+        vec![vec![0.0; categories.len()]; group_names.len()]
+    } else {
+        Vec::new()
+    };
+    let mut size_values = if is_trail && trail_size_field.is_some() {
+        vec![vec![0.0; categories.len()]; group_names.len()]
+    } else {
+        Vec::new()
+    };
 
-    group_names
-        .iter()
-        .enumerate()
-        .map(|(si, group)| {
-            let values: Vec<f64> = categories
-                .iter()
-                .map(|cat| {
-                    records
-                        .iter()
-                        .filter(|r| {
-                            &field_category(r, x_field.as_deref()) == cat
-                                && match color_field {
-                                    Some(_) => &field_category(r, color_field.as_deref()) == group,
-                                    None => true,
-                                }
-                        })
-                        .map(|r| field_f64(r, y_field.as_deref()))
-                        .sum()
-                })
-                .collect();
-            let color = palette_pick(&theme.palette, si);
-            Series {
-                name: group.clone(),
-                values,
-                points: vec![],
-                fill: vec![color],
-                stroke: vec![color],
-                stroke_width,
-                area: false,
-                area_fill: None,
-                interpolation: LineInterpolation::Linear,
-                span_gaps: false,
-                step_mode: None,
-                line_style: None,
-                series_type,
-                stack: None,
-                bar_geometry: None,
-                point_radius: None,
-                violin_samples: vec![],
-                box_points: vec![],
-                tree: vec![],
-                links: vec![],
+    if is_trail {
+        let category_indexes = categories
+            .iter()
+            .enumerate()
+            .map(|(index, category)| (category.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        let group_indexes = group_names
+            .iter()
+            .enumerate()
+            .map(|(index, group)| (group.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        for record in records {
+            let category = field_category(record, x_field.as_deref());
+            let Some(&category_index) = category_indexes.get(category.as_str()) else {
+                return Err("trail category index is inconsistent with input data".to_string());
+            };
+            let series_index = if color_field.is_some() {
+                let group = field_category(record, color_field.as_deref());
+                let Some(&series_index) = group_indexes.get(group.as_str()) else {
+                    return Err(
+                        "trail color group index is inconsistent with input data".to_string()
+                    );
+                };
+                series_index
+            } else {
+                0
+            };
+            let value_sum = &mut value_sums[series_index][category_index];
+            *value_sum += field_f64(record, y_field.as_deref());
+            if !value_sum.is_finite() {
+                return Err("trail y aggregate must be finite".to_string());
             }
-        })
-        .collect()
+            if let Some(size_field) = trail_size_field {
+                let size_sum = &mut size_values[series_index][category_index];
+                *size_sum += field_f64(record, Some(size_field));
+                if !size_sum.is_finite() {
+                    return Err("trail size aggregate must be finite".to_string());
+                }
+            }
+        }
+    }
+
+    let mut series = Vec::with_capacity(group_names.len());
+
+    for (series_index, group) in group_names.iter().enumerate() {
+        let values = if is_trail {
+            std::mem::take(&mut value_sums[series_index])
+        } else {
+            let mut values = Vec::with_capacity(categories.len());
+            for category in &categories {
+                let mut value_sum = 0.0;
+                for record in records.iter().filter(|record| {
+                    &field_category(record, x_field.as_deref()) == category
+                        && match color_field {
+                            Some(_) => &field_category(record, color_field.as_deref()) == group,
+                            None => true,
+                        }
+                }) {
+                    value_sum += field_f64(record, y_field.as_deref());
+                }
+                values.push(value_sum);
+            }
+            values
+        };
+        let color = palette_pick(&theme.palette, series_index);
+        series.push(Series {
+            name: group.clone(),
+            values,
+            points: vec![],
+            fill: vec![color],
+            stroke: vec![color],
+            stroke_width,
+            area: false,
+            area_fill: None,
+            interpolation: LineInterpolation::Linear,
+            span_gaps: false,
+            step_mode: None,
+            line_style: None,
+            series_type,
+            stack: None,
+            bar_geometry: None,
+            point_radius: None,
+            trail_widths: None,
+            violin_samples: vec![],
+            box_points: vec![],
+            tree: vec![],
+            links: vec![],
+        });
+    }
+
+    if is_trail {
+        if trail_size_field.is_some() {
+            let mut min = f64::INFINITY;
+            let mut max = f64::NEG_INFINITY;
+            for values in &size_values {
+                for &value in values {
+                    min = min.min(value);
+                    max = max.max(value);
+                }
+            }
+            for (series, values) in series.iter_mut().zip(size_values) {
+                series.trail_widths = Some(Box::new(
+                    values
+                        .into_iter()
+                        .map(|value| trail_width(value, min, max))
+                        .collect(),
+                ));
+            }
+        } else {
+            for series in &mut series {
+                series.trail_widths = Some(Box::new(vec![1.0; categories.len()]));
+            }
+        }
+    }
+
+    Ok(series)
+}
+
+fn preflight_trail_shape(
+    category_count: usize,
+    series_count: usize,
+    limits: &crate::guard::InputLimits,
+) -> Result<(), String> {
+    if category_count > limits.max_categories {
+        return Err(format!(
+            "trail category count {category_count} exceeds max_categories limit {} (pre-allocation)",
+            limits.max_categories
+        ));
+    }
+    if series_count > limits.max_series {
+        return Err(format!(
+            "trail series count {series_count} exceeds max_series limit {} (pre-allocation)",
+            limits.max_series
+        ));
+    }
+    let product = category_count.saturating_mul(series_count);
+    if product > limits.max_categorical_primitives {
+        return Err(format!(
+            "trail dense product {product} exceeds max_categorical_primitives limit {} (pre-allocation)",
+            limits.max_categorical_primitives
+        ));
+    }
+    if product > limits.max_total_data_points {
+        return Err(format!(
+            "trail dense product {product} exceeds max_total_data_points limit {} (pre-allocation)",
+            limits.max_total_data_points
+        ));
+    }
+    Ok(())
+}
+
+const TRAIL_WIDTH_MIN_PX: f64 = 1.0;
+const TRAIL_WIDTH_MAX_PX: f64 = 4.0;
+
+/// Map an aggregated quantitative size to the shared trail-width scale.
+fn trail_width(value: f64, domain_min: f64, domain_max: f64) -> f64 {
+    if domain_min == domain_max {
+        return (TRAIL_WIDTH_MIN_PX + TRAIL_WIDTH_MAX_PX) / 2.0;
+    }
+    let scale = domain_min.abs().max(domain_max.abs()).max(1.0);
+    let fraction = ((value / scale - domain_min / scale)
+        / (domain_max / scale - domain_min / scale))
+        .clamp(0.0, 1.0);
+    TRAIL_WIDTH_MIN_PX + fraction * (TRAIL_WIDTH_MAX_PX - TRAIL_WIDTH_MIN_PX)
 }
 
 #[derive(Debug)]
@@ -1490,6 +1753,8 @@ fn build_temporal_line(
     theme: &Theme,
     point: bool,
     interpolation: LineInterpolation,
+    trail_size_field: Option<&str>,
+    is_trail: bool,
     limits: &crate::guard::InputLimits,
 ) -> Result<TemporalLineData, String> {
     let x_field = require_field(x_field, "x")?;
@@ -1511,6 +1776,7 @@ fn build_temporal_line(
     let mut group_orders = Vec::new();
     let mut group_indexes = HashMap::<TemporalGroupKey, usize>::new();
     let mut aggregates = HashMap::<(i64, usize), f64>::new();
+    let mut size_aggregates = HashMap::<(i64, usize), f64>::new();
     preflight_temporal_shape(0, group_names.len(), limits)?;
 
     for record in records {
@@ -1590,6 +1856,19 @@ fn build_temporal_line(
         if !aggregate.is_finite() {
             return Err("temporal line aggregate must be finite".to_string());
         }
+        if let Some(size_field) = trail_size_field {
+            let size = match record.get(size_field) {
+                Some(Value::Number(number)) => number
+                    .as_f64()
+                    .expect("validated trail size must convert to f64"),
+                _ => return Err(format!("size field {size_field} must contain numbers")),
+            };
+            let aggregate = size_aggregates.entry((millis, group_index)).or_insert(0.0);
+            *aggregate += size;
+            if !aggregate.is_finite() {
+                return Err("temporal trail size aggregate must be finite".to_string());
+            }
+        }
     }
 
     let domain = domain.into_iter().collect::<Vec<_>>();
@@ -1604,6 +1883,7 @@ fn build_temporal_line(
         });
     }
     let mut series = Vec::with_capacity(ordered_groups.len());
+    let mut trail_size_values = Vec::with_capacity(ordered_groups.len());
     for (palette_index, (name, group_index)) in ordered_groups.into_iter().enumerate() {
         let values = domain
             .iter()
@@ -1617,6 +1897,23 @@ fn build_temporal_line(
                     })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let sizes = if let Some(size_field) = trail_size_field {
+            Some(
+                domain
+                    .iter()
+                    .map(|(millis, _)| {
+                        size_aggregates
+                            .get(&(*millis, group_index))
+                            .copied()
+                            .ok_or_else(|| {
+                                format!("temporal trail size is missing for field {size_field}")
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        } else {
+            None
+        };
         let color = palette_pick(&theme.palette, palette_index);
         series.push(Series {
             name,
@@ -1635,11 +1932,41 @@ fn build_temporal_line(
             bar_geometry: None,
             series_type: SeriesType::Line,
             point_radius: Some(if point { 3.0 } else { 0.0 }),
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
             links: vec![],
         });
+        if let Some(sizes) = sizes {
+            trail_size_values.push(sizes);
+        }
+    }
+    if is_trail {
+        if trail_size_field.is_some() {
+            let min = trail_size_values
+                .iter()
+                .flatten()
+                .copied()
+                .fold(f64::INFINITY, f64::min);
+            let max = trail_size_values
+                .iter()
+                .flatten()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max);
+            for (series, sizes) in series.iter_mut().zip(trail_size_values) {
+                series.trail_widths = Some(Box::new(
+                    sizes
+                        .into_iter()
+                        .map(|size| trail_width(size, min, max))
+                        .collect(),
+                ));
+            }
+        } else {
+            for series in &mut series {
+                series.trail_widths = Some(Box::new(vec![1.0; domain.len()]));
+            }
+        }
     }
     Ok(TemporalLineData { domain, series })
 }
@@ -1754,6 +2081,8 @@ mod temporal_line_tests {
             &vegalite_theme(),
             false,
             LineInterpolation::Linear,
+            None,
+            false,
             &crate::guard::InputLimits::default(),
         )
         .unwrap_err();
@@ -1787,6 +2116,8 @@ mod temporal_line_tests {
             &vegalite_theme(),
             false,
             LineInterpolation::Linear,
+            None,
+            false,
             limits,
         )
     }
@@ -2160,6 +2491,7 @@ fn build_scatter(
                 bar_geometry: None,
                 series_type: SeriesType::Bar,
                 point_radius: None,
+                trail_widths: None,
                 violin_samples: vec![],
                 box_points: vec![],
                 tree: vec![],
@@ -2256,6 +2588,7 @@ fn build_pie(
         bar_geometry: None,
         series_type: SeriesType::Bar,
         point_radius: None,
+        trail_widths: None,
         violin_samples: vec![],
         box_points: vec![],
         tree: vec![],
@@ -2278,6 +2611,25 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
     }
 
     let top_allowed: &[&str] = match read_mark_name(top) {
+        Some("trail")
+            if top
+                .get("encoding")
+                .and_then(Value::as_object)
+                .and_then(|encoding| channel_type(encoding, "x"))
+                == Some("temporal") =>
+        {
+            &[
+                "mark",
+                "data",
+                "encoding",
+                "$schema",
+                "width",
+                "height",
+                "title",
+                "background",
+                "config",
+            ]
+        }
         Some("line") => &[
             "mark",
             "data",
@@ -2316,6 +2668,13 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
     };
     check_object(top, top_allowed, "")?;
 
+    if matches!(read_mark_name(top), Some("trail"))
+        && let Some(mark) = top.get("mark").and_then(Value::as_object)
+    {
+        check_line_object(mark, &["type"], "mark")?;
+        check_line_string(mark, "type", "mark.type")?;
+    }
+
     // Keep the strict parser aligned with VlSquareSpec's mark-definition schema.
     if matches!(read_mark_name(top), Some("square"))
         && let Some(mark) = top.get("mark").and_then(Value::as_object)
@@ -2334,6 +2693,7 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         // 現状挙動(全キー拒否せずスルー)を保つ = 後段パースに委ねる。
         let allowed: &[&str] = match read_mark_name(top) {
             Some("bar" | "line" | "circle" | "area") => &["x", "y", "color"],
+            Some("trail") => &["x", "y", "color", "size"],
             Some("point" | "square") => &["x", "y", "color", "size"],
             Some("arc") => &["theta", "color", "x", "y"],
             Some("rect") => &["x", "y", "color"],
@@ -2351,6 +2711,8 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         // のと同じ考え方だが、ここでは channel allow-list の拡張だけに留める)。
         let temporal_area = matches!(read_mark_name(top), Some("area"))
             && channel_type(encoding, "x") == Some("temporal");
+        let temporal_trail = matches!(read_mark_name(top), Some("trail"))
+            && channel_type(encoding, "x") == Some("temporal");
         for channel in allowed {
             if let Some(ch) = encoding.get(*channel).and_then(Value::as_object) {
                 // aggregate は原則未実装(本体は単純合計しかしない)。strict では
@@ -2359,7 +2721,9 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                 // (aggregate の値のバリデーションは下の rect 固有ブロックで行う)。
                 // area の y チャネルに限り、stack(積み上げ制御)を受理する。
                 let channel_allowed: &[&str] =
-                    if matches!(read_mark_name(top), Some("rect")) && *channel == "color" {
+                    if matches!(read_mark_name(top), Some("trail")) && *channel == "size" {
+                        &["field", "type"]
+                    } else if matches!(read_mark_name(top), Some("rect")) && *channel == "color" {
                         &["field", "type", "aggregate"]
                     } else if matches!(read_mark_name(top), Some("area")) && *channel == "y" {
                         if temporal_area {
@@ -2367,9 +2731,9 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
                         } else {
                             &["field", "type", "stack"]
                         }
-                    } else if temporal_area && *channel == "x" {
+                    } else if (temporal_area || temporal_trail) && matches!(*channel, "x" | "y") {
                         &["field", "type", "title"]
-                    } else if temporal_area && *channel == "color" {
+                    } else if (temporal_area || temporal_trail) && *channel == "color" {
                         &["field", "type", "title", "scale"]
                     } else {
                         &["field", "type"]

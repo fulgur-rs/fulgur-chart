@@ -1,0 +1,101 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": "Temporal trail by request volume",
+  "width": 720,
+  "height": 360,
+  "mark": {
+    "type": "trail"
+  },
+  "background": "white",
+  "data": {
+    "values": [
+      {
+        "date": "2026-09-01T00:00:00Z",
+        "region": "East",
+        "latency": 32,
+        "requests": 120
+      },
+      {
+        "date": "2026-09-02T00:00:00Z",
+        "region": "East",
+        "latency": 38,
+        "requests": 260
+      },
+      {
+        "date": "2026-09-03T00:00:00Z",
+        "region": "East",
+        "latency": 35,
+        "requests": 180
+      },
+      {
+        "date": "2026-09-04T00:00:00Z",
+        "region": "East",
+        "latency": 47,
+        "requests": 340
+      },
+      {
+        "date": "2026-09-05T00:00:00Z",
+        "region": "East",
+        "latency": 42,
+        "requests": 220
+      },
+      {
+        "date": "2026-09-01T00:00:00Z",
+        "region": "West",
+        "latency": 24,
+        "requests": 200
+      },
+      {
+        "date": "2026-09-02T00:00:00Z",
+        "region": "West",
+        "latency": 30,
+        "requests": 140
+      },
+      {
+        "date": "2026-09-03T00:00:00Z",
+        "region": "West",
+        "latency": 28,
+        "requests": 280
+      },
+      {
+        "date": "2026-09-04T00:00:00Z",
+        "region": "West",
+        "latency": 34,
+        "requests": 190
+      },
+      {
+        "date": "2026-09-05T00:00:00Z",
+        "region": "West",
+        "latency": 31,
+        "requests": 320
+      }
+    ]
+  },
+  "encoding": {
+    "x": {
+      "field": "date",
+      "type": "temporal",
+      "title": "Date"
+    },
+    "y": {
+      "field": "latency",
+      "type": "quantitative",
+      "title": "Latency (ms)"
+    },
+    "color": {
+      "field": "region",
+      "type": "nominal",
+      "title": "Region"
+    },
+    "size": {
+      "field": "requests",
+      "type": "quantitative"
+    }
+  },
+  "config": {
+    "axis": {
+      "grid": true,
+      "gridOpacity": 0.2
+    }
+  }
+}

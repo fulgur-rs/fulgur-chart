@@ -114,7 +114,9 @@ pub struct Geometry {
 }
 
 fn base_model_dimensions(spec: &ChartSpec, m: &TextMeasurer) -> (f64, f64) {
-    if matches!(spec.size_mode, SizeMode::PlotArea) && matches!(spec.kind, ChartKind::Line { .. }) {
+    if matches!(spec.size_mode, SizeMode::PlotArea)
+        && matches!(spec.kind, ChartKind::Line { .. } | ChartKind::Trail)
+    {
         let frame = crate::layout::common::compute(spec, m);
         (frame.scene_width, frame.scene_height)
     } else {
@@ -261,7 +263,7 @@ fn compute_base_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry>
                 elements,
             })
         }
-        ChartKind::Line { .. } => {
+        ChartKind::Line { .. } | ChartKind::Trail => {
             let frame = crate::layout::common::compute(spec, m);
             let pw = frame.plot_right - frame.plot_left;
             let ph = frame.plot_bottom - frame.plot_top;
@@ -334,6 +336,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         } => "bar-horizontal",
         ChartKind::Bar { .. } => "bar",
         ChartKind::Line { .. } => "line",
+        ChartKind::Trail => "trail",
         ChartKind::Pie { cutout, .. } if cutout.is_doughnut() => "doughnut",
         ChartKind::Pie { .. } => "pie",
         ChartKind::Scatter => "scatter",
@@ -525,7 +528,7 @@ fn value_axis_model(
 /// 軸を持たないチャート(pie/radar/matrix/progress)は None を返す。
 fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisModel, usize)> {
     use crate::scale::nice_ticks;
-    if let (ChartKind::Line { .. }, XPositions::Temporal { unix_millis }) =
+    if let (ChartKind::Line { .. } | ChartKind::Trail, XPositions::Temporal { unix_millis }) =
         (&spec.kind, &spec.x_positions)
     {
         let frame = crate::layout::common::compute(spec, m);
@@ -544,6 +547,7 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
             horizontal: false, ..
         }
         | ChartKind::Line { .. }
+        | ChartKind::Trail
         | ChartKind::Mixed => {
             let frame = crate::layout::common::compute(spec, m);
             let x_model = match &spec.x_positions {

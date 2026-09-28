@@ -1,0 +1,89 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": "Variable width by daily volume",
+  "width": 720,
+  "height": 360,
+  "mark": "trail",
+  "data": {
+    "values": [
+      {
+        "day": "Mon",
+        "metric": "A",
+        "value": 3,
+        "volume": 2
+      },
+      {
+        "day": "Tue",
+        "metric": "A",
+        "value": 7,
+        "volume": 8
+      },
+      {
+        "day": "Wed",
+        "metric": "A",
+        "value": 5,
+        "volume": 4
+      },
+      {
+        "day": "Thu",
+        "metric": "A",
+        "value": 10,
+        "volume": 12
+      },
+      {
+        "day": "Fri",
+        "metric": "A",
+        "value": 8,
+        "volume": 7
+      },
+      {
+        "day": "Mon",
+        "metric": "B",
+        "value": 8,
+        "volume": 10
+      },
+      {
+        "day": "Tue",
+        "metric": "B",
+        "value": 5,
+        "volume": 4
+      },
+      {
+        "day": "Wed",
+        "metric": "B",
+        "value": 7,
+        "volume": 9
+      },
+      {
+        "day": "Thu",
+        "metric": "B",
+        "value": 4,
+        "volume": 3
+      },
+      {
+        "day": "Fri",
+        "metric": "B",
+        "value": 6,
+        "volume": 8
+      }
+    ]
+  },
+  "encoding": {
+    "x": {
+      "field": "day",
+      "type": "ordinal"
+    },
+    "y": {
+      "field": "value",
+      "type": "quantitative"
+    },
+    "color": {
+      "field": "metric",
+      "type": "nominal"
+    },
+    "size": {
+      "field": "volume",
+      "type": "quantitative"
+    }
+  }
+}

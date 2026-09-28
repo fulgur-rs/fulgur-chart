@@ -981,7 +981,7 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     } else if is_log {
         crate::scale::log_axis_ticks(domain_min, domain_max)
     } else if matches!(spec.size_mode, SizeMode::PlotArea)
-        && matches!(spec.kind, ChartKind::Line { .. })
+        && matches!(spec.kind, ChartKind::Line { .. } | ChartKind::Trail)
         && matches!(spec.x_positions, XPositions::Temporal { .. })
     {
         (
@@ -1166,26 +1166,27 @@ pub fn compute(spec: &ChartSpec, m: &TextMeasurer) -> Frame {
     // 末尾は常に内側化し、先頭は y 軸ラベル幅で足りなければ拡張する。
     // offset:true の line は bar 同様 band 中心配置でラベルがプロット内に収まるため、
     // 端余白は取らない(bar と同じ chartArea を使う)。
-    let (edge_pad_left, edge_pad_right) = if matches!(spec.kind, ChartKind::Line { .. })
-        && spec.categories.len() > 1
-        && !spec.x_axis.offset
-    {
-        let lf = spec.theme.font_size as f32;
-        let half = |c: &String| (m.width(c, lf) as f64) / 2.0;
-        let first = spec
-            .categories
-            .first()
-            .filter(|c| !c.is_empty())
-            .map_or(0.0, half);
-        let last = spec
-            .categories
-            .last()
-            .filter(|c| !c.is_empty())
-            .map_or(0.0, half);
-        (first, last)
-    } else {
-        (0.0, 0.0)
-    };
+    let (edge_pad_left, edge_pad_right) =
+        if matches!(spec.kind, ChartKind::Line { .. } | ChartKind::Trail)
+            && spec.categories.len() > 1
+            && !spec.x_axis.offset
+        {
+            let lf = spec.theme.font_size as f32;
+            let half = |c: &String| (m.width(c, lf) as f64) / 2.0;
+            let first = spec
+                .categories
+                .first()
+                .filter(|c| !c.is_empty())
+                .map_or(0.0, half);
+            let last = spec
+                .categories
+                .last()
+                .filter(|c| !c.is_empty())
+                .map_or(0.0, half);
+            (first, last)
+        } else {
+            (0.0, 0.0)
+        };
     // 狭い幅 + 長い端ラベルで edge 余白が利用可能幅を超えると plot_right <= plot_left に
     // 反転し line_x が壊れる。余白合計を利用可能幅で比例縮小し、最後に plot_right >= plot_left
     // を保証する。
@@ -1449,6 +1450,7 @@ fn supports_x_category_offset(spec: &ChartSpec) -> bool {
     matches!(
         spec.kind,
         ChartKind::Line { .. }
+            | ChartKind::Trail
             | ChartKind::Bar {
                 horizontal: false,
                 ..
@@ -2606,6 +2608,7 @@ mod tests {
                 bar_geometry: None,
                 series_type: SeriesType::Bar,
                 point_radius: None,
+                trail_widths: None,
                 violin_samples: vec![],
                 box_points: vec![],
                 tree: vec![],
@@ -3220,6 +3223,7 @@ mod tests {
                 bar_geometry: None,
                 series_type: SeriesType::Line,
                 point_radius: None,
+                trail_widths: None,
                 violin_samples: vec![],
                 box_points: vec![],
                 tree: vec![],
@@ -3242,6 +3246,7 @@ mod tests {
                 bar_geometry: None,
                 series_type: SeriesType::Line,
                 point_radius: None,
+                trail_widths: None,
                 violin_samples: vec![],
                 box_points: vec![],
                 tree: vec![],
@@ -3264,6 +3269,7 @@ mod tests {
                 bar_geometry: None,
                 series_type: SeriesType::Line,
                 point_radius: None,
+                trail_widths: None,
                 violin_samples: vec![],
                 box_points: vec![],
                 tree: vec![],

@@ -306,6 +306,47 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         ));
     }
 
+    if matches!(spec.kind, ChartKind::Trail) {
+        for (series_index, series) in spec.series.iter().enumerate() {
+            if series.values.len() != spec.categories.len() {
+                return Err(format!(
+                    "trail series {series_index} value count {} does not match domain count {}",
+                    series.values.len(),
+                    spec.categories.len()
+                ));
+            }
+            let widths = series.trail_widths_slice();
+            if series.trail_widths.is_none() {
+                return Err(format!(
+                    "trail widths are missing for series {series_index}"
+                ));
+            }
+            if widths.len() != spec.categories.len() {
+                return Err(format!(
+                    "trail width count {} does not match domain count {} for series {series_index}",
+                    widths.len(),
+                    spec.categories.len()
+                ));
+            }
+            if widths.iter().any(|width| !width.is_finite()) {
+                return Err(format!(
+                    "trail widths must be finite for series {series_index}"
+                ));
+            }
+            if widths.iter().any(|width| !(1.0..=4.0).contains(width)) {
+                return Err(format!(
+                    "trail widths must be between 1 and 4 pixels for series {series_index}"
+                ));
+            }
+        }
+    } else if spec
+        .series
+        .iter()
+        .any(|series| series.trail_widths.is_some())
+    {
+        return Err("trail widths are only valid for trail charts".to_string());
+    }
+
     let x_is_temporal_scale = matches!(
         spec.x_axis.scale_kind,
         crate::ir::ScaleKind::Time | crate::ir::ScaleKind::Timeseries
@@ -376,14 +417,16 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         if !x_is_temporal_scale && unix_millis.windows(2).any(|pair| pair[0] >= pair[1]) {
             return Err("temporal x positions must be strictly increasing".to_string());
         }
-        let allowed = matches!(spec.kind, ChartKind::Line { .. } | ChartKind::Mixed)
-            || matches!(
-                spec.kind,
-                ChartKind::Bar {
-                    horizontal: false,
-                    ..
-                }
-            );
+        let allowed = matches!(
+            spec.kind,
+            ChartKind::Line { .. } | ChartKind::Trail | ChartKind::Mixed
+        ) || matches!(
+            spec.kind,
+            ChartKind::Bar {
+                horizontal: false,
+                ..
+            }
+        );
         if !allowed {
             return Err(
                 "temporal x positions are only supported on Cartesian index axes".to_string(),
@@ -1098,7 +1141,7 @@ pub(crate) fn validate_plot_area_scene_with_measurer(
     limits: &InputLimits,
     measurer: &crate::text::TextMeasurer<'_>,
 ) -> Result<(), String> {
-    if matches!(spec.kind, ChartKind::Line { .. })
+    if matches!(spec.kind, ChartKind::Line { .. } | ChartKind::Trail)
         && matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
     {
         let frame = crate::layout::common::compute(spec, measurer);
@@ -1674,6 +1717,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -1717,6 +1761,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -1754,6 +1799,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -1790,6 +1836,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -2666,5 +2713,46 @@ mod tests {
         let error = validate_spec_with_measurer(&spec, &default_limits(), &measurer).unwrap_err();
         assert!(error.contains("scene height"), "unexpected error: {error}");
         assert!(error.contains("exceeds limit"), "unexpected error: {error}");
+    }
+}
+
+#[cfg(test)]
+mod trail_guard_tests {
+    use super::*;
+    use crate::frontend::vegalite;
+
+    fn trail_spec() -> ChartSpec {
+        vegalite::parse(
+            r#"{"mark":"trail","data":{"values":[{"x":"a","y":1},{"x":"b","y":2}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"}}}"#,
+            true,
+        )
+        .expect("valid trail fixture")
+    }
+
+    #[test]
+    fn trail_widths_must_align_with_the_domain_and_be_in_range() {
+        let mut spec = trail_spec();
+        spec.series[0].trail_widths.as_mut().unwrap().pop();
+        let error = validate_spec(&spec, &InputLimits::default()).unwrap_err();
+        assert!(
+            error.contains("trail width count"),
+            "unexpected error: {error}"
+        );
+
+        let mut spec = trail_spec();
+        spec.series[0].trail_widths.as_mut().unwrap()[0] = f64::NAN;
+        let error = validate_spec(&spec, &InputLimits::default()).unwrap_err();
+        assert!(
+            error.contains("trail widths must be finite"),
+            "unexpected error: {error}"
+        );
+
+        let mut spec = trail_spec();
+        spec.series[0].trail_widths.as_mut().unwrap()[0] = 4.1;
+        let error = validate_spec(&spec, &InputLimits::default()).unwrap_err();
+        assert!(
+            error.contains("trail widths must be between 1 and 4"),
+            "unexpected error: {error}"
+        );
     }
 }
