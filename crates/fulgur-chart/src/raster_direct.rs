@@ -24,10 +24,11 @@ use ttf_parser::OutlineBuilder;
 
 #[cfg(feature = "default-font")]
 use crate::font::DEFAULT_FONT;
+use crate::guard::MAX_SAFE_DEVICE_CIRCLE_COORD_PX;
 use crate::ir::Color;
-use crate::scene::{Anchor, Prim, Scene};
+use crate::scene::{Anchor, ClipRect, Prim, Scene, visit_prims};
 
-type ClipMaskKey = (u64, u64, u64, u64);
+type ClipMaskKey = (u64, u64, u64, u64, u32, u32);
 
 /// PNG 出力の最大ピクセル面積(幅 × 高さ)。
 /// scale 適用後のピクセル数がこれを超えると OOM のリスクがあるため Err とする。
@@ -301,111 +302,156 @@ const STAMP_MIN_RUN: usize = 128;
 /// 病的な巨大半径/スケールのみガードする。
 const STAMP_MAX_DEVICE_R: f64 = 64.0;
 
-/// tiny-skia の AA scan converter に渡せる円外縁の device 座標絶対値上限。
-///
-/// tiny-skia 0.11.4 の AA edge は user/device 座標を FDot6 へ変換する際、
-/// supersample shift 2 と fractional bits 6 により 256 倍して `i32` に保持し、
-/// 2 点の差分も `i32` で計算する。外縁を ±4,000,000px に制限すれば最悪 span は
-/// `8,000,000 * 256 = 2,048,000,000 < i32::MAX` となり、上限まで約 4.6% の
-/// 余裕を残せる。中心、半径、正の stroke 半幅、output scale を全て含めて検証する。
-const MAX_SAFE_DEVICE_CIRCLE_COORD_PX: f64 = 4_000_000.0;
-
 fn validate_clipped_path_device_bounds(scene: &Scene, scale: f32) -> Result<(), String> {
     const MAX_MITER_STROKE_EXTENSION: f64 = 2.0;
     let scale = scale as f64;
-    for prim in &scene.items {
-        let Prim::ClippedPath {
-            d,
-            stroke,
-            stroke_width,
-            clip,
-            ..
-        } = prim
-        else {
-            continue;
-        };
-        let Some(path) = parse_path_data(d) else {
-            continue;
-        };
-        let bounds = path.bounds();
-        let path_extent = [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()]
-            .into_iter()
-            .map(|value| f64::from(value).abs())
-            .fold(0.0_f64, f64::max);
-        let stroke_extent = if stroke.is_some() {
-            if !stroke_width.is_finite() {
-                return Err(format!(
-                    "raster clipped path device bounds exceed safe coordinate limit of {:.0} px",
-                    MAX_SAFE_DEVICE_CIRCLE_COORD_PX
-                ));
+    let mut error = None;
+    visit_prims(
+        &scene.items,
+        0.0,
+        0.0,
+        &mut |prim, translate_x, translate_y| {
+            if error.is_some() {
+                return;
             }
-            stroke_width.max(0.0) * MAX_MITER_STROKE_EXTENSION
-        } else {
-            0.0
-        };
-        // The clip rectangle is also sent to tiny-skia as a mask path, so include its edges.
-        let clip_extent = [clip.x, clip.y, clip.x + clip.w, clip.y + clip.h]
-            .into_iter()
-            .map(f64::abs)
-            .fold(0.0_f64, f64::max);
-        let max_device_coord = (path_extent + stroke_extent).max(clip_extent) * scale;
-        if !max_device_coord.is_finite() || max_device_coord > MAX_SAFE_DEVICE_CIRCLE_COORD_PX {
-            return Err(format!(
-                "raster clipped path device bounds exceed safe coordinate limit of {:.0} px",
-                MAX_SAFE_DEVICE_CIRCLE_COORD_PX
-            ));
-        }
-    }
-    Ok(())
+            let mut check_extent = |extent: f64, subject: &str| {
+                if !extent.is_finite() || extent > MAX_SAFE_DEVICE_CIRCLE_COORD_PX {
+                    error = Some(format!(
+                        "raster {subject} device bounds exceed safe coordinate limit of {:.0} px",
+                        MAX_SAFE_DEVICE_CIRCLE_COORD_PX
+                    ));
+                }
+            };
+            match prim {
+                Prim::ClippedPath {
+                    d,
+                    stroke,
+                    stroke_width,
+                    clip,
+                    ..
+                } => {
+                    let Some(path) = parse_path_data(d) else {
+                        return;
+                    };
+                    let bounds = path.bounds();
+                    let path_extent = [
+                        f64::from(bounds.left()) + translate_x,
+                        f64::from(bounds.top()) + translate_y,
+                        f64::from(bounds.right()) + translate_x,
+                        f64::from(bounds.bottom()) + translate_y,
+                    ]
+                    .into_iter()
+                    .map(f64::abs)
+                    .fold(0.0_f64, f64::max);
+                    let stroke_extent = if stroke.is_some() {
+                        if !stroke_width.is_finite() {
+                            check_extent(f64::INFINITY, "clipped path");
+                            return;
+                        }
+                        stroke_width.max(0.0) * MAX_MITER_STROKE_EXTENSION
+                    } else {
+                        0.0
+                    };
+                    let clip_extent = [
+                        clip.x + translate_x,
+                        clip.y + translate_y,
+                        clip.x + clip.w + translate_x,
+                        clip.y + clip.h + translate_y,
+                    ]
+                    .into_iter()
+                    .map(f64::abs)
+                    .fold(0.0_f64, f64::max);
+                    check_extent(
+                        (path_extent + stroke_extent).max(clip_extent) * scale,
+                        "clipped path",
+                    );
+                }
+                Prim::Group {
+                    clip: Some(clip), ..
+                } => {
+                    // Group clip rectangles are transformed with the group and are also sent to
+                    // tiny-skia's scan converter as mask paths.
+                    let clip_extent = [
+                        clip.x + translate_x,
+                        clip.y + translate_y,
+                        clip.x + clip.w + translate_x,
+                        clip.y + clip.h + translate_y,
+                    ]
+                    .into_iter()
+                    .map(f64::abs)
+                    .fold(0.0_f64, f64::max);
+                    check_extent(clip_extent * scale, "group clip");
+                }
+                _ => {}
+            }
+        },
+    );
+    error.map_or(Ok(()), Err)
 }
 
 fn validate_circle_device_bounds(scene: &Scene, scale: f32) -> Result<(), String> {
     let scale = scale as f64;
-    for prim in &scene.items {
-        let (cx, cy, r, stroke_width, clip) = match prim {
-            Prim::Circle {
-                cx,
-                cy,
-                r,
-                stroke_width,
-                ..
-            } => (cx, cy, r, stroke_width, None),
-            Prim::ClippedCircle {
-                cx,
-                cy,
-                r,
-                stroke_width,
-                clip,
-                ..
-            } => (cx, cy, r, stroke_width, Some(clip.as_ref())),
-            _ => continue,
-        };
-        // tiny-skia の from_circle が従来どおり無描画にする入力はここでは policy
-        // error に変えない。r==0 は正の stroke で点を描き得るため検証対象。
-        if !cx.is_finite() || !cy.is_finite() || !r.is_finite() || *r < 0.0 {
-            continue;
-        }
-        let half_stroke = if *stroke_width > 0.0 {
-            *stroke_width / 2.0
-        } else {
-            0.0
-        };
-        let extent = *r + half_stroke;
-        let clip_extent = clip.map_or(0.0, |clip| {
-            [clip.x, clip.y, clip.x + clip.w, clip.y + clip.h]
+    let mut error = None;
+    visit_prims(
+        &scene.items,
+        0.0,
+        0.0,
+        &mut |prim, translate_x, translate_y| {
+            if error.is_some() {
+                return;
+            }
+            let (cx, cy, r, stroke_width, clip) = match prim {
+                Prim::Circle {
+                    cx,
+                    cy,
+                    r,
+                    stroke_width,
+                    ..
+                } => (cx, cy, r, stroke_width, None),
+                Prim::ClippedCircle {
+                    cx,
+                    cy,
+                    r,
+                    stroke_width,
+                    clip,
+                    ..
+                } => (cx, cy, r, stroke_width, Some(clip.as_ref())),
+                _ => return,
+            };
+            // tiny-skia の from_circle が従来どおり無描画にする入力はここでは policy
+            // error に変えない。r==0 は正の stroke で点を描き得るため検証対象。
+            if !cx.is_finite() || !cy.is_finite() || !r.is_finite() || *r < 0.0 {
+                return;
+            }
+            let half_stroke = if *stroke_width > 0.0 {
+                *stroke_width / 2.0
+            } else {
+                0.0
+            };
+            let extent = *r + half_stroke;
+            let clip_extent = clip.map_or(0.0, |clip| {
+                [
+                    clip.x + translate_x,
+                    clip.y + translate_y,
+                    clip.x + clip.w + translate_x,
+                    clip.y + clip.h + translate_y,
+                ]
                 .into_iter()
                 .map(f64::abs)
                 .fold(0.0_f64, f64::max)
-        });
-        let max_device_coord = ((cx.abs().max(cy.abs()) + extent).max(clip_extent)) * scale;
-        if !max_device_coord.is_finite() || max_device_coord > MAX_SAFE_DEVICE_CIRCLE_COORD_PX {
-            return Err(format!(
-                "raster circle device bounds exceed safe coordinate limit of {:.0} px",
-                MAX_SAFE_DEVICE_CIRCLE_COORD_PX
-            ));
-        }
-    }
-    Ok(())
+            });
+            let max_device_coord =
+                ((cx + translate_x).abs().max((cy + translate_y).abs()) + extent).max(clip_extent)
+                    * scale;
+            if !max_device_coord.is_finite() || max_device_coord > MAX_SAFE_DEVICE_CIRCLE_COORD_PX {
+                error = Some(format!(
+                    "raster circle device bounds exceed safe coordinate limit of {:.0} px",
+                    MAX_SAFE_DEVICE_CIRCLE_COORD_PX
+                ));
+            }
+        },
+    );
+    error.map_or(Ok(()), Err)
 }
 
 /// Scene を RGBA Pixmap にラスタライズする（PNG/WebP 共通）。
@@ -444,72 +490,174 @@ fn scene_to_pixmap_with(
     let transform = Transform::from_scale(scale, scale);
     let mut glyph_cache: HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>> = HashMap::new();
     let mut clip_masks: HashMap<ClipMaskKey, Mask> = HashMap::new();
-
-    let mut i = 0;
-    while i < scene.items.len() {
-        let run = uniform_circle_run_len(&scene.items, i);
-        // 正半径かつ device サイズが上限内の同一 appearance circle が長く続く run のみ
-        // stamp する。それ以外(閾値未満/巨大半径/非円)は per-prim。負の stroke は描画
-        // されない(下の stroke_width>0 ガード)ので、サイズ判定では max(0) でクランプする。
-        let stampable = run >= min_run
-            && matches!(
-                &scene.items[i],
-                Prim::Circle { r, stroke_width, .. }
-                    if *r > 0.0
-                        && (*r + stroke_width.max(0.0) / 2.0) * scale as f64 <= STAMP_MAX_DEVICE_R
-            );
-        if stampable {
-            if let Prim::Circle {
-                r,
-                fill,
-                stroke,
-                stroke_width,
-                ..
-            } = &scene.items[i]
-            {
-                let key = MarkerKey {
-                    r: *r,
-                    fill: *fill,
-                    stroke: *stroke,
-                    stroke_width: *stroke_width,
-                };
-                let set = build_stamp_set(&key, scale);
-                for it in &scene.items[i..i + run] {
-                    if let Prim::Circle { cx, cy, .. } = it {
-                        blit_stamp(&mut pixmap, &set, *cx as f32 * scale, *cy as f32 * scale);
-                    }
-                }
-            }
-            i += run;
-        } else if run > 0 {
-            // stamp しない uniform circle run(閾値未満/巨大半径/r<=0)も run 全体を
-            // まとめて描画して i += run で進める。1 要素ずつ進めると毎回フルスキャンが
-            // 走り O(n^2) になる(閾値直下の均一 scatter で顕著)。
-            for prim in &scene.items[i..i + run] {
-                render_prim(
-                    &mut pixmap,
-                    prim,
-                    transform,
-                    face,
-                    &mut glyph_cache,
-                    &mut clip_masks,
-                );
-            }
-            i += run;
-        } else {
-            render_prim(
-                &mut pixmap,
-                &scene.items[i],
-                transform,
-                face,
-                &mut glyph_cache,
-                &mut clip_masks,
-            );
-            i += 1;
-        }
-    }
+    render_items(
+        &mut pixmap,
+        &scene.items,
+        transform,
+        None,
+        None,
+        face,
+        &mut glyph_cache,
+        &mut clip_masks,
+        min_run,
+    );
 
     Ok(pixmap)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_items(
+    pixmap: &mut Pixmap,
+    items: &[Prim],
+    transform: Transform,
+    inherited_clip: Option<&Mask>,
+    inherited_clip_bounds: Option<DeviceClipBounds>,
+    face: &ttf_parser::Face<'_>,
+    glyph_cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
+    clip_masks: &mut HashMap<ClipMaskKey, Mask>,
+    min_run: usize,
+) {
+    let mut index = 0;
+    while index < items.len() {
+        match &items[index] {
+            Prim::Group {
+                translate_x,
+                translate_y,
+                clip,
+                children,
+            } => {
+                let child_transform =
+                    transform.pre_translate(*translate_x as f32, *translate_y as f32);
+                if let Some(clip) = clip {
+                    if let Some(mask) =
+                        group_clip_mask(pixmap, clip, child_transform, inherited_clip)
+                    {
+                        let child_clip_bounds =
+                            device_clip_bounds(clip, child_transform).and_then(|child| {
+                                inherited_clip_bounds
+                                    .map_or(Some(child), |parent| parent.intersection(child))
+                            });
+                        render_items(
+                            pixmap,
+                            children,
+                            child_transform,
+                            Some(&mask),
+                            child_clip_bounds,
+                            face,
+                            glyph_cache,
+                            clip_masks,
+                            min_run,
+                        );
+                    }
+                } else {
+                    render_items(
+                        pixmap,
+                        children,
+                        child_transform,
+                        inherited_clip,
+                        inherited_clip_bounds,
+                        face,
+                        glyph_cache,
+                        clip_masks,
+                        min_run,
+                    );
+                }
+                index += 1;
+            }
+            _ => {
+                let run = uniform_circle_run_len(items, index);
+                // Group clipping is applied per primitive. For an unclipped group, translated
+                // centers still enter the existing stamp path in device coordinates.
+                let stampable = inherited_clip.is_none()
+                    && run >= min_run
+                    && matches!(
+                        &items[index],
+                        Prim::Circle { r, stroke_width, .. }
+                            if *r > 0.0
+                                && (*r + stroke_width.max(0.0) / 2.0)
+                                    * transform.get_scale().0 as f64
+                                    <= STAMP_MAX_DEVICE_R
+                    );
+                if stampable {
+                    if let Prim::Circle {
+                        r,
+                        fill,
+                        stroke,
+                        stroke_width,
+                        ..
+                    } = &items[index]
+                    {
+                        let key = MarkerKey {
+                            r: *r,
+                            fill: *fill,
+                            stroke: *stroke,
+                            stroke_width: *stroke_width,
+                        };
+                        let scale = transform.get_scale().0;
+                        let set = build_stamp_set(&key, scale);
+                        for item in &items[index..index + run] {
+                            if let Prim::Circle { cx, cy, .. } = item {
+                                let mut center = Point::from_xy(*cx as f32, *cy as f32);
+                                transform.map_point(&mut center);
+                                blit_stamp(&mut *pixmap, &set, center.x, center.y);
+                            }
+                        }
+                    }
+                    index += run;
+                } else if run > 0 {
+                    // Keep equal-appearance runs batched even if clipping prevents stamping.
+                    for prim in &items[index..index + run] {
+                        render_prim(
+                            pixmap,
+                            prim,
+                            transform,
+                            inherited_clip,
+                            inherited_clip_bounds,
+                            face,
+                            glyph_cache,
+                            clip_masks,
+                        );
+                    }
+                    index += run;
+                } else {
+                    render_prim(
+                        pixmap,
+                        &items[index],
+                        transform,
+                        inherited_clip,
+                        inherited_clip_bounds,
+                        face,
+                        glyph_cache,
+                        clip_masks,
+                    );
+                    index += 1;
+                }
+            }
+        }
+    }
+}
+
+fn group_clip_mask(
+    pixmap: &Pixmap,
+    clip: &crate::scene::ClipRect,
+    transform: Transform,
+    inherited_clip: Option<&Mask>,
+) -> Option<Mask> {
+    let mut mask = if let Some(parent) = inherited_clip {
+        parent.clone()
+    } else {
+        let mut mask = Mask::new(pixmap.width(), pixmap.height())?;
+        mask.data_mut().fill(255);
+        mask
+    };
+    let Some(rect) = Rect::from_xywh(clip.x as f32, clip.y as f32, clip.w as f32, clip.h as f32)
+    else {
+        mask.clear();
+        return Some(mask);
+    };
+    let path = PathBuilder::from_rect(rect);
+    mask.intersect_path(&path, FillRule::Winding, true, transform);
+    Some(mask)
 }
 
 fn scene_to_png_with_face(
@@ -838,10 +986,13 @@ fn blit_stamp(pm: &mut Pixmap, set: &StampSet, cx_dev: f32, cy_dev: f32) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_prim(
     pixmap: &mut Pixmap,
     prim: &Prim,
     transform: Transform,
+    inherited_clip: Option<&Mask>,
+    inherited_clip_bounds: Option<DeviceClipBounds>,
     face: &ttf_parser::Face<'_>,
     cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
     clip_masks: &mut HashMap<ClipMaskKey, Mask>,
@@ -854,7 +1005,7 @@ fn render_prim(
             let path = PathBuilder::from_rect(rect);
             let mut paint = solid_paint(*fill);
             paint.anti_alias = false;
-            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, inherited_clip);
         }
 
         Prim::Line {
@@ -877,7 +1028,13 @@ fn render_prim(
                 0.0,
                 distance((*x1, *y1), (*x2, *y2)),
             );
-            pixmap.stroke_path(&path, &solid_paint(*stroke), &stroke_style, transform, None);
+            pixmap.stroke_path(
+                &path,
+                &solid_paint(*stroke),
+                &stroke_style,
+                transform,
+                inherited_clip,
+            );
         }
 
         Prim::Polyline {
@@ -902,7 +1059,7 @@ fn render_prim(
                 &solid_paint(*stroke),
                 &make_stroke(*stroke_width),
                 transform,
-                None,
+                inherited_clip,
             );
         }
 
@@ -931,7 +1088,13 @@ fn render_prim(
                 .sum();
             let mut stroke_style = make_stroke(*stroke_width);
             apply_stroke_dash(&mut stroke_style, dash, *dash_offset, path_length);
-            pixmap.stroke_path(&path, &solid_paint(*stroke), &stroke_style, transform, None);
+            pixmap.stroke_path(
+                &path,
+                &solid_paint(*stroke),
+                &stroke_style,
+                transform,
+                inherited_clip,
+            );
         }
 
         Prim::Path {
@@ -949,7 +1112,7 @@ fn render_prim(
                     &solid_paint(*fill_color),
                     FillRule::Winding,
                     transform,
-                    None,
+                    inherited_clip,
                 );
             }
             if let Some(stroke_color) = stroke {
@@ -958,7 +1121,7 @@ fn render_prim(
                     &solid_paint(*stroke_color),
                     &make_stroke(*stroke_width),
                     transform,
-                    None,
+                    inherited_clip,
                 );
             }
         }
@@ -975,6 +1138,8 @@ fn render_prim(
                 clip.y.to_bits(),
                 clip.w.to_bits(),
                 clip.h.to_bits(),
+                transform.tx.to_bits(),
+                transform.ty.to_bits(),
             );
             if let std::collections::hash_map::Entry::Vacant(entry) = clip_masks.entry(key) {
                 let Some(rect) =
@@ -992,6 +1157,18 @@ fn render_prim(
             let Some(mask) = clip_masks.get(&key) else {
                 return;
             };
+            let combined_mask = match inherited_clip {
+                Some(parent)
+                    if !inherited_clip_bounds.is_some_and(|parent_bounds| {
+                        device_clip_bounds(clip, transform)
+                            .is_some_and(|local_bounds| parent_bounds.safely_contains(local_bounds))
+                    }) =>
+                {
+                    Some(intersect_masks(mask, parent))
+                }
+                _ => None,
+            };
+            let mask = combined_mask.as_ref().unwrap_or(mask);
             let Some(path) = parse_path_data(d) else {
                 return;
             };
@@ -1032,7 +1209,13 @@ fn render_prim(
                 *dash_offset,
                 path_length_upper_bound(&path),
             );
-            pixmap.stroke_path(&path, &solid_paint(*stroke), &stroke_style, transform, None);
+            pixmap.stroke_path(
+                &path,
+                &solid_paint(*stroke),
+                &stroke_style,
+                transform,
+                inherited_clip,
+            );
         }
 
         Prim::GradientPath {
@@ -1067,7 +1250,7 @@ fn render_prim(
                 shader: shader.unwrap_or_else(|| Shader::SolidColor(to_skia_color(stop1))),
                 ..Default::default()
             };
-            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, None);
+            pixmap.fill_path(&path, &paint, FillRule::Winding, transform, inherited_clip);
         }
 
         Prim::Circle {
@@ -1086,7 +1269,7 @@ fn render_prim(
                 &solid_paint(*fill),
                 FillRule::Winding,
                 transform,
-                None,
+                inherited_clip,
             );
             if *stroke_width > 0.0 {
                 pixmap.stroke_path(
@@ -1094,7 +1277,7 @@ fn render_prim(
                     &solid_paint(*stroke),
                     &make_stroke(*stroke_width),
                     transform,
-                    None,
+                    inherited_clip,
                 );
             }
         }
@@ -1113,6 +1296,8 @@ fn render_prim(
                 clip.y.to_bits(),
                 clip.w.to_bits(),
                 clip.h.to_bits(),
+                transform.tx.to_bits(),
+                transform.ty.to_bits(),
             );
             if let std::collections::hash_map::Entry::Vacant(entry) = clip_masks.entry(key) {
                 let Some(rect) =
@@ -1130,6 +1315,18 @@ fn render_prim(
             let Some(mask) = clip_masks.get(&key) else {
                 return;
             };
+            let combined_mask = match inherited_clip {
+                Some(parent)
+                    if !inherited_clip_bounds.is_some_and(|parent_bounds| {
+                        device_clip_bounds(clip, transform)
+                            .is_some_and(|local_bounds| parent_bounds.safely_contains(local_bounds))
+                    }) =>
+                {
+                    Some(intersect_masks(mask, parent))
+                }
+                _ => None,
+            };
+            let mask = combined_mask.as_ref().unwrap_or(mask);
             let Some(path) = PathBuilder::from_circle(*cx as f32, *cy as f32, *r as f32) else {
                 return;
             };
@@ -1173,6 +1370,7 @@ fn render_prim(
                 None,
                 face,
                 transform,
+                inherited_clip,
                 cache,
             );
         }
@@ -1190,10 +1388,76 @@ fn render_prim(
                 text.font_style.as_deref(),
                 face,
                 transform,
+                inherited_clip,
                 cache,
             );
         }
+        Prim::Group { .. } => unreachable!("groups are traversed by render_items"),
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DeviceClipBounds {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+}
+
+impl DeviceClipBounds {
+    fn intersection(self, other: Self) -> Option<Self> {
+        let intersection = Self {
+            left: self.left.max(other.left),
+            top: self.top.max(other.top),
+            right: self.right.min(other.right),
+            bottom: self.bottom.min(other.bottom),
+        };
+        (intersection.right > intersection.left && intersection.bottom > intersection.top)
+            .then_some(intersection)
+    }
+
+    /// Require a one-device-pixel inset so antialiased edge pixels in the local mask are fully
+    /// covered by the inherited mask. This lets the local mask stand in for their intersection.
+    fn safely_contains(self, child: Self) -> bool {
+        const AA_MARGIN: f32 = 1.0;
+        child.left >= self.left + AA_MARGIN
+            && child.top >= self.top + AA_MARGIN
+            && child.right <= self.right - AA_MARGIN
+            && child.bottom <= self.bottom - AA_MARGIN
+    }
+}
+
+fn device_clip_bounds(clip: &ClipRect, transform: Transform) -> Option<DeviceClipBounds> {
+    Rect::from_xywh(clip.x as f32, clip.y as f32, clip.w as f32, clip.h as f32)?;
+    let x0 = clip.x as f32;
+    let y0 = clip.y as f32;
+    let x1 = x0 + clip.w as f32;
+    let y1 = y0 + clip.h as f32;
+    let mut top_left = Point::from_xy(x0, y0);
+    let mut bottom_right = Point::from_xy(x1, y1);
+    transform.map_point(&mut top_left);
+    transform.map_point(&mut bottom_right);
+    if !top_left.x.is_finite()
+        || !top_left.y.is_finite()
+        || !bottom_right.x.is_finite()
+        || !bottom_right.y.is_finite()
+    {
+        return None;
+    }
+    Some(DeviceClipBounds {
+        left: top_left.x.min(bottom_right.x),
+        top: top_left.y.min(bottom_right.y),
+        right: top_left.x.max(bottom_right.x),
+        bottom: top_left.y.max(bottom_right.y),
+    })
+}
+
+fn intersect_masks(first: &Mask, second: &Mask) -> Mask {
+    let mut result = first.clone();
+    for (first, second) in result.data_mut().iter_mut().zip(second.data()) {
+        *first = ((*first as u16 * *second as u16 + 127) / 255) as u8;
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -1255,6 +1519,7 @@ fn render_text(
     font_style: Option<&str>,
     face: &ttf_parser::Face<'_>,
     transform: Transform,
+    clip: Option<&Mask>,
     cache: &mut HashMap<ttf_parser::GlyphId, Option<tiny_skia::Path>>,
 ) {
     if content.is_empty() {
@@ -1325,7 +1590,7 @@ fn render_text(
                 glyph_transform = glyph_transform.pre_concat(Transform::from_skew(-0.2, 0.0));
             }
             let glyph_transform = text_transform.pre_concat(glyph_transform);
-            pixmap.fill_path(path, &paint, FillRule::Winding, glyph_transform, None);
+            pixmap.fill_path(path, &paint, FillRule::Winding, glyph_transform, clip);
             if bold {
                 // Raster mode uses the configured font face for every label. A small outline
                 // stroke approximates the requested weight without requiring a second font file.
@@ -1334,7 +1599,7 @@ fn render_text(
                     &paint,
                     &make_stroke(face.units_per_em() as f64 * 0.035),
                     glyph_transform,
-                    None,
+                    clip,
                 );
             }
         }
@@ -2719,6 +2984,8 @@ mod tests {
                 stroke_width: key.stroke_width,
             },
             Transform::identity(),
+            None,
+            None,
             &face,
             &mut cache,
             &mut HashMap::new(),
@@ -3335,6 +3602,508 @@ mod tests {
         assert!(
             frac < 0.02,
             "line マーカーの stamp 出力は参照と視覚的に同等(差分 {frac:.6} < 0.02)のはず"
+        );
+    }
+
+    fn translated_sample_scenes() -> (Scene, Scene) {
+        let group_children = vec![
+            Prim::Rect {
+                x: 1.0,
+                y: 2.0,
+                w: 8.0,
+                h: 6.0,
+                fill: RED,
+            },
+            Prim::Line {
+                x1: 1.0,
+                y1: 12.0,
+                x2: 10.0,
+                y2: 12.0,
+                stroke: BLUE,
+                stroke_width: 1.5,
+                dash: Vec::new(),
+            },
+            Prim::Polyline {
+                points: vec![(1.0, 15.0), (10.0, 15.0)],
+                stroke: RED,
+                stroke_width: 1.0,
+            },
+            Prim::StyledPolyline {
+                points: vec![(1.0, 18.0), (10.0, 18.0)],
+                stroke: BLUE,
+                stroke_width: 1.0,
+                dash: vec![2.0, 1.0],
+                dash_offset: 0.5,
+            },
+            Prim::Path {
+                d: "M 1 21 L 10 21 L 10 28 L 1 28 Z".into(),
+                fill: Some(RED),
+                stroke: None,
+                stroke_width: 0.0,
+            },
+            Prim::ClippedPath {
+                d: "M 20 1 L 30 1 L 30 11 L 20 11 Z".into(),
+                fill: Some(BLUE),
+                stroke: None,
+                stroke_width: 0.0,
+                clip: Box::new(crate::scene::ClipRect {
+                    x: 20.0,
+                    y: 1.0,
+                    w: 10.0,
+                    h: 10.0,
+                }),
+            },
+            Prim::StyledPath {
+                d: "M 35 1 L 45 10".into(),
+                stroke: RED,
+                stroke_width: 2.0,
+                dash: vec![3.0, 2.0],
+                dash_offset: 1.0,
+            },
+            Prim::GradientPath {
+                d: "M 50 1 L 60 1 L 60 11 L 50 11 Z".into(),
+                x0: 50.0,
+                x1: 60.0,
+                stop0: RED,
+                stop1: BLUE,
+            },
+            Prim::Circle {
+                cx: 40.0,
+                cy: 20.0,
+                r: 3.0,
+                fill: BLUE,
+                stroke: RED,
+                stroke_width: 1.0,
+            },
+            Prim::Text {
+                x: 1.0,
+                y: 48.0,
+                size: 11.0,
+                anchor: Anchor::Start,
+                fill: RED,
+                content: "text".into(),
+                rotate_deg: None,
+            },
+            Prim::StyledText(Box::new(crate::scene::StyledText {
+                x: 25.0,
+                y: 48.0,
+                size: 11.0,
+                anchor: Anchor::Start,
+                fill: BLUE,
+                content: "styled".into(),
+                rotate_deg: None,
+                font_family: Some("Test Sans".into()),
+                font_weight: Some("bold".into()),
+                font_style: Some("italic".into()),
+            })),
+        ];
+        let flat_children = vec![
+            Prim::Rect {
+                x: 14.0,
+                y: 9.0,
+                w: 8.0,
+                h: 6.0,
+                fill: RED,
+            },
+            Prim::Line {
+                x1: 14.0,
+                y1: 19.0,
+                x2: 23.0,
+                y2: 19.0,
+                stroke: BLUE,
+                stroke_width: 1.5,
+                dash: Vec::new(),
+            },
+            Prim::Polyline {
+                points: vec![(14.0, 22.0), (23.0, 22.0)],
+                stroke: RED,
+                stroke_width: 1.0,
+            },
+            Prim::StyledPolyline {
+                points: vec![(14.0, 25.0), (23.0, 25.0)],
+                stroke: BLUE,
+                stroke_width: 1.0,
+                dash: vec![2.0, 1.0],
+                dash_offset: 0.5,
+            },
+            Prim::Path {
+                d: "M 14 28 L 23 28 L 23 35 L 14 35 Z".into(),
+                fill: Some(RED),
+                stroke: None,
+                stroke_width: 0.0,
+            },
+            Prim::ClippedPath {
+                d: "M 33 8 L 43 8 L 43 18 L 33 18 Z".into(),
+                fill: Some(BLUE),
+                stroke: None,
+                stroke_width: 0.0,
+                clip: Box::new(crate::scene::ClipRect {
+                    x: 33.0,
+                    y: 8.0,
+                    w: 10.0,
+                    h: 10.0,
+                }),
+            },
+            Prim::StyledPath {
+                d: "M 48 8 L 58 17".into(),
+                stroke: RED,
+                stroke_width: 2.0,
+                dash: vec![3.0, 2.0],
+                dash_offset: 1.0,
+            },
+            Prim::GradientPath {
+                d: "M 63 8 L 73 8 L 73 18 L 63 18 Z".into(),
+                x0: 63.0,
+                x1: 73.0,
+                stop0: RED,
+                stop1: BLUE,
+            },
+            Prim::Circle {
+                cx: 53.0,
+                cy: 27.0,
+                r: 3.0,
+                fill: BLUE,
+                stroke: RED,
+                stroke_width: 1.0,
+            },
+            Prim::Text {
+                x: 14.0,
+                y: 55.0,
+                size: 11.0,
+                anchor: Anchor::Start,
+                fill: RED,
+                content: "text".into(),
+                rotate_deg: None,
+            },
+            Prim::StyledText(Box::new(crate::scene::StyledText {
+                x: 38.0,
+                y: 55.0,
+                size: 11.0,
+                anchor: Anchor::Start,
+                fill: BLUE,
+                content: "styled".into(),
+                rotate_deg: None,
+                font_family: Some("Test Sans".into()),
+                font_weight: Some("bold".into()),
+                font_style: Some("italic".into()),
+            })),
+        ];
+        (
+            Scene {
+                width: 100.0,
+                height: 80.0,
+                items: vec![Prim::Group {
+                    translate_x: 13.0,
+                    translate_y: 7.0,
+                    clip: None,
+                    children: group_children,
+                }],
+            },
+            Scene {
+                width: 100.0,
+                height: 80.0,
+                items: flat_children,
+            },
+        )
+    }
+
+    #[test]
+    fn translated_group_moves_text_and_shapes_in_png() {
+        let (grouped, flat) = translated_sample_scenes();
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let actual = scene_to_pixmap(&grouped, 1.0, &face, &PNG_LIMITS).unwrap();
+        let expected = scene_to_pixmap(&flat, 1.0, &face, &PNG_LIMITS).unwrap();
+        assert_eq!(actual.data(), expected.data());
+    }
+
+    #[test]
+    fn translated_group_clips_children_in_svg_and_png() {
+        let clip = crate::scene::ClipRect {
+            x: 5.0,
+            y: 4.0,
+            w: 20.0,
+            h: 18.0,
+        };
+        let make_scene = |child| Scene {
+            width: 50.0,
+            height: 45.0,
+            items: vec![Prim::Group {
+                translate_x: 13.0,
+                translate_y: 7.0,
+                clip: Some(Box::new(clip)),
+                children: vec![child],
+            }],
+        };
+        let text = Prim::Text {
+            x: -10.0,
+            y: 20.0,
+            size: 14.0,
+            anchor: Anchor::Start,
+            fill: RED,
+            content: "clipped text".into(),
+            rotate_deg: None,
+        };
+        let path = Prim::Path {
+            d: "M -10 10 L 50 10 L 50 40 L -10 40 Z".into(),
+            fill: Some(BLUE),
+            stroke: None,
+            stroke_width: 0.0,
+        };
+        let svg_scene = Scene {
+            width: 50.0,
+            height: 45.0,
+            items: vec![Prim::Group {
+                translate_x: 13.0,
+                translate_y: 7.0,
+                clip: Some(Box::new(clip)),
+                children: vec![text.clone(), path.clone()],
+            }],
+        };
+        let svg = crate::svg::render_svg(&svg_scene, "sans-serif");
+        assert!(svg.contains(r#"<g transform="translate(13 7)" clip-path="url(#clip0)">"#));
+        assert!(svg.contains("<text "));
+        assert!(svg.contains("<path d=\"M -10 10 L 50 10 L 50 40 L -10 40 Z\""));
+
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        for child in [text, path] {
+            let pixmap = scene_to_pixmap(&make_scene(child), 1.0, &face, &PNG_LIMITS).unwrap();
+            let mut painted = 0;
+            for (index, pixel) in pixmap.data().as_chunks::<4>().0.iter().enumerate() {
+                if pixel[3] == 0 {
+                    continue;
+                }
+                painted += 1;
+                let x = index as u32 % pixmap.width();
+                let y = index as u32 / pixmap.width();
+                assert!((18..38).contains(&x), "group clip leaked x={x}");
+                assert!((11..29).contains(&y), "group clip leaked y={y}");
+            }
+            assert!(
+                painted > 0,
+                "the clipped child still paints inside its clip"
+            );
+        }
+    }
+
+    #[test]
+    fn translated_group_preserves_circle_stamp_output() {
+        let children = (0..256)
+            .map(|index| {
+                circle(
+                    2.0 + f64::from(index % 32) * 6.0,
+                    2.0 + f64::from(index / 32) * 6.0,
+                    2.0,
+                    RED,
+                )
+            })
+            .collect();
+        let scene = Scene {
+            width: 220.0,
+            height: 80.0,
+            items: vec![Prim::Group {
+                translate_x: 13.0,
+                translate_y: 7.0,
+                clip: None,
+                children,
+            }],
+        };
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let stamped = scene_to_pixmap_with(&scene, 1.0, &face, &PNG_LIMITS, STAMP_MIN_RUN).unwrap();
+        let reference = scene_to_pixmap_with(&scene, 1.0, &face, &PNG_LIMITS, usize::MAX).unwrap();
+        assert_eq!(stamped.data(), reference.data());
+    }
+
+    #[test]
+    fn translated_groups_render_clipped_circles_with_local_masks() {
+        let clip = crate::scene::ClipRect {
+            x: 0.0,
+            y: 0.0,
+            w: 8.0,
+            h: 8.0,
+        };
+        let make_group = |translate_x| Prim::Group {
+            translate_x,
+            translate_y: 0.0,
+            clip: None,
+            children: vec![Prim::ClippedCircle {
+                cx: 4.0,
+                cy: 4.0,
+                r: 2.0,
+                fill: RED,
+                stroke: RED,
+                stroke_width: 0.0,
+                clip: Box::new(clip),
+            }],
+        };
+        let scene = Scene {
+            width: 32.0,
+            height: 12.0,
+            items: vec![make_group(2.0), make_group(20.0)],
+        };
+
+        let svg = crate::svg::render_svg(&scene, "sans-serif");
+        assert!(svg.contains(r#"<clipPath id="clip0" clipPathUnits="userSpaceOnUse">"#));
+        assert_eq!(svg.matches(r#"clip-path="url(#clip0)""#).count(), 2);
+
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let pixmap = scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap();
+        let alpha_at =
+            |x: usize, y: usize| pixmap.data()[(y * pixmap.width() as usize + x) * 4 + 3];
+        assert!(alpha_at(6, 4) > 0, "first translated circle should render");
+        assert!(
+            alpha_at(24, 4) > 0,
+            "second translated circle should render"
+        );
+    }
+
+    #[test]
+    fn group_clip_intersects_clipped_circle_local_mask() {
+        let scene = Scene {
+            width: 20.0,
+            height: 12.0,
+            items: vec![Prim::Group {
+                translate_x: 2.0,
+                translate_y: 2.0,
+                clip: Some(Box::new(crate::scene::ClipRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 8.0,
+                    h: 8.0,
+                })),
+                children: vec![Prim::ClippedCircle {
+                    cx: 8.0,
+                    cy: 4.0,
+                    r: 3.0,
+                    fill: RED,
+                    stroke: RED,
+                    stroke_width: 0.0,
+                    clip: Box::new(crate::scene::ClipRect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 12.0,
+                        h: 8.0,
+                    }),
+                }],
+            }],
+        };
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let pixmap = scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap();
+        let mut painted = 0;
+        for (index, pixel) in pixmap.data().as_chunks::<4>().0.iter().enumerate() {
+            if pixel[3] == 0 {
+                continue;
+            }
+            painted += 1;
+            let x = index as u32 % pixmap.width();
+            let y = index as u32 / pixmap.width();
+            assert!((2..10).contains(&x), "parent group clip leaked x={x}");
+            assert!((2..10).contains(&y), "parent group clip leaked y={y}");
+        }
+        assert!(painted > 0, "clipped circle should paint inside both clips");
+    }
+
+    #[test]
+    fn nested_local_clip_inside_parent_with_aa_margin_needs_no_mask_intersection() {
+        let parent_clip = crate::scene::ClipRect {
+            x: 2.0,
+            y: 2.0,
+            w: 26.0,
+            h: 26.0,
+        };
+        let local_clip = crate::scene::ClipRect {
+            x: 7.0,
+            y: 7.0,
+            w: 12.0,
+            h: 12.0,
+        };
+        let transform = Transform::from_scale(2.0, 2.0).pre_translate(1.0, 1.0);
+        let parent_bounds = device_clip_bounds(&parent_clip, transform).unwrap();
+        let local_bounds = device_clip_bounds(&local_clip, transform).unwrap();
+        assert!(parent_bounds.safely_contains(local_bounds));
+
+        let mut parent_mask = Mask::new(64, 64).unwrap();
+        let parent_path = PathBuilder::from_rect(
+            Rect::from_xywh(
+                parent_clip.x as f32,
+                parent_clip.y as f32,
+                parent_clip.w as f32,
+                parent_clip.h as f32,
+            )
+            .unwrap(),
+        );
+        parent_mask.fill_path(&parent_path, FillRule::Winding, true, transform);
+
+        let mut local_mask = Mask::new(64, 64).unwrap();
+        let local_path = PathBuilder::from_rect(
+            Rect::from_xywh(
+                local_clip.x as f32,
+                local_clip.y as f32,
+                local_clip.w as f32,
+                local_clip.h as f32,
+            )
+            .unwrap(),
+        );
+        local_mask.fill_path(&local_path, FillRule::Winding, true, transform);
+        assert_eq!(
+            local_mask.data(),
+            intersect_masks(&local_mask, &parent_mask).data(),
+            "strictly contained local clips already carry the complete visible mask"
+        );
+
+        let near_edge_clip = crate::scene::ClipRect {
+            x: 2.25,
+            y: 7.0,
+            w: 12.0,
+            h: 12.0,
+        };
+        assert!(
+            !parent_bounds.safely_contains(device_clip_bounds(&near_edge_clip, transform).unwrap())
+        );
+    }
+
+    #[test]
+    fn translated_group_bounds_check_circles_and_clipped_paths() {
+        let circle_scene = Scene {
+            width: 20.0,
+            height: 20.0,
+            items: vec![Prim::Group {
+                translate_x: 4_000_000.0,
+                translate_y: 0.0,
+                clip: None,
+                children: vec![circle(0.0, 0.0, 1.0, RED)],
+            }],
+        };
+        assert!(
+            validate_circle_device_bounds(&circle_scene, 1.0)
+                .unwrap_err()
+                .contains("circle device bounds")
+        );
+
+        let path_scene = Scene {
+            width: 20.0,
+            height: 20.0,
+            items: vec![Prim::Group {
+                translate_x: 2_100_000.0,
+                translate_y: 0.0,
+                clip: None,
+                children: vec![Prim::ClippedPath {
+                    d: "M 0 0 L 1 0 L 1 1 Z".into(),
+                    fill: Some(RED),
+                    stroke: None,
+                    stroke_width: 0.0,
+                    clip: Box::new(crate::scene::ClipRect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 20.0,
+                        h: 20.0,
+                    }),
+                }],
+            }],
+        };
+        assert!(
+            validate_clipped_path_device_bounds(&path_scene, 2.0)
+                .unwrap_err()
+                .contains("clipped path device bounds")
         );
     }
 }

@@ -235,3 +235,33 @@ fn geoshape_model_reports_type_and_feature_count() {
     assert_eq!(model.counts.datasets, 2);
     assert_eq!(model.axes, None);
 }
+
+#[test]
+fn chartjs_title_model_geometry_matches_translated_viewport() {
+    let cases = [
+        (
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,3]}]}}"#,
+            r#"{"type":"bar","data":{"labels":["A","B"],"datasets":[{"data":[1,3]}]},"options":{"plugins":{"title":{"display":true,"text":"Title","font":{"size":30,"lineHeight":1.2},"padding":0}}}}"#,
+        ),
+        (
+            r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2},{"x":3,"y":4}]}]}}"#,
+            r#"{"type":"scatter","data":{"datasets":[{"data":[{"x":1,"y":2},{"x":3,"y":4}]}]},"options":{"plugins":{"title":{"display":true,"text":"Title","font":{"size":30,"lineHeight":1.2},"padding":0}}}}"#,
+        ),
+    ];
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+
+    for (plain_json, titled_json) in cases {
+        let plain = chartjs::parse(plain_json, false).unwrap();
+        let titled = chartjs::parse(titled_json, false).unwrap();
+        let plain_geometry = build_model(&plain, &measurer).geometry.unwrap();
+        let titled_model = build_model(&titled, &measurer);
+        let titled_geometry = titled_model.geometry.unwrap();
+
+        assert_eq!(titled_model.meta.width, plain.width);
+        assert_eq!(titled_model.meta.height, plain.height);
+        assert!(titled_geometry.plot_area.y > plain_geometry.plot_area.y);
+        assert!(titled_geometry.plot_area.h < plain_geometry.plot_area.h);
+        assert_eq!(titled_geometry.plot_area.x, plain_geometry.plot_area.x);
+        assert_eq!(titled_geometry.plot_area.w, plain_geometry.plot_area.w);
+    }
+}

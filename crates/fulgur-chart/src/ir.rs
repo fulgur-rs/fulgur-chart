@@ -154,6 +154,47 @@ pub enum SizeMode {
     PlotArea,
 }
 
+/// Horizontal alignment for Chart.js title and subtitle text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChartJsTitleAlign {
+    Start,
+    Center,
+    End,
+}
+
+/// Canvas side used by a Chart.js title or subtitle box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChartJsTitlePosition {
+    Top,
+    Left,
+    Bottom,
+    Right,
+}
+
+/// Resolved top and bottom padding for one Chart.js title box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ChartJsTitlePadding {
+    pub top: f64,
+    pub bottom: f64,
+}
+
+/// Chart.js title or subtitle options after frontend defaults and theme are applied.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChartJsTitle {
+    pub display: bool,
+    pub text: Vec<String>,
+    pub align: ChartJsTitleAlign,
+    pub position: ChartJsTitlePosition,
+    pub color: Color,
+    pub font_size: f64,
+    pub font_family: Option<String>,
+    pub font_weight: Option<String>,
+    pub font_style: Option<String>,
+    pub line_height: f64,
+    pub padding: ChartJsTitlePadding,
+    pub full_size: bool,
+}
+
 /// Optional Chart.js per-dataset bar geometry overrides.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BarGeometryOptions {
@@ -960,7 +1001,12 @@ pub struct ChartSpec {
     pub legend: LegendPos,
     pub legend_options: LegendOptions,
     pub legend_title: Option<String>,
+    /// Legacy shared title channel used by Vega-Lite and native `ChartSpec` callers.
     pub title: Option<String>,
+    /// Independent Chart.js title plugin configuration.
+    pub chartjs_title: Option<ChartJsTitle>,
+    /// Independent Chart.js subtitle plugin configuration.
+    pub chartjs_subtitle: Option<ChartJsTitle>,
     pub width: f64,
     pub height: f64,
     pub size_mode: SizeMode,
@@ -1248,6 +1294,8 @@ mod radial_axis_tests {
             legend_options: LegendOptions::default(),
             legend_title: None,
             title: None,
+            chartjs_title: None,
+            chartjs_subtitle: None,
             width: 600.0,
             height: 400.0,
             size_mode: SizeMode::default(),

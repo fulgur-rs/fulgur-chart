@@ -125,6 +125,14 @@ pub enum Prim {
     /// enlarge every `Prim` stored in a scene. Raster output uses the selected font face and
     /// approximates weight/style where possible.
     StyledText(Box<StyledText>),
+    /// Ordered child primitives rendered with a user-space translation and optional clip.
+    /// The clip rectangle is expressed in this group's local coordinate system.
+    Group {
+        translate_x: f64,
+        translate_y: f64,
+        clip: Option<Box<ClipRect>>,
+        children: Vec<Prim>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -147,6 +155,30 @@ pub struct Scene {
     pub width: f64,
     pub height: f64,
     pub items: Vec<Prim>,
+}
+
+/// Visit each primitive in depth-first input order with the translation applied to its local
+/// coordinates. Group nodes are visited too, using their own effective translation.
+pub(crate) fn visit_prims<'a>(
+    items: &'a [Prim],
+    parent_x: f64,
+    parent_y: f64,
+    visitor: &mut impl FnMut(&'a Prim, f64, f64),
+) {
+    for prim in items {
+        let (translate_x, translate_y) = match prim {
+            Prim::Group {
+                translate_x,
+                translate_y,
+                ..
+            } => (parent_x + translate_x, parent_y + translate_y),
+            _ => (parent_x, parent_y),
+        };
+        visitor(prim, translate_x, translate_y);
+        if let Prim::Group { children, .. } = prim {
+            visit_prims(children, translate_x, translate_y, visitor);
+        }
+    }
 }
 
 impl Scene {
@@ -296,5 +328,98 @@ mod tests {
             }],
         };
         assert!(!s.has_opaque_background());
+    }
+
+    #[test]
+    fn translated_group_visits_primitives_in_depth_first_input_order() {
+        let scene = Scene {
+            width: 100.0,
+            height: 80.0,
+            items: vec![
+                Prim::Line {
+                    x1: 0.0,
+                    y1: 0.0,
+                    x2: 1.0,
+                    y2: 1.0,
+                    stroke: Color {
+                        r: 0,
+                        g: 0,
+                        b: 0,
+                        a: 1.0,
+                    },
+                    stroke_width: 1.0,
+                    dash: Vec::new(),
+                },
+                Prim::Group {
+                    translate_x: 13.0,
+                    translate_y: 7.0,
+                    clip: None,
+                    children: vec![
+                        Prim::Rect {
+                            x: 1.0,
+                            y: 2.0,
+                            w: 3.0,
+                            h: 4.0,
+                            fill: Color {
+                                r: 1,
+                                g: 2,
+                                b: 3,
+                                a: 1.0,
+                            },
+                        },
+                        Prim::Group {
+                            translate_x: 2.0,
+                            translate_y: 3.0,
+                            clip: None,
+                            children: vec![Prim::Circle {
+                                cx: 1.0,
+                                cy: 1.0,
+                                r: 1.0,
+                                fill: Color {
+                                    r: 4,
+                                    g: 5,
+                                    b: 6,
+                                    a: 1.0,
+                                },
+                                stroke: Color {
+                                    r: 0,
+                                    g: 0,
+                                    b: 0,
+                                    a: 1.0,
+                                },
+                                stroke_width: 0.0,
+                            }],
+                        },
+                    ],
+                },
+            ],
+        };
+
+        let mut visits = Vec::new();
+        visit_prims(&scene.items, 0.0, 0.0, &mut |prim, x, y| {
+            if matches!(
+                prim,
+                Prim::Line { .. } | Prim::Rect { .. } | Prim::Circle { .. }
+            ) {
+                visits.push((
+                    match prim {
+                        Prim::Line { .. } => "line",
+                        Prim::Rect { .. } => "rect",
+                        Prim::Circle { .. } => "circle",
+                        _ => unreachable!(),
+                    },
+                    x,
+                    y,
+                ));
+            }
+        });
+        assert_eq!(
+            visits,
+            [
+                ("line", 0.0, 0.0),
+                ("rect", 13.0, 7.0),
+                ("circle", 15.0, 10.0)
+            ]
+        );
     }
 }

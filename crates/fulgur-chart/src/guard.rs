@@ -15,6 +15,14 @@
 use crate::ir::{ChartKind, ChartSpec, XPositions};
 use crate::num::fmt_num;
 
+/// tiny-skia の AA scan converter に渡せる円・クリップ device 座標絶対値上限。
+///
+/// tiny-skia 0.11.4 の AA edge は user/device 座標を FDot6 へ変換する際、
+/// supersample shift 2 と fractional bits 6 により 256 倍して `i32` に保持し、
+/// 2 点の差分も `i32` で計算する。外縁を ±4,000,000px に制限すれば最悪 span は
+/// `8,000,000 * 256 = 2,048,000,000 < i32::MAX` となり、安全余裕を残せる。
+pub(crate) const MAX_SAFE_DEVICE_CIRCLE_COORD_PX: f64 = 4_000_000.0;
+
 // --- デフォルト上限定数 ---
 
 /// wordcloud の単語数上限 (DoS 対策)。
@@ -66,6 +74,9 @@ pub const DEFAULT_MAX_CATEGORICAL_PRIMITIVES: usize = 1_000_000;
 
 /// ラベル・タイトル文字列の上限(バイト)。
 pub const DEFAULT_MAX_LABEL_BYTES: usize = 4_096;
+
+/// Maximum number of explicit lines in one Chart.js title or subtitle.
+const MAX_CHARTJS_TITLE_LINES: usize = 1_024;
 
 /// treemap のツリー深さの上限。スタックオーバーフロー/DoS 対策。parser の groups 上限に揃える。
 pub const DEFAULT_MAX_TREE_DEPTH: usize = 50;
@@ -231,9 +242,7 @@ fn violin_nonempty_group_count(spec: &ChartSpec) -> usize {
 
 pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     validate_spec_base(spec, limits)?;
-    if !matches!(spec.kind, ChartKind::Line { .. })
-        || !matches!(spec.size_mode, crate::ir::SizeMode::PlotArea)
-    {
+    if !matches!(spec.size_mode, crate::ir::SizeMode::PlotArea) {
         return Ok(());
     }
     #[cfg(feature = "default-font")]
@@ -663,6 +672,37 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
             limits.max_label_bytes,
         ));
     }
+    for (name, title) in [
+        ("title", spec.chartjs_title.as_ref()),
+        ("subtitle", spec.chartjs_subtitle.as_ref()),
+    ] {
+        let Some(title) = title else {
+            continue;
+        };
+        if title.text.len() > MAX_CHARTJS_TITLE_LINES {
+            return Err(format!(
+                "Chart.js {name} has {} lines; limit is {MAX_CHARTJS_TITLE_LINES}",
+                title.text.len(),
+            ));
+        }
+        let mut total_bytes = 0usize;
+        for line in &title.text {
+            if line.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "Chart.js {name} text line length {} bytes exceeds limit {}",
+                    line.len(),
+                    limits.max_label_bytes,
+                ));
+            }
+            total_bytes = total_bytes.saturating_add(line.len());
+        }
+        if total_bytes > limits.max_label_bytes {
+            return Err(format!(
+                "Chart.js {name} total text length {total_bytes} bytes exceeds limit {}",
+                limits.max_label_bytes,
+            ));
+        }
+    }
     if let Some(title) = &spec.legend_title
         && title.len() > limits.max_label_bytes
     {
@@ -1073,6 +1113,31 @@ pub(crate) fn validate_plot_area_scene_with_measurer(
                 "scene height {:.0} exceeds limit {:.0}",
                 frame.scene_height, limits.max_dimension_px
             ));
+        }
+    }
+
+    if matches!(spec.size_mode, crate::ir::SizeMode::PlotArea) {
+        let (base_width, base_height) = if matches!(spec.kind, ChartKind::Line { .. }) {
+            let frame = crate::layout::common::compute(spec, measurer);
+            (frame.scene_width, frame.scene_height)
+        } else {
+            (spec.width, spec.height)
+        };
+        if let Some(layout) =
+            crate::layout::chartjs_title::chartjs_title_layout(spec, base_width, base_height)
+        {
+            if !layout.scene_width.is_finite() || layout.scene_width > limits.max_dimension_px {
+                return Err(format!(
+                    "scene width {:.0} exceeds limit {:.0}",
+                    layout.scene_width, limits.max_dimension_px
+                ));
+            }
+            if !layout.scene_height.is_finite() || layout.scene_height > limits.max_dimension_px {
+                return Err(format!(
+                    "scene height {:.0} exceeds limit {:.0}",
+                    layout.scene_height, limits.max_dimension_px
+                ));
+            }
         }
     }
 
@@ -1779,6 +1844,78 @@ mod tests {
         let mut s = base_spec();
         s.title = Some("x".repeat(DEFAULT_MAX_LABEL_BYTES + 1));
         assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    fn chartjs_title_spec() -> ChartSpec {
+        chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},"options":{"plugins":{"title":{"display":true,"text":"title"},"subtitle":{"display":true,"text":"subtitle"}}}}"#,
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn chartjs_title_and_subtitle_reject_oversized_text_lines() {
+        for is_subtitle in [false, true] {
+            let mut spec = chartjs_title_spec();
+            let title = if is_subtitle {
+                spec.chartjs_subtitle.as_mut().unwrap()
+            } else {
+                spec.chartjs_title.as_mut().unwrap()
+            };
+            title.text = vec!["x".repeat(DEFAULT_MAX_LABEL_BYTES + 1)];
+
+            let error = validate_spec(&spec, &default_limits()).unwrap_err();
+            assert!(
+                error.contains(if is_subtitle { "subtitle" } else { "title" }),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn chartjs_title_rejects_aggregate_text_over_label_byte_limit() {
+        let mut spec = chartjs_title_spec();
+        spec.chartjs_title.as_mut().unwrap().text = vec![
+            "x".repeat(DEFAULT_MAX_LABEL_BYTES / 2 + 1),
+            "y".repeat(DEFAULT_MAX_LABEL_BYTES / 2 + 1),
+        ];
+
+        let error = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(error.contains("total"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn chartjs_title_text_at_byte_and_line_limits_is_accepted() {
+        let mut spec = chartjs_title_spec();
+        spec.chartjs_title.as_mut().unwrap().text =
+            vec!["x".repeat(DEFAULT_MAX_LABEL_BYTES - 1), "y".to_string()];
+        spec.chartjs_subtitle.as_mut().unwrap().text = vec![String::new(); 1_024];
+
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn chartjs_title_plot_area_dimension_limit_applies_to_non_line_kinds() {
+        let mut spec = chartjs_title_spec();
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        let title = spec.chartjs_title.as_mut().unwrap();
+        title.font_size = 2_000.0;
+        title.line_height = 2_400.0;
+        let mut limits = default_limits();
+        limits.max_dimension_px = 900.0;
+
+        let error = validate_spec(&spec, &limits).unwrap_err();
+        assert!(error.contains("scene height"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn chartjs_subtitle_rejects_too_many_text_lines() {
+        let mut spec = chartjs_title_spec();
+        spec.chartjs_subtitle.as_mut().unwrap().text = vec![String::new(); 1_025];
+
+        let error = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(error.contains("lines"), "unexpected error: {error}");
     }
 
     #[test]
@@ -2518,5 +2655,16 @@ mod tests {
             ..base_spec()
         };
         assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn chartjs_title_expansion_over_dimension_limit_is_rejected() {
+        let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]},"options":{"plugins":{"title":{"display":true,"text":"Title","font":{"size":32768,"lineHeight":"32768px"},"padding":0}}}}"#;
+        let mut spec = chartjs::parse(json, false).unwrap();
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        let measurer = crate::text::TextMeasurer::new(crate::font::TEST_FONT).unwrap();
+        let error = validate_spec_with_measurer(&spec, &default_limits(), &measurer).unwrap_err();
+        assert!(error.contains("scene height"), "unexpected error: {error}");
+        assert!(error.contains("exceeds limit"), "unexpected error: {error}");
     }
 }

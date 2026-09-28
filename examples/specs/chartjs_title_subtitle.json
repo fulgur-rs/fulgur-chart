@@ -1,0 +1,46 @@
+{
+  "type": "bar",
+  "data": {
+    "labels": ["Q1", "Q2", "Q3", "Q4"],
+    "datasets": [
+      {
+        "label": "Revenue",
+        "data": [42, 58, 51, 73],
+        "backgroundColor": "#36a2eb"
+      }
+    ]
+  },
+  "options": {
+    "plugins": {
+      "title": {
+        "display": true,
+        "text": ["Quarterly revenue", "North America"],
+        "align": "start",
+        "position": "top",
+        "color": "#334155",
+        "font": {
+          "size": 24,
+          "family": "Inter, sans-serif",
+          "weight": "700",
+          "style": "normal"
+        },
+        "padding": { "top": 8, "bottom": 4 }
+      },
+      "subtitle": {
+        "display": true,
+        "text": "Millions of USD",
+        "align": "end",
+        "position": "bottom",
+        "color": "#64748b",
+        "font": {
+          "size": 13,
+          "family": "Inter, sans-serif",
+          "weight": "400",
+          "style": "italic"
+        },
+        "padding": { "top": 2, "bottom": 6 }
+      },
+      "legend": { "display": true, "position": "top" }
+    }
+  }
+}

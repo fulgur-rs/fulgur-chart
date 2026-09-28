@@ -470,7 +470,25 @@ fn title_from_plugins() {
     let json = r#"{ "type":"bar","data":{"labels":[],"datasets":[]},
       "options":{"plugins":{"title":{"display":true,"text":"四半期売上"}}} }"#;
     let spec = chartjs::parse(json, false).unwrap();
-    assert_eq!(spec.title.as_deref(), Some("四半期売上"));
+    assert_eq!(
+        spec.title, None,
+        "Chart.js title must use its independent IR field"
+    );
+    assert_eq!(spec.chartjs_title.as_ref().unwrap().text, ["四半期売上"]);
+}
+
+#[test]
+fn non_strict_gauge_and_wordcloud_ignore_unrelated_plugin_shapes() {
+    let cases = [
+        r#"{"type":"gauge","data":{"datasets":[{"value":3,"data":[2,4,6],"backgroundColor":["green","yellow","red"]}]},"options":{"plugins":{"legend":5}}}"#,
+        r#"{"type":"wordCloud","data":{"labels":["A"],"datasets":[{"data":[30]}]},"options":{"plugins":{"legend":5}}}"#,
+    ];
+    for json in cases {
+        assert!(
+            chartjs::parse(json, false).is_ok(),
+            "non-strict special parser should ignore unrelated plugin shape: {json}"
+        );
+    }
 }
 
 #[test]
@@ -479,6 +497,7 @@ fn title_not_displayed_is_none() {
       "options":{"plugins":{"title":{"display":false,"text":"x"}}} }"#;
     let spec = chartjs::parse(json, false).unwrap();
     assert_eq!(spec.title, None);
+    assert!(!spec.chartjs_title.as_ref().unwrap().display);
 }
 
 #[test]
@@ -2505,4 +2524,449 @@ fn pie_arc_geometry_is_deterministic_in_svg_and_png() {
     .unwrap();
     assert_eq!(png_first, png_second);
     tiny_skia::Pixmap::decode_png(&png_first).expect("pie PNG should decode");
+}
+
+#[test]
+fn chartjs_title_schema_accepts_all_chart_kinds() {
+    use fulgur_chart::schema::chartjs::ChartJsSpec;
+    use serde_json::{Value, json};
+
+    let cases = [
+        ("bar", include_str!("../../../examples/specs/bar.json")),
+        ("line", include_str!("../../../examples/specs/line.json")),
+        ("pie", include_str!("../../../examples/specs/pie.json")),
+        (
+            "doughnut",
+            include_str!("../../../examples/specs/doughnut.json"),
+        ),
+        (
+            "scatter",
+            include_str!("../../../examples/specs/scatter.json"),
+        ),
+        (
+            "bubble",
+            include_str!("../../../examples/specs/bubble.json"),
+        ),
+        ("radar", include_str!("../../../examples/specs/radar.json")),
+        (
+            "matrix",
+            include_str!("../../../examples/specs/matrix.json"),
+        ),
+        (
+            "treemap",
+            include_str!("../../../examples/specs/treemap.json"),
+        ),
+        (
+            "progress",
+            include_str!("../../../examples/specs/progress.json"),
+        ),
+        (
+            "progressBar",
+            include_str!("../../../examples/specs/progress.json"),
+        ),
+        (
+            "boxplot",
+            include_str!("../../../examples/specs/boxplot_with_null.json"),
+        ),
+        (
+            "violin",
+            include_str!("../../../examples/specs/violin.json"),
+        ),
+        (
+            "horizontalViolin",
+            include_str!("../../../examples/specs/violin-horizontal.json"),
+        ),
+        (
+            "sparkline",
+            include_str!("../../../examples/specs/sparkline_decimated.json"),
+        ),
+        ("gauge", include_str!("../../../examples/specs/gauge.json")),
+        (
+            "polarArea",
+            include_str!("../../../examples/specs/pie.json"),
+        ),
+        (
+            "radialGauge",
+            include_str!("../../../examples/specs/radial-gauge.json"),
+        ),
+        (
+            "outlabeledPie",
+            include_str!("../../../examples/specs/outlabeled_pie.json"),
+        ),
+        (
+            "outlabeledDoughnut",
+            include_str!("../../../examples/specs/outlabeled_doughnut.json"),
+        ),
+        (
+            "wordCloud",
+            include_str!("../../../examples/specs/wordcloud.json"),
+        ),
+        (
+            "sankey",
+            include_str!("../../../examples/specs/sankey.json"),
+        ),
+    ];
+
+    let title = json!({
+        "display": true,
+        "text": "",
+        "align": "start",
+        "position": "left",
+        "color": "#123456",
+        "font": {
+            "size": 14.0,
+            "family": "Inter, sans-serif",
+            "weight": "600",
+            "style": "italic",
+            "lineHeight": "125%"
+        },
+        "padding": 8.0,
+        "fullSize": false
+    });
+    let subtitle = json!({
+        "display": true,
+        "text": ["Line one", "Line two"],
+        "align": "end",
+        "position": "right",
+        "color": "#654321",
+        "font": {
+            "size": 10.0,
+            "family": "Fira Sans",
+            "weight": "normal",
+            "style": "normal",
+            "lineHeight": 1.1
+        },
+        "padding": {"top": 4.0, "bottom": 2.0},
+        "fullSize": true
+    });
+
+    for (kind, fixture) in cases {
+        let mut input: Value = serde_json::from_str(fixture).unwrap();
+        let root = input.as_object_mut().expect("chart fixture object");
+        root.insert("type".into(), Value::String(kind.into()));
+        let options = root
+            .entry("options")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("chart options object");
+        let plugins = options
+            .entry("plugins")
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("chart plugins object");
+        plugins.insert("title".into(), title.clone());
+        plugins.insert("subtitle".into(), subtitle.clone());
+
+        let parsed: ChartJsSpec = serde_json::from_value(input.clone())
+            .unwrap_or_else(|error| panic!("{kind} schema rejected title options: {error}"));
+        let round_trip = serde_json::to_value(parsed).unwrap();
+        assert_eq!(
+            round_trip["options"]["plugins"]["title"], title,
+            "title fields did not round-trip for {kind}"
+        );
+        assert_eq!(
+            round_trip["options"]["plugins"]["subtitle"], subtitle,
+            "subtitle fields did not round-trip for {kind}"
+        );
+    }
+
+    let mut invalid: Value =
+        serde_json::from_str(include_str!("../../../examples/specs/bar.json")).unwrap();
+    invalid["options"]["plugins"]["title"] = json!({
+        "display": true,
+        "text": "unknown field",
+        "unexpected": true
+    });
+    assert!(
+        serde_json::from_value::<ChartJsSpec>(invalid).is_err(),
+        "unknown nested title fields must remain rejected"
+    );
+}
+
+#[test]
+fn chartjs_title_and_subtitle_map_independently() {
+    let json = r##"{
+      "type":"bar",
+      "data":{"labels":["A"],"datasets":[{"data":[1]}]},
+      "options":{"plugins":{
+        "title":{"display":true,"text":"Primary","align":"start","position":"left",
+          "color":"#123456","font":{"size":14,"family":"Inter","weight":"600",
+          "style":"italic","lineHeight":"1.25"},"padding":{"top":8,"bottom":4},"fullSize":false},
+        "subtitle":{"display":true,"text":["First","Second"],"align":"end","position":"right",
+          "color":"#abcdef","font":{"size":10,"family":"Fira Sans","weight":"normal",
+          "style":"normal","lineHeight":"125%"},"padding":3,"fullSize":true}
+      }}
+    }"##;
+    let spec = chartjs::parse(json, true).unwrap();
+    let title = spec.chartjs_title.as_ref().expect("main title");
+    let subtitle = spec.chartjs_subtitle.as_ref().expect("subtitle");
+
+    assert!(title.display);
+    assert_eq!(title.text, ["Primary"]);
+    assert_eq!(title.align, fulgur_chart::ir::ChartJsTitleAlign::Start);
+    assert_eq!(title.position, fulgur_chart::ir::ChartJsTitlePosition::Left);
+    assert_eq!(
+        title.color,
+        fulgur_chart::ir::Color {
+            r: 18,
+            g: 52,
+            b: 86,
+            a: 1.0
+        }
+    );
+    assert_eq!(title.font_size, 14.0);
+    assert_eq!(title.font_family.as_deref(), Some("Inter"));
+    assert_eq!(title.font_weight.as_deref(), Some("600"));
+    assert_eq!(title.font_style.as_deref(), Some("italic"));
+    assert_eq!(title.line_height, 17.5);
+    assert_eq!(title.padding.top, 8.0);
+    assert_eq!(title.padding.bottom, 4.0);
+    assert!(!title.full_size);
+
+    assert_eq!(subtitle.text, ["First", "Second"]);
+    assert_eq!(subtitle.align, fulgur_chart::ir::ChartJsTitleAlign::End);
+    assert_eq!(
+        subtitle.position,
+        fulgur_chart::ir::ChartJsTitlePosition::Right
+    );
+    assert_eq!(
+        subtitle.color,
+        fulgur_chart::ir::Color {
+            r: 171,
+            g: 205,
+            b: 239,
+            a: 1.0
+        }
+    );
+    assert_eq!(subtitle.font_size, 10.0);
+    assert_eq!(subtitle.font_family.as_deref(), Some("Fira Sans"));
+    assert_eq!(subtitle.font_weight.as_deref(), Some("normal"));
+    assert_eq!(subtitle.font_style.as_deref(), Some("normal"));
+    assert_eq!(subtitle.line_height, 12.5);
+    assert_eq!(subtitle.padding.top, 3.0);
+    assert_eq!(subtitle.padding.bottom, 3.0);
+    assert!(subtitle.full_size);
+    assert_eq!(
+        spec.title, None,
+        "Chart.js title must not use the legacy title channel"
+    );
+}
+
+#[test]
+fn chartjs_title_plugin_defaults_match_title_and_subtitle_defaults() {
+    let json = r##"{
+      "type":"bar","data":{"labels":["A"],"datasets":[{"data":[1]}]},
+      "options":{"theme":{"textColor":"#334455","fontSize":16},
+        "plugins":{"title":{"display":true},"subtitle":{"display":true}}}
+    }"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let title = spec.chartjs_title.as_ref().unwrap();
+    let subtitle = spec.chartjs_subtitle.as_ref().unwrap();
+    let expected_color = fulgur_chart::ir::Color {
+        r: 51,
+        g: 68,
+        b: 85,
+        a: 1.0,
+    };
+
+    for resolved in [title, subtitle] {
+        assert!(resolved.display);
+        assert_eq!(resolved.text, [""]);
+        assert_eq!(resolved.align, fulgur_chart::ir::ChartJsTitleAlign::Center);
+        assert_eq!(
+            resolved.position,
+            fulgur_chart::ir::ChartJsTitlePosition::Top
+        );
+        assert_eq!(resolved.color, expected_color);
+        assert_eq!(resolved.font_size, 16.0);
+        assert_eq!(resolved.font_style.as_deref(), Some("normal"));
+        assert_eq!(resolved.line_height, 19.2);
+        assert!(resolved.full_size);
+    }
+    assert_eq!(title.font_weight.as_deref(), Some("bold"));
+    assert_eq!(title.padding.top, 10.0);
+    assert_eq!(title.padding.bottom, 10.0);
+    assert_eq!(subtitle.font_weight.as_deref(), Some("normal"));
+    assert_eq!(subtitle.padding.top, 0.0);
+    assert_eq!(subtitle.padding.bottom, 0.0);
+}
+
+#[test]
+fn chartjs_title_text_preserves_empty_string_and_empty_array() {
+    let json = r#"{"type":"bar","data":{"datasets":[{"data":[1]}]},"options":{"plugins":{"title":{"display":true,"text":""},"subtitle":{"display":true,"text":[]}}}}"#;
+    let spec = chartjs::parse(json, true).unwrap();
+    assert_eq!(spec.chartjs_title.unwrap().text, [""]);
+    assert!(spec.chartjs_subtitle.unwrap().text.is_empty());
+}
+
+#[test]
+fn chartjs_title_line_height_resolves_number_px_em_percent_and_normal() {
+    let values = [
+        (serde_json::json!(1.25), 15.0),
+        (serde_json::json!("18px"), 18.0),
+        (serde_json::json!("1.5em"), 18.0),
+        (serde_json::json!("150%"), 18.0),
+        (serde_json::json!("normal"), 14.4),
+    ];
+    for (line_height, expected) in values {
+        let input = serde_json::json!({
+            "type":"bar",
+            "data":{"datasets":[{"data":[1]}]},
+            "options":{"plugins":{"title":{"display":true,"text":"Title",
+                "font":{"size":12,"lineHeight":line_height}}}}
+        });
+        let spec = chartjs::parse(&input.to_string(), false).unwrap();
+        let actual = spec.chartjs_title.unwrap().line_height;
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "{line_height}: {actual} != {expected}"
+        );
+    }
+}
+
+#[test]
+fn chartjs_title_rejects_invalid_alignment_position_and_padding() {
+    let base = serde_json::json!({
+        "type":"bar","data":{"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"title":{"display":true,"text":"Title"}}}
+    });
+    for (path, value) in [
+        ("align", serde_json::json!("middle")),
+        ("position", serde_json::json!("center")),
+        ("padding", serde_json::json!(-1)),
+    ] {
+        let mut input = base.clone();
+        input["options"]["plugins"]["title"][path] = value;
+        assert!(
+            chartjs::parse(&input.to_string(), true).is_err(),
+            "invalid {path} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn chartjs_title_invalid_line_height_falls_back_to_default_multiplier() {
+    let input = serde_json::json!({
+        "type":"bar","data":{"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"title":{"display":true,"font":{"size":12,"lineHeight":"not-a-length"}}}}
+    });
+    let spec = chartjs::parse(&input.to_string(), false).unwrap();
+    assert!((spec.chartjs_title.unwrap().line_height - 14.4).abs() < 1e-9);
+}
+
+#[test]
+fn chartjs_title_extreme_line_height_and_padding_resolve_to_bounded_metrics() {
+    let input = serde_json::json!({
+        "type":"bar","data":{"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"title":{"display":true,"font":{"size":12,"lineHeight":"1e300"},"padding":1e300}}}
+    });
+    let spec = chartjs::parse(&input.to_string(), false).unwrap();
+    let title = spec.chartjs_title.unwrap();
+    let max = fulgur_chart::guard::DEFAULT_MAX_DIMENSION_PX;
+    assert!(title.line_height.is_finite() && title.line_height <= max);
+    assert!(title.padding.top.is_finite() && title.padding.top <= max);
+    assert!(title.padding.bottom.is_finite() && title.padding.bottom <= max);
+}
+
+#[test]
+fn chartjs_title_strict_allowlists_accept_both_plugins_for_all_kinds() {
+    use serde_json::{Value, json};
+
+    let cases = [
+        ("bar", include_str!("../../../examples/specs/bar.json")),
+        ("line", include_str!("../../../examples/specs/line.json")),
+        ("pie", include_str!("../../../examples/specs/pie.json")),
+        (
+            "doughnut",
+            include_str!("../../../examples/specs/doughnut.json"),
+        ),
+        (
+            "scatter",
+            include_str!("../../../examples/specs/scatter.json"),
+        ),
+        (
+            "bubble",
+            include_str!("../../../examples/specs/bubble.json"),
+        ),
+        ("radar", include_str!("../../../examples/specs/radar.json")),
+        (
+            "matrix",
+            include_str!("../../../examples/specs/matrix.json"),
+        ),
+        (
+            "treemap",
+            include_str!("../../../examples/specs/treemap.json"),
+        ),
+        (
+            "progress",
+            include_str!("../../../examples/specs/progress.json"),
+        ),
+        (
+            "progressBar",
+            include_str!("../../../examples/specs/progress.json"),
+        ),
+        (
+            "boxplot",
+            include_str!("../../../examples/specs/boxplot_with_null.json"),
+        ),
+        (
+            "violin",
+            include_str!("../../../examples/specs/violin.json"),
+        ),
+        (
+            "horizontalViolin",
+            include_str!("../../../examples/specs/violin-horizontal.json"),
+        ),
+        (
+            "sparkline",
+            include_str!("../../../examples/specs/sparkline_decimated.json"),
+        ),
+        ("gauge", include_str!("../../../examples/specs/gauge.json")),
+        (
+            "polarArea",
+            include_str!("../../../examples/specs/pie.json"),
+        ),
+        (
+            "radialGauge",
+            include_str!("../../../examples/specs/radial-gauge.json"),
+        ),
+        (
+            "outlabeledPie",
+            include_str!("../../../examples/specs/outlabeled_pie.json"),
+        ),
+        (
+            "outlabeledDoughnut",
+            include_str!("../../../examples/specs/outlabeled_doughnut.json"),
+        ),
+        (
+            "wordCloud",
+            include_str!("../../../examples/specs/wordcloud.json"),
+        ),
+        (
+            "sankey",
+            include_str!("../../../examples/specs/sankey.json"),
+        ),
+    ];
+
+    for (kind, fixture) in cases {
+        let mut input: Value = serde_json::from_str(fixture).unwrap();
+        input["type"] = Value::String(kind.into());
+        input["options"]["plugins"]["title"] = json!({"display":true,"text":"Title"});
+        input["options"]["plugins"]["subtitle"] = json!({"display":true,"text":["Subtitle"]});
+        let spec = chartjs::parse(&input.to_string(), true)
+            .unwrap_or_else(|error| panic!("strict parser rejected {kind} title plugins: {error}"));
+        assert!(spec.chartjs_title.is_some(), "title missing for {kind}");
+        assert!(
+            spec.chartjs_subtitle.is_some(),
+            "subtitle missing for {kind}"
+        );
+    }
+
+    let typo = serde_json::json!({
+        "type":"bar",
+        "data":{"datasets":[{"data":[1]}]},
+        "options":{"plugins":{"title":{"display":true,"font":{"lineHeigth":12}}}}
+    });
+    assert!(chartjs::parse(&typo.to_string(), true).is_err());
+    assert!(chartjs::parse(&typo.to_string(), false).is_ok());
 }

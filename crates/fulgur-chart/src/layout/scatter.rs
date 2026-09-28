@@ -938,6 +938,8 @@ mod tests {
             legend_options: crate::ir::LegendOptions::default(),
             legend_title: None,
             title: None,
+            chartjs_title: None,
+            chartjs_subtitle: None,
             width: 600.0,
             height: 400.0,
             size_mode: SizeMode::Canvas,
