@@ -1084,6 +1084,31 @@ pub(crate) fn validate_plot_area_scene_with_measurer(
         }
     }
 
+    if matches!(spec.size_mode, crate::ir::SizeMode::PlotArea) {
+        let (base_width, base_height) = if matches!(spec.kind, ChartKind::Line { .. }) {
+            let frame = crate::layout::common::compute(spec, measurer);
+            (frame.scene_width, frame.scene_height)
+        } else {
+            (spec.width, spec.height)
+        };
+        if let Some(layout) =
+            crate::layout::chartjs_title::chartjs_title_layout(spec, base_width, base_height)
+        {
+            if !layout.scene_width.is_finite() || layout.scene_width > limits.max_dimension_px {
+                return Err(format!(
+                    "scene width {:.0} exceeds limit {:.0}",
+                    layout.scene_width, limits.max_dimension_px
+                ));
+            }
+            if !layout.scene_height.is_finite() || layout.scene_height > limits.max_dimension_px {
+                return Err(format!(
+                    "scene height {:.0} exceeds limit {:.0}",
+                    layout.scene_height, limits.max_dimension_px
+                ));
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -2526,5 +2551,16 @@ mod tests {
             ..base_spec()
         };
         assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    #[test]
+    fn chartjs_title_expansion_over_dimension_limit_is_rejected() {
+        let json = r#"{"type":"line","data":{"labels":["A","B"],"datasets":[{"data":[1,2]}]},"options":{"plugins":{"title":{"display":true,"text":"Title","font":{"size":32768,"lineHeight":"32768px"},"padding":0}}}}"#;
+        let mut spec = chartjs::parse(json, false).unwrap();
+        spec.size_mode = crate::ir::SizeMode::PlotArea;
+        let measurer = crate::text::TextMeasurer::new(crate::font::TEST_FONT).unwrap();
+        let error = validate_spec_with_measurer(&spec, &default_limits(), &measurer).unwrap_err();
+        assert!(error.contains("scene height"), "unexpected error: {error}");
+        assert!(error.contains("exceeds limit"), "unexpected error: {error}");
     }
 }

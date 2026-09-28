@@ -2,6 +2,7 @@
 
 pub mod bar;
 pub mod boxplot;
+pub(crate) mod chartjs_title;
 pub mod common;
 mod decimate;
 pub mod gauge;
@@ -42,7 +43,68 @@ pub fn build_scene_checked_with_limits(
     m: &TextMeasurer,
     limits: &crate::guard::InputLimits,
 ) -> Result<Scene, String> {
-    let mut scene = match spec.kind {
+    let mut scene = if !chartjs_title::has_visible_chartjs_titles(spec) {
+        build_chart_scene(spec, m, limits)?
+    } else {
+        let (base_scene, layout) = if matches!(spec.size_mode, crate::ir::SizeMode::Canvas) {
+            let layout = chartjs_title::chartjs_title_layout(spec, spec.width, spec.height)
+                .ok_or_else(|| "visible Chart.js title produces no layout".to_string())?;
+            let child_spec = chartjs_title::chart_view_spec(spec, &layout);
+            (build_chart_scene(&child_spec, m, limits)?, layout)
+        } else {
+            let mut child_spec = spec.clone();
+            child_spec.chartjs_title = None;
+            child_spec.chartjs_subtitle = None;
+            let base_scene = build_chart_scene(&child_spec, m, limits)?;
+            let layout =
+                chartjs_title::chartjs_title_layout(spec, base_scene.width, base_scene.height)
+                    .ok_or_else(|| "visible Chart.js title produces no layout".to_string())?;
+            (base_scene, layout)
+        };
+
+        let mut items = Vec::with_capacity(1 + layout.text_items.len());
+        items.push(Prim::Group {
+            translate_x: layout.left,
+            translate_y: layout.top,
+            clip: Some(Box::new(crate::scene::ClipRect {
+                x: 0.0,
+                y: 0.0,
+                w: layout.viewport_width,
+                h: layout.viewport_height,
+            })),
+            children: base_scene.items,
+        });
+        items.extend(layout.text_items);
+        Scene {
+            width: layout.scene_width,
+            height: layout.scene_height,
+            items,
+        }
+    };
+
+    // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。
+    if let Some(fill) = spec.theme.background {
+        scene.items.insert(
+            0,
+            Prim::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: scene.width,
+                h: scene.height,
+                fill,
+            },
+        );
+    }
+
+    Ok(scene)
+}
+
+fn build_chart_scene(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    limits: &crate::guard::InputLimits,
+) -> Result<Scene, String> {
+    let scene = match spec.kind {
         ChartKind::Bar { .. } => bar::build(spec, m),
         ChartKind::Line { .. } => line::build(spec, m),
         ChartKind::Pie { .. } => pie::build(spec, m),
@@ -66,20 +128,5 @@ pub fn build_scene_checked_with_limits(
         ChartKind::WordCloud { .. } => wordcloud::build(spec, m),
         ChartKind::Sankey { .. } => sankey::build(spec, m),
     };
-
-    // テーマ背景色: 指定時のみ最背面(index 0)へ全面矩形を挿入する。
-    if let Some(fill) = spec.theme.background {
-        scene.items.insert(
-            0,
-            Prim::Rect {
-                x: 0.0,
-                y: 0.0,
-                w: scene.width,
-                h: scene.height,
-                fill,
-            },
-        );
-    }
-
     Ok(scene)
 }
