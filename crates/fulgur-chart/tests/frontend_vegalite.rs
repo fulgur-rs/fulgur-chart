@@ -923,7 +923,7 @@ fn vegalite_error_mark_resolves_mark_and_part_styles() {
         panic!("styled errorbar did not normalize to ErrorMark")
     };
     assert!(!data.style.clip);
-    assert!((data.style.opacity - 0.4).abs() < f64::EPSILON);
+    assert!((data.style.opacity - 0.5).abs() < f64::EPSILON);
     assert!(data.style.rule.visible);
     assert_eq!(data.style.rule.stroke_width, Some(2.0));
     assert_eq!(data.style.rule.opacity, Some(0.5));
@@ -4709,6 +4709,36 @@ fn vegalite_error_mark_schema_accepts_range_channels() {
         serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(center_error).is_ok(),
         "typed schema must accept asymmetric center/error field channels"
     );
+}
+
+#[test]
+fn vegalite_error_mark_generated_schema_constrains_detail_and_dash() {
+    let schema =
+        serde_json::to_value(schemars::schema_for!(fulgur_chart::schema::VegaLiteSpec)).unwrap();
+    let definitions = &schema["$defs"];
+    let detail = &definitions["VlErrorMarkEncoding"]["properties"]["detail"];
+    assert_eq!(detail["anyOf"][0]["$ref"], "#/$defs/VlErrorDetailChannel");
+    assert_eq!(
+        definitions["VlErrorDetailChannel"]["properties"]["type"]["anyOf"][0]["$ref"],
+        "#/$defs/VlCategoricalType"
+    );
+    assert_eq!(
+        definitions["VlCategoricalType"]["enum"],
+        serde_json::json!(["nominal", "ordinal"])
+    );
+    for style in ["VlErrorBarPartStyle", "VlErrorBandPartStyle"] {
+        assert_eq!(
+            definitions[style]["properties"]["strokeDash"]["items"]["minimum"],
+            0.0
+        );
+    }
+
+    for strict in [false, true] {
+        let invalid_detail = r##"{"mark":"errorbar","data":{"values":[{"x":"a","low":1,"high":2,"site":"A"}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low","type":"quantitative"},"y2":{"field":"high"},"detail":{"field":"site","type":"quantitative"}}}"##;
+        let invalid_dash = r##"{"mark":{"type":"errorband","band":{"strokeDash":[1,-1]}},"data":{"values":[{"x":"a","low":1,"high":2},{"x":"b","low":2,"high":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##;
+        assert!(vegalite::parse(invalid_detail, strict).is_err());
+        assert!(vegalite::parse(invalid_dash, strict).is_err());
+    }
 }
 
 #[test]

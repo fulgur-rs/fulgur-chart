@@ -394,6 +394,7 @@ pub struct VlErrorBarPartStyle {
     #[schemars(range(min = 0.0))]
     pub size: Option<f64>,
     #[serde(rename = "strokeDash", skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(range(min = 0.0)))]
     pub stroke_dash: Option<Vec<f64>>,
 }
 
@@ -413,6 +414,7 @@ pub struct VlErrorBandPartStyle {
     #[schemars(range(min = 0.0, max = 1.0))]
     pub opacity: Option<f64>,
     #[serde(rename = "strokeDash", skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(range(min = 0.0)))]
     pub stroke_dash: Option<Vec<f64>>,
 }
 
@@ -528,6 +530,14 @@ pub struct VlErrorColorFieldChannel {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct VlErrorDetailChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlCategoricalType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct VlErrorColorValueChannel {
     pub value: String,
 }
@@ -568,7 +578,7 @@ pub struct VlErrorMarkEncoding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<VlErrorColorChannel>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<VlChannel>,
+    pub detail: Option<VlErrorDetailChannel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opacity: Option<VlErrorOpacityChannel>,
 }

@@ -554,7 +554,8 @@ pub(super) fn parse_error_mark_spec(
         }
     }
 
-    let opacity = parse_mark_opacity(mark)? * parse_encoding_opacity(encoding)?.unwrap_or(1.0);
+    let mark_opacity = parse_mark_opacity(mark)?;
+    let opacity = parse_encoding_opacity(encoding)?.unwrap_or(mark_opacity);
     let style = parse_style(kind, mark, opacity)?;
     let mut theme = vegalite_theme();
     if let Some(background) = top.get("background").filter(|value| !value.is_null()) {

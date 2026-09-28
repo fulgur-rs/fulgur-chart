@@ -79,6 +79,7 @@ pub(crate) struct ErrorMarkFrame {
     pub(crate) plot_right: f64,
     pub(crate) plot_top: f64,
     pub(crate) plot_bottom: f64,
+    legend_left: f64,
     pub(crate) x: ErrorAxisInfo,
     pub(crate) y: ErrorAxisInfo,
     x_mapper: AxisMapper,
@@ -526,6 +527,7 @@ pub(crate) fn compute_frame(spec: &ChartSpec, m: &TextMeasurer) -> ErrorMarkFram
         plot_right,
         plot_top,
         plot_bottom,
+        legend_left,
         x: x_info,
         y: y_info,
         x_mapper,
@@ -568,7 +570,28 @@ fn map_position_with_clip(
             let max = info
                 .max
                 .ok_or_else(|| format!("error mark {axis:?} axis has no upper domain bound"))?;
-            value.clamp(min, max)
+            // Keep coordinates finite without moving out-of-domain endpoints onto the plot edge.
+            // Segment/path clipping then removes caps and boundaries that lie wholly outside.
+            let span = max - min;
+            let pad = if span.is_finite() && span > 0.0 {
+                span
+            } else {
+                min.abs().max(max.abs()).max(1.0) / 4.0
+            };
+            let padded_min = min - pad;
+            let padded_max = max + pad;
+            value.clamp(
+                if padded_min.is_finite() {
+                    padded_min
+                } else {
+                    -f64::MAX
+                },
+                if padded_max.is_finite() {
+                    padded_max
+                } else {
+                    f64::MAX
+                },
+            )
         } else {
             value
         };
@@ -766,7 +789,7 @@ fn draw_axis(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &ErrorMarkFrame, ax
                 }
             };
             items.push(Prim::Text {
-                x: OUTER_PAD + size / 2.0,
+                x: OUTER_PAD + frame.legend_left + size / 2.0,
                 y,
                 size,
                 anchor,
@@ -2029,6 +2052,84 @@ mod tests {
             build_checked(&spec, &measurer(), 100).is_err(),
             "an un-clipped endpoint that maps to infinity must return an error"
         );
+    }
+
+    #[test]
+    fn errorbar_clipping_does_not_pin_an_out_of_domain_tick_to_plot_edge() {
+        let mut spec = parse(
+            r##"{"width":320,"height":220,"mark":{"type":"errorbar","color":"blue","ticks":{"stroke":"red"}},"data":{"values":[{"x":"A","lo":1,"hi":10}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"lo","type":"quantitative"},"y2":{"field":"hi"}}}"##,
+        );
+        spec.y_axis.min = Some(0.0);
+        spec.y_axis.max = Some(5.0);
+        let frame = compute_frame(&spec, &measurer());
+        let scene = build_checked(&spec, &measurer(), 100).unwrap();
+        let horizontal_red_lines = scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Line {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    stroke,
+                    ..
+                } if stroke.r == 255
+                    && stroke.g == 0
+                    && stroke.b == 0
+                    && (x1 - x2).abs() > 0.0
+                    && (y1 - y2).abs() < f64::EPSILON =>
+                {
+                    Some((*x1, *y1, *x2, *y2))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            horizontal_red_lines
+                .iter()
+                .any(|line| { line.1 > frame.plot_top && line.1 < frame.plot_bottom })
+        );
+        assert!(
+            horizontal_red_lines
+                .iter()
+                .all(|line| (line.1 - frame.plot_top).abs() >= 1e-8)
+        );
+    }
+
+    #[test]
+    fn error_mark_y_axis_title_moves_right_of_left_legend() {
+        let mut spec = parse(
+            r##"{"width":360,"height":240,"mark":"errorbar","data":{"values":[{"x":"Mon","lo":1,"hi":2,"site":"Alpha"},{"x":"Tue","lo":2,"hi":3,"site":"Beta"}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"lo","type":"quantitative"},"y2":{"field":"hi"},"color":{"field":"site","type":"nominal"}}}"##,
+        );
+        spec.legend = LegendPos::Left;
+        let scene = build(&spec, &measurer());
+        let y_title = scene.items.iter().find_map(|item| match item {
+            Prim::Text {
+                x,
+                size,
+                content,
+                rotate_deg: Some(-90.0),
+                ..
+            } if content == "lo" => Some((*x, *size)),
+            _ => None,
+        });
+        let (title_x, title_size) = y_title.expect("y-axis title");
+        assert!(title_x > OUTER_PAD + title_size / 2.0);
+
+        spec.legend = LegendPos::None;
+        let scene = build(&spec, &measurer());
+        let no_legend_title_x = scene.items.iter().find_map(|item| match item {
+            Prim::Text {
+                x,
+                content,
+                rotate_deg: Some(-90.0),
+                ..
+            } if content == "lo" => Some(*x),
+            _ => None,
+        });
+        assert!((no_legend_title_x.unwrap() - (OUTER_PAD + title_size / 2.0)).abs() < 1e-8);
     }
 
     #[test]
