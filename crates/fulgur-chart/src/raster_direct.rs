@@ -1292,6 +1292,8 @@ fn render_prim(
             let Some(mask) = clip_masks.get(&key) else {
                 return;
             };
+            let combined_mask = inherited_clip.map(|parent| intersect_masks(mask, parent));
+            let mask = combined_mask.as_ref().unwrap_or(mask);
             let Some(path) = PathBuilder::from_circle(*cx as f32, *cy as f32, *r as f32) else {
                 return;
             };
@@ -3862,6 +3864,52 @@ mod tests {
             alpha_at(24, 4) > 0,
             "second translated circle should render"
         );
+    }
+
+    #[test]
+    fn group_clip_intersects_clipped_circle_local_mask() {
+        let scene = Scene {
+            width: 20.0,
+            height: 12.0,
+            items: vec![Prim::Group {
+                translate_x: 2.0,
+                translate_y: 2.0,
+                clip: Some(Box::new(crate::scene::ClipRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 8.0,
+                    h: 8.0,
+                })),
+                children: vec![Prim::ClippedCircle {
+                    cx: 8.0,
+                    cy: 4.0,
+                    r: 3.0,
+                    fill: RED,
+                    stroke: RED,
+                    stroke_width: 0.0,
+                    clip: Box::new(crate::scene::ClipRect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 12.0,
+                        h: 8.0,
+                    }),
+                }],
+            }],
+        };
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let pixmap = scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap();
+        let mut painted = 0;
+        for (index, pixel) in pixmap.data().as_chunks::<4>().0.iter().enumerate() {
+            if pixel[3] == 0 {
+                continue;
+            }
+            painted += 1;
+            let x = index as u32 % pixmap.width();
+            let y = index as u32 / pixmap.width();
+            assert!((2..10).contains(&x), "parent group clip leaked x={x}");
+            assert!((2..10).contains(&y), "parent group clip leaked y={y}");
+        }
+        assert!(painted > 0, "clipped circle should paint inside both clips");
     }
 
     #[test]
