@@ -223,3 +223,190 @@ fn error_mark_model_reports_chart_type_and_axes() {
     assert_eq!(axes.x.kind, "linear");
     assert_eq!(axes.y.kind, "category");
 }
+
+fn filled_paths(scene: &Scene) -> Vec<(&str, Color)> {
+    scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::ClippedPath {
+                d,
+                fill: Some(fill),
+                ..
+            }
+            | Prim::Path {
+                d,
+                fill: Some(fill),
+                ..
+            } => Some((d.as_str(), *fill)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn path_coordinates(path: &str) -> Vec<(f64, f64)> {
+    let tokens = path.split_whitespace().collect::<Vec<_>>();
+    let mut coordinates = Vec::new();
+    let mut index = 0;
+    while index < tokens.len() {
+        let command = tokens[index];
+        index += 1;
+        if matches!(command, "M" | "L") {
+            let x = tokens[index].parse().unwrap();
+            let y = tokens[index + 1].parse().unwrap();
+            coordinates.push((x, y));
+            index += 2;
+        }
+    }
+    coordinates
+}
+
+#[test]
+fn errorband_vertical_horizontal_and_1d_geometry() {
+    let vertical = parse(
+        r##"{"mark":"errorband","data":{"values":[{"x":"a","low":1,"high":4},{"x":"b","low":2,"high":4},{"x":"c","low":3,"high":4}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##,
+    );
+    let vertical_scene = layout::build_scene_checked(&vertical, &measurer()).unwrap();
+    let vertical_fill = filled_paths(&vertical_scene);
+    assert_eq!(vertical_fill.len(), 1);
+    let vertical_points = path_coordinates(vertical_fill[0].0);
+    assert!(vertical_points[1].0 > vertical_points[0].0);
+    assert!((vertical_points[1].1 - vertical_points[0].1).abs() < 0.01);
+
+    let horizontal = parse(
+        r##"{"mark":{"type":"errorband","orient":"horizontal"},"data":{"values":[{"y":"a","low":1,"high":4},{"y":"b","low":2,"high":4}]},
+        "encoding":{"x":{"field":"low","type":"quantitative"},"x2":{"field":"high"},"y":{"field":"y","type":"nominal"}}}"##,
+    );
+    let horizontal_scene = layout::build_scene_checked(&horizontal, &measurer()).unwrap();
+    let horizontal_fill = filled_paths(&horizontal_scene);
+    assert_eq!(horizontal_fill.len(), 1);
+    let horizontal_points = path_coordinates(horizontal_fill[0].0);
+    assert!((horizontal_points[1].0 - horizontal_points[0].0).abs() < 0.01);
+    assert!(horizontal_points[1].1 > horizontal_points[0].1);
+
+    let one_dimensional = parse(
+        r##"{"mark":{"type":"errorband","orient":"vertical"},"data":{"values":[{"low":2,"high":8}]},
+        "encoding":{"y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##,
+    );
+    let one_dimensional_scene = layout::build_scene_checked(&one_dimensional, &measurer()).unwrap();
+    let one_dimensional_fills = filled_paths(&one_dimensional_scene);
+    assert_eq!(one_dimensional_fills.len(), 1);
+    let clip = one_dimensional_scene
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Prim::ClippedPath {
+                fill: Some(_),
+                clip,
+                ..
+            } => Some(**clip),
+            _ => None,
+        })
+        .expect("one-dimensional errorband fill is clipped to the plot");
+    let coordinates = path_coordinates(one_dimensional_fills[0].0);
+    let x_coordinates = coordinates.iter().map(|point| point.0);
+    let min_x = x_coordinates.clone().fold(f64::INFINITY, f64::min);
+    let max_x = x_coordinates.fold(f64::NEG_INFINITY, f64::max);
+    assert!(
+        (min_x - clip.x).abs() < 0.01,
+        "minimum path x {min_x} != clip left {}; path: {}",
+        clip.x,
+        one_dimensional_fills[0].0
+    );
+    assert!(
+        (max_x - (clip.x + clip.w)).abs() < 0.01,
+        "maximum path x {max_x} != clip right {}; path: {}",
+        clip.x + clip.w,
+        one_dimensional_fills[0].0
+    );
+}
+
+#[test]
+fn errorband_single_point_group_emits_no_fill() {
+    let spec = parse(
+        r##"{"mark":"errorband","data":{"values":[{"x":"only","low":2,"high":8}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##,
+    );
+    let scene = layout::build_scene_checked(&spec, &measurer()).unwrap();
+    assert!(filled_paths(&scene).is_empty());
+}
+
+#[test]
+fn errorband_styles_control_fill_and_boundaries() {
+    let spec = parse(
+        r##"{"mark":{"type":"errorband","band":{"fill":"blue","opacity":0.25},"borders":{"stroke":"red","strokeWidth":2}},
+        "data":{"values":[{"x":"a","low":1,"high":4},{"x":"b","low":2,"high":6}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##,
+    );
+    let scene = layout::build_scene_checked(&spec, &measurer()).unwrap();
+    let fills = filled_paths(&scene);
+    assert_eq!(fills.len(), 1);
+    assert_eq!(
+        fills[0].1,
+        Color {
+            r: 0,
+            g: 0,
+            b: 255,
+            a: 0.25
+        }
+    );
+    let borders = scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::ClippedPath {
+                stroke: Some(stroke),
+                stroke_width,
+                fill: None,
+                ..
+            } if *stroke == red() => Some(*stroke_width),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(borders, vec![2.0, 2.0]);
+}
+
+#[test]
+fn errorband_all_interpolations_emit_finite_paths() {
+    for interpolation in [
+        "linear",
+        "linear-closed",
+        "step",
+        "step-before",
+        "step-after",
+        "basis",
+        "basis-open",
+        "basis-closed",
+        "cardinal",
+        "cardinal-open",
+        "cardinal-closed",
+        "bundle",
+        "monotone",
+    ] {
+        let json = format!(
+            r##"{{"mark":{{"type":"errorband","interpolate":"{interpolation}","tension":0.4}},"data":{{"values":[{{"x":"a","low":1,"high":4}},{{"x":"b","low":3,"high":7}},{{"x":"c","low":2,"high":8}}]}},"encoding":{{"x":{{"field":"x","type":"nominal"}},"y":{{"field":"low","type":"quantitative"}},"y2":{{"field":"high"}}}}}}"##
+        );
+        let spec = parse(&json);
+        let scene = layout::build_scene_checked(&spec, &measurer()).unwrap();
+        let fills = filled_paths(&scene);
+        assert_eq!(fills.len(), 1, "{interpolation}");
+        let path = fills[0].0.to_ascii_lowercase();
+        assert!(
+            !path.contains("nan") && !path.contains("inf"),
+            "{interpolation}: {path}"
+        );
+    }
+}
+
+#[test]
+fn errorband_groups_keep_detail_paths_separate() {
+    let spec = parse(
+        r##"{"mark":"errorband","data":{"values":[
+        {"x":"a","low":1,"high":4,"detail":"one"},{"x":"b","low":2,"high":5,"detail":"one"},
+        {"x":"a","low":3,"high":6,"detail":"two"},{"x":"b","low":4,"high":7,"detail":"two"}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low","type":"quantitative"},"y2":{"field":"high"},"detail":{"field":"detail","type":"nominal"}}}"##,
+    );
+    let scene = layout::build_scene_checked(&spec, &measurer()).unwrap();
+    assert_eq!(filled_paths(&scene).len(), 2);
+}

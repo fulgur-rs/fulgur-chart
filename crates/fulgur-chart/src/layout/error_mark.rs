@@ -1,13 +1,16 @@
 //! Shared axis frame and errorbar Scene geometry for Vega-Lite composite marks.
 
 use crate::ir::{
-    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, ErrorMarkData, ErrorMarkKind,
-    ErrorPartStyle, ErrorPosition, ErrorRangePoint, LegendPos, ScaleKind,
+    AxisSpec, AxisTitleAlign, ChartKind, ChartSpec, Color, ErrorBandInterpolation, ErrorMarkData,
+    ErrorMarkKind, ErrorPartStyle, ErrorPosition, ErrorRangePoint, LegendPos, ScaleKind,
 };
+use crate::num::fmt_num;
 use crate::scale::{LinearScale, NiceTicks, ValueScale};
-use crate::scene::{Anchor, Prim, Scene};
+use crate::scene::{Anchor, ClipRect, Prim, Scene};
 use crate::temporal::{TemporalScale, TemporalTick};
 use crate::text::TextMeasurer;
+use std::collections::HashMap;
+use std::fmt::Write;
 
 const OUTER_PAD: f64 = 8.0;
 const TITLE_BAND: f64 = 28.0;
@@ -51,6 +54,21 @@ enum AxisMapper {
     Category { count: usize },
     FullAxis,
     Continuous(ValueScale),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MappedErrorRange {
+    /// Mapped independent coordinate: x for vertical bands, y for horizontal bands.
+    independent: f64,
+    lower: f64,
+    upper: f64,
+    horizontal: bool,
+}
+
+#[derive(Clone, Debug)]
+struct MappedErrorBand {
+    representative: ErrorRangePoint,
+    ranges: Vec<MappedErrorRange>,
 }
 
 #[derive(Clone, Debug)]
@@ -998,20 +1016,610 @@ fn draw_errorbars(items: &mut Vec<Prim>, spec: &ChartSpec, frame: &ErrorMarkFram
     }
 }
 
-/// Builds one error-mark Scene without applying the shared outer theme background pass.
-pub(crate) fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
-    let frame = compute_frame(spec, m);
+fn error_position_order(left: ErrorPosition, right: ErrorPosition) -> std::cmp::Ordering {
+    match (left, right) {
+        (ErrorPosition::FullAxis, ErrorPosition::FullAxis) => std::cmp::Ordering::Equal,
+        (ErrorPosition::Category(left), ErrorPosition::Category(right)) => left.cmp(&right),
+        (ErrorPosition::Quantitative(left), ErrorPosition::Quantitative(right)) => {
+            left.total_cmp(&right)
+        }
+        (ErrorPosition::Temporal(left), ErrorPosition::Temporal(right)) => left.cmp(&right),
+        (left, right) => error_position_kind(left).cmp(&error_position_kind(right)),
+    }
+}
+
+fn error_position_kind(position: ErrorPosition) -> u8 {
+    match position {
+        ErrorPosition::FullAxis => 0,
+        ErrorPosition::Category(_) => 1,
+        ErrorPosition::Quantitative(_) => 2,
+        ErrorPosition::Temporal(_) => 3,
+    }
+}
+
+fn mapped_errorbands(
+    spec: &ChartSpec,
+    frame: &ErrorMarkFrame,
+) -> Result<Vec<MappedErrorBand>, String> {
+    let data = error_data(spec);
+    if data.kind != ErrorMarkKind::ErrorBand {
+        return Ok(Vec::new());
+    }
+    let horizontal = data.orient == crate::ir::ErrorMarkOrient::Horizontal;
+    let measure_axis = if horizontal {
+        ErrorAxis::X
+    } else {
+        ErrorAxis::Y
+    };
+    let independent_axis = if horizontal {
+        ErrorAxis::Y
+    } else {
+        ErrorAxis::X
+    };
+    let mut groups: Vec<(usize, Option<String>, Vec<ErrorRangePoint>)> = Vec::new();
+    let mut group_indices = HashMap::new();
+    for range in &data.ranges {
+        let key = (range.series_index, range.detail.clone());
+        let index = if let Some(index) = group_indices.get(&key) {
+            *index
+        } else {
+            let index = groups.len();
+            group_indices.insert(key.clone(), index);
+            groups.push((key.0, key.1, Vec::new()));
+            index
+        };
+        groups[index].2.push(range.clone());
+    }
+
+    let mut mapped_groups = Vec::with_capacity(groups.len());
+    for (series_index, _detail, mut ranges) in groups {
+        ranges.sort_by(|left, right| error_position_order(left.position, right.position));
+        let representative = ranges[0].clone();
+        let full_axis = matches!(ranges[0].position, ErrorPosition::FullAxis);
+        if full_axis && ranges.len() != 1 {
+            return Err(
+                "an errorband without an independent axis must have one range per group".into(),
+            );
+        }
+
+        let mut mapped = Vec::with_capacity(if full_axis { 2 } else { ranges.len() });
+        for range in &ranges {
+            let independent = frame.map_position(independent_axis, range.position)?;
+            let lower = map_continuous(
+                match measure_axis {
+                    ErrorAxis::X => &frame.x_mapper,
+                    ErrorAxis::Y => &frame.y_mapper,
+                },
+                ErrorPosition::Quantitative(range.lower),
+            )
+            .ok_or_else(|| {
+                "errorband lower endpoint does not match the measured axis".to_string()
+            })?;
+            let upper = map_continuous(
+                match measure_axis {
+                    ErrorAxis::X => &frame.x_mapper,
+                    ErrorAxis::Y => &frame.y_mapper,
+                },
+                ErrorPosition::Quantitative(range.upper),
+            )
+            .ok_or_else(|| {
+                "errorband upper endpoint does not match the measured axis".to_string()
+            })?;
+            if ![independent, lower, upper]
+                .iter()
+                .all(|value| value.is_finite())
+            {
+                return Err(format!(
+                    "errorband range for series {series_index} maps to a non-finite coordinate"
+                ));
+            }
+            mapped.push(MappedErrorRange {
+                independent,
+                lower,
+                upper,
+                horizontal,
+            });
+        }
+
+        if full_axis {
+            let (start, end) = frame.full_axis_extent(independent_axis);
+            let only = mapped[0];
+            mapped.clear();
+            mapped.push(MappedErrorRange {
+                independent: start,
+                ..only
+            });
+            mapped.push(MappedErrorRange {
+                independent: end,
+                ..only
+            });
+        }
+        mapped_groups.push(MappedErrorBand {
+            representative,
+            ranges: mapped,
+        });
+    }
+    Ok(mapped_groups)
+}
+
+fn boundary_samples(
+    points: &[(f64, f64)],
+    interpolation: ErrorBandInterpolation,
+    tension: f64,
+) -> Vec<(f64, f64)> {
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    match interpolation {
+        ErrorBandInterpolation::Linear | ErrorBandInterpolation::LinearClosed => points.to_vec(),
+        ErrorBandInterpolation::Step => step_samples(points, StepInterpolation::Middle),
+        ErrorBandInterpolation::StepBefore => step_samples(points, StepInterpolation::Before),
+        ErrorBandInterpolation::StepAfter => step_samples(points, StepInterpolation::After),
+        ErrorBandInterpolation::Monotone => {
+            if points[0].0 <= points[points.len() - 1].0 {
+                crate::layout::monotone::monotone_samples(points, 8)
+            } else {
+                let reversed = points.iter().copied().rev().collect::<Vec<_>>();
+                crate::layout::monotone::monotone_samples(&reversed, 8)
+                    .into_iter()
+                    .rev()
+                    .collect()
+            }
+        }
+        ErrorBandInterpolation::Basis | ErrorBandInterpolation::BasisClosed => {
+            basis_samples(points)
+        }
+        ErrorBandInterpolation::BasisOpen if points.len() >= 4 => {
+            basis_samples(&points[1..points.len() - 1])
+        }
+        ErrorBandInterpolation::BasisOpen => basis_samples(points),
+        ErrorBandInterpolation::Bundle => bundle_samples(points, tension),
+        ErrorBandInterpolation::Cardinal | ErrorBandInterpolation::CardinalClosed => {
+            cardinal_samples(points, tension)
+        }
+        ErrorBandInterpolation::CardinalOpen if points.len() >= 4 => {
+            cardinal_samples(&points[1..points.len() - 1], tension)
+        }
+        ErrorBandInterpolation::CardinalOpen => cardinal_samples(points, tension),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StepInterpolation {
+    Middle,
+    Before,
+    After,
+}
+
+fn step_samples(points: &[(f64, f64)], interpolation: StepInterpolation) -> Vec<(f64, f64)> {
+    let mut sampled = vec![points[0]];
+    for pair in points.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        match interpolation {
+            StepInterpolation::Middle => {
+                let middle = (start.0 + end.0) / 2.0;
+                sampled.extend([(middle, start.1), (middle, end.1)]);
+            }
+            StepInterpolation::Before => sampled.push((start.0, end.1)),
+            StepInterpolation::After => sampled.push((end.0, start.1)),
+        }
+        sampled.push(end);
+    }
+    sampled
+}
+
+fn bundle_samples(points: &[(f64, f64)], tension: f64) -> Vec<(f64, f64)> {
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    let last_index = (points.len() - 1) as f64;
+    let first = points[0];
+    let last = points[points.len() - 1];
+    let blended = points
+        .iter()
+        .enumerate()
+        .map(|(index, point)| {
+            let t = index as f64 / last_index;
+            let straight = (
+                first.0 + (last.0 - first.0) * t,
+                first.1 + (last.1 - first.1) * t,
+            );
+            (
+                straight.0 * (1.0 - tension) + point.0 * tension,
+                straight.1 * (1.0 - tension) + point.1 * tension,
+            )
+        })
+        .collect::<Vec<_>>();
+    basis_samples(&blended)
+}
+
+fn cardinal_samples(points: &[(f64, f64)], tension: f64) -> Vec<(f64, f64)> {
+    const SAMPLES_PER_SEGMENT: usize = 8;
+    if points.len() < 2 {
+        return points.to_vec();
+    }
+    let mut sampled = vec![points[0]];
+    for index in 0..points.len() - 1 {
+        let p0 = points[index.saturating_sub(1)];
+        let p1 = points[index];
+        let p2 = points[index + 1];
+        let p3 = points[(index + 2).min(points.len() - 1)];
+        let tangent_scale = (1.0 - tension) / 6.0;
+        let cp1 = (
+            p1.0 + (p2.0 - p0.0) * tangent_scale,
+            p1.1 + (p2.1 - p0.1) * tangent_scale,
+        );
+        let cp2 = (
+            p2.0 - (p3.0 - p1.0) * tangent_scale,
+            p2.1 - (p3.1 - p1.1) * tangent_scale,
+        );
+        for step in 1..=SAMPLES_PER_SEGMENT {
+            sampled.push(cubic_point(
+                p1,
+                cp1,
+                cp2,
+                p2,
+                step as f64 / SAMPLES_PER_SEGMENT as f64,
+            ));
+        }
+    }
+    sampled
+}
+
+fn basis_samples(points: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    const SAMPLES_PER_SEGMENT: usize = 8;
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+    let first = points[0];
+    let second = points[1];
+    let mut current = (
+        (5.0 * first.0 + second.0) / 6.0,
+        (5.0 * first.1 + second.1) / 6.0,
+    );
+    let mut sampled = vec![first, current];
+    for index in 2..points.len() {
+        let p0 = points[index - 2];
+        let p1 = points[index - 1];
+        let p2 = points[index];
+        let control1 = ((2.0 * p0.0 + p1.0) / 3.0, (2.0 * p0.1 + p1.1) / 3.0);
+        let control2 = ((p0.0 + 2.0 * p1.0) / 3.0, (p0.1 + 2.0 * p1.1) / 3.0);
+        let end = (
+            (p0.0 + 4.0 * p1.0 + p2.0) / 6.0,
+            (p0.1 + 4.0 * p1.1 + p2.1) / 6.0,
+        );
+        append_cubic_samples(
+            &mut sampled,
+            current,
+            control1,
+            control2,
+            end,
+            SAMPLES_PER_SEGMENT,
+        );
+        current = end;
+    }
+    let penultimate = points[points.len() - 2];
+    let last = points[points.len() - 1];
+    let control1 = (
+        (2.0 * penultimate.0 + last.0) / 3.0,
+        (2.0 * penultimate.1 + last.1) / 3.0,
+    );
+    let control2 = (
+        (penultimate.0 + 2.0 * last.0) / 3.0,
+        (penultimate.1 + 2.0 * last.1) / 3.0,
+    );
+    let end = (
+        (penultimate.0 + 5.0 * last.0) / 6.0,
+        (penultimate.1 + 5.0 * last.1) / 6.0,
+    );
+    append_cubic_samples(
+        &mut sampled,
+        current,
+        control1,
+        control2,
+        end,
+        SAMPLES_PER_SEGMENT,
+    );
+    sampled.push(last);
+    sampled
+}
+
+fn append_cubic_samples(
+    output: &mut Vec<(f64, f64)>,
+    start: (f64, f64),
+    control1: (f64, f64),
+    control2: (f64, f64),
+    end: (f64, f64),
+    steps: usize,
+) {
+    for step in 1..=steps {
+        output.push(cubic_point(
+            start,
+            control1,
+            control2,
+            end,
+            step as f64 / steps as f64,
+        ));
+    }
+}
+
+fn cubic_point(
+    p0: (f64, f64),
+    cp1: (f64, f64),
+    cp2: (f64, f64),
+    p1: (f64, f64),
+    t: f64,
+) -> (f64, f64) {
+    let one_minus_t = 1.0 - t;
+    let a = one_minus_t * one_minus_t * one_minus_t;
+    let b = 3.0 * one_minus_t * one_minus_t * t;
+    let c = 3.0 * one_minus_t * t * t;
+    let d = t * t * t;
+    (
+        a * p0.0 + b * cp1.0 + c * cp2.0 + d * p1.0,
+        a * p0.1 + b * cp1.1 + c * cp2.1 + d * p1.1,
+    )
+}
+
+fn errorband_paths(
+    ranges: &[MappedErrorRange],
+    interpolation: ErrorBandInterpolation,
+    tension: f64,
+) -> Result<Option<(String, String, String)>, String> {
+    if ranges.len() < 2
+        || ranges
+            .iter()
+            .any(|range| !range.horizontal.eq(&ranges[0].horizontal))
+    {
+        return Ok(None);
+    }
+    let upper = ranges
+        .iter()
+        .map(|range| (range.independent, range.upper))
+        .collect::<Vec<_>>();
+    let lower = ranges
+        .iter()
+        .map(|range| (range.independent, range.lower))
+        .collect::<Vec<_>>();
+    let upper = boundary_samples(&upper, interpolation, tension);
+    let lower = boundary_samples(&lower, interpolation, tension);
+    if upper.len() < 2
+        || lower.len() < 2
+        || upper
+            .iter()
+            .chain(&lower)
+            .any(|point| !point.0.is_finite() || !point.1.is_finite())
+    {
+        return Err("errorband interpolation produced a non-finite coordinate".into());
+    }
+
+    let convert = |point: (f64, f64)| {
+        if ranges[0].horizontal {
+            (point.1, point.0)
+        } else {
+            point
+        }
+    };
+    let polygon_points = upper
+        .iter()
+        .copied()
+        .chain(lower.iter().copied().rev())
+        .map(convert)
+        .collect::<Vec<_>>();
+    let polygon = path_from_points(&polygon_points, true)
+        .ok_or_else(|| "errorband polygon contains a non-finite coordinate".to_string())?;
+    let upper = path_from_points(
+        &upper.iter().copied().map(convert).collect::<Vec<_>>(),
+        false,
+    )
+    .ok_or_else(|| "errorband upper boundary contains a non-finite coordinate".to_string())?;
+    let lower = path_from_points(
+        &lower.iter().copied().map(convert).collect::<Vec<_>>(),
+        false,
+    )
+    .ok_or_else(|| "errorband lower boundary contains a non-finite coordinate".to_string())?;
+    Ok(Some((polygon, upper, lower)))
+}
+
+fn path_from_points(points: &[(f64, f64)], close: bool) -> Option<String> {
+    let first = *points.first()?;
+    if !first.0.is_finite() || !first.1.is_finite() {
+        return None;
+    }
+    let mut path = String::new();
+    write!(path, "M {} {}", fmt_num(first.0), fmt_num(first.1)).ok()?;
+    for &(x, y) in &points[1..] {
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        write!(path, " L {} {}", fmt_num(x), fmt_num(y)).ok()?;
+    }
+    if close {
+        path.push_str(" Z");
+    }
+    Some(path)
+}
+
+fn errorband_color(
+    spec: &ChartSpec,
+    range: &ErrorRangePoint,
+    style: &ErrorPartStyle,
+    fill: bool,
+) -> Color {
+    let series = spec.series.get(range.series_index);
+    let base = if fill {
+        style.fill.or(style.stroke).or_else(|| {
+            series.and_then(|series| series.fill.first().or(series.stroke.first()).copied())
+        })
+    } else {
+        style.stroke.or(style.fill).or_else(|| {
+            series.and_then(|series| series.stroke.first().or(series.fill.first()).copied())
+        })
+    }
+    .unwrap_or(spec.theme.text_color);
+    let mark_opacity = error_data(spec).style.opacity;
+    let part_opacity = style.opacity.unwrap_or(1.0);
+    Color {
+        a: base.a * (mark_opacity * part_opacity) as f32,
+        ..base
+    }
+}
+
+fn errorband_clip(frame: &ErrorMarkFrame) -> Box<ClipRect> {
+    Box::new(ClipRect {
+        x: frame.plot_left,
+        y: frame.plot_top,
+        w: (frame.plot_right - frame.plot_left).max(0.0),
+        h: (frame.plot_bottom - frame.plot_top).max(0.0),
+    })
+}
+
+fn push_errorband_fill(
+    items: &mut Vec<Prim>,
+    path: String,
+    fill: Color,
+    clip: bool,
+    frame: &ErrorMarkFrame,
+) {
+    if clip {
+        items.push(Prim::ClippedPath {
+            d: path,
+            fill: Some(fill),
+            stroke: None,
+            stroke_width: 0.0,
+            clip: errorband_clip(frame),
+        });
+    } else {
+        items.push(Prim::Path {
+            d: path,
+            fill: Some(fill),
+            stroke: None,
+            stroke_width: 0.0,
+        });
+    }
+}
+
+fn push_errorband_border(
+    items: &mut Vec<Prim>,
+    path: String,
+    stroke: Color,
+    width: f64,
+    dash: &[f64],
+    clip: bool,
+    frame: &ErrorMarkFrame,
+) {
+    if dash.is_empty() {
+        if clip {
+            items.push(Prim::ClippedPath {
+                d: path,
+                fill: None,
+                stroke: Some(stroke),
+                stroke_width: width,
+                clip: errorband_clip(frame),
+            });
+        } else {
+            items.push(Prim::Path {
+                d: path,
+                fill: None,
+                stroke: Some(stroke),
+                stroke_width: width,
+            });
+        }
+        return;
+    }
+
+    let styled = Prim::StyledPath {
+        d: path,
+        stroke,
+        stroke_width: width,
+        dash: dash.to_vec(),
+        dash_offset: 0.0,
+    };
+    if clip {
+        items.push(Prim::Group {
+            translate_x: 0.0,
+            translate_y: 0.0,
+            clip: Some(errorband_clip(frame)),
+            children: vec![styled],
+        });
+    } else {
+        items.push(styled);
+    }
+}
+
+fn draw_errorbands(
+    items: &mut Vec<Prim>,
+    spec: &ChartSpec,
+    frame: &ErrorMarkFrame,
+    groups: &[MappedErrorBand],
+) -> Result<(), String> {
+    let data = error_data(spec);
+    if data.kind != ErrorMarkKind::ErrorBand {
+        return Ok(());
+    }
+    for group in groups {
+        let Some((polygon, upper, lower)) =
+            errorband_paths(&group.ranges, data.style.interpolation, data.style.tension)?
+        else {
+            continue;
+        };
+        if data.style.band.visible {
+            push_errorband_fill(
+                items,
+                polygon,
+                errorband_color(spec, &group.representative, &data.style.band, true),
+                data.style.clip,
+                frame,
+            );
+        }
+        if data.style.borders.visible {
+            let color = errorband_color(spec, &group.representative, &data.style.borders, false);
+            let width = data
+                .style
+                .borders
+                .stroke_width
+                .unwrap_or(DEFAULT_RULE_WIDTH);
+            for path in [upper, lower] {
+                push_errorband_border(
+                    items,
+                    path,
+                    color,
+                    width,
+                    &data.style.borders.stroke_dash,
+                    data.style.clip,
+                    frame,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn build_with_bands(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    frame: ErrorMarkFrame,
+    bands: Vec<MappedErrorBand>,
+) -> Result<Scene, String> {
     let mut items = Vec::new();
     draw_chart_title(&mut items, spec, &frame);
     draw_axis(&mut items, spec, &frame, ErrorAxis::X);
     draw_axis(&mut items, spec, &frame, ErrorAxis::Y);
     draw_legend(&mut items, spec, &frame, m);
     draw_errorbars(&mut items, spec, &frame);
-    Scene {
+    draw_errorbands(&mut items, spec, &frame, &bands)?;
+    Ok(Scene {
         width: frame.width,
         height: frame.height,
         items,
-    }
+    })
+}
+
+/// Builds one error-mark Scene without applying the shared outer theme background pass.
+pub(crate) fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
+    let frame = compute_frame(spec, m);
+    let bands = mapped_errorbands(spec, &frame).expect("errorband coordinates must be valid");
+    build_with_bands(spec, m, frame, bands).expect("errorband geometry must be finite")
 }
 
 pub(crate) fn build_checked(
@@ -1020,7 +1628,12 @@ pub(crate) fn build_checked(
     primitive_limit: usize,
 ) -> Result<Scene, String> {
     crate::guard::validate_error_mark(spec, primitive_limit)?;
-    Ok(build(spec, m))
+    if error_data(spec).kind == ErrorMarkKind::ErrorBar {
+        return Ok(build(spec, m));
+    }
+    let frame = compute_frame(spec, m);
+    let bands = mapped_errorbands(spec, &frame)?;
+    build_with_bands(spec, m, frame, bands)
 }
 
 #[cfg(test)]
