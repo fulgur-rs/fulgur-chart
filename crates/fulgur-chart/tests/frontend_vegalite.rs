@@ -3943,31 +3943,31 @@ fn vegalite_trail_size_aggregates_per_point_and_scales_across_groups() {
     assert_eq!(spec.categories, ["a", "b"]);
     assert_eq!(spec.series.len(), 2);
     assert_eq!(spec.series[0].values, [3.0, 1.0]);
-    assert_eq!(spec.series[0].trail_widths.len(), 2);
-    assert!((spec.series[0].trail_widths[0] - (1.0 + 20.0 / 90.0 * 3.0)).abs() < 1e-12);
-    assert_eq!(spec.series[0].trail_widths[1], 1.0);
-    assert_eq!(spec.series[1].trail_widths, [4.0, 1.0]);
+    assert_eq!(spec.series[0].trail_widths_slice().len(), 2);
+    assert!((spec.series[0].trail_widths_slice()[0] - (1.0 + 20.0 / 90.0 * 3.0)).abs() < 1e-12);
+    assert_eq!(spec.series[0].trail_widths_slice()[1], 1.0);
+    assert_eq!(spec.series[1].trail_widths_slice(), &[4.0, 1.0]);
 }
 
 #[test]
 fn vegalite_trail_size_defaults_to_one_and_constant_encoding_to_midpoint() {
     let base = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1,"size":7},{"x":"b","y":2,"size":7}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"}}}"#;
     let no_size = vegalite::parse(base, true).expect("trail without size should parse");
-    assert_eq!(no_size.series[0].trail_widths, [1.0, 1.0]);
+    assert_eq!(no_size.series[0].trail_widths_slice(), &[1.0, 1.0]);
 
     let null_size = base.replace(
         r#""y":{"field":"y","type":"quantitative"}"#,
         r#""y":{"field":"y","type":"quantitative"},"size":null"#,
     );
     let null_size = vegalite::parse(&null_size, true).expect("null size should be omitted");
-    assert_eq!(null_size.series[0].trail_widths, [1.0, 1.0]);
+    assert_eq!(null_size.series[0].trail_widths_slice(), &[1.0, 1.0]);
 
     let constant_size = base.replace(
         r#""y":{"field":"y","type":"quantitative"}"#,
         r#""y":{"field":"y","type":"quantitative"},"size":{"field":"size"}"#,
     );
     let constant_size = vegalite::parse(&constant_size, true).expect("constant size should parse");
-    assert_eq!(constant_size.series[0].trail_widths, [2.5, 2.5]);
+    assert_eq!(constant_size.series[0].trail_widths_slice(), &[2.5, 2.5]);
 }
 
 #[test]
@@ -4049,7 +4049,7 @@ fn vegalite_temporal_trail_sorts_timestamps_and_keeps_widths_aligned() {
         Ok(fulgur_chart::schema::VegaLiteSpec::TemporalTrail(_))
     ));
     assert_eq!(spec.series[0].values, [1.0, 5.0]);
-    assert_eq!(spec.series[0].trail_widths, [1.0, 4.0]);
+    assert_eq!(spec.series[0].trail_widths_slice(), &[1.0, 4.0]);
     assert_eq!(spec.categories.len(), 2);
 }
 
@@ -4079,10 +4079,10 @@ fn vegalite_temporal_trail_rejects_sparse_color_groups() {
 fn vegalite_trail_size_scales_finite_extreme_and_negative_values() {
     let json = r#"{"mark":"trail","data":{"values":[{"x":"a","y":1,"size":-1.7976931348623157e308},{"x":"b","y":2,"size":1.7976931348623157e308}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"},"size":{"field":"size"}}}"#;
     let spec = vegalite::parse(json, true).expect("finite extreme size domain should parse");
-    assert_eq!(spec.series[0].trail_widths, [1.0, 4.0]);
+    assert_eq!(spec.series[0].trail_widths_slice(), &[1.0, 4.0]);
     assert!(
         spec.series[0]
-            .trail_widths
+            .trail_widths_slice()
             .iter()
             .all(|width| width.is_finite())
     );
@@ -4156,8 +4156,8 @@ fn vegalite_trail_aggregates_a_large_categorical_domain() {
     assert_eq!(spec.series[1].name, "B");
     assert_eq!(spec.series[0].values[0], 1.0);
     assert_eq!(spec.series[1].values[point_count - 1], 2.0);
-    assert_eq!(spec.series[0].trail_widths[0], 1.0);
-    assert_eq!(spec.series[1].trail_widths[point_count - 1], 4.0);
+    assert_eq!(spec.series[0].trail_widths_slice()[0], 1.0);
+    assert_eq!(spec.series[1].trail_widths_slice()[point_count - 1], 4.0);
 }
 
 #[test]

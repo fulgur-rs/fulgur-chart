@@ -315,23 +315,25 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                     spec.categories.len()
                 ));
             }
-            if series.trail_widths.len() != spec.categories.len() {
+            let widths = series.trail_widths_slice();
+            if series.trail_widths.is_none() {
+                return Err(format!(
+                    "trail widths are missing for series {series_index}"
+                ));
+            }
+            if widths.len() != spec.categories.len() {
                 return Err(format!(
                     "trail width count {} does not match domain count {} for series {series_index}",
-                    series.trail_widths.len(),
+                    widths.len(),
                     spec.categories.len()
                 ));
             }
-            if series.trail_widths.iter().any(|width| !width.is_finite()) {
+            if widths.iter().any(|width| !width.is_finite()) {
                 return Err(format!(
                     "trail widths must be finite for series {series_index}"
                 ));
             }
-            if series
-                .trail_widths
-                .iter()
-                .any(|width| !(1.0..=4.0).contains(width))
-            {
+            if widths.iter().any(|width| !(1.0..=4.0).contains(width)) {
                 return Err(format!(
                     "trail widths must be between 1 and 4 pixels for series {series_index}"
                 ));
@@ -340,7 +342,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
     } else if spec
         .series
         .iter()
-        .any(|series| !series.trail_widths.is_empty())
+        .any(|series| series.trail_widths.is_some())
     {
         return Err("trail widths are only valid for trail charts".to_string());
     }
@@ -1715,7 +1717,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
-            trail_widths: vec![],
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -1759,7 +1761,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
-            trail_widths: vec![],
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -1797,7 +1799,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
-            trail_widths: vec![],
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -1834,7 +1836,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
-            trail_widths: vec![],
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -2730,7 +2732,7 @@ mod trail_guard_tests {
     #[test]
     fn trail_widths_must_align_with_the_domain_and_be_in_range() {
         let mut spec = trail_spec();
-        spec.series[0].trail_widths.pop();
+        spec.series[0].trail_widths.as_mut().unwrap().pop();
         let error = validate_spec(&spec, &InputLimits::default()).unwrap_err();
         assert!(
             error.contains("trail width count"),
@@ -2738,7 +2740,7 @@ mod trail_guard_tests {
         );
 
         let mut spec = trail_spec();
-        spec.series[0].trail_widths[0] = f64::NAN;
+        spec.series[0].trail_widths.as_mut().unwrap()[0] = f64::NAN;
         let error = validate_spec(&spec, &InputLimits::default()).unwrap_err();
         assert!(
             error.contains("trail widths must be finite"),
@@ -2746,7 +2748,7 @@ mod trail_guard_tests {
         );
 
         let mut spec = trail_spec();
-        spec.series[0].trail_widths[0] = 4.1;
+        spec.series[0].trail_widths.as_mut().unwrap()[0] = 4.1;
         let error = validate_spec(&spec, &InputLimits::default()).unwrap_err();
         assert!(
             error.contains("trail widths must be between 1 and 4"),

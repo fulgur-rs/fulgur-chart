@@ -901,7 +901,7 @@ mod tests {
                 bar_geometry: None,
                 series_type: SeriesType::Bar,
                 point_radius: None,
-                trail_widths: vec![],
+                trail_widths: None,
                 violin_samples: vec![],
                 box_points: vec![],
                 tree: vec![],

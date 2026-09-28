@@ -1592,7 +1592,7 @@ fn build_categorical(
             stack: None,
             bar_geometry: None,
             point_radius: None,
-            trail_widths: vec![],
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -1611,14 +1611,16 @@ fn build_categorical(
                 }
             }
             for (series, values) in series.iter_mut().zip(size_values) {
-                series.trail_widths = values
-                    .into_iter()
-                    .map(|value| trail_width(value, min, max))
-                    .collect();
+                series.trail_widths = Some(Box::new(
+                    values
+                        .into_iter()
+                        .map(|value| trail_width(value, min, max))
+                        .collect(),
+                ));
             }
         } else {
             for series in &mut series {
-                series.trail_widths = vec![1.0; categories.len()];
+                series.trail_widths = Some(Box::new(vec![1.0; categories.len()]));
             }
         }
     }
@@ -1930,7 +1932,7 @@ fn build_temporal_line(
             bar_geometry: None,
             series_type: SeriesType::Line,
             point_radius: Some(if point { 3.0 } else { 0.0 }),
-            trail_widths: vec![],
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -1953,14 +1955,16 @@ fn build_temporal_line(
                 .copied()
                 .fold(f64::NEG_INFINITY, f64::max);
             for (series, sizes) in series.iter_mut().zip(trail_size_values) {
-                series.trail_widths = sizes
-                    .into_iter()
-                    .map(|size| trail_width(size, min, max))
-                    .collect();
+                series.trail_widths = Some(Box::new(
+                    sizes
+                        .into_iter()
+                        .map(|size| trail_width(size, min, max))
+                        .collect(),
+                ));
             }
         } else {
             for series in &mut series {
-                series.trail_widths = vec![1.0; domain.len()];
+                series.trail_widths = Some(Box::new(vec![1.0; domain.len()]));
             }
         }
     }
@@ -2487,7 +2491,7 @@ fn build_scatter(
                 bar_geometry: None,
                 series_type: SeriesType::Bar,
                 point_radius: None,
-                trail_widths: vec![],
+                trail_widths: None,
                 violin_samples: vec![],
                 box_points: vec![],
                 tree: vec![],
@@ -2584,7 +2588,7 @@ fn build_pie(
         bar_geometry: None,
         series_type: SeriesType::Bar,
         point_radius: None,
-        trail_widths: vec![],
+        trail_widths: None,
         violin_samples: vec![],
         box_points: vec![],
         tree: vec![],

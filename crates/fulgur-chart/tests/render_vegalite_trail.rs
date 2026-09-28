@@ -83,7 +83,10 @@ fn trail_decimation_keeps_widths_aligned() {
         samples: Some(3.0),
         threshold: Some(3.0),
     };
-    assert_eq!(spec.series[0].trail_widths.len(), spec.categories.len());
+    assert_eq!(
+        spec.series[0].trail_widths_slice().len(),
+        spec.categories.len()
+    );
 
     let measurer = TextMeasurer::new(fulgur_chart::font::DEFAULT_FONT).unwrap();
     let decimated_scene = layout::build_scene(&spec, &measurer);

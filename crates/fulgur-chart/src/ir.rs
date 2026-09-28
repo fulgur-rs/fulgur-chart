@@ -343,8 +343,8 @@ pub struct Series {
     /// scatter のマーカー半径(chart.js pointRadius)。None なら既定値。
     /// bubble では point.r を優先し、欠落時のフォールバックに使う。
     pub point_radius: Option<f64>,
-    /// Vega-Lite trail の点ごとの幅(px)。Trail 以外では空。
-    pub trail_widths: Vec<f64>,
+    /// Vega-Lite trail の点ごとの幅(px)。Trail 以外では None。
+    pub trail_widths: Option<Box<Vec<f64>>>,
     /// violin のカテゴリごとの生サンプル。violin 種別のみ使用、他は空。None は入力 null。
     pub violin_samples: Vec<Vec<Option<f64>>>,
     /// boxplot の5数要約データ。boxplot 種別のみ使用、他は空。
@@ -356,6 +356,11 @@ pub struct Series {
 }
 
 impl Series {
+    /// 点ごとのTrail幅をsliceで返す。Trail以外は空slice。
+    pub fn trail_widths_slice(&self) -> &[f64] {
+        self.trail_widths.as_deref().map_or(&[], Vec::as_slice)
+    }
+
     /// i 番目のデータ点の塗り色。空なら黒、len==1 ならブロードキャスト。
     pub fn fill_at(&self, i: usize) -> Color {
         color_at(&self.fill, i)
@@ -1058,7 +1063,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
-            trail_widths: vec![],
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -1087,7 +1092,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
-            trail_widths: vec![],
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],
@@ -1131,7 +1136,7 @@ mod tests {
             bar_geometry: None,
             series_type: SeriesType::Bar,
             point_radius: None,
-            trail_widths: vec![],
+            trail_widths: None,
             violin_samples: vec![],
             box_points: vec![],
             tree: vec![],

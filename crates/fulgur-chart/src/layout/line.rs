@@ -1567,7 +1567,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         let border_dash_offset = line_style.map_or(0.0, |style| style.border_dash_offset);
         for seg in &segments {
             if is_trail {
-                if let Some(d) = trail_outline_path(seg, &ser.trail_widths) {
+                if let Some(d) = trail_outline_path(seg, ser.trail_widths_slice()) {
                     items.push(Prim::ClippedPath {
                         d,
                         fill: Some(ser.fill_at(0)),
@@ -2636,7 +2636,7 @@ mod tests {
                         bar_geometry: None,
                         series_type: crate::ir::SeriesType::Line,
                         point_radius: None,
-                        trail_widths: vec![],
+                        trail_widths: None,
                         violin_samples: vec![],
                         box_points: vec![],
                         tree: vec![],
@@ -3240,7 +3240,7 @@ mod tests {
         let spec = trail_spec_for(
             r#"{"mark":"trail","data":{"values":[{"x":"a","y":1,"size":10},{"x":"b","y":1,"size":20}]},"encoding":{"x":{"field":"x"},"y":{"field":"y","type":"quantitative"},"size":{"field":"size"}}}"#,
         );
-        assert_eq!(spec.series[0].trail_widths, [1.0, 4.0]);
+        assert_eq!(spec.series[0].trail_widths_slice(), &[1.0, 4.0]);
         let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
         let frame = common::compute(&spec, &measurer);
         let x0 = common::line_x(&spec, &frame, 0);
@@ -3371,7 +3371,8 @@ mod tests {
             source.len(),
             frame.plot_right - frame.plot_left
         );
-        let expected = trail_outline_path(&retained[0], &spec.series[0].trail_widths).unwrap();
+        let expected =
+            trail_outline_path(&retained[0], spec.series[0].trail_widths_slice()).unwrap();
         let scene = build(&spec, &measurer);
         let actual = scene
             .items
