@@ -440,12 +440,9 @@ fn validate_circle_device_bounds(scene: &Scene, scale: f32) -> Result<(), String
                 .map(f64::abs)
                 .fold(0.0_f64, f64::max)
             });
-            let max_device_coord = ((cx + translate_x)
-                .abs()
-                .max((cy + translate_y).abs())
-                + extent)
-                .max(clip_extent)
-                * scale;
+            let max_device_coord =
+                ((cx + translate_x).abs().max((cy + translate_y).abs()) + extent).max(clip_extent)
+                    * scale;
             if !max_device_coord.is_finite() || max_device_coord > MAX_SAFE_DEVICE_CIRCLE_COORD_PX {
                 error = Some(format!(
                     "raster circle device bounds exceed safe coordinate limit of {:.0} px",
@@ -1276,6 +1273,8 @@ fn render_prim(
                 clip.y.to_bits(),
                 clip.w.to_bits(),
                 clip.h.to_bits(),
+                transform.tx.to_bits(),
+                transform.ty.to_bits(),
             );
             if let std::collections::hash_map::Entry::Vacant(entry) = clip_masks.entry(key) {
                 let Some(rect) =
@@ -3820,6 +3819,49 @@ mod tests {
         let stamped = scene_to_pixmap_with(&scene, 1.0, &face, &PNG_LIMITS, STAMP_MIN_RUN).unwrap();
         let reference = scene_to_pixmap_with(&scene, 1.0, &face, &PNG_LIMITS, usize::MAX).unwrap();
         assert_eq!(stamped.data(), reference.data());
+    }
+
+    #[test]
+    fn translated_groups_render_clipped_circles_with_local_masks() {
+        let clip = crate::scene::ClipRect {
+            x: 0.0,
+            y: 0.0,
+            w: 8.0,
+            h: 8.0,
+        };
+        let make_group = |translate_x| Prim::Group {
+            translate_x,
+            translate_y: 0.0,
+            clip: None,
+            children: vec![Prim::ClippedCircle {
+                cx: 4.0,
+                cy: 4.0,
+                r: 2.0,
+                fill: RED,
+                stroke: RED,
+                stroke_width: 0.0,
+                clip: Box::new(clip),
+            }],
+        };
+        let scene = Scene {
+            width: 32.0,
+            height: 12.0,
+            items: vec![make_group(2.0), make_group(20.0)],
+        };
+
+        let svg = crate::svg::render_svg(&scene, "sans-serif");
+        assert!(svg.contains(r#"<clipPath id="clip0" clipPathUnits="userSpaceOnUse">"#));
+        assert_eq!(svg.matches(r#"clip-path="url(#clip0)""#).count(), 2);
+
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let pixmap = scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap();
+        let alpha_at =
+            |x: usize, y: usize| pixmap.data()[(y * pixmap.width() as usize + x) * 4 + 3];
+        assert!(alpha_at(6, 4) > 0, "first translated circle should render");
+        assert!(
+            alpha_at(24, 4) > 0,
+            "second translated circle should render"
+        );
     }
 
     #[test]
