@@ -224,8 +224,8 @@ pub fn render(
 ) -> Result<Vec<u8>, RenderError> {
     match format {
         OutputFormat::Svg | OutputFormat::DataUri => {
-            // render_chart は Result を返さない（パニックしない）。
-            let svg = render::render_chart(spec);
+            let svg = render::render_chart_with_limits(spec, &guard::InputLimits::default())
+                .map_err(RenderError::Render)?;
             Ok(svg.into_bytes())
         }
         OutputFormat::Png => {

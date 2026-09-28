@@ -620,6 +620,112 @@ pub enum SankeySize {
     Max,
 }
 
+/// GeoJSON geometry retained in the chart IR until projection/layout.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GeoGeometry {
+    Point([f64; 2]),
+    MultiPoint(Vec<[f64; 2]>),
+    LineString(Vec<[f64; 2]>),
+    MultiLineString(Vec<Vec<[f64; 2]>>),
+    Polygon(Vec<Vec<[f64; 2]>>),
+    MultiPolygon(Vec<Vec<Vec<[f64; 2]>>>),
+    GeometryCollection(Vec<GeoGeometry>),
+}
+
+impl GeoGeometry {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::Point(_) => "Point",
+            Self::MultiPoint(_) => "MultiPoint",
+            Self::LineString(_) => "LineString",
+            Self::MultiLineString(_) => "MultiLineString",
+            Self::Polygon(_) => "Polygon",
+            Self::MultiPolygon(_) => "MultiPolygon",
+            Self::GeometryCollection(_) => "GeometryCollection",
+        }
+    }
+}
+
+/// A validated GeoJSON feature and its resolved choropleth fill.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeoFeature {
+    pub geometry: Option<GeoGeometry>,
+    pub fill: Option<Color>,
+}
+
+/// One of the projection types accepted by the Vega-Lite v6 schema.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeoProjectionType {
+    Albers,
+    AlbersUsa,
+    AzimuthalEqualArea,
+    AzimuthalEquidistant,
+    ConicConformal,
+    ConicEqualArea,
+    ConicEquidistant,
+    EqualEarth,
+    Equirectangular,
+    Gnomonic,
+    Identity,
+    Mercator,
+    NaturalEarth1,
+    Orthographic,
+    Stereographic,
+    TransverseMercator,
+}
+
+/// Projection settings shared by the native and WASM render paths.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeoProjection {
+    pub projection_type: GeoProjectionType,
+    pub center: Option<[f64; 2]>,
+    pub rotate: Option<[f64; 3]>,
+    pub clip_angle: Option<f64>,
+    pub clip_extent: Option<[[f64; 2]; 2]>,
+    pub parallels: Option<[f64; 2]>,
+    pub point_radius: f64,
+    pub precision: Option<f64>,
+    pub scale: Option<f64>,
+    pub translate: Option<[f64; 2]>,
+    pub reflect_x: bool,
+    pub reflect_y: bool,
+}
+
+impl Default for GeoProjection {
+    fn default() -> Self {
+        Self {
+            projection_type: GeoProjectionType::EqualEarth,
+            center: None,
+            rotate: None,
+            clip_angle: None,
+            clip_extent: None,
+            parallels: None,
+            point_radius: 4.5,
+            precision: None,
+            scale: None,
+            translate: None,
+            reflect_x: false,
+            reflect_y: false,
+        }
+    }
+}
+
+/// Constant styling shared by all GeoJSON features.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GeoShapeStyle {
+    pub fill: Option<Color>,
+    pub stroke: Option<Color>,
+    pub stroke_width: f64,
+}
+
+/// GeoJSON data and projection settings for a Vega-Lite geoshape mark.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeoShape {
+    pub features: Vec<GeoFeature>,
+    pub projection: GeoProjection,
+    pub style: GeoShapeStyle,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChartKind {
     Bar {
@@ -667,6 +773,10 @@ pub enum ChartKind {
         /// cells[row][col] = 解決済み Color または None(欠損/skip)。
         /// row: y_labels の index、col: x_labels の index。
         cells: Vec<Vec<Option<Color>>>,
+    },
+    /// Vega-Lite `mark: "geoshape"` with inline GeoJSON features.
+    GeoShape {
+        data: Box<GeoShape>,
     },
     /// QuickChart 互換の progress バー。軸なし水平バー。
     /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。

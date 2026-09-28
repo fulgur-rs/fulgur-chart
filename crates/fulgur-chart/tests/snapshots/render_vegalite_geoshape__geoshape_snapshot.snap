@@ -1,0 +1,6 @@
+---
+source: crates/fulgur-chart/tests/render_vegalite_geoshape.rs
+assertion_line: 15
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="280" viewBox="0 0 480 280"><rect x="0" y="0" width="480" height="280" fill="#e8eef5"/><text x="240" y="24" font-family="Noto Sans JP, sans-serif" font-size="16" text-anchor="middle" fill="#333333">Population density by region</text><path d="M 16.5 250.76 L 42.01 200.58 L 70.76 151.89 L 102.82 104.87 L 138.18 59.76 L 200.31 57.24 L 258.43 59.76 L 227.27 104.87 L 199.03 151.89 L 173.7 200.58 L 151.23 250.76 L 118.44 248.77 L 85.04 248.11 Z M 88.21 180.34 L 140.34 180.34 L 166.34 135.09 L 115.56 135.09 Z" fill="#ffffff" stroke="#ffffff" stroke-width="1"/><path d="M 250.03 250.76 L 267.76 206.41 L 287.49 163.2 L 309.26 121.26 L 333.07 80.74 L 366.93 78.52 L 399.99 77.78 L 432.2 78.52 L 463.5 80.74 L 443.5 121.26 L 425.21 163.2 L 408.64 206.41 L 393.75 250.76 L 358.61 248.5 L 322.93 247.74 L 286.72 248.5 Z" fill="#4c78a8" stroke="#ffffff" stroke-width="1"/></svg>

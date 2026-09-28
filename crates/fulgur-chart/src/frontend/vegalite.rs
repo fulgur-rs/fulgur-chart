@@ -14,7 +14,7 @@
 
 use crate::color::parse_color;
 use crate::ir::*;
-use crate::palette::vegalite_theme;
+use crate::palette::{VEGALITE_PALETTE, vegalite_theme};
 use crate::temporal::{bounded_error_fragment, parse_rfc3339_millis};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -47,6 +47,9 @@ pub fn parse_with_limits(
         .ok_or_else(|| "トップレベルは object でなければなりません".to_string())?;
 
     let mut kind = parse_mark(top.get("mark"))?;
+    if matches!(&kind, ChartKind::GeoShape { .. }) {
+        return parse_geoshape_spec(top, limits);
+    }
     let is_area = read_mark_name(top) == Some("area");
     // Reject this immediately, before validating data or encoding, so the unsupported
     // area + point combination is reported whenever the key is present.
@@ -462,6 +465,605 @@ pub fn parse_with_limits(
     })
 }
 
+fn parse_geoshape_spec(
+    top: &Map<String, Value>,
+    limits: &crate::guard::InputLimits,
+) -> Result<ChartSpec, String> {
+    let data = top
+        .get("data")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "geoshape requires an inline data object".to_string())?;
+    if data.contains_key("url") {
+        return Err(
+            "data.url is unsupported for geoshape; provide inline GeoJSON in data.values"
+                .to_string(),
+        );
+    }
+    if let Some(format) = data.get("format").filter(|value| !value.is_null()) {
+        let format = format
+            .as_object()
+            .ok_or_else(|| "data.format must be an object for geoshape".to_string())?;
+        let format_type = format
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "data.format.type must be a string for geoshape".to_string())?;
+        if format_type.eq_ignore_ascii_case("topojson") {
+            return Err(
+                "TopoJSON is unsupported for geoshape; convert it to inline GeoJSON first"
+                    .to_string(),
+            );
+        }
+        return Err(format!(
+            "data.format.type {format_type:?} is unsupported for geoshape; provide inline GeoJSON"
+        ));
+    }
+    let values = data
+        .get("values")
+        .ok_or_else(|| "geoshape requires inline data.values GeoJSON".to_string())?;
+
+    let encoding = match top.get("encoding") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(
+            value
+                .as_object()
+                .ok_or_else(|| "encoding must be an object for geoshape".to_string())?,
+        ),
+    };
+    let shape_field = encoding
+        .and_then(|encoding| encoding.get("shape"))
+        .map(parse_geoshape_field_channel)
+        .transpose()?;
+    let color_encoding = encoding
+        .and_then(|encoding| encoding.get("color"))
+        .filter(|value| !value.is_null())
+        .map(parse_geoshape_color_encoding)
+        .transpose()?;
+
+    let features = crate::geoshape::parse_geojson(values, shape_field.as_deref(), limits)?;
+    let projection = parse_geoshape_projection(top.get("projection"))?;
+    let mut style = parse_geoshape_mark_style(top.get("mark"))?;
+    let mark_fill_is_explicit = top
+        .get("mark")
+        .and_then(Value::as_object)
+        .is_some_and(|mark| mark.contains_key("fill") || mark.contains_key("color"));
+    let mut feature_fills = vec![None; features.len()];
+    if let Some(GeoshapeColorEncoding::Field(field, type_hint)) = &color_encoding {
+        feature_fills =
+            resolve_geoshape_colors(&features, field, type_hint.clone(), VEGALITE_PALETTE)?;
+        // A missing choropleth value remains unfilled; mark.fill/color is only a default when
+        // there is no field encoding.
+        style.fill = None;
+    } else if let Some(GeoshapeColorEncoding::Value(color)) = color_encoding {
+        style.fill = Some(color);
+    } else if style.fill.is_none() && !mark_fill_is_explicit {
+        // Vega-Lite's default geoshape color is the first Tableau10 color.
+        style.fill = Some(GEOSHAPE_DEFAULT_COLOR);
+    }
+
+    let mut theme = vegalite_theme();
+    if let Some(background) = top.get("background").filter(|value| !value.is_null()) {
+        let color = background
+            .as_str()
+            .and_then(parse_color)
+            .ok_or_else(|| "background must be a valid color".to_string())?;
+        theme.background = Some(color);
+    }
+    let width = top
+        .get("width")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(800.0);
+    let height = top
+        .get("height")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(450.0);
+    let title = match top.get("title") {
+        Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
+        Some(Value::Object(object)) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string),
+        _ => None,
+    };
+
+    Ok(ChartSpec {
+        kind: ChartKind::GeoShape {
+            data: Box::new(GeoShape {
+                features: features
+                    .into_iter()
+                    .zip(feature_fills)
+                    .map(|(feature, fill)| GeoFeature {
+                        geometry: feature.geometry,
+                        fill,
+                    })
+                    .collect(),
+                projection,
+                style,
+            }),
+        },
+        series: Vec::new(),
+        categories: Vec::new(),
+        x_positions: XPositions::Category,
+        y_positions: XPositions::Category,
+        x_axis: geoshape_axis_spec(),
+        y_axis: geoshape_axis_spec(),
+        legend: LegendPos::None,
+        legend_options: crate::ir::LegendOptions::default(),
+        legend_title: None,
+        title,
+        width,
+        height,
+        size_mode: SizeMode::Canvas,
+        data_labels: false,
+        theme,
+        decimation: Decimation::default(),
+        radial_axis: None,
+    })
+}
+
+fn geoshape_axis_spec() -> AxisSpec {
+    AxisSpec {
+        title: None,
+        min: None,
+        max: None,
+        suggested_min: None,
+        suggested_max: None,
+        begin_at_zero: false,
+        offset: false,
+        grid: AxisGrid::default(),
+        border: AxisBorder::default(),
+        scale_kind: ScaleKind::Linear,
+        time: None,
+        ticks: AxisTickOptions::default(),
+    }
+}
+
+fn parse_geoshape_field_channel(value: &Value) -> Result<String, String> {
+    let channel = value
+        .as_object()
+        .ok_or_else(|| "encoding.shape must be an object".to_string())?;
+    let field = channel
+        .get("field")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "encoding.shape.field must be a string".to_string())?;
+    if field.is_empty() {
+        return Err("encoding.shape.field must not be empty".to_string());
+    }
+    if let Some(field_type) = channel.get("type").filter(|value| !value.is_null())
+        && field_type.as_str() != Some("geojson")
+    {
+        return Err("encoding.shape.type must be \"geojson\"".to_string());
+    }
+    Ok(field.to_string())
+}
+
+enum GeoshapeColorEncoding {
+    Field(String, Option<String>),
+    Value(Color),
+}
+
+fn parse_geoshape_color_encoding(value: &Value) -> Result<GeoshapeColorEncoding, String> {
+    let channel = value
+        .as_object()
+        .ok_or_else(|| "encoding.color must be an object".to_string())?;
+    if channel.contains_key("scale") {
+        return Err("encoding.color.scale is unsupported for geoshape".to_string());
+    }
+    match (channel.get("field"), channel.get("value")) {
+        (Some(Value::String(field)), None) if !field.is_empty() => {
+            let type_hint = match channel.get("type").filter(|value| !value.is_null()) {
+                None => None,
+                Some(Value::String(value))
+                    if matches!(value.as_str(), "quantitative" | "nominal" | "ordinal") =>
+                {
+                    Some(value.clone())
+                }
+                Some(Value::String(value)) => {
+                    return Err(format!(
+                        "encoding.color.type {value:?} is unsupported for geoshape"
+                    ));
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "encoding.color.type must be a string, got {}",
+                        json_value_type(other)
+                    ));
+                }
+            };
+            Ok(GeoshapeColorEncoding::Field(field.clone(), type_hint))
+        }
+        (Some(_), Some(_)) => {
+            Err("encoding.color cannot combine field and value for geoshape".to_string())
+        }
+        (Some(_), None) => Err("encoding.color.field must be a non-empty string".to_string()),
+        (None, Some(_)) if channel.contains_key("type") => {
+            Err("encoding.color.value cannot be combined with type for geoshape".to_string())
+        }
+        (None, Some(value)) => {
+            let color = value
+                .as_str()
+                .and_then(parse_color)
+                .ok_or_else(|| "encoding.color.value must be a valid color string".to_string())?;
+            Ok(GeoshapeColorEncoding::Value(color))
+        }
+        (None, None) => Err("encoding.color requires field or value".to_string()),
+    }
+}
+
+fn parse_geoshape_mark_style(mark: Option<&Value>) -> Result<GeoShapeStyle, String> {
+    let Some(mark) = mark else {
+        return Err("mark is required for geoshape".to_string());
+    };
+    let Some(object) = mark.as_object() else {
+        return Ok(GeoShapeStyle {
+            fill: Some(GEOSHAPE_DEFAULT_COLOR),
+            stroke: None,
+            stroke_width: 1.0,
+        });
+    };
+    let fill = parse_mark_color(object, "fill")?.or(parse_mark_color(object, "color")?);
+    let stroke = parse_mark_color(object, "stroke")?.flatten();
+    let stroke_width = match object.get("strokeWidth") {
+        None | Some(Value::Null) => 1.0,
+        Some(Value::Number(value)) => value
+            .as_f64()
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .ok_or_else(|| "mark.strokeWidth must be finite and non-negative".to_string())?,
+        Some(other) => {
+            return Err(format!(
+                "mark.strokeWidth must be a number, got {}",
+                json_value_type(other)
+            ));
+        }
+    };
+    Ok(GeoShapeStyle {
+        fill: fill.flatten(),
+        stroke,
+        stroke_width,
+    })
+}
+
+const GEOSHAPE_DEFAULT_COLOR: Color = Color {
+    r: 76,
+    g: 120,
+    b: 168,
+    a: 1.0,
+};
+
+/// Outer `None` means the property was absent; `Some(None)` means an explicit JSON null.
+fn parse_mark_color(mark: &Map<String, Value>, key: &str) -> Result<Option<Option<Color>>, String> {
+    let Some(value) = mark.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(Some(None));
+    }
+    let color = value
+        .as_str()
+        .and_then(parse_color)
+        .ok_or_else(|| format!("mark.{key} must be a valid color string or null"))?;
+    Ok(Some(Some(color)))
+}
+
+fn resolve_geoshape_colors(
+    features: &[crate::geoshape::RawGeoFeature],
+    field: &str,
+    type_hint: Option<String>,
+    palette: &[Color],
+) -> Result<Vec<Option<Color>>, String> {
+    let values = features
+        .iter()
+        .map(|feature| {
+            feature
+                .record
+                .get(field)
+                .or_else(|| feature.properties.get(field))
+        })
+        .collect::<Vec<_>>();
+    if !features.is_empty()
+        && !features.iter().any(|feature| {
+            feature.record.contains_key(field) || feature.properties.contains_key(field)
+        })
+    {
+        return Err(format!(
+            "encoding.color.field {field:?} was not found in records or Feature properties"
+        ));
+    }
+    let non_null = values
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|value| !value.is_null())
+        .collect::<Vec<_>>();
+    let color_type = match type_hint.as_deref() {
+        Some("quantitative") => ColorType::Quantitative,
+        Some("nominal" | "ordinal") => ColorType::Nominal,
+        Some(other) => {
+            return Err(format!("unsupported geoshape color type {other:?}"));
+        }
+        None if !non_null.is_empty()
+            && non_null
+                .iter()
+                .all(|value| value.as_f64().is_some_and(f64::is_finite)) =>
+        {
+            ColorType::Quantitative
+        }
+        None => ColorType::Nominal,
+    };
+    match color_type {
+        ColorType::Quantitative => {
+            let mut numbers = Vec::with_capacity(values.len());
+            for (index, value) in values.iter().enumerate() {
+                match value {
+                    None | Some(Value::Null) => numbers.push(None),
+                    Some(value) => {
+                        let number = value.as_f64().filter(|number| number.is_finite()).ok_or_else(
+                            || {
+                                format!(
+                                    "encoding.color.field {field:?} must be numeric at feature {index}"
+                                )
+                            },
+                        )?;
+                        numbers.push(Some(number));
+                    }
+                }
+            }
+            let min = numbers.iter().flatten().copied().reduce(f64::min);
+            let max = numbers.iter().flatten().copied().reduce(f64::max);
+            let Some((min, max)) = min.zip(max) else {
+                return Ok(vec![None; values.len()]);
+            };
+            let range = max - min;
+            if range == 0.0 {
+                return Ok(numbers
+                    .into_iter()
+                    .map(|value| value.map(|_| RECT_COLOR_HI))
+                    .collect());
+            }
+            Ok(numbers
+                .into_iter()
+                .map(|value| {
+                    value.map(|value| {
+                        lerp_rect_color(normalize_quantitative_value(value, min, max, range))
+                    })
+                })
+                .collect())
+        }
+        ColorType::Nominal => {
+            let mut categories = HashMap::<String, Color>::new();
+            let mut next_index = 0;
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    let Some(value) = value.filter(|value| !value.is_null()) else {
+                        return Ok(None);
+                    };
+                    let category = geoshape_category(value).ok_or_else(|| {
+                        format!("encoding.color.field {field:?} must be scalar at feature {index}")
+                    })?;
+                    let color = *categories.entry(category).or_insert_with(|| {
+                        let color = palette_pick(palette, next_index);
+                        next_index += 1;
+                        color
+                    });
+                    Ok(Some(color))
+                })
+                .collect()
+        }
+    }
+}
+
+fn normalize_quantitative_value(value: f64, min: f64, max: f64, range: f64) -> f64 {
+    if range.is_finite() {
+        return (value - min) / range;
+    }
+
+    // Finite endpoints can still produce an infinite difference (for example -1e308..1e308).
+    // Scale the domain first so interpolation keeps the same relative positions without overflow.
+    let scale = min.abs().max(max.abs());
+    ((value / scale) - (min / scale)) / ((max / scale) - (min / scale))
+}
+
+fn geoshape_category(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn parse_geoshape_projection(value: Option<&Value>) -> Result<GeoProjection, String> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(GeoProjection::default());
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| "projection must be an object".to_string())?;
+    let mut projection = GeoProjection::default();
+    if let Some(projection_type) = object.get("type").filter(|value| !value.is_null()) {
+        let name = projection_type
+            .as_str()
+            .ok_or_else(|| "projection.type must be a string".to_string())?;
+        projection.projection_type = parse_geoshape_projection_type(name)
+            .ok_or_else(|| format!("unsupported projection.type {name:?}"))?;
+    }
+    projection.center = parse_geo_pair(object.get("center"), "projection.center")?;
+    if let Some(value) = object.get("rotate").filter(|value| !value.is_null()) {
+        let values = value
+            .as_array()
+            .ok_or_else(|| "projection.rotate must be a 2- or 3-number array".to_string())?;
+        if values.len() != 2 && values.len() != 3 {
+            return Err("projection.rotate must contain 2 or 3 numbers".to_string());
+        }
+        let mut rotate = [0.0; 3];
+        for (index, value) in values.iter().enumerate() {
+            rotate[index] = value
+                .as_f64()
+                .filter(|number| number.is_finite())
+                .ok_or_else(|| format!("projection.rotate[{index}] must be finite"))?;
+        }
+        projection.rotate = Some(rotate);
+    }
+    projection.clip_angle = geo_optional_f64(object, "clipAngle", "projection.clipAngle")?;
+    if projection
+        .clip_angle
+        .is_some_and(|angle| angle <= 0.0 || angle > 180.0)
+    {
+        return Err("projection.clipAngle must be in (0, 180]".to_string());
+    }
+    if let Some(value) = object.get("clipExtent").filter(|value| !value.is_null()) {
+        let extent = value
+            .as_array()
+            .filter(|extent| extent.len() == 2)
+            .ok_or_else(|| "projection.clipExtent must contain two coordinate pairs".to_string())?;
+        let first = parse_geo_pair(Some(&extent[0]), "projection.clipExtent[0]")?
+            .ok_or_else(|| "projection.clipExtent[0] must be a coordinate pair".to_string())?;
+        let second = parse_geo_pair(Some(&extent[1]), "projection.clipExtent[1]")?
+            .ok_or_else(|| "projection.clipExtent[1] must be a coordinate pair".to_string())?;
+        let [[x0, y0], [x1, y1]] = [first, second];
+        if x1 < x0 || y1 < y0 {
+            return Err("projection.clipExtent corners must be ordered".to_string());
+        }
+        projection.clip_extent = Some([first, second]);
+    }
+    projection.parallels = parse_geo_pair(object.get("parallels"), "projection.parallels")?;
+    projection.point_radius =
+        geo_optional_f64(object, "pointRadius", "projection.pointRadius")?.unwrap_or(4.5);
+    if projection.point_radius < 0.0 || projection.point_radius > crate::guard::MAX_MARKER_RADIUS_PX
+    {
+        return Err("projection.pointRadius must be in [0, 32768]".to_string());
+    }
+    projection.precision = geo_optional_f64(object, "precision", "projection.precision")?;
+    if projection
+        .precision
+        .is_some_and(|precision| precision < 0.0)
+    {
+        return Err("projection.precision must be non-negative".to_string());
+    }
+    projection.scale = geo_optional_f64(object, "scale", "projection.scale")?;
+    if projection.scale.is_some_and(|scale| scale <= 0.0) {
+        return Err("projection.scale must be positive".to_string());
+    }
+    projection.translate = parse_geo_pair(object.get("translate"), "projection.translate")?;
+    projection.reflect_x =
+        geo_optional_bool(object, "reflectX", "projection.reflectX")?.unwrap_or(false);
+    projection.reflect_y =
+        geo_optional_bool(object, "reflectY", "projection.reflectY")?.unwrap_or(false);
+    if projection.projection_type != GeoProjectionType::Identity
+        && (projection.reflect_x || projection.reflect_y)
+    {
+        return Err("projection.reflectX and reflectY are only supported for identity".to_string());
+    }
+    if projection.projection_type == GeoProjectionType::Identity
+        && (projection.center.is_some()
+            || projection.rotate.is_some()
+            || projection.clip_angle.is_some()
+            || projection.parallels.is_some())
+    {
+        return Err(
+            "identity supports scale, translate, reflectX, reflectY, and clipExtent only"
+                .to_string(),
+        );
+    }
+    if projection.projection_type == GeoProjectionType::AlbersUsa
+        && (projection.center.is_some()
+            || projection.rotate.is_some()
+            || projection.clip_angle.is_some()
+            || projection.parallels.is_some())
+    {
+        return Err(
+            "albersUsa supports scale, translate, pointRadius, and clipExtent only".to_string(),
+        );
+    }
+    if projection.parallels.is_some()
+        && !matches!(
+            projection.projection_type,
+            GeoProjectionType::Albers
+                | GeoProjectionType::ConicConformal
+                | GeoProjectionType::ConicEqualArea
+                | GeoProjectionType::ConicEquidistant
+        )
+    {
+        return Err("projection.parallels is supported only by conic projections".to_string());
+    }
+    Ok(projection)
+}
+
+fn parse_geoshape_projection_type(name: &str) -> Option<GeoProjectionType> {
+    use GeoProjectionType as P;
+    match name.to_ascii_lowercase().as_str() {
+        "albers" => Some(P::Albers),
+        "albersusa" => Some(P::AlbersUsa),
+        "azimuthalequalarea" => Some(P::AzimuthalEqualArea),
+        "azimuthalequidistant" => Some(P::AzimuthalEquidistant),
+        "conicconformal" => Some(P::ConicConformal),
+        "conicequalarea" => Some(P::ConicEqualArea),
+        "conicequidistant" => Some(P::ConicEquidistant),
+        "equalearth" => Some(P::EqualEarth),
+        "equirectangular" => Some(P::Equirectangular),
+        "gnomonic" => Some(P::Gnomonic),
+        "identity" => Some(P::Identity),
+        "mercator" => Some(P::Mercator),
+        "naturalearth1" => Some(P::NaturalEarth1),
+        "orthographic" => Some(P::Orthographic),
+        "stereographic" => Some(P::Stereographic),
+        "transversemercator" => Some(P::TransverseMercator),
+        _ => None,
+    }
+}
+
+fn geo_optional_f64(
+    object: &Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<Option<f64>, String> {
+    let Some(value) = object.get(key).filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    value
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .map(Some)
+        .ok_or_else(|| format!("{path} must be finite number"))
+}
+
+fn geo_optional_bool(
+    object: &Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<Option<bool>, String> {
+    let Some(value) = object.get(key).filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| format!("{path} must be boolean"))
+}
+
+fn parse_geo_pair(value: Option<&Value>, path: &str) -> Result<Option<[f64; 2]>, String> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let values = value
+        .as_array()
+        .filter(|values| values.len() == 2)
+        .ok_or_else(|| format!("{path} must contain exactly two numbers"))?;
+    let first = values[0]
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| format!("{path}[0] must be finite"))?;
+    let second = values[1]
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| format!("{path}[1] must be finite"))?;
+    Ok(Some([first, second]))
+}
+
 fn preflight_stacked_area_shape(
     category_count: usize,
     series_count: usize,
@@ -521,6 +1123,13 @@ fn parse_mark(mark: Option<&Value>) -> Result<ChartKind, String> {
             x_labels: Vec::new(),
             y_labels: Vec::new(),
             cells: Vec::new(),
+        }),
+        "geoshape" => Ok(ChartKind::GeoShape {
+            data: Box::new(GeoShape {
+                features: Vec::new(),
+                projection: GeoProjection::default(),
+                style: GeoShapeStyle::default(),
+            }),
         }),
         "arc" => Ok(ChartKind::Pie {
             cutout: crate::ir::PieCutout::Percent(0.0),
@@ -1656,6 +2265,9 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(()); // object でなければ後段パースに委ねる
     };
+    if read_mark_name(top) == Some("geoshape") {
+        return check_geoshape_keys(top);
+    }
 
     let top_allowed: &[&str] = match read_mark_name(top) {
         Some("line") => &[
@@ -1872,6 +2484,67 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+fn check_geoshape_keys(top: &Map<String, Value>) -> Result<(), String> {
+    check_object(
+        top,
+        &[
+            "mark",
+            "data",
+            "encoding",
+            "projection",
+            "$schema",
+            "width",
+            "height",
+            "title",
+            "background",
+        ],
+        "",
+    )?;
+    if let Some(mark) = top.get("mark").and_then(Value::as_object) {
+        check_object(
+            mark,
+            &["type", "fill", "color", "stroke", "strokeWidth"],
+            "mark",
+        )?;
+    }
+    if let Some(data) = top.get("data").and_then(Value::as_object) {
+        check_object(data, &["values", "url", "format"], "data")?;
+        if let Some(format) = data.get("format").and_then(Value::as_object) {
+            check_object(format, &["type", "feature"], "data.format")?;
+        }
+    }
+    if let Some(encoding) = top.get("encoding").and_then(Value::as_object) {
+        check_object(encoding, &["shape", "color"], "encoding")?;
+        if let Some(shape) = encoding.get("shape").and_then(Value::as_object) {
+            check_object(shape, &["field", "type"], "encoding.shape")?;
+        }
+        if let Some(color) = encoding.get("color").and_then(Value::as_object) {
+            check_object(color, &["field", "type", "value"], "encoding.color")?;
+        }
+    }
+    if let Some(projection) = top.get("projection").and_then(Value::as_object) {
+        check_object(
+            projection,
+            &[
+                "type",
+                "center",
+                "rotate",
+                "clipAngle",
+                "clipExtent",
+                "parallels",
+                "pointRadius",
+                "precision",
+                "scale",
+                "translate",
+                "reflectX",
+                "reflectY",
+            ],
+            "projection",
+        )?;
+    }
     Ok(())
 }
 

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "title": "Population density by region",
+  "width": 480,
+  "height": 280,
+  "background": "#e8eef5",
+  "mark": {
+    "type": "geoshape",
+    "stroke": "#ffffff",
+    "strokeWidth": 1
+  },
+  "data": {
+    "values": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "id": "west",
+          "properties": { "region": "West", "density": 120 },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [[-126, 32], [-111, 32], [-111, 49], [-126, 49], [-126, 32]],
+              [[-122, 38], [-116, 38], [-116, 42], [-122, 42], [-122, 38]]
+            ]
+          }
+        },
+        {
+          "type": "Feature",
+          "id": "east",
+          "properties": { "region": "East", "density": 480 },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+              [[-100, 32], [-84, 32], [-84, 47], [-100, 47], [-100, 32]]
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "encoding": {
+    "color": { "field": "density", "type": "quantitative" }
+  },
+  "projection": { "type": "equalEarth" }
+}

@@ -122,6 +122,12 @@ pub struct InputLimits {
     pub max_categories: usize,
     /// series × categories の積の上限(bar/line チャートの SVG プリミティブ数を抑える)。
     pub max_categorical_primitives: usize,
+    /// geoshape の Feature 数の上限。
+    pub max_geo_features: usize,
+    /// geoshape の総座標頂点数の上限。
+    pub max_geo_vertices: usize,
+    /// geoshape の描画 primitive 数の上限。
+    pub max_geo_primitives: usize,
     /// ラベル・タイトル文字列の上限(バイト)。
     pub max_label_bytes: usize,
     /// width/height の上限(px)。
@@ -137,6 +143,9 @@ impl Default for InputLimits {
             max_series: DEFAULT_MAX_SERIES,
             max_categories: DEFAULT_MAX_CATEGORIES,
             max_categorical_primitives: DEFAULT_MAX_CATEGORICAL_PRIMITIVES,
+            max_geo_features: 100_000,
+            max_geo_vertices: 1_000_000,
+            max_geo_primitives: 1_000_000,
             max_label_bytes: DEFAULT_MAX_LABEL_BYTES,
             max_dimension_px: DEFAULT_MAX_DIMENSION_PX,
             min_dimension_px: DEFAULT_MIN_DIMENSION_PX,
@@ -804,6 +813,174 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                     "sankey manual column ({})={} must be below limit {}",
                     key, col, MAX_SANKEY_NODES,
                 ));
+            }
+        }
+    }
+
+    if let ChartKind::GeoShape { data } = &spec.kind {
+        let projection = &data.projection;
+        let finite_pair = |pair: [f64; 2]| pair.iter().all(|value| value.is_finite());
+        if projection.center.is_some_and(|center| !finite_pair(center))
+            || projection
+                .rotate
+                .is_some_and(|rotate| rotate.iter().any(|value| !value.is_finite()))
+            || projection
+                .translate
+                .is_some_and(|translate| !finite_pair(translate))
+            || projection
+                .parallels
+                .is_some_and(|parallels| !finite_pair(parallels))
+        {
+            return Err("geoshape projection coordinates must be finite".to_string());
+        }
+        if projection
+            .clip_angle
+            .is_some_and(|angle| !angle.is_finite() || angle <= 0.0 || angle > 180.0)
+        {
+            return Err("geoshape clipAngle must be in (0, 180]".to_string());
+        }
+        if projection.clip_extent.is_some_and(|[[x0, y0], [x1, y1]]| {
+            ![x0, y0, x1, y1].iter().all(|value| value.is_finite()) || x1 < x0 || y1 < y0
+        }) {
+            return Err("geoshape clipExtent must have finite ordered corners".to_string());
+        }
+        if projection
+            .scale
+            .is_some_and(|scale| !scale.is_finite() || scale <= 0.0)
+        {
+            return Err("geoshape projection scale must be finite and positive".to_string());
+        }
+        if projection
+            .precision
+            .is_some_and(|precision| !precision.is_finite() || precision < 0.0)
+        {
+            return Err("geoshape precision must be finite and non-negative".to_string());
+        }
+        if !projection.point_radius.is_finite()
+            || projection.point_radius < 0.0
+            || projection.point_radius > MAX_MARKER_RADIUS_PX
+        {
+            return Err(
+                "geoshape pointRadius must be finite and no greater than 32768".to_string(),
+            );
+        }
+        if !data.style.stroke_width.is_finite() || data.style.stroke_width < 0.0 {
+            return Err("geoshape strokeWidth must be finite and non-negative".to_string());
+        }
+        if data.features.len() > limits.max_geo_features {
+            return Err(format!(
+                "geoshape feature count {} exceeds limit {}",
+                data.features.len(),
+                limits.max_geo_features,
+            ));
+        }
+        let mut vertices = 0usize;
+        let mut primitives = 0usize;
+        for (feature_index, feature) in data.features.iter().enumerate() {
+            let Some(geometry) = &feature.geometry else {
+                continue;
+            };
+            let mut pending = vec![(geometry, 0usize)];
+            while let Some((geometry, depth)) = pending.pop() {
+                if matches!(geometry, crate::ir::GeoGeometry::GeometryCollection(_)) && depth >= 64
+                {
+                    return Err(format!(
+                        "geoshape GeometryCollection nesting exceeds 64 at feature {feature_index}"
+                    ));
+                }
+                let mut count_positions = |positions: &[[f64; 2]]| -> Result<(), String> {
+                    for point in positions {
+                        if !finite_pair(*point) {
+                            return Err(format!(
+                                "geoshape coordinate must be finite at feature {feature_index}"
+                            ));
+                        }
+                    }
+                    vertices = vertices.saturating_add(positions.len());
+                    if vertices > limits.max_geo_vertices {
+                        return Err(format!(
+                            "geoshape coordinate vertex count {} exceeds limit {}",
+                            vertices, limits.max_geo_vertices,
+                        ));
+                    }
+                    Ok(())
+                };
+                let check_line = |line: &[[f64; 2]], name: &str| -> Result<(), String> {
+                    if !line.is_empty() && line.len() < 2 {
+                        return Err(format!(
+                            "geoshape {name} requires at least two positions at feature {feature_index}"
+                        ));
+                    }
+                    Ok(())
+                };
+                let check_ring = |ring: &[[f64; 2]]| -> Result<(), String> {
+                    if ring.len() < 4 {
+                        return Err(format!(
+                            "geoshape polygon ring requires at least four positions at feature {feature_index}"
+                        ));
+                    }
+                    if ring.first() != ring.last() {
+                        return Err(format!(
+                            "geoshape polygon ring must be closed at feature {feature_index}"
+                        ));
+                    }
+                    Ok(())
+                };
+                let add_primitives =
+                    |amount: usize, primitives: &mut usize| -> Result<(), String> {
+                        *primitives = primitives.saturating_add(amount);
+                        if *primitives > limits.max_geo_primitives {
+                            return Err(format!(
+                                "geoshape primitive count {} exceeds limit {}",
+                                *primitives, limits.max_geo_primitives,
+                            ));
+                        }
+                        Ok(())
+                    };
+                match geometry {
+                    crate::ir::GeoGeometry::Point(point) => {
+                        count_positions(std::slice::from_ref(point))?;
+                        add_primitives(1, &mut primitives)?;
+                    }
+                    crate::ir::GeoGeometry::MultiPoint(points) => {
+                        count_positions(points)?;
+                        add_primitives(points.len(), &mut primitives)?;
+                    }
+                    crate::ir::GeoGeometry::LineString(points) => {
+                        check_line(points, "LineString")?;
+                        count_positions(points)?;
+                        add_primitives(usize::from(!points.is_empty()), &mut primitives)?;
+                    }
+                    crate::ir::GeoGeometry::MultiLineString(lines) => {
+                        for line in lines {
+                            check_line(line, "MultiLineString")?;
+                            count_positions(line)?;
+                        }
+                        add_primitives(lines.len(), &mut primitives)?;
+                    }
+                    crate::ir::GeoGeometry::Polygon(rings) => {
+                        for ring in rings {
+                            check_ring(ring)?;
+                            count_positions(ring)?;
+                        }
+                        add_primitives(usize::from(!rings.is_empty()), &mut primitives)?;
+                    }
+                    crate::ir::GeoGeometry::MultiPolygon(polygons) => {
+                        for polygon in polygons {
+                            for ring in polygon {
+                                check_ring(ring)?;
+                                count_positions(ring)?;
+                            }
+                        }
+                        add_primitives(polygons.len(), &mut primitives)?;
+                    }
+                    crate::ir::GeoGeometry::GeometryCollection(geometries) => {
+                        if geometries.is_empty() {
+                            add_primitives(1, &mut primitives)?;
+                        }
+                        pending.extend(geometries.iter().map(|geometry| (geometry, depth + 1)));
+                    }
+                }
             }
         }
     }
@@ -2223,6 +2400,101 @@ mod tests {
         assert!(
             err.contains("cells") || err.contains("不一致"),
             "expected shape mismatch error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn geoshape_guard_rejects_feature_vertex_and_primitive_over_limits() {
+        use crate::ir::{GeoFeature, GeoGeometry, GeoProjection, GeoShape, GeoShapeStyle};
+
+        let make_spec = |geometries: Vec<Option<GeoGeometry>>| {
+            let mut spec = base_spec();
+            spec.series.clear();
+            spec.categories.clear();
+            spec.kind = ChartKind::GeoShape {
+                data: Box::new(GeoShape {
+                    features: geometries
+                        .into_iter()
+                        .map(|geometry| GeoFeature {
+                            geometry,
+                            fill: None,
+                        })
+                        .collect(),
+                    projection: GeoProjection::default(),
+                    style: GeoShapeStyle::default(),
+                }),
+            };
+            spec
+        };
+
+        let feature_spec = make_spec(vec![None, None]);
+        let feature_limits = InputLimits {
+            max_geo_features: 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&feature_spec, &feature_limits).unwrap_err();
+        assert!(error.contains("feature count"), "unexpected error: {error}");
+
+        let multipoint = GeoGeometry::MultiPoint(vec![[0.0, 0.0], [1.0, 1.0]]);
+        let vertex_spec = make_spec(vec![Some(multipoint.clone())]);
+        let vertex_limits = InputLimits {
+            max_geo_vertices: 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&vertex_spec, &vertex_limits).unwrap_err();
+        assert!(
+            error.contains("coordinate vertex count"),
+            "unexpected error: {error}"
+        );
+
+        let primitive_spec = make_spec(vec![Some(multipoint)]);
+        let primitive_limits = InputLimits {
+            max_geo_primitives: 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&primitive_spec, &primitive_limits).unwrap_err();
+        assert!(
+            error.contains("primitive count"),
+            "unexpected error: {error}"
+        );
+
+        let empty_collection_spec = make_spec(vec![Some(GeoGeometry::GeometryCollection(vec![]))]);
+        let empty_collection_limits = InputLimits {
+            max_geo_primitives: 0,
+            ..default_limits()
+        };
+        let error = validate_spec(&empty_collection_spec, &empty_collection_limits).unwrap_err();
+        assert!(
+            error.contains("primitive count"),
+            "empty GeometryCollections must consume the bounded primitive budget: {error}"
+        );
+    }
+
+    #[test]
+    fn geoshape_guard_matches_parser_collection_depth_limit() {
+        use crate::ir::{GeoFeature, GeoGeometry, GeoProjection, GeoShape, GeoShapeStyle};
+
+        let mut geometry = GeoGeometry::GeometryCollection(Vec::new());
+        for _ in 0..64 {
+            geometry = GeoGeometry::GeometryCollection(vec![geometry]);
+        }
+        let mut spec = base_spec();
+        spec.series.clear();
+        spec.categories.clear();
+        spec.kind = ChartKind::GeoShape {
+            data: Box::new(GeoShape {
+                features: vec![GeoFeature {
+                    geometry: Some(geometry),
+                    fill: None,
+                }],
+                projection: GeoProjection::default(),
+                style: GeoShapeStyle::default(),
+            }),
+        };
+        let error = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(
+            error.contains("GeometryCollection nesting exceeds 64"),
+            "unexpected error: {error}"
         );
     }
 

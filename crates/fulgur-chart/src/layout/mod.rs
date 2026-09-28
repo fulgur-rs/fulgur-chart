@@ -5,6 +5,7 @@ pub mod boxplot;
 pub mod common;
 mod decimate;
 pub mod gauge;
+pub mod geoshape;
 pub mod line;
 pub mod matrix;
 pub mod mixed;
@@ -27,6 +28,20 @@ use crate::scene::{Prim, Scene};
 use crate::text::TextMeasurer;
 
 pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
+    build_scene_checked(spec, m).expect("chart layout failed")
+}
+
+/// Fallible layout path for renderers that can report projection/layout errors to callers.
+pub fn build_scene_checked(spec: &ChartSpec, m: &TextMeasurer) -> Result<Scene, String> {
+    build_scene_checked_with_limits(spec, m, &crate::guard::InputLimits::default())
+}
+
+/// Fallible layout path that applies caller-provided GeoShape projection limits.
+pub fn build_scene_checked_with_limits(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    limits: &crate::guard::InputLimits,
+) -> Result<Scene, String> {
     let mut scene = match spec.kind {
         ChartKind::Bar { .. } => bar::build(spec, m),
         ChartKind::Line { .. } => line::build(spec, m),
@@ -38,6 +53,9 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         ChartKind::Mixed => mixed::build(spec, m),
         ChartKind::Matrix { .. } => matrix::build(spec, m),
         ChartKind::VegaRect { .. } => vega_rect::build(spec, m),
+        ChartKind::GeoShape { .. } => {
+            geoshape::build_with_primitive_limit(spec, m, limits.max_geo_primitives)?
+        }
         ChartKind::Progress => progress::build(spec, m),
         ChartKind::BoxPlot => boxplot::build(spec, m),
         ChartKind::Violin { .. } => violin::build(spec, m),
@@ -63,5 +81,5 @@ pub fn build_scene(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         );
     }
 
-    scene
+    Ok(scene)
 }

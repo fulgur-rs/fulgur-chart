@@ -187,12 +187,43 @@ fulgur-chart render chart.vl.json -o chart.svg
 ```
 
 Supported subset: `mark` (`bar` / `line` / `area` / `point` → scatter / `circle` → scatter /
-`square` → square scatter / `arc` → pie / `rect` → heatmap), inline `data.values`, and
-`encoding` fields `x` / `y` / `color` / `theta`; `point` and `square` also support quantitative
-`size` mapped to marker area. `area` stacks by default when `color` is present (`encoding.y.stack: null`
-to disable), matching Vega-Lite. The Tableau10 color palette is applied automatically to
-Vega-Lite specs. Input is converted to a shared intermediate representation, so output
-determinism and Fulgur integration are identical to chart.js input.
+`square` → square scatter / `arc` → pie / `rect` → heatmap / `geoshape`), inline `data.values`, and
+`encoding` fields `x` / `y` / `color` / `theta` / `shape`; `point` and `square` also support
+quantitative `size` mapped to marker area. `area` stacks by default when `color` is present
+(`encoding.y.stack: null` to disable), matching Vega-Lite. Geoshape accepts Feature arrays and
+single Feature/FeatureCollection values directly; ordinary records put a GeoJSON Geometry,
+Feature, or FeatureCollection in `encoding.shape.field`. It supports all 16 Vega-Lite v6
+projections with automatic fitting. URL data and TopoJSON are not supported for geoshape. The Tableau10 color
+palette is applied automatically to categorical Vega-Lite encodings. Input is converted to a
+shared intermediate representation, so output determinism and Fulgur integration are identical
+to chart.js input.
+
+For example, a quantitative choropleth can provide GeoJSON features directly in `data.values`:
+
+```json
+{
+  "mark": "geoshape",
+  "data": {
+    "values": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": { "density": 24 },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[0, 0], [8, 0], [8, 5], [0, 5], [0, 0]]]
+          }
+        }
+      ]
+    }
+  },
+  "encoding": { "color": { "field": "density", "type": "quantitative" } }
+}
+```
+
+The [geoshape fixture](examples/specs/vegalite_geoshape.json) demonstrates a choropleth with a
+polygon hole and native/WASM rendering coverage.
 
 ## Ruby binding
 

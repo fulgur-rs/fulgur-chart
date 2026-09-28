@@ -201,7 +201,7 @@ fn render_chart_to_png_with_options(
         .map_err(|e| format!("text measurer init failed: {e}"))?;
     crate::guard::validate_marker_radii(spec)?;
     crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &measurer)?;
-    let scene = crate::layout::build_scene(spec, &measurer);
+    let scene = crate::layout::build_scene_checked_with_limits(spec, &measurer, limits)?;
     scene_to_png_with_face(&scene, scale, &face, compression)
 }
 
@@ -248,7 +248,7 @@ pub fn render_chart_to_webp_with_limits(
         .map_err(|e| format!("text measurer init failed: {e}"))?;
     crate::guard::validate_marker_radii(spec)?;
     crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &measurer)?;
-    let scene = crate::layout::build_scene(spec, &measurer);
+    let scene = crate::layout::build_scene_checked_with_limits(spec, &measurer, limits)?;
     // WebP 専用の上限(軸・面積)で pixmap 確保前に弾き OOM を防ぐ(→ WEBP_LIMITS)。
     let mut pixmap = scene_to_pixmap(&scene, scale, &face, &WEBP_LIMITS)?;
 
@@ -362,15 +362,23 @@ fn validate_clipped_path_device_bounds(scene: &Scene, scale: f32) -> Result<(), 
 fn validate_circle_device_bounds(scene: &Scene, scale: f32) -> Result<(), String> {
     let scale = scale as f64;
     for prim in &scene.items {
-        let Prim::Circle {
-            cx,
-            cy,
-            r,
-            stroke_width,
-            ..
-        } = prim
-        else {
-            continue;
+        let (cx, cy, r, stroke_width, clip) = match prim {
+            Prim::Circle {
+                cx,
+                cy,
+                r,
+                stroke_width,
+                ..
+            } => (cx, cy, r, stroke_width, None),
+            Prim::ClippedCircle {
+                cx,
+                cy,
+                r,
+                stroke_width,
+                clip,
+                ..
+            } => (cx, cy, r, stroke_width, Some(clip.as_ref())),
+            _ => continue,
         };
         // tiny-skia の from_circle が従来どおり無描画にする入力はここでは policy
         // error に変えない。r==0 は正の stroke で点を描き得るため検証対象。
@@ -383,7 +391,13 @@ fn validate_circle_device_bounds(scene: &Scene, scale: f32) -> Result<(), String
             0.0
         };
         let extent = *r + half_stroke;
-        let max_device_coord = (cx.abs().max(cy.abs()) + extent) * scale;
+        let clip_extent = clip.map_or(0.0, |clip| {
+            [clip.x, clip.y, clip.x + clip.w, clip.y + clip.h]
+                .into_iter()
+                .map(f64::abs)
+                .fold(0.0_f64, f64::max)
+        });
+        let max_device_coord = ((cx.abs().max(cy.abs()) + extent).max(clip_extent)) * scale;
         if !max_device_coord.is_finite() || max_device_coord > MAX_SAFE_DEVICE_CIRCLE_COORD_PX {
             return Err(format!(
                 "raster circle device bounds exceed safe coordinate limit of {:.0} px",
@@ -1081,6 +1095,58 @@ fn render_prim(
                     &make_stroke(*stroke_width),
                     transform,
                     None,
+                );
+            }
+        }
+
+        Prim::ClippedCircle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+            stroke_width,
+            clip,
+        } => {
+            let key = (
+                clip.x.to_bits(),
+                clip.y.to_bits(),
+                clip.w.to_bits(),
+                clip.h.to_bits(),
+            );
+            if let std::collections::hash_map::Entry::Vacant(entry) = clip_masks.entry(key) {
+                let Some(rect) =
+                    Rect::from_xywh(clip.x as f32, clip.y as f32, clip.w as f32, clip.h as f32)
+                else {
+                    return;
+                };
+                let clip_path = PathBuilder::from_rect(rect);
+                let Some(mut mask) = Mask::new(pixmap.width(), pixmap.height()) else {
+                    return;
+                };
+                mask.fill_path(&clip_path, FillRule::Winding, true, transform);
+                entry.insert(mask);
+            }
+            let Some(mask) = clip_masks.get(&key) else {
+                return;
+            };
+            let Some(path) = PathBuilder::from_circle(*cx as f32, *cy as f32, *r as f32) else {
+                return;
+            };
+            pixmap.fill_path(
+                &path,
+                &solid_paint(*fill),
+                FillRule::Winding,
+                transform,
+                Some(mask),
+            );
+            if *stroke_width > 0.0 {
+                pixmap.stroke_path(
+                    &path,
+                    &solid_paint(*stroke),
+                    &make_stroke(*stroke_width),
+                    transform,
+                    Some(mask),
                 );
             }
         }

@@ -37,7 +37,11 @@ pub fn render_svg(scene: &Scene, font_family: &str) -> String {
     let mut clip_defs = String::new();
     let mut clip_ids = HashMap::<ClipKey, usize>::new();
     for item in &scene.items {
-        if let Prim::ClippedPath { clip, .. } = item {
+        let clip = match item {
+            Prim::ClippedPath { clip, .. } | Prim::ClippedCircle { clip, .. } => Some(clip),
+            _ => None,
+        };
+        if let Some(clip) = clip {
             let key = (
                 clip.x.to_bits(),
                 clip.y.to_bits(),
@@ -342,6 +346,42 @@ fn write_prim(
             write!(
                 s,
                 r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="{fill_hex}""#
+            )
+            .unwrap();
+            if *stroke_width > 0.0 {
+                let stroke_hex = color_hex(stroke);
+                let sw = fmt_num(*stroke_width);
+                write!(s, r#" stroke="{stroke_hex}" stroke-width="{sw}""#).unwrap();
+            }
+            s.push_str(&opacity_attr("fill-opacity", fill.a));
+            if *stroke_width > 0.0 {
+                s.push_str(&opacity_attr("stroke-opacity", stroke.a));
+            }
+            s.push_str("/>");
+        }
+        Prim::ClippedCircle {
+            cx,
+            cy,
+            r,
+            fill,
+            stroke,
+            stroke_width,
+            clip,
+        } => {
+            let key = (
+                clip.x.to_bits(),
+                clip.y.to_bits(),
+                clip.w.to_bits(),
+                clip.h.to_bits(),
+            );
+            let clip_id = clip_ids.get(&key).expect("clipped circle definition");
+            let cx = fmt_num(*cx);
+            let cy = fmt_num(*cy);
+            let r = fmt_num(*r);
+            let fill_hex = color_hex(fill);
+            write!(
+                s,
+                r#"<circle cx="{cx}" cy="{cy}" r="{r}" fill="{fill_hex}" clip-path="url(#clip{clip_id})""#
             )
             .unwrap();
             if *stroke_width > 0.0 {
