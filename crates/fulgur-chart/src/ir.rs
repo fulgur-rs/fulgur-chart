@@ -792,6 +792,93 @@ pub struct GeoShape {
     pub style: GeoShapeStyle,
 }
 
+/// Vega-Lite composite mark kind represented by `ChartKind::ErrorMark`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ErrorMarkKind {
+    ErrorBar,
+    ErrorBand,
+}
+
+/// Axis direction along which the measured range is drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ErrorMarkOrient {
+    Horizontal,
+    Vertical,
+}
+
+/// Independent coordinate for one error range. Category stores its first-seen index,
+/// temporal stores Unix milliseconds, and quantitative stores the numeric value.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ErrorPosition {
+    FullAxis,
+    Category(usize),
+    Quantitative(f64),
+    Temporal(i64),
+}
+
+/// One normalized range point; `series_index` indexes `ChartSpec.series`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ErrorRangePoint {
+    pub series_index: usize,
+    pub detail: Option<String>,
+    pub position: ErrorPosition,
+    pub center: f64,
+    pub lower: f64,
+    pub upper: f64,
+}
+
+/// Resolved error-mark data and component styling stored outside generic `Series`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ErrorMarkData {
+    pub kind: ErrorMarkKind,
+    pub orient: ErrorMarkOrient,
+    pub ranges: Vec<ErrorRangePoint>,
+    pub style: ErrorMarkStyle,
+}
+
+/// Mark-wide properties and resolved styles for each composite component.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ErrorMarkStyle {
+    pub opacity: f64,
+    pub clip: bool,
+    pub rule: ErrorPartStyle,
+    pub ticks: ErrorPartStyle,
+    pub band: ErrorPartStyle,
+    pub borders: ErrorPartStyle,
+    pub interpolation: ErrorBandInterpolation,
+    pub tension: f64,
+}
+
+/// Resolved style for one rule, cap, band, or boundary component.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ErrorPartStyle {
+    pub visible: bool,
+    pub fill: Option<Color>,
+    pub stroke: Option<Color>,
+    pub stroke_width: Option<f64>,
+    pub opacity: Option<f64>,
+    pub size: Option<f64>,
+    pub stroke_dash: Vec<f64>,
+}
+
+/// Vega-Lite v6 interpolation methods for errorband paths.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ErrorBandInterpolation {
+    Linear,
+    LinearClosed,
+    Step,
+    StepBefore,
+    StepAfter,
+    Basis,
+    BasisOpen,
+    BasisClosed,
+    Cardinal,
+    CardinalOpen,
+    CardinalClosed,
+    Bundle,
+    Monotone,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ChartKind {
     Bar {

@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum VegaLiteSpec {
+    ErrorBar(VlErrorBarSpec),
+    ErrorBand(VlErrorBandSpec),
     Bar(VlBarSpec),
     TemporalTrail(VlTemporalTrailSpec),
     CategoricalTrail(VlCategoricalTrailSpec),
@@ -321,6 +323,294 @@ pub struct MarkAreaObject {
 pub enum MarkArea {
     String(MarkAreaName),
     Object(MarkAreaObject),
+}
+
+// ────────────────────────────────────────────────
+// Error bars and bands (composite marks)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkErrorBarName {
+    Errorbar,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkErrorBandName {
+    Errorband,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlErrorExtent {
+    Stderr,
+    Stdev,
+    Ci,
+    Iqr,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlErrorOrient {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum VlErrorBandInterpolation {
+    Linear,
+    LinearClosed,
+    Step,
+    StepBefore,
+    StepAfter,
+    Basis,
+    BasisOpen,
+    BasisClosed,
+    Cardinal,
+    CardinalOpen,
+    CardinalClosed,
+    Bundle,
+    Monotone,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlErrorBarPartStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<String>,
+    #[serde(rename = "strokeWidth", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub stroke_width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub size: Option<f64>,
+    #[serde(rename = "strokeDash", skip_serializing_if = "Option::is_none")]
+    pub stroke_dash: Option<Vec<f64>>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlErrorBandPartStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<String>,
+    #[serde(rename = "strokeWidth", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub stroke_width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: Option<f64>,
+    #[serde(rename = "strokeDash", skip_serializing_if = "Option::is_none")]
+    pub stroke_dash: Option<Vec<f64>>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlErrorBarPart {
+    Flag(bool),
+    Style(VlErrorBarPartStyle),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlErrorBandPart {
+    Flag(bool),
+    Style(VlErrorBandPartStyle),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkErrorBarObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkErrorBarName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extent: Option<VlErrorExtent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orient: Option<VlErrorOrient>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<VlErrorBarPart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticks: Option<VlErrorBarPart>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkErrorBar {
+    String(MarkErrorBarName),
+    Object(MarkErrorBarObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkErrorBandObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkErrorBandName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extent: Option<VlErrorExtent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orient: Option<VlErrorOrient>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub band: Option<VlErrorBandPart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub borders: Option<VlErrorBandPart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpolate: Option<VlErrorBandInterpolation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub tension: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkErrorBand {
+    String(MarkErrorBandName),
+    Object(MarkErrorBandObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlErrorAxisType {
+    Quantitative,
+    Nominal,
+    Ordinal,
+    Temporal,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlErrorAxisChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlErrorAxisType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlErrorRangeChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlQuantitativeType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlErrorColorFieldChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlCategoricalType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlErrorColorValueChannel {
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlErrorColorChannel {
+    Field(VlErrorColorFieldChannel),
+    Value(VlErrorColorValueChannel),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlErrorOpacityChannel {
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub value: f64,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlErrorMarkEncoding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<VlErrorAxisChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<VlErrorAxisChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x2: Option<VlErrorRangeChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y2: Option<VlErrorRangeChannel>,
+    #[serde(rename = "xError", skip_serializing_if = "Option::is_none")]
+    pub x_error: Option<VlErrorRangeChannel>,
+    #[serde(rename = "xError2", skip_serializing_if = "Option::is_none")]
+    pub x_error2: Option<VlErrorRangeChannel>,
+    #[serde(rename = "yError", skip_serializing_if = "Option::is_none")]
+    pub y_error: Option<VlErrorRangeChannel>,
+    #[serde(rename = "yError2", skip_serializing_if = "Option::is_none")]
+    pub y_error2: Option<VlErrorRangeChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlErrorColorChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<VlChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<VlErrorOpacityChannel>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlErrorBarSpec {
+    pub mark: MarkErrorBar,
+    pub data: VlData,
+    pub encoding: VlErrorMarkEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<VlConfig>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlErrorBandSpec {
+    pub mark: MarkErrorBand,
+    pub data: VlData,
+    pub encoding: VlErrorMarkEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<VlConfig>,
 }
 
 // ────────────────────────────────────────────────

@@ -4189,3 +4189,94 @@ fn vegalite_trail_rejects_non_finite_y_aggregates_on_both_x_modes() {
         "{error}"
     );
 }
+
+#[test]
+fn vegalite_error_mark_schema_accepts_both_mark_forms() {
+    let string_mark = r##"{
+      "mark":"errorbar",
+      "data":{"values":[{"group":"A","value":1},{"group":"A","value":3}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+    let object_mark = r##"{
+      "mark":{"type":"errorband","extent":"ci","interpolate":"basis","tension":0.4},
+      "data":{"values":[{"group":"A","value":1},{"group":"A","value":3}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+
+    let string_spec = serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(string_mark)
+        .expect("typed schema must accept the string errorbar mark");
+    let object_spec = serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(object_mark)
+        .expect("typed schema must accept the object errorband mark with mark-specific properties");
+    assert!(matches!(
+        string_spec,
+        fulgur_chart::schema::VegaLiteSpec::ErrorBar(_)
+    ));
+    assert!(matches!(
+        object_spec,
+        fulgur_chart::schema::VegaLiteSpec::ErrorBand(_)
+    ));
+}
+
+#[test]
+fn vegalite_error_mark_schema_accepts_range_channels() {
+    let lower_upper = r##"{
+      "mark":"errorbar",
+      "data":{"values":[{"group":"A","low":1,"high":3,"series":"one"}]},
+      "encoding":{
+        "x":{"field":"group","type":"nominal"},
+        "y":{"field":"low","type":"quantitative"},
+        "y2":{"field":"high","type":"quantitative"},
+        "color":{"field":"series","type":"nominal"},
+        "detail":{"field":"group"},
+        "opacity":{"value":0.6}
+      }
+    }"##;
+    let center_error = r##"{
+      "mark":"errorbar",
+      "data":{"values":[{"group":"A","center":2,"upper":1,"lower":-1}]},
+      "encoding":{
+        "x":{"field":"center","type":"quantitative"},
+        "xError":{"field":"upper","type":"quantitative"},
+        "xError2":{"field":"lower","type":"quantitative"},
+        "y":{"field":"group","type":"nominal"}
+      }
+    }"##;
+
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(lower_upper).is_ok(),
+        "typed schema must accept lower/upper field channels with color, detail, and constant opacity"
+    );
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(center_error).is_ok(),
+        "typed schema must accept asymmetric center/error field channels"
+    );
+}
+
+#[test]
+fn vegalite_error_mark_schema_rejects_unknown_part_keys() {
+    let valid_errorbar = r##"{
+      "mark":{"type":"errorbar","ticks":{"stroke":"#334455","strokeWidth":1,"size":5}},
+      "data":{"values":[{"group":"A","value":1}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+    let unknown_errorbar = valid_errorbar.replace("\"size\":5", "\"size\":5,\"futureOption\":true");
+    let valid_errorband = r##"{
+      "mark":{"type":"errorband","band":{"opacity":0.25,"stroke":"#334455"}},
+      "data":{"values":[{"group":"A","value":1}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+    let unknown_errorband =
+        valid_errorband.replace("\"opacity\":0.25", "\"opacity\":0.25,\"futureOption\":true");
+    let unsupported_band_size =
+        valid_errorband.replace("\"opacity\":0.25", "\"opacity\":0.25,\"size\":5");
+
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(valid_errorbar).is_ok());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(valid_errorband).is_ok());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unknown_errorbar).is_err());
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unknown_errorband).is_err()
+    );
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unsupported_band_size).is_err()
+    );
+}
