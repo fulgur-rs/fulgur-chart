@@ -200,20 +200,56 @@ pub fn parse_with_limits(
         if is_area && matches!(kind, ChartKind::Line { stacked: true, .. }) {
             preflight_stacked_area_shape(cats.len(), groups.len(), limits)?;
         }
-        for group in &groups {
-            for cat in &cats {
-                let present = records.iter().any(|r| {
-                    &field_category(r, x_field.as_deref()) == cat
-                        && &field_category(r, color_field.as_deref()) == group
-                });
-                if !present {
-                    return Err(if matches!(kind, ChartKind::Trail) {
-                        "色分け trail は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
-                            .to_string()
-                    } else {
-                        "色分け折れ線(line + color)は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
-                            .to_string()
+        if is_trail {
+            preflight_trail_shape(cats.len(), groups.len(), limits)?;
+            let category_indexes = cats
+                .iter()
+                .enumerate()
+                .map(|(index, category)| (category.as_str(), index))
+                .collect::<HashMap<_, _>>();
+            let group_indexes = groups
+                .iter()
+                .enumerate()
+                .map(|(index, group)| (group.as_str(), index))
+                .collect::<HashMap<_, _>>();
+            let product = cats.len().saturating_mul(groups.len());
+            let mut present_pairs = HashSet::with_capacity(records.len().min(product));
+            for record in &records {
+                let category = field_category(record, x_field.as_deref());
+                let group = field_category(record, color_field.as_deref());
+                let Some(&category_index) = category_indexes.get(category.as_str()) else {
+                    return Err("trail category index is inconsistent with input data".to_string());
+                };
+                let Some(&group_index) = group_indexes.get(group.as_str()) else {
+                    return Err(
+                        "trail color group index is inconsistent with input data".to_string()
+                    );
+                };
+                present_pairs.insert((category_index, group_index));
+            }
+            for group_index in 0..groups.len() {
+                for category_index in 0..cats.len() {
+                    if !present_pairs.contains(&(category_index, group_index)) {
+                        return Err(
+                            "色分け trail は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        } else {
+            for group in &groups {
+                for cat in &cats {
+                    let present = records.iter().any(|r| {
+                        &field_category(r, x_field.as_deref()) == cat
+                            && &field_category(r, color_field.as_deref()) == group
                     });
+                    if !present {
+                        return Err(
+                            "色分け折れ線(line + color)は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
+                                .to_string(),
+                        );
+                    }
                 }
             }
         }

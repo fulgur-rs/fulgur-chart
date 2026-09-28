@@ -4134,18 +4134,30 @@ fn vegalite_trail_preflights_dense_width_allocation() {
 fn vegalite_trail_aggregates_a_large_categorical_domain() {
     let point_count = 10_000;
     let values = (0..point_count)
-        .map(|index| format!(r#"{{"x":"{index}","y":1,"size":{index}}}"#))
+        .flat_map(|index| {
+            [
+                format!(r#"{{"x":"{index}","y":1,"group":"A","size":{index}}}"#),
+                format!(
+                    r#"{{"x":"{index}","y":2,"group":"B","size":{}}}"#,
+                    index + point_count
+                ),
+            ]
+        })
         .collect::<Vec<_>>()
         .join(",");
     let json = format!(
-        r#"{{"mark":"trail","data":{{"values":[{values}]}},"encoding":{{"x":{{"field":"x"}},"y":{{"field":"y","type":"quantitative"}},"size":{{"field":"size"}}}}}}"#
+        r#"{{"mark":"trail","data":{{"values":[{values}]}},"encoding":{{"x":{{"field":"x"}},"y":{{"field":"y","type":"quantitative"}},"color":{{"field":"group"}},"size":{{"field":"size"}}}}}}"#
     );
 
     let spec = vegalite::parse(&json, true).expect("large categorical Trail should parse");
     assert_eq!(spec.categories.len(), point_count);
-    assert_eq!(spec.series[0].values.len(), point_count);
+    assert_eq!(spec.series.len(), 2);
+    assert_eq!(spec.series[0].name, "A");
+    assert_eq!(spec.series[1].name, "B");
+    assert_eq!(spec.series[0].values[0], 1.0);
+    assert_eq!(spec.series[1].values[point_count - 1], 2.0);
     assert_eq!(spec.series[0].trail_widths[0], 1.0);
-    assert_eq!(spec.series[0].trail_widths[point_count - 1], 4.0);
+    assert_eq!(spec.series[1].trail_widths[point_count - 1], 4.0);
 }
 
 #[test]
