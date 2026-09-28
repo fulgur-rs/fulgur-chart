@@ -75,6 +75,9 @@ pub const DEFAULT_MAX_CATEGORICAL_PRIMITIVES: usize = 1_000_000;
 /// ラベル・タイトル文字列の上限(バイト)。
 pub const DEFAULT_MAX_LABEL_BYTES: usize = 4_096;
 
+/// Maximum number of explicit lines in one Chart.js title or subtitle.
+const MAX_CHARTJS_TITLE_LINES: usize = 1_024;
+
 /// treemap のツリー深さの上限。スタックオーバーフロー/DoS 対策。parser の groups 上限に揃える。
 pub const DEFAULT_MAX_TREE_DEPTH: usize = 50;
 
@@ -670,6 +673,37 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
             title.len(),
             limits.max_label_bytes,
         ));
+    }
+    for (name, title) in [
+        ("title", spec.chartjs_title.as_ref()),
+        ("subtitle", spec.chartjs_subtitle.as_ref()),
+    ] {
+        let Some(title) = title else {
+            continue;
+        };
+        if title.text.len() > MAX_CHARTJS_TITLE_LINES {
+            return Err(format!(
+                "Chart.js {name} has {} lines; limit is {MAX_CHARTJS_TITLE_LINES}",
+                title.text.len(),
+            ));
+        }
+        let mut total_bytes = 0usize;
+        for line in &title.text {
+            if line.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "Chart.js {name} text line length {} bytes exceeds limit {}",
+                    line.len(),
+                    limits.max_label_bytes,
+                ));
+            }
+            total_bytes = total_bytes.saturating_add(line.len());
+        }
+        if total_bytes > limits.max_label_bytes {
+            return Err(format!(
+                "Chart.js {name} total text length {total_bytes} bytes exceeds limit {}",
+                limits.max_label_bytes,
+            ));
+        }
     }
     if let Some(title) = &spec.legend_title
         && title.len() > limits.max_label_bytes
@@ -1812,6 +1846,64 @@ mod tests {
         let mut s = base_spec();
         s.title = Some("x".repeat(DEFAULT_MAX_LABEL_BYTES + 1));
         assert!(validate_spec(&s, &default_limits()).is_err());
+    }
+
+    fn chartjs_title_spec() -> ChartSpec {
+        chartjs::parse(
+            r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]},"options":{"plugins":{"title":{"display":true,"text":"title"},"subtitle":{"display":true,"text":"subtitle"}}}}"#,
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn chartjs_title_and_subtitle_reject_oversized_text_lines() {
+        for is_subtitle in [false, true] {
+            let mut spec = chartjs_title_spec();
+            let title = if is_subtitle {
+                spec.chartjs_subtitle.as_mut().unwrap()
+            } else {
+                spec.chartjs_title.as_mut().unwrap()
+            };
+            title.text = vec!["x".repeat(DEFAULT_MAX_LABEL_BYTES + 1)];
+
+            let error = validate_spec(&spec, &default_limits()).unwrap_err();
+            assert!(
+                error.contains(if is_subtitle { "subtitle" } else { "title" }),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn chartjs_title_rejects_aggregate_text_over_label_byte_limit() {
+        let mut spec = chartjs_title_spec();
+        spec.chartjs_title.as_mut().unwrap().text = vec![
+            "x".repeat(DEFAULT_MAX_LABEL_BYTES / 2 + 1),
+            "y".repeat(DEFAULT_MAX_LABEL_BYTES / 2 + 1),
+        ];
+
+        let error = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(error.contains("total"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn chartjs_title_text_at_byte_and_line_limits_is_accepted() {
+        let mut spec = chartjs_title_spec();
+        spec.chartjs_title.as_mut().unwrap().text =
+            vec!["x".repeat(DEFAULT_MAX_LABEL_BYTES - 1), "y".to_string()];
+        spec.chartjs_subtitle.as_mut().unwrap().text = vec![String::new(); 1_024];
+
+        assert!(validate_spec(&spec, &default_limits()).is_ok());
+    }
+
+    #[test]
+    fn chartjs_subtitle_rejects_too_many_text_lines() {
+        let mut spec = chartjs_title_spec();
+        spec.chartjs_subtitle.as_mut().unwrap().text = vec![String::new(); 1_025];
+
+        let error = validate_spec(&spec, &default_limits()).unwrap_err();
+        assert!(error.contains("lines"), "unexpected error: {error}");
     }
 
     #[test]

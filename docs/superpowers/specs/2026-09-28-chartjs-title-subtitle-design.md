@@ -67,6 +67,9 @@ configuration:
 - `text` is a string or an array of strings. A string is one line, including an
   empty string; an empty array has no text lines. If omitted while `display` is
   true, it behaves as an empty string and still reserves one line of height.
+- Each title and subtitle is limited to 1,024 lines and to the configured
+  `InputLimits.max_label_bytes` total UTF-8 text bytes (4,096 by default), even
+  when its plugin is hidden. Each individual line must also fit that byte cap.
 - `align` accepts `start`, `center`, or `end`; the default is `center`.
 - `position` accepts `top`, `left`, `bottom`, or `right`; the default is `top`.
   Left and right text is rotated vertically. For these positions, `align`

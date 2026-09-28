@@ -595,6 +595,8 @@ fn parse_geoshape_spec(
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
         title,
+        chartjs_title: None,
+        chartjs_subtitle: None,
         width,
         height,
         size_mode: SizeMode::Canvas,
