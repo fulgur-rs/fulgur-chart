@@ -347,6 +347,10 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Matrix { .. } => "matrix",
         ChartKind::VegaRect { .. } => "vegaRect",
         ChartKind::GeoShape { .. } => "geoshape",
+        ChartKind::ErrorMark(data) => match data.kind {
+            crate::ir::ErrorMarkKind::ErrorBar => "errorbar",
+            crate::ir::ErrorMarkKind::ErrorBand => "errorband",
+        },
         ChartKind::Progress => "progress",
         ChartKind::BoxPlot => "boxplot",
         ChartKind::Violin { horizontal: true } => "horizontalViolin",
@@ -424,6 +428,14 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
         counts.legend_items = 0;
         counts.x_ticks = 0;
         counts.y_ticks = 0;
+    }
+    if matches!(spec.kind, ChartKind::ErrorMark(_)) {
+        counts.datasets = spec.series.len();
+        counts.legend_items = spec
+            .series
+            .iter()
+            .filter(|series| !series.name.is_empty())
+            .count();
     }
     ChartModel {
         meta: Meta {

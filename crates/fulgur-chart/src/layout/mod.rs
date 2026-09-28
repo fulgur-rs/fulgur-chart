@@ -118,6 +118,11 @@ fn build_chart_scene(
         ChartKind::GeoShape { .. } => {
             geoshape::build_with_primitive_limit(spec, m, limits.max_geo_primitives)?
         }
+        ChartKind::ErrorMark(_) => Scene {
+            width: spec.width,
+            height: spec.height,
+            items: Vec::new(),
+        },
         ChartKind::Progress => progress::build(spec, m),
         ChartKind::BoxPlot => boxplot::build(spec, m),
         ChartKind::Violin { .. } => violin::build(spec, m),

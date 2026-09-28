@@ -933,6 +933,8 @@ pub enum ChartKind {
     GeoShape {
         data: Box<GeoShape>,
     },
+    /// Vega-Lite `errorbar` / `errorband` normalized range mark.
+    ErrorMark(Box<ErrorMarkData>),
     /// QuickChart 互換の progress バー。軸なし水平バー。
     /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。
     Progress,

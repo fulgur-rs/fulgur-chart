@@ -44,6 +44,33 @@ fn snapshot_bar_horizontal_model() {
 }
 
 #[test]
+fn error_mark_model_reports_type_series_and_range_centers() {
+    let json = r##"{
+        "mark":"errorbar",
+        "data":{"values":[
+            {"x":"a","low":2,"high":8,"color":"red"},
+            {"x":"b","low":4,"high":10,"color":"blue"}
+        ]},
+        "encoding":{
+            "x":{"field":"x","type":"nominal"},
+            "y":{"field":"low","type":"quantitative"},
+            "y2":{"field":"high","type":"quantitative"},
+            "color":{"field":"color","type":"nominal"}
+        }
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    let model = build_model_core(&spec);
+
+    assert_eq!(model.meta.r#type, "errorbar");
+    assert_eq!(model.counts.datasets, 2);
+    assert_eq!(model.counts.legend_items, 2);
+    assert_eq!(model.series[0].label, "red");
+    assert_eq!(model.series[0].values, vec![Some(5.0)]);
+    assert_eq!(model.series[1].label, "blue");
+    assert_eq!(model.series[1].values, vec![Some(7.0)]);
+}
+
+#[test]
 fn plot_area_categorical_line_model_uses_scene_dimensions() {
     let json = r#"{
         "type":"line",

@@ -456,7 +456,7 @@ pub struct MarkErrorBarObject {
 #[serde(untagged)]
 pub enum MarkErrorBar {
     String(MarkErrorBarName),
-    Object(MarkErrorBarObject),
+    Object(Box<MarkErrorBarObject>),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -490,7 +490,7 @@ pub struct MarkErrorBandObject {
 #[serde(untagged)]
 pub enum MarkErrorBand {
     String(MarkErrorBandName),
-    Object(MarkErrorBandObject),
+    Object(Box<MarkErrorBandObject>),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
