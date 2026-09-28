@@ -424,14 +424,15 @@ fn plot_clip_rect(frame: &ViolinFrame) -> (f64, f64, f64, f64) {
 }
 
 const MAX_MITER_STROKE_EXTENSION: f64 = 2.0;
+// Bound retained offscreen geometry so extreme stroke widths cannot inflate SVG coordinates.
+const MAX_GEOMETRY_CLIP_MARGIN: f64 = 1_000_000.0;
 
-/// Leave enough geometry for a miter-limited stroke to reach the exact renderer clip.
+/// Retain miter-limited stroke geometry within the offscreen geometry budget.
 fn stroke_clip_margin(stroke_width: f64) -> f64 {
     if !stroke_width.is_finite() {
         return 1.0;
     }
-    stroke_width.clamp(0.0, f64::MAX / MAX_MITER_STROKE_EXTENSION) * MAX_MITER_STROKE_EXTENSION
-        + 1.0
+    (stroke_width.max(0.0) * MAX_MITER_STROKE_EXTENSION + 1.0).min(MAX_GEOMETRY_CLIP_MARGIN)
 }
 
 fn expanded_value_bounds(frame: &ViolinFrame, margin: f64) -> (f64, f64) {
@@ -498,9 +499,9 @@ fn body_path(
             (center - half, value)
         });
     }
-    // Bound coordinates before mapping, but retain the full renderer stroke extent around the
-    // plot. The renderer applies the exact clip after both fill and stroke, avoiding extra joins
-    // on clipped edges and keeping a stroke visible when the body lies just outside hard bounds.
+    // Bound coordinates before mapping, retaining stroke geometry up to the offscreen budget.
+    // The renderer applies the exact clip after both fill and stroke, avoiding extra joins on
+    // clipped edges and keeping ordinary strokes visible just outside hard bounds.
     let margin = stroke_clip_margin(stroke_width);
     let (value_min, value_max) = expanded_value_bounds(frame, margin);
     let (left, right, top, bottom) = plot_clip_rect(frame);
@@ -1191,15 +1192,64 @@ mod tests {
     }
 
     #[test]
-    fn violin_geometry_margin_tracks_large_finite_stroke_widths() {
-        close(stroke_clip_margin(4_000_000.0), 8_000_001.0);
+    fn violin_geometry_margin_caps_large_finite_stroke_widths() {
+        for width in [4_000_000.0, 1e307, f64::MAX] {
+            close(stroke_clip_margin(width), 1_000_000.0);
+        }
+        for width in [-1.0, 0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            close(stroke_clip_margin(width), 1.0);
+        }
+        close(stroke_clip_margin(8.0), 17.0);
+    }
+
+    #[test]
+    fn violin_discards_far_offscreen_geometry_with_extreme_strokes() {
         for (chart_type, axis) in [("violin", "y"), ("horizontalViolin", "x")] {
-            let json = format!(
-                r##"{{"type":"{chart_type}","data":{{"labels":["A"],"datasets":[{{"data":[[-200000,-199999]],"borderWidth":4000000}}]}},"options":{{"scales":{{"{axis}":{{"min":0,"max":100}}}}}}}}"##
-            );
-            let spec = parse(&json);
+            for width in [1e307, f64::MAX] {
+                for value in [-1e305, 1e305] {
+                    let json = serde_json::json!({
+                        "type": chart_type,
+                        "data": {
+                            "labels": ["A"],
+                            "datasets": [{"data": [[value]], "borderWidth": width}]
+                        },
+                        "options": {"scales": {axis: {"min": 0, "max": 100}}}
+                    });
+                    let spec = parse(&json.to_string());
+                    let scene = build(&spec, &measurer());
+                    assert!(
+                        !scene
+                            .items
+                            .iter()
+                            .any(|item| matches!(item, Prim::ClippedPath { .. })),
+                        "far-offscreen body and markers must not be retained: chart={chart_type}, width={width}, value={value}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn violin_extreme_stroke_does_not_amplify_guarded_svg_output() {
+        for (chart_type, axis) in [("violin", "y"), ("horizontalViolin", "x")] {
+            let json = serde_json::json!({
+                "type": chart_type,
+                "data": {
+                    "labels": vec![""; 32],
+                    "datasets": [{"data": vec![vec![1e305]; 32], "borderWidth": 1e307}]
+                },
+                "options": {"scales": {axis: {"min": 0, "max": 100}}}
+            });
+            let spec = chartjs::parse(&json.to_string(), true).expect("strict violin input parses");
+            crate::guard::validate_spec(&spec, &crate::guard::InputLimits::default())
+                .expect("extreme finite inputs pass default guards");
             let scene = build(&spec, &measurer());
-            assert_eq!(body_paths(&scene).len(), 1, "chart={chart_type}");
+            let svg = crate::svg::render_svg(&scene, "sans-serif");
+            let bytes = svg.len();
+            assert!(
+                bytes < 16_384,
+                "offscreen groups must not inflate SVG: chart={chart_type}, bytes={bytes}"
+            );
         }
     }
 
