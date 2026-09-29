@@ -1,0 +1,32 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 480,
+  "height": 280,
+  "title": "Daily range by site",
+  "mark": {
+    "type": "errorbar",
+    "extent": "stdev",
+    "ticks": {"stroke": "#29445c", "strokeWidth": 1.2, "size": 6}
+  },
+  "data": {
+    "values": [
+      {"day": "Mon", "site": "North", "value": 18},
+      {"day": "Mon", "site": "North", "value": 22},
+      {"day": "Mon", "site": "South", "value": 24},
+      {"day": "Mon", "site": "South", "value": 27},
+      {"day": "Tue", "site": "North", "value": 21},
+      {"day": "Tue", "site": "North", "value": 23},
+      {"day": "Tue", "site": "South", "value": 20},
+      {"day": "Tue", "site": "South", "value": 25},
+      {"day": "Wed", "site": "North", "value": 25},
+      {"day": "Wed", "site": "North", "value": 28},
+      {"day": "Wed", "site": "South", "value": 26},
+      {"day": "Wed", "site": "South", "value": 30}
+    ]
+  },
+  "encoding": {
+    "x": {"field": "day", "type": "nominal"},
+    "y": {"field": "value", "type": "quantitative"},
+    "color": {"field": "site", "type": "nominal"}
+  }
+}

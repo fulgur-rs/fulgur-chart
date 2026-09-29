@@ -19,6 +19,9 @@ use crate::temporal::{bounded_error_fragment, parse_rfc3339_millis};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+#[path = "vegalite_error_mark.rs"]
+mod error_mark;
+
 /// Vega-Lite サブセットを [`ChartSpec`] へ変換する。
 ///
 /// `strict` が真のとき、上位/encoding/各チャネルのキーをホワイトリストで検査し、
@@ -41,10 +44,14 @@ pub fn parse_with_limits(
         check_unknown_keys(json)?;
     }
 
-    let value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let mut value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
     let top = value
-        .as_object()
+        .as_object_mut()
         .ok_or_else(|| "トップレベルは object でなければなりません".to_string())?;
+
+    if matches!(read_mark_name(top), Some("errorbar" | "errorband")) {
+        return error_mark::parse_error_mark_spec(top, limits);
+    }
 
     let mut kind = parse_mark(top.get("mark"))?;
     if matches!(&kind, ChartKind::GeoShape { .. }) {
@@ -2608,6 +2615,9 @@ fn check_unknown_keys(json: &str) -> Result<(), String> {
     };
     if read_mark_name(top) == Some("geoshape") {
         return check_geoshape_keys(top);
+    }
+    if matches!(read_mark_name(top), Some("errorbar" | "errorband")) {
+        return error_mark::check_unknown_keys(top);
     }
 
     let top_allowed: &[&str] = match read_mark_name(top) {

@@ -347,6 +347,10 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Matrix { .. } => "matrix",
         ChartKind::VegaRect { .. } => "vegaRect",
         ChartKind::GeoShape { .. } => "geoshape",
+        ChartKind::ErrorMark(data) => match data.kind {
+            crate::ir::ErrorMarkKind::ErrorBar => "errorbar",
+            crate::ir::ErrorMarkKind::ErrorBand => "errorband",
+        },
         ChartKind::Progress => "progress",
         ChartKind::BoxPlot => "boxplot",
         ChartKind::Violin { horizontal: true } => "horizontalViolin",
@@ -424,6 +428,14 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
         counts.legend_items = 0;
         counts.x_ticks = 0;
         counts.y_ticks = 0;
+    }
+    if matches!(spec.kind, ChartKind::ErrorMark(_)) {
+        counts.datasets = spec.series.len();
+        counts.legend_items = spec
+            .series
+            .iter()
+            .filter(|series| !series.name.is_empty())
+            .count();
     }
     ChartModel {
         meta: Meta {
@@ -666,7 +678,26 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
                 frame.ticks.ticks.len(),
             ))
         }
+        ChartKind::ErrorMark(_) => {
+            let frame = crate::layout::error_mark::compute_frame(spec, m);
+            let x = error_mark_axis_model(&frame.x);
+            let y = error_mark_axis_model(&frame.y);
+            Some((x, y, frame.y.ticks.len()))
+        }
         _ => None,
+    }
+}
+
+fn error_mark_axis_model(axis: &crate::layout::error_mark::ErrorAxisInfo) -> AxisModel {
+    use crate::layout::error_mark::ErrorAxisKind;
+    match axis.kind {
+        ErrorAxisKind::Category => category_axis(&axis.labels),
+        ErrorAxisKind::Linear => linear_axis(&axis.nice_ticks),
+        ErrorAxisKind::Logarithmic => logarithmic_axis(&axis.nice_ticks),
+        ErrorAxisKind::Temporal => {
+            temporal_axis_with_domain(axis.min, axis.max, &axis.temporal_ticks)
+        }
+        ErrorAxisKind::FullAxis => linear_axis(&axis.nice_ticks),
     }
 }
 
@@ -676,14 +707,27 @@ pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
     let mut model = build_model_core(spec);
     (model.meta.width, model.meta.height) = model_dimensions(spec, m);
     if let Some((x, y, y_ticks)) = compute_axes(spec, m) {
-        if x.kind == "temporal" {
+        if matches!(spec.kind, ChartKind::ErrorMark(_)) {
+            model.counts.x_ticks = axis_tick_count(&x);
+            model.counts.y_ticks = axis_tick_count(&y);
+        } else if x.kind == "temporal" {
             model.counts.x_ticks = x.ticks.as_ref().map_or(0, Vec::len);
+            model.counts.y_ticks = y_ticks;
+        } else {
+            model.counts.y_ticks = y_ticks;
         }
-        model.counts.y_ticks = y_ticks;
         model.axes = Some(Axes { x, y });
     }
     model.geometry = compute_geometry(spec, m);
     model
+}
+
+fn axis_tick_count(axis: &AxisModel) -> usize {
+    axis.ticks
+        .as_ref()
+        .map(Vec::len)
+        .or_else(|| axis.labels.as_ref().map(Vec::len))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

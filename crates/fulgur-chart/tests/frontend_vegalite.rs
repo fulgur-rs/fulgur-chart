@@ -1,5 +1,8 @@
 use fulgur_chart::frontend::vegalite;
-use fulgur_chart::ir::{ChartKind, LegendPos, LineInterpolation, SizeMode, XPositions};
+use fulgur_chart::ir::{
+    ChartKind, ErrorMarkKind, ErrorMarkOrient, ErrorPosition, LegendPos, LineInterpolation,
+    SizeMode, XPositions,
+};
 use fulgur_chart::palette::VEGALITE_PALETTE;
 use fulgur_chart::temporal::parse_rfc3339_millis;
 
@@ -492,6 +495,462 @@ fn temporal_line_populates_positioned_ir_metadata() {
         ),
         (255, 255, 255)
     );
+}
+
+#[test]
+fn vegalite_error_marks_accept_string_and_object_forms() {
+    for mark in [
+        r#""errorbar""#,
+        r##"{"type":"errorbar","extent":"stderr","color":"#336699","opacity":0.7}"##,
+    ] {
+        let json = format!(
+            r#"{{"mark":{mark},"data":{{"values":[{{"x":"a","y":1}},{{"x":"a","y":3}}]}},"encoding":{{"x":{{"field":"x","type":"nominal"}},"y":{{"field":"y","type":"quantitative"}}}}}}"#
+        );
+        let spec = vegalite::parse(&json, true).unwrap();
+        assert_eq!(spec.categories, vec!["a"]);
+        assert_eq!(spec.width, 800.0);
+        assert_eq!(spec.height, 450.0);
+        let ChartKind::ErrorMark(data) = &spec.kind else {
+            panic!("errorbar mark did not normalize to ErrorMark")
+        };
+        assert_eq!(data.kind, ErrorMarkKind::ErrorBar);
+        assert_eq!(data.orient, ErrorMarkOrient::Vertical);
+        assert_eq!(data.ranges.len(), 1);
+        assert_eq!(data.ranges[0].position, ErrorPosition::Category(0));
+        assert_eq!(data.ranges[0].center, 2.0);
+        assert_eq!(data.ranges[0].lower, 1.0);
+        assert_eq!(data.ranges[0].upper, 3.0);
+    }
+}
+
+#[test]
+fn vegalite_errorbar_raw_aggregates_by_position_color_and_detail() {
+    let json = r##"{
+        "mark":{"type":"errorbar","extent":"stdev"},
+        "data":{"values":[
+            {"x":"a","y":2,"color":"red","detail":"one"},
+            {"x":"a","y":4,"color":"red","detail":"one"},
+            {"x":"a","y":1,"color":"red","detail":"two"},
+            {"x":"a","y":3,"color":"red","detail":"two"},
+            {"x":"b","y":8,"color":"blue","detail":"one"},
+            {"x":"b","y":10,"color":"blue","detail":"one"},
+            {"x":"b","y":6,"color":"blue","detail":"two"},
+            {"x":"b","y":8,"color":"blue","detail":"two"}
+        ]},
+        "encoding":{
+            "x":{"field":"x","type":"nominal"},
+            "y":{"field":"y","type":"quantitative"},
+            "color":{"field":"color","type":"nominal"},
+            "detail":{"field":"detail","type":"nominal"}
+        }
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    assert_eq!(spec.categories, vec!["a", "b"]);
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|series| series.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["red", "blue"]
+    );
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("errorbar mark did not normalize to ErrorMark")
+    };
+    assert_eq!(data.ranges.len(), 4);
+    assert_eq!(
+        data.ranges
+            .iter()
+            .map(|range| range.detail.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("one"), Some("two"), Some("one"), Some("two")]
+    );
+    assert_eq!(
+        data.ranges
+            .iter()
+            .map(|range| (range.series_index, range.position))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, ErrorPosition::Category(0)),
+            (0, ErrorPosition::Category(0)),
+            (1, ErrorPosition::Category(1)),
+            (1, ErrorPosition::Category(1)),
+        ]
+    );
+    assert_eq!(
+        data.ranges
+            .iter()
+            .map(|range| range.center)
+            .collect::<Vec<_>>(),
+        vec![3.0, 2.0, 9.0, 7.0]
+    );
+}
+
+#[test]
+fn vegalite_error_mark_raw_measure_uses_encoded_field() {
+    let vertical = r##"{
+        "mark":{"type":"errorbar","extent":"stdev"},
+        "data":{"values":[{"x":"a","reading":2},{"x":"a","reading":4}]},
+        "encoding":{
+            "x":{"field":"x","type":"nominal"},
+            "y":{"field":"reading","type":"quantitative"}
+        }
+    }"##;
+    let spec = vegalite::parse(vertical, true).unwrap();
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("vertical raw errorbar did not normalize to ErrorMark")
+    };
+    assert_eq!(data.ranges[0].center, 3.0);
+
+    let horizontal = r##"{
+        "mark":{"type":"errorbar","orient":"horizontal","extent":"stdev"},
+        "data":{"values":[{"score":2,"row":"a"},{"score":4,"row":"a"}]},
+        "encoding":{
+            "x":{"field":"score","type":"quantitative"},
+            "y":{"field":"row","type":"nominal"}
+        }
+    }"##;
+    let spec = vegalite::parse(horizontal, true).unwrap();
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("horizontal raw errorbar did not normalize to ErrorMark")
+    };
+    assert_eq!(data.ranges[0].center, 3.0);
+}
+
+#[test]
+fn vegalite_errorband_raw_builds_ordered_series_ranges() {
+    let json = r##"{
+        "mark":{"type":"errorband","extent":"iqr"},
+        "data":{"values":[
+            {"x":"b","y":4,"color":"second"},
+            {"x":"a","y":2,"color":"first"},
+            {"x":"b","y":8,"color":"second"},
+            {"x":"a","y":6,"color":"first"}
+        ]},
+        "encoding":{
+            "x":{"field":"x","type":"ordinal"},
+            "y":{"field":"y","type":"quantitative"},
+            "color":{"field":"color","type":"nominal"}
+        }
+    }"##;
+    let spec = vegalite::parse(json, true).unwrap();
+    assert_eq!(spec.categories, vec!["b", "a"]);
+    assert_eq!(
+        spec.series
+            .iter()
+            .map(|series| series.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["second", "first"]
+    );
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("errorband mark did not normalize to ErrorMark")
+    };
+    assert_eq!(data.kind, ErrorMarkKind::ErrorBand);
+    assert_eq!(
+        data.ranges
+            .iter()
+            .map(|range| (
+                range.series_index,
+                range.position,
+                range.center,
+                range.lower,
+                range.upper
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (0, ErrorPosition::Category(0), 6.0, 5.0, 7.0),
+            (1, ErrorPosition::Category(1), 4.0, 3.0, 5.0),
+        ]
+    );
+}
+
+#[test]
+fn vegalite_error_mark_accepts_both_preaggregated_forms() {
+    let lower_upper = r##"{
+        "mark":{"type":"errorbar","orient":"vertical"},
+        "data":{"values":[{"x":"a","low":2,"high":8}]},
+        "encoding":{
+            "x":{"field":"x","type":"nominal"},
+            "y":{"field":"low","type":"quantitative"},
+            "y2":{"field":"high","type":"quantitative"}
+        }
+    }"##;
+    let center_error = r##"{
+        "mark":"errorbar",
+        "data":{"values":[{"x":"a","center":10,"upper":2,"lower":-3}]},
+        "encoding":{
+            "x":{"field":"x","type":"nominal"},
+            "y":{"field":"center","type":"quantitative"},
+            "yError":{"field":"upper","type":"quantitative"},
+            "yError2":{"field":"lower","type":"quantitative"}
+        }
+    }"##;
+    let lower_upper_spec = vegalite::parse(lower_upper, true).unwrap();
+    let ChartKind::ErrorMark(data) = &lower_upper_spec.kind else {
+        panic!("lower/upper form did not normalize to ErrorMark")
+    };
+    assert_eq!(
+        (
+            data.ranges[0].center,
+            data.ranges[0].lower,
+            data.ranges[0].upper
+        ),
+        (5.0, 2.0, 8.0)
+    );
+    let center_error_spec = vegalite::parse(center_error, true).unwrap();
+    let ChartKind::ErrorMark(data) = &center_error_spec.kind else {
+        panic!("center/error form did not normalize to ErrorMark")
+    };
+    assert_eq!(
+        (
+            data.ranges[0].center,
+            data.ranges[0].lower,
+            data.ranges[0].upper
+        ),
+        (10.0, 7.0, 12.0)
+    );
+
+    let mirrored_error = r##"{
+        "mark":"errorbar",
+        "data":{"values":[{"x":"a","center":10,"upper":2}]},
+        "encoding":{
+            "x":{"field":"x","type":"nominal"},
+            "y":{"field":"center","type":"quantitative"},
+            "yError":{"field":"upper","type":"quantitative"}
+        }
+    }"##;
+    let mirrored_spec = vegalite::parse(mirrored_error, true).unwrap();
+    let ChartKind::ErrorMark(data) = &mirrored_spec.kind else {
+        panic!("symmetric error form did not normalize to ErrorMark")
+    };
+    assert_eq!(
+        (
+            data.ranges[0].center,
+            data.ranges[0].lower,
+            data.ranges[0].upper
+        ),
+        (10.0, 8.0, 12.0)
+    );
+}
+
+#[test]
+fn vegalite_error_mark_rejects_malformed_ranges() {
+    let cases = [
+        (
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","low":8,"high":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low"},"y2":{"field":"high"}}}"##,
+            "lower endpoint",
+        ),
+        (
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","center":10,"upper":2,"lower":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"center"},"yError":{"field":"upper"},"yError2":{"field":"lower"}}}"##,
+            "error2",
+        ),
+        (
+            r##"{"mark":{"type":"errorbar","extent":"stderr"},"data":{"values":[{"x":"a","y":1},{"x":"a","y2":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y"},"y2":{"field":"y2"}}}"##,
+            "extent cannot",
+        ),
+        (
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","low":null,"high":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low"},"y2":{"field":"high"}}}"##,
+            "finite number",
+        ),
+        (
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","high":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low"},"y2":{"field":"high"}}}"##,
+            "finite number",
+        ),
+        (
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","low":1e999,"high":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low"},"y2":{"field":"high"}}}"##,
+            "number out of range",
+        ),
+        (
+            r##"{"mark":{"type":"errorbar","extent":"stdev"},"data":{"values":[{"x":"a","y":1.7e308},{"x":"a","y":-1.7e308}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"##,
+            "standard deviation must be finite",
+        ),
+        (
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","y":null}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y"}}}"##,
+            "missing or null",
+        ),
+        (
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a"}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y"}}}"##,
+            "missing or null",
+        ),
+        (
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","y":1e999}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y"}}}"##,
+            "number out of range",
+        ),
+    ];
+    for (json, expected) in cases {
+        let error = vegalite::parse(json, false).unwrap_err();
+        assert!(
+            error.contains(expected),
+            "expected {expected:?}, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn vegalite_error_extent_rejects_single_sample_groups() {
+    for extent in ["stderr", "stdev", "ci"] {
+        let json = format!(
+            r#"{{"mark":{{"type":"errorbar","extent":"{extent}"}},"data":{{"values":[{{"x":"a","y":2}}]}},"encoding":{{"x":{{"field":"x","type":"nominal"}},"y":{{"field":"y","type":"quantitative"}}}}}}"#
+        );
+        let error = vegalite::parse(&json, true).unwrap_err();
+        assert!(error.contains("at least two"), "{extent}: {error}");
+    }
+}
+
+#[test]
+fn vegalite_error_mark_rejects_unsupported_encoding_in_both_modes() {
+    let valid = r##"{"mark":"errorbar","data":{"values":[{"x":"a","y":1},{"x":"a","y":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"##;
+    assert!(vegalite::parse(valid, false).is_ok());
+    for strict in [false, true] {
+        for json in [
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","y":1},{"x":"a","y":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y"},"size":{"field":"y"}}}"##,
+            r##"{"mark":{"type":"errorbar","mystery":true},"data":{"values":[{"x":"a","y":1},{"x":"a","y":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y"}}}"##,
+            r##"{"mark":{"type":"errorbar","extent":"variance"},"data":{"values":[{"x":"a","y":1},{"x":"a","y":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y"}}}"##,
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","y":1},{"x":"a","y":3}]},"encoding":{"x":{"field":"x","type":"nominal","scale":{}},"y":{"field":"y"}}}"##,
+            r##"{"mark":{"type":"errorbar","orient":"diagonal"},"data":{"values":[{"x":"a","y":1},{"x":"a","y":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y"}}}"##,
+            r##"{"mark":{"type":"errorbar","rule":{"width":2}},"data":{"values":[{"x":"a","low":1,"high":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low"},"y2":{"field":"high"}}}"##,
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","y":1},{"x":"a","y":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y"},"opacity":{"field":"alpha"}}}"##,
+            r##"{"mark":"errorbar","data":{"values":[{"x":"a","low":1,"high":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"datum":1},"y2":{"field":"high"}}}"##,
+        ] {
+            assert!(
+                vegalite::parse(json, strict).is_err(),
+                "strict={strict}: {json}"
+            );
+        }
+    }
+}
+
+#[test]
+fn vegalite_errorband_rejects_duplicate_independent_positions() {
+    let json = r##"{
+        "mark":"errorband",
+        "data":{"values":[{"x":"a","low":1,"high":3},{"x":"a","low":2,"high":4}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low"},"y2":{"field":"high"}}
+    }"##;
+    assert!(vegalite::parse(json, true).is_err());
+}
+
+#[test]
+fn vegalite_error_mark_rejects_one_dimensional_interpolation() {
+    let json = r##"{
+        "mark":{"type":"errorband","interpolate":"monotone","tension":0.5},
+        "data":{"values":[{"low":1,"high":3}]},
+        "encoding":{"y":{"field":"low","type":"quantitative"},"y2":{"field":"high","type":"quantitative"}}
+    }"##;
+    let error = vegalite::parse(json, false).unwrap_err();
+    assert!(error.contains("one-dimensional"), "{error}");
+}
+
+#[test]
+fn vegalite_error_mark_normalizes_horizontal_numeric_temporal_and_one_dimensional_positions() {
+    let horizontal = r##"{
+        "mark":{"type":"errorbar","orient":"horizontal"},
+        "data":{"values":[{"x":2,"y":"row"},{"x":4,"y":"row"}]},
+        "encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"nominal"}}
+    }"##;
+    let spec = vegalite::parse(horizontal, true).unwrap();
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("horizontal errorbar did not normalize to ErrorMark")
+    };
+    assert_eq!(data.orient, ErrorMarkOrient::Horizontal);
+    assert_eq!(data.ranges[0].position, ErrorPosition::Category(0));
+    assert_eq!(data.ranges[0].center, 3.0);
+    assert_eq!(spec.categories, vec!["row"]);
+
+    let quantitative_position = r##"{
+        "mark":{"type":"errorbar","orient":"vertical"},
+        "data":{"values":[{"x":5,"y":1},{"x":5,"y":3}]},
+        "encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}
+    }"##;
+    let spec = vegalite::parse(quantitative_position, true).unwrap();
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("quantitative errorbar did not normalize to ErrorMark")
+    };
+    assert_eq!(data.ranges[0].position, ErrorPosition::Quantitative(5.0));
+    assert!(spec.categories.is_empty());
+
+    let temporal_position = r##"{
+        "mark":"errorbar",
+        "data":{"values":[
+            {"x":"2026-09-01T00:00:00Z","y":1},
+            {"x":"2026-09-01T00:00:00Z","y":3}
+        ]},
+        "encoding":{"x":{"field":"x","type":"temporal"},"y":{"field":"y","type":"quantitative"}}
+    }"##;
+    let spec = vegalite::parse(temporal_position, true).unwrap();
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("temporal errorbar did not normalize to ErrorMark")
+    };
+    let millis = parse_rfc3339_millis("x", "2026-09-01T00:00:00Z").unwrap();
+    assert_eq!(data.ranges[0].position, ErrorPosition::Temporal(millis));
+    assert_eq!(
+        spec.x_positions,
+        XPositions::Temporal {
+            unix_millis: vec![millis]
+        }
+    );
+
+    let one_dimensional = r##"{
+        "mark":"errorbar",
+        "data":{"values":[{"y":1},{"y":3}]},
+        "encoding":{"y":{"field":"y","type":"quantitative"}}
+    }"##;
+    let spec = vegalite::parse(one_dimensional, true).unwrap();
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("one-dimensional errorbar did not normalize to ErrorMark")
+    };
+    assert_eq!(data.ranges[0].position, ErrorPosition::FullAxis);
+}
+
+#[test]
+fn vegalite_error_mark_resolves_mark_and_part_styles() {
+    let styled_errorbar = r##"{
+        "mark":{
+            "type":"errorbar","color":"#336699","opacity":0.8,"clip":false,
+            "rule":{"stroke":"#ff0000","strokeWidth":2,"opacity":0.5,"strokeDash":[3,2]},
+            "ticks":{"size":6}
+        },
+        "data":{"values":[{"x":"a","low":2,"high":8}]},
+        "encoding":{
+            "x":{"field":"x","type":"nominal"},
+            "y":{"field":"low","type":"quantitative"},
+            "y2":{"field":"high","type":"quantitative"},
+            "color":{"value":"#00ff00"},
+            "opacity":{"value":0.5}
+        }
+    }"##;
+    let spec = vegalite::parse(styled_errorbar, true).unwrap();
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("styled errorbar did not normalize to ErrorMark")
+    };
+    assert!(!data.style.clip);
+    assert!((data.style.opacity - 0.5).abs() < f64::EPSILON);
+    assert!(data.style.rule.visible);
+    assert_eq!(data.style.rule.stroke_width, Some(2.0));
+    assert_eq!(data.style.rule.opacity, Some(0.5));
+    assert_eq!(data.style.rule.stroke_dash, vec![3.0, 2.0]);
+    assert!(data.style.ticks.visible);
+    assert_eq!(data.style.ticks.size, Some(6.0));
+    assert_eq!(
+        (
+            spec.series[0].fill[0].r,
+            spec.series[0].fill[0].g,
+            spec.series[0].fill[0].b
+        ),
+        (0, 255, 0)
+    );
+
+    let default_errorband = r##"{
+        "mark":"errorband",
+        "data":{"values":[{"x":"a","y":1},{"x":"a","y":3},{"x":"b","y":2},{"x":"b","y":4}]},
+        "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}
+    }"##;
+    let spec = vegalite::parse(default_errorband, true).unwrap();
+    let ChartKind::ErrorMark(data) = &spec.kind else {
+        panic!("errorband did not normalize to ErrorMark")
+    };
+    assert!(data.style.band.visible);
+    assert_eq!(data.style.band.opacity, Some(0.3));
+    assert!(!data.style.borders.visible);
 }
 
 #[test]
@@ -4187,5 +4646,126 @@ fn vegalite_trail_rejects_non_finite_y_aggregates_on_both_x_modes() {
     assert!(
         error.contains("temporal line aggregate must be finite"),
         "{error}"
+    );
+}
+
+#[test]
+fn vegalite_error_mark_schema_accepts_both_mark_forms() {
+    let string_mark = r##"{
+      "mark":"errorbar",
+      "data":{"values":[{"group":"A","value":1},{"group":"A","value":3}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+    let object_mark = r##"{
+      "mark":{"type":"errorband","extent":"ci","interpolate":"basis","tension":0.4},
+      "data":{"values":[{"group":"A","value":1},{"group":"A","value":3}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+
+    let string_spec = serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(string_mark)
+        .expect("typed schema must accept the string errorbar mark");
+    let object_spec = serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(object_mark)
+        .expect("typed schema must accept the object errorband mark with mark-specific properties");
+    assert!(matches!(
+        string_spec,
+        fulgur_chart::schema::VegaLiteSpec::ErrorBar(_)
+    ));
+    assert!(matches!(
+        object_spec,
+        fulgur_chart::schema::VegaLiteSpec::ErrorBand(_)
+    ));
+}
+
+#[test]
+fn vegalite_error_mark_schema_accepts_range_channels() {
+    let lower_upper = r##"{
+      "mark":"errorbar",
+      "data":{"values":[{"group":"A","low":1,"high":3,"series":"one"}]},
+      "encoding":{
+        "x":{"field":"group","type":"nominal"},
+        "y":{"field":"low","type":"quantitative"},
+        "y2":{"field":"high","type":"quantitative"},
+        "color":{"field":"series","type":"nominal"},
+        "detail":{"field":"group"},
+        "opacity":{"value":0.6}
+      }
+    }"##;
+    let center_error = r##"{
+      "mark":"errorbar",
+      "data":{"values":[{"group":"A","center":2,"upper":1,"lower":-1}]},
+      "encoding":{
+        "x":{"field":"center","type":"quantitative"},
+        "xError":{"field":"upper","type":"quantitative"},
+        "xError2":{"field":"lower","type":"quantitative"},
+        "y":{"field":"group","type":"nominal"}
+      }
+    }"##;
+
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(lower_upper).is_ok(),
+        "typed schema must accept lower/upper field channels with color, detail, and constant opacity"
+    );
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(center_error).is_ok(),
+        "typed schema must accept asymmetric center/error field channels"
+    );
+}
+
+#[test]
+fn vegalite_error_mark_generated_schema_constrains_detail_and_dash() {
+    let schema =
+        serde_json::to_value(schemars::schema_for!(fulgur_chart::schema::VegaLiteSpec)).unwrap();
+    let definitions = &schema["$defs"];
+    let detail = &definitions["VlErrorMarkEncoding"]["properties"]["detail"];
+    assert_eq!(detail["anyOf"][0]["$ref"], "#/$defs/VlErrorDetailChannel");
+    assert_eq!(
+        definitions["VlErrorDetailChannel"]["properties"]["type"]["anyOf"][0]["$ref"],
+        "#/$defs/VlCategoricalType"
+    );
+    assert_eq!(
+        definitions["VlCategoricalType"]["enum"],
+        serde_json::json!(["nominal", "ordinal"])
+    );
+    for style in ["VlErrorBarPartStyle", "VlErrorBandPartStyle"] {
+        assert_eq!(
+            definitions[style]["properties"]["strokeDash"]["items"]["minimum"],
+            0.0
+        );
+    }
+
+    for strict in [false, true] {
+        let invalid_detail = r##"{"mark":"errorbar","data":{"values":[{"x":"a","low":1,"high":2,"site":"A"}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low","type":"quantitative"},"y2":{"field":"high"},"detail":{"field":"site","type":"quantitative"}}}"##;
+        let invalid_dash = r##"{"mark":{"type":"errorband","band":{"strokeDash":[1,-1]}},"data":{"values":[{"x":"a","low":1,"high":2},{"x":"b","low":2,"high":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"low","type":"quantitative"},"y2":{"field":"high"}}}"##;
+        assert!(vegalite::parse(invalid_detail, strict).is_err());
+        assert!(vegalite::parse(invalid_dash, strict).is_err());
+    }
+}
+
+#[test]
+fn vegalite_error_mark_schema_rejects_unknown_part_keys() {
+    let valid_errorbar = r##"{
+      "mark":{"type":"errorbar","ticks":{"stroke":"#334455","strokeWidth":1,"size":5}},
+      "data":{"values":[{"group":"A","value":1}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+    let unknown_errorbar = valid_errorbar.replace("\"size\":5", "\"size\":5,\"futureOption\":true");
+    let valid_errorband = r##"{
+      "mark":{"type":"errorband","band":{"opacity":0.25,"stroke":"#334455"}},
+      "data":{"values":[{"group":"A","value":1}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+    let unknown_errorband =
+        valid_errorband.replace("\"opacity\":0.25", "\"opacity\":0.25,\"futureOption\":true");
+    let unsupported_band_size =
+        valid_errorband.replace("\"opacity\":0.25", "\"opacity\":0.25,\"size\":5");
+
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(valid_errorbar).is_ok());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(valid_errorband).is_ok());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unknown_errorbar).is_err());
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unknown_errorband).is_err()
+    );
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unsupported_band_size).is_err()
     );
 }

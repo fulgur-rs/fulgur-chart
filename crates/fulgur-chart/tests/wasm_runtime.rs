@@ -161,6 +161,71 @@ fn geoshape_projection_errors_are_returned_on_every_platform() {
     assert!(error.contains("non-finite"), "{error}");
 }
 
+fn error_mark_fixtures() -> [(&'static str, &'static str); 4] {
+    [
+        (
+            "vegalite-errorbar-raw",
+            include_str!("../../../examples/specs/vegalite-errorbar-raw.json"),
+        ),
+        (
+            "vegalite-errorbar-preaggregated",
+            include_str!("../../../examples/specs/vegalite-errorbar-preaggregated.json"),
+        ),
+        (
+            "vegalite-errorband-raw",
+            include_str!("../../../examples/specs/vegalite-errorband-raw.json"),
+        ),
+        (
+            "vegalite-errorband-preaggregated",
+            include_str!("../../../examples/specs/vegalite-errorband-preaggregated.json"),
+        ),
+    ]
+}
+
+/// Error mark examples parse and use the same Scene geometry on native and wasm32.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn error_mark_examples_render_svg_and_png_deterministically() {
+    for (name, json) in error_mark_fixtures() {
+        let spec = vegalite::parse(json, true)
+            .unwrap_or_else(|error| panic!("{name} error mark example did not parse: {error}"));
+        let svg = render_chart(&spec);
+        let svg_again = render_chart(&spec);
+        assert_eq!(svg, svg_again, "{name} SVG should be deterministic");
+        assert!(svg.starts_with("<svg"), "{name} did not render SVG");
+        let lower_svg = svg.to_ascii_lowercase();
+        assert!(
+            !lower_svg.contains("nan") && !lower_svg.contains("inf"),
+            "{name} SVG contains a non-finite coordinate"
+        );
+        if name.contains("errorbar") {
+            assert!(
+                svg.contains("<line"),
+                "{name} has no errorbar line geometry"
+            );
+        } else {
+            assert!(
+                svg.contains("d=\"M "),
+                "{name} has no errorband path geometry"
+            );
+        }
+
+        let png = render_chart_to_png_default(&spec, 1.0)
+            .unwrap_or_else(|error| panic!("{name} PNG render failed: {error}"));
+        let png_again = render_chart_to_png_default(&spec, 1.0)
+            .unwrap_or_else(|error| panic!("{name} PNG rerender failed: {error}"));
+        assert_eq!(png, png_again, "{name} PNG should be deterministic");
+        assert_eq!(&png[..8], PNG_SIGNATURE, "{name} PNG signature is invalid");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png)
+            .unwrap_or_else(|error| panic!("{name} PNG failed to decode: {error}"));
+        assert_eq!(
+            (pixmap.width(), pixmap.height()),
+            (480, 280),
+            "{name} PNG dimensions are invalid"
+        );
+    }
+}
+
 /// PNG: wasm32 と linux-x86_64 native で、linux-x86_64 の期待 byte と一致することを検証する。
 /// CI の wasm ジョブは ubuntu で走るため、ubuntu native と同一ビットになる。
 /// tiny-skia の浮動小数差は OS 跨ぎで出るため、この exact 比較は上記対象に限定する。

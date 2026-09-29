@@ -31,6 +31,10 @@ const NAMES: &[&str] = &[
     "violin-horizontal",
     "bar_logarithmic",
     "vegalite_geoshape",
+    "vegalite-errorbar-raw",
+    "vegalite-errorbar-preaggregated",
+    "vegalite-errorband-raw",
+    "vegalite-errorband-preaggregated",
     "vegalite-trail-categorical",
     "vegalite-trail-temporal",
 ];

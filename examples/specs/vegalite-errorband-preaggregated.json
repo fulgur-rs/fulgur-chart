@@ -1,0 +1,31 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 480,
+  "height": 280,
+  "title": "Quarterly value range",
+  "mark": {
+    "type": "errorband",
+    "interpolate": "cardinal",
+    "tension": 0.35,
+    "band": {"fill": "#4a90a4", "opacity": 0.25},
+    "borders": {"stroke": "#26566a", "strokeWidth": 1.5}
+  },
+  "data": {
+    "values": [
+      {"quarter": "Q1", "low": 12, "high": 18, "product": "Core"},
+      {"quarter": "Q2", "low": 14, "high": 22, "product": "Core"},
+      {"quarter": "Q3", "low": 13, "high": 21, "product": "Core"},
+      {"quarter": "Q4", "low": 16, "high": 25, "product": "Core"},
+      {"quarter": "Q1", "low": 8, "high": 15, "product": "Plus"},
+      {"quarter": "Q2", "low": 10, "high": 19, "product": "Plus"},
+      {"quarter": "Q3", "low": 9, "high": 18, "product": "Plus"},
+      {"quarter": "Q4", "low": 12, "high": 22, "product": "Plus"}
+    ]
+  },
+  "encoding": {
+    "x": {"field": "quarter", "type": "nominal"},
+    "y": {"field": "low", "type": "quantitative"},
+    "y2": {"field": "high"},
+    "color": {"field": "product", "type": "nominal"}
+  }
+}

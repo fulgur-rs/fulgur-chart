@@ -1,0 +1,26 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 480,
+  "height": 280,
+  "title": "Delivery range by route",
+  "mark": {
+    "type": "errorbar",
+    "orient": "horizontal",
+    "rule": {"strokeWidth": 2},
+    "ticks": {"color": "#3a506b", "size": 7}
+  },
+  "data": {
+    "values": [
+      {"route": "A", "low": 12, "high": 24, "fleet": "Local"},
+      {"route": "B", "low": 18, "high": 31, "fleet": "Local"},
+      {"route": "C", "low": 9, "high": 19, "fleet": "Express"},
+      {"route": "D", "low": 15, "high": 28, "fleet": "Express"}
+    ]
+  },
+  "encoding": {
+    "x": {"field": "low", "type": "quantitative"},
+    "x2": {"field": "high"},
+    "y": {"field": "route", "type": "nominal"},
+    "color": {"field": "fleet", "type": "nominal"}
+  }
+}
