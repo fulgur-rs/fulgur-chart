@@ -1,0 +1,46 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 480,
+  "height": 280,
+  "title": "Measurements by site and cohort",
+  "mark": {
+    "type": "boxplot",
+    "size": 16,
+    "opacity": 0.95,
+    "clip": true,
+    "box": {"stroke": "#ffffff", "strokeWidth": 1},
+    "median": {"color": "#ffffff"},
+    "outliers": {"color": "#c2410c", "size": 36},
+    "rule": {"color": "#334155", "strokeWidth": 1.2},
+    "ticks": false
+  },
+  "data": {
+    "values": [
+      {"site": "North", "cohort": "Control", "value": 18},
+      {"site": "North", "cohort": "Control", "value": 19},
+      {"site": "North", "cohort": "Control", "value": 20},
+      {"site": "North", "cohort": "Control", "value": 22},
+      {"site": "North", "cohort": "Control", "value": 100},
+      {"site": "North", "cohort": "Treatment", "value": 22},
+      {"site": "North", "cohort": "Treatment", "value": 23},
+      {"site": "North", "cohort": "Treatment", "value": 24},
+      {"site": "North", "cohort": "Treatment", "value": 25},
+      {"site": "North", "cohort": "Treatment", "value": 26},
+      {"site": "South", "cohort": "Control", "value": 21},
+      {"site": "South", "cohort": "Control", "value": 22},
+      {"site": "South", "cohort": "Control", "value": 23},
+      {"site": "South", "cohort": "Control", "value": 24},
+      {"site": "South", "cohort": "Control", "value": 25},
+      {"site": "South", "cohort": "Treatment", "value": 29},
+      {"site": "South", "cohort": "Treatment", "value": 30},
+      {"site": "South", "cohort": "Treatment", "value": 31},
+      {"site": "South", "cohort": "Treatment", "value": 32},
+      {"site": "South", "cohort": "Treatment", "value": 33}
+    ]
+  },
+  "encoding": {
+    "x": {"field": "site", "type": "nominal"},
+    "y": {"field": "value", "type": "quantitative"},
+    "color": {"field": "cohort", "type": "nominal"}
+  }
+}

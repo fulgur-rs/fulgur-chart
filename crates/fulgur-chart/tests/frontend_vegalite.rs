@@ -4769,3 +4769,249 @@ fn vegalite_error_mark_schema_rejects_unknown_part_keys() {
         serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unsupported_band_size).is_err()
     );
 }
+
+#[test]
+fn vegalite_boxplot_schema_accepts_string_and_object_mark() {
+    let string_mark = r##"{
+      "mark":"boxplot",
+      "data":{"values":[{"group":"A","value":1}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+    let object_mark = r##"{
+      "mark":{"type":"boxplot","extent":"min-max","orient":"vertical","clip":true,
+              "box":{"fill":"#ddeeff","strokeWidth":1},"outliers":false},
+      "data":{"values":[{"group":"A","value":1}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(string_mark).is_ok(),
+        "typed schema must accept the string boxplot mark"
+    );
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(object_mark).is_ok(),
+        "typed schema must accept the boxplot object mark and component styles"
+    );
+}
+
+#[test]
+fn vegalite_boxplot_schema_accepts_supported_encoding_channels() {
+    let json = r##"{
+      "mark":"boxplot",
+      "data":{"values":[{"group":"A","series":"one","detail":"left","value":1,"size":4}]},
+      "encoding":{
+        "x":{"field":"group","type":"nominal"},
+        "y":{"field":"value","type":"quantitative"},
+        "color":{"field":"series","type":"nominal"},
+        "detail":{"field":"detail","type":"ordinal"},
+        "size":{"field":"size","type":"quantitative"},
+        "opacity":{"value":0.5}
+      }
+    }"##;
+
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(json).is_ok(),
+        "typed schema must accept boxplot position, grouping, size, and opacity channels"
+    );
+}
+
+#[test]
+fn vegalite_boxplot_schema_rejects_unknown_mark_and_part_keys() {
+    let valid = r##"{
+      "mark":{"type":"boxplot","box":{"color":"#334455","strokeDash":[1,2],"size":5}},
+      "data":{"values":[{"group":"A","value":1}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+    let unknown_mark = valid.replace(
+        "\"type\":\"boxplot\"",
+        "\"type\":\"boxplot\",\"futureOption\":true",
+    );
+    let unknown_part = valid.replace("\"size\":5", "\"size\":5,\"futureOption\":true");
+
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(valid).is_ok());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unknown_mark).is_err());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unknown_part).is_err());
+}
+
+#[test]
+fn vegalite_boxplot_infers_horizontal_and_vertical_orientation() {
+    let horizontal = vegalite::parse(
+        r#"{"mark":"boxplot","data":{"values":[{"value":1,"group":"a"},{"value":2,"group":"a"}]},"encoding":{"x":{"field":"value","type":"quantitative"},"y":{"field":"group","type":"nominal"}}}"#,
+        true,
+    )
+    .unwrap();
+    let vertical = vegalite::parse(
+        r#"{"mark":"boxplot","data":{"values":[{"value":1,"group":"a"},{"value":2,"group":"a"}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}"#,
+        true,
+    )
+    .unwrap();
+
+    assert!(format!("{:?}", horizontal.kind).contains("orient: Horizontal"));
+    assert!(format!("{:?}", vertical.kind).contains("orient: Vertical"));
+}
+
+#[test]
+fn vegalite_boxplot_rejects_conflicting_orient() {
+    let error = vegalite::parse(
+        r#"{"mark":{"type":"boxplot","orient":"horizontal"},"data":{"values":[{"group":"a","value":1}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}"#,
+        true,
+    )
+    .unwrap_err();
+    assert!(error.contains("orient"), "unexpected error: {error}");
+}
+
+#[test]
+fn vegalite_boxplot_groups_category_color_and_detail_in_first_seen_order() {
+    let spec = vegalite::parse(
+        r#"{"mark":"boxplot","data":{"values":[{"category":"A","color":"red","detail":"first","value":1},{"category":"A","color":"blue","detail":"second","value":2},{"category":"A","color":"red","detail":"third","value":3},{"category":"B","color":"red","detail":"first","value":4},{"category":"A","color":"red","detail":"first","value":5}]},"encoding":{"x":{"field":"category","type":"nominal"},"y":{"field":"value","type":"quantitative"},"color":{"field":"color","type":"nominal"},"detail":{"field":"detail","type":"nominal"}}}"#,
+        true,
+    )
+    .unwrap();
+    let debug = format!("{:?}", spec.kind);
+    let first = debug.find("detail_label: Some(\"first\")").unwrap();
+    let second = debug.find("detail_label: Some(\"second\")").unwrap();
+    let third = debug.find("detail_label: Some(\"third\")").unwrap();
+    let later_category = debug.rfind("category_index: Some(1)").unwrap();
+    assert!(first < second && second < third && third < later_category);
+}
+
+#[test]
+fn vegalite_boxplot_rejects_transform_layer_and_summary_in_both_modes() {
+    let inputs = [
+        (
+            r#"{"mark":"boxplot","transform":[{"filter":"datum.value > 0"}],"data":{"values":[{"value":1}]},"encoding":{"y":{"field":"value","type":"quantitative"}}}"#,
+            "transform",
+        ),
+        (
+            r#"{"layer":[{"mark":"boxplot","data":{"values":[{"value":1}]},"encoding":{"y":{"field":"value","type":"quantitative"}}}]}"#,
+            "layer",
+        ),
+        (
+            r#"{"mark":"boxplot","data":{"values":[{"group":"a","lower":1,"upper":4}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"lower","type":"quantitative"},"y2":{"field":"upper"}}}"#,
+            "pre-aggregated",
+        ),
+    ];
+    for strict in [false, true] {
+        for (json, expected) in inputs {
+            let error = vegalite::parse(json, strict).unwrap_err();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?} in error {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn vegalite_boxplot_rejects_missing_or_null_measurement_and_group_fields() {
+    let invalid = [
+        r#"{"mark":"boxplot","data":{"values":[{"group":"a"}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}"#,
+        r#"{"mark":"boxplot","data":{"values":[{"group":"a","value":null}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}"#,
+        r#"{"mark":"boxplot","data":{"values":[{"group":"a","value":1,"detail":null}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"},"detail":{"field":"detail","type":"nominal"}}}"#,
+        r#"{"mark":"boxplot","data":{"values":[{"group":"a","value":"bad"}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}"#,
+    ];
+    for json in invalid {
+        let nonstrict = vegalite::parse(json, false).unwrap_err();
+        let strict = vegalite::parse(json, true).unwrap_err();
+        assert!(
+            nonstrict.contains("boxplot"),
+            "unexpected error: {nonstrict}"
+        );
+        assert!(strict.contains("boxplot"), "unexpected error: {strict}");
+    }
+}
+
+#[test]
+fn vegalite_boxplot_rejects_nonfinite_statistical_results() {
+    let error = vegalite::parse(
+        r#"{"mark":"boxplot","data":{"values":[{"value":-1e308},{"value":1e308}]},"encoding":{"y":{"field":"value","type":"quantitative"}}}"#,
+        true,
+    )
+    .unwrap_err();
+    assert!(error.contains("finite"), "unexpected error: {error}");
+}
+
+#[test]
+fn vegalite_boxplot_schema_accepts_hard_domain_and_rejects_other_scale_extensions() {
+    let valid = r#"{"mark":"boxplot","data":{"values":[{"value":1}]},"encoding":{"y":{"field":"value","type":"quantitative","scale":{"domain":[0,10]}}}}"#;
+    let invalid = valid.replace("\"domain\":[0,10]", "\"zero\":true");
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(valid).is_ok());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&invalid).is_err());
+}
+
+#[test]
+fn vegalite_boxplot_rejects_unsupported_data_keys_in_both_modes() {
+    let base = serde_json::json!({
+        "mark": "boxplot",
+        "data": {"values": [{"group": "A", "value": 1}, {"group": "A", "value": 2}]},
+        "encoding": {
+            "x": {"field": "group", "type": "nominal"},
+            "y": {"field": "value", "type": "quantitative"}
+        }
+    });
+    for (key, value) in [
+        ("format", serde_json::json!({"parse": {"value": "boolean"}})),
+        ("unsupported", serde_json::json!(true)),
+    ] {
+        let mut spec = base.clone();
+        spec["data"][key] = value;
+        let json = serde_json::to_string(&spec).unwrap();
+        for strict in [false, true] {
+            assert!(
+                vegalite::parse(&json, strict).is_err(),
+                "data.{key} must be rejected in strict={strict} mode"
+            );
+        }
+    }
+}
+
+#[test]
+fn vegalite_boxplot_treats_schema_null_options_as_omitted_in_both_modes() {
+    for scale in [serde_json::Value::Null, serde_json::json!({"domain": null})] {
+        let spec = serde_json::json!({
+            "mark": {
+                "type": "boxplot",
+                "extent": null,
+                "orient": null,
+                "size": null,
+                "color": null,
+                "opacity": null,
+                "clip": null,
+                "box": {
+                    "color": null,
+                    "fill": null,
+                    "stroke": null,
+                    "strokeWidth": null,
+                    "strokeDash": null,
+                    "opacity": null,
+                    "size": null
+                },
+                "median": null,
+                "outliers": null,
+                "rule": null,
+                "ticks": null
+            },
+            "data": {"values": [{"value": 1}, {"value": 2}]},
+            "encoding": {
+                "x": null,
+                "y": {"field": "value", "type": null, "scale": scale},
+                "color": null,
+                "detail": null,
+                "size": null,
+                "opacity": null
+            },
+            "background": null
+        });
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_ok(),
+            "typed schema should accept optional null fields: {json}"
+        );
+        for strict in [false, true] {
+            let parsed = vegalite::parse(&json, strict).unwrap_or_else(|error| {
+                panic!("schema-valid null options must be omitted in strict={strict}: {error}")
+            });
+            assert!(matches!(parsed.kind, ChartKind::VegaBoxPlot(_)));
+        }
+    }
+}

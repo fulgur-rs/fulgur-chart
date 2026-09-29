@@ -149,7 +149,7 @@ fn bootstrap_interval(
     )
 }
 
-fn type7_quantile(sorted: &[f64], probability: f64) -> f64 {
+pub(super) fn type7_quantile(sorted: &[f64], probability: f64) -> f64 {
     debug_assert!(!sorted.is_empty());
     debug_assert!((0.0..=1.0).contains(&probability));
     let position = (sorted.len() - 1) as f64 * probability;
