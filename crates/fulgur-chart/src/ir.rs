@@ -1191,6 +1191,79 @@ impl Default for Decimation {
     }
 }
 
+/// Effective Vega-Lite scale resolution on one composition node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VegaResolutionMode {
+    Shared,
+    Independent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VegaCompositionResolve {
+    pub x_scale: VegaResolutionMode,
+    pub y_scale: VegaResolutionMode,
+    pub color_scale: VegaResolutionMode,
+    pub size_scale: VegaResolutionMode,
+    pub x_axis: VegaResolutionMode,
+    pub y_axis: VegaResolutionMode,
+    pub color_legend: VegaResolutionMode,
+    pub size_legend: VegaResolutionMode,
+}
+
+/// Resolved Vega-Lite scale domain. Category order is significant and remains first-seen.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VegaScaleDomain {
+    Categories(Vec<String>),
+    Numeric { min: f64, max: f64 },
+    Temporal { min_millis: i64, max_millis: i64 },
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VegaLeafScaleDomains {
+    pub x: Option<VegaScaleDomain>,
+    pub y: Option<VegaScaleDomain>,
+    pub color: Option<VegaScaleDomain>,
+    pub size: Option<VegaScaleDomain>,
+}
+
+/// Fully parsed unit chart plus the scale context inherited from its composition ancestors.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaCompositionLeaf {
+    pub path: String,
+    pub spec: Box<ChartSpec>,
+    pub scales: VegaLeafScaleDomains,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaLayerNode {
+    pub path: String,
+    pub children: Vec<VegaCompositionNode>,
+    pub width: f64,
+    pub height: f64,
+    pub title: Option<String>,
+    pub resolve: VegaCompositionResolve,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaConcatNode {
+    pub path: String,
+    pub children: Vec<VegaCompositionNode>,
+    pub width: f64,
+    pub height: f64,
+    pub spacing: f64,
+    pub title: Option<String>,
+    pub resolve: VegaCompositionResolve,
+}
+
+/// Recursive Vega-Lite composition tree. Unit marks retain their existing chart IR.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VegaCompositionNode {
+    Unit(Box<VegaCompositionLeaf>),
+    Layer(Box<VegaLayerNode>),
+    HConcat(Box<VegaConcatNode>),
+    VConcat(Box<VegaConcatNode>),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartSpec {
     pub kind: ChartKind,
