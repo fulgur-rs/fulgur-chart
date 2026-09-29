@@ -1039,6 +1039,8 @@ pub enum ChartKind {
     ErrorMark(Box<ErrorMarkData>),
     /// Vega-Lite `boxplot` composite mark with dedicated statistics and layout.
     VegaBoxPlot(Box<VegaBoxPlotData>),
+    /// Recursive Vega-Lite `layer` / `hconcat` / `vconcat` composition root.
+    VegaComposition(Box<VegaCompositionNode>),
     /// QuickChart 互換の progress バー。軸なし水平バー。
     /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。
     Progress,
@@ -1240,7 +1242,11 @@ pub struct VegaLayerNode {
     pub children: Vec<VegaCompositionNode>,
     pub width: f64,
     pub height: f64,
+    /// Shared Cartesian view rectangle before independent-guide gutters.
+    pub view_width: f64,
+    pub view_height: f64,
     pub title: Option<String>,
+    pub background: Option<Color>,
     pub resolve: VegaCompositionResolve,
 }
 
@@ -1252,6 +1258,7 @@ pub struct VegaConcatNode {
     pub height: f64,
     pub spacing: f64,
     pub title: Option<String>,
+    pub background: Option<Color>,
     pub resolve: VegaCompositionResolve,
 }
 

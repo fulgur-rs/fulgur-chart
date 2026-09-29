@@ -47,6 +47,13 @@ pub fn parse_with_limits(
     limits: &crate::guard::InputLimits,
 ) -> Result<ChartSpec, String> {
     let mut value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if value.as_object().is_some_and(|object| {
+        ["layer", "hconcat", "vconcat", "concat", "facet", "repeat"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+    }) {
+        return super::vegalite_composition::parse_composition_value(&value, strict, limits);
+    }
     parse_unit_value(&mut value, strict, limits)
 }
 

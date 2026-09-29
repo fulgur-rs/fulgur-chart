@@ -525,7 +525,23 @@ fn validate_raster_supported_prims(items: &[Prim]) -> Result<(), String> {
 }
 
 fn validate_raster_chart_kind(spec: &crate::ir::ChartSpec) -> Result<(), String> {
-    if matches!(&spec.kind, crate::ir::ChartKind::VegaImage(_)) {
+    fn contains_image(node: &crate::ir::VegaCompositionNode) -> bool {
+        match node {
+            crate::ir::VegaCompositionNode::Unit(leaf) => {
+                matches!(leaf.spec.kind, crate::ir::ChartKind::VegaImage(_))
+            }
+            crate::ir::VegaCompositionNode::Layer(layer) => {
+                layer.children.iter().any(contains_image)
+            }
+            crate::ir::VegaCompositionNode::HConcat(concat)
+            | crate::ir::VegaCompositionNode::VConcat(concat) => {
+                concat.children.iter().any(contains_image)
+            }
+        }
+    }
+    if matches!(&spec.kind, crate::ir::ChartKind::VegaImage(_))
+        || matches!(&spec.kind, crate::ir::ChartKind::VegaComposition(root) if contains_image(root))
+    {
         return Err(
             "PNG and WebP rendering does not support Vega-Lite image marks; use SVG output"
                 .to_string(),

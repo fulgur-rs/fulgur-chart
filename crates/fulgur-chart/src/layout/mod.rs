@@ -22,6 +22,7 @@ pub mod scatter;
 pub mod sparkline;
 pub mod treemap;
 pub(crate) mod vega_boxplot;
+pub(crate) mod vega_composition;
 pub mod vega_rect;
 pub mod violin;
 pub mod wordcloud;
@@ -127,6 +128,7 @@ fn build_chart_scene(
             error_mark::build_checked(spec, m, limits.max_categorical_primitives)?
         }
         ChartKind::VegaBoxPlot(_) => vega_boxplot::build_checked(spec, m, limits)?,
+        ChartKind::VegaComposition(_) => vega_composition::build_checked(spec, m, limits)?,
         ChartKind::Progress => progress::build(spec, m),
         ChartKind::BoxPlot => boxplot::build(spec, m),
         ChartKind::Violin { .. } => violin::build(spec, m),

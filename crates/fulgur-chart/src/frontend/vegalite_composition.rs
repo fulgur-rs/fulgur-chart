@@ -808,6 +808,56 @@ fn parse_resolved_composition(
     Ok(parsed)
 }
 
+pub(super) fn parse_composition_value(
+    value: &Value,
+    strict: bool,
+    limits: &crate::guard::InputLimits,
+) -> Result<crate::ir::ChartSpec, String> {
+    preflight_composition(value, limits)?;
+    let expanded = expand_composition(value, strict)?;
+    let resolved_scales = resolve_raw_color_size_scales(&expanded)?;
+    let node = parse_resolved_composition(expanded, &resolved_scales, strict, limits)?;
+    let (width, height) = composition_node_dimensions(&node);
+    let first_leaf = first_unit_leaf(&node)
+        .ok_or_else(|| "composition must contain at least one unit view".to_string())?;
+    let mut root = (*first_leaf.spec).clone();
+    root.kind = crate::ir::ChartKind::VegaComposition(Box::new(node.clone()));
+    root.series.clear();
+    root.categories.clear();
+    root.width = width;
+    root.height = height;
+    root.title = composition_node_title(&node).map(str::to_owned);
+    // Composition backgrounds are retained on their own IR nodes and painted by the
+    // composition layout, so child leaf backgrounds cannot accidentally cover the root.
+    root.theme.background = None;
+    crate::guard::validate_vega_composition(&root, limits)?;
+    Ok(root)
+}
+
+fn first_unit_leaf(
+    node: &crate::ir::VegaCompositionNode,
+) -> Option<&crate::ir::VegaCompositionLeaf> {
+    match node {
+        crate::ir::VegaCompositionNode::Unit(leaf) => Some(leaf),
+        crate::ir::VegaCompositionNode::Layer(layer) => {
+            layer.children.iter().find_map(first_unit_leaf)
+        }
+        crate::ir::VegaCompositionNode::HConcat(concat)
+        | crate::ir::VegaCompositionNode::VConcat(concat) => {
+            concat.children.iter().find_map(first_unit_leaf)
+        }
+    }
+}
+
+fn composition_node_title(node: &crate::ir::VegaCompositionNode) -> Option<&str> {
+    match node {
+        crate::ir::VegaCompositionNode::Unit(_) => None,
+        crate::ir::VegaCompositionNode::Layer(layer) => layer.title.as_deref(),
+        crate::ir::VegaCompositionNode::HConcat(concat)
+        | crate::ir::VegaCompositionNode::VConcat(concat) => concat.title.as_deref(),
+    }
+}
+
 fn parse_resolved_node(
     node: ExpandedCompositionNode,
     scales: &ResolvedScaleInput,
@@ -859,28 +909,51 @@ fn parse_resolved_node(
                 limits,
             )?;
             let children = parse_resolved_children(container.children, scales, strict, limits)?;
+            validate_layer_children(&children, &container.path)?;
             let first = children.first().ok_or_else(|| {
                 format!("{}.layer must be non-empty", path_or_root(&container.path))
             })?;
-            let (width, height) = composition_node_dimensions(first);
+            let (view_width, view_height) = composition_node_dimensions(first);
             for child in &children[1..] {
                 let (child_width, child_height) = composition_node_dimensions(child);
-                if child_width != width || child_height != height {
+                if child_width != view_width || child_height != view_height {
                     return Err(format!(
-                        "{}layer children must resolve to equal dimensions (expected {width}×{height}, got {child_width}×{child_height})",
+                        "{}layer children must resolve to equal dimensions (expected {view_width}×{view_height}, got {child_width}×{child_height})",
                         path_or_root(&container.path)
                     ));
                 }
             }
+            let resolve = node_resolution(scales, &container.path)?;
+            let title = composition_title(&container.raw_spec, &container.path, limits)?;
+            let title_height = title
+                .as_ref()
+                .map(|_| crate::layout::common::TITLE_BAND)
+                .unwrap_or(0.0);
+            let independent_axes = children.len().saturating_sub(1) as f64;
+            let width = view_width
+                + if resolve.y_axis == crate::ir::VegaResolutionMode::Independent {
+                    independent_axes * 36.0
+                } else {
+                    0.0
+                };
+            let height = view_height
+                + if resolve.x_axis == crate::ir::VegaResolutionMode::Independent {
+                    independent_axes * 36.0
+                } else {
+                    0.0
+                }
+                + title_height;
             check_composition_dimension(width, &container.path, "width", limits)?;
             check_composition_dimension(height, &container.path, "height", limits)?;
-            let resolve = node_resolution(scales, &container.path)?;
             Ok(VegaCompositionNode::Layer(Box::new(VegaLayerNode {
                 path: container.path.clone(),
                 children,
                 width,
                 height,
-                title: composition_title(&container.raw_spec, &container.path, limits)?,
+                view_width,
+                view_height,
+                title,
+                background: composition_background(&container.raw_spec, &container.path)?,
                 resolve,
             })))
         }
@@ -905,11 +978,17 @@ fn parse_resolved_node(
                 .map(|(width, _)| width)
                 .sum::<f64>()
                 + spacing * children.len().saturating_sub(1) as f64;
-            let height = children
+            let content_height = children
                 .iter()
                 .map(composition_node_dimensions)
                 .map(|(_, height)| height)
                 .fold(0.0, f64::max);
+            let title = composition_title(&container.raw_spec, &container.path, limits)?;
+            let height = content_height
+                + title
+                    .as_ref()
+                    .map(|_| crate::layout::common::TITLE_BAND)
+                    .unwrap_or(0.0);
             check_composition_dimension(width, &container.path, "derived width", limits)?;
             check_composition_dimension(height, &container.path, "derived height", limits)?;
             let resolve = node_resolution(scales, &container.path)?;
@@ -919,7 +998,8 @@ fn parse_resolved_node(
                 width,
                 height,
                 spacing,
-                title: composition_title(&container.raw_spec, &container.path, limits)?,
+                title,
+                background: composition_background(&container.raw_spec, &container.path)?,
                 resolve,
             })))
         }
@@ -943,12 +1023,18 @@ fn parse_resolved_node(
                 .map(composition_node_dimensions)
                 .map(|(width, _)| width)
                 .fold(0.0, f64::max);
-            let height = children
+            let content_height = children
                 .iter()
                 .map(composition_node_dimensions)
                 .map(|(_, height)| height)
                 .sum::<f64>()
                 + spacing * children.len().saturating_sub(1) as f64;
+            let title = composition_title(&container.raw_spec, &container.path, limits)?;
+            let height = content_height
+                + title
+                    .as_ref()
+                    .map(|_| crate::layout::common::TITLE_BAND)
+                    .unwrap_or(0.0);
             check_composition_dimension(width, &container.path, "derived width", limits)?;
             check_composition_dimension(height, &container.path, "derived height", limits)?;
             let resolve = node_resolution(scales, &container.path)?;
@@ -958,11 +1044,60 @@ fn parse_resolved_node(
                 width,
                 height,
                 spacing,
-                title: composition_title(&container.raw_spec, &container.path, limits)?,
+                title,
+                background: composition_background(&container.raw_spec, &container.path)?,
                 resolve,
             })))
         }
     }
+}
+
+fn validate_layer_children(
+    children: &[crate::ir::VegaCompositionNode],
+    path: &str,
+) -> Result<(), String> {
+    fn check_node(node: &crate::ir::VegaCompositionNode, path: &str) -> Result<(), String> {
+        match node {
+            crate::ir::VegaCompositionNode::Unit(leaf) => {
+                if matches!(
+                    &leaf.spec.kind,
+                    crate::ir::ChartKind::Bar { .. }
+                        | crate::ir::ChartKind::Line { .. }
+                        | crate::ir::ChartKind::Trail
+                        | crate::ir::ChartKind::Scatter
+                        | crate::ir::ChartKind::Bubble
+                        | crate::ir::ChartKind::Square
+                        | crate::ir::ChartKind::VegaRect { .. }
+                        | crate::ir::ChartKind::VegaImage(_)
+                        | crate::ir::ChartKind::ErrorMark(_)
+                        | crate::ir::ChartKind::VegaBoxPlot(_)
+                ) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "{path} uses a mark that cannot share a Cartesian layer frame"
+                    ))
+                }
+            }
+            crate::ir::VegaCompositionNode::Layer(layer) => {
+                validate_layer_children(&layer.children, &layer.path)
+            }
+            crate::ir::VegaCompositionNode::HConcat(_)
+            | crate::ir::VegaCompositionNode::VConcat(_) => Err(format!(
+                "{path} concat node cannot be nested inside a layer"
+            )),
+        }
+    }
+
+    for (index, child) in children.iter().enumerate() {
+        let child_path = if path.is_empty() {
+            format!("layer[{index}]")
+        } else {
+            format!("{path}.layer[{index}]")
+        };
+        check_node(child, &child_path)?;
+    }
+    Ok(())
 }
 
 fn parse_resolved_children(
@@ -1029,6 +1164,19 @@ fn composition_title(
         ));
     }
     Ok(title)
+}
+
+fn composition_background(spec: &Value, path: &str) -> Result<Option<crate::ir::Color>, String> {
+    match spec.get("background") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(color)) => crate::color::parse_color(color)
+            .map(Some)
+            .ok_or_else(|| format!("{}.background must be a valid color", path_or_root(path))),
+        Some(_) => Err(format!(
+            "{}.background must be a color string",
+            path_or_root(path)
+        )),
+    }
 }
 
 fn composition_spacing(
@@ -1629,6 +1777,16 @@ fn inherited_at_node(
     } else {
         inherited.encoding.clone()
     };
+    let mut height = object
+        .get("height")
+        .cloned()
+        .or_else(|| inherited.height.clone());
+    if composition_title_has_text(object.get("title")) {
+        let outer_height = height.as_ref().and_then(Value::as_f64).unwrap_or(450.0);
+        height = Some(Value::from(
+            outer_height - crate::layout::common::TITLE_BAND,
+        ));
+    }
     Ok(VegaInheritedSpec {
         data,
         encoding,
@@ -1636,15 +1794,23 @@ fn inherited_at_node(
             .get("width")
             .cloned()
             .or_else(|| inherited.width.clone()),
-        height: object
-            .get("height")
-            .cloned()
-            .or_else(|| inherited.height.clone()),
+        height,
         resolve: object
             .get("resolve")
             .cloned()
             .or_else(|| inherited.resolve.clone()),
     })
+}
+
+fn composition_title_has_text(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::String(text)) => !text.is_empty(),
+        Some(Value::Object(object)) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty()),
+        _ => false,
+    }
 }
 
 fn merge_encoding(

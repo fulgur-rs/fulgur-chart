@@ -251,6 +251,21 @@ fn violin_nonempty_group_count(spec: &ChartSpec) -> usize {
 }
 
 pub fn validate_spec(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
+    if matches!(spec.kind, ChartKind::VegaComposition(_)) {
+        validate_vega_composition(spec, limits)?;
+        if !matches!(spec.size_mode, crate::ir::SizeMode::PlotArea) {
+            return Ok(());
+        }
+        #[cfg(feature = "default-font")]
+        let font = crate::font::DEFAULT_FONT;
+        #[cfg(all(test, not(feature = "default-font")))]
+        let font = crate::font::TEST_FONT;
+        #[cfg(all(not(test), not(feature = "default-font")))]
+        let font = crate::font::DEFAULT_FONT;
+        let measurer = crate::text::TextMeasurer::new(font)
+            .map_err(|error| format!("failed to measure plot-area scene: {error}"))?;
+        return validate_plot_area_scene_with_measurer(spec, limits, &measurer);
+    }
     validate_spec_base(spec, limits)?;
     if !matches!(spec.size_mode, crate::ir::SizeMode::PlotArea) {
         return Ok(());
@@ -272,8 +287,204 @@ pub fn validate_spec_with_measurer(
     limits: &InputLimits,
     measurer: &crate::text::TextMeasurer<'_>,
 ) -> Result<(), String> {
+    if matches!(spec.kind, ChartKind::VegaComposition(_)) {
+        validate_vega_composition(spec, limits)?;
+        return validate_plot_area_scene_with_measurer(spec, limits, measurer);
+    }
     validate_spec_base(spec, limits)?;
     validate_plot_area_scene_with_measurer(spec, limits, measurer)
+}
+
+/// Validate every unit leaf and enforce composition-wide point and primitive budgets.
+pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
+    let ChartKind::VegaComposition(root) = &spec.kind else {
+        return Ok(());
+    };
+
+    fn visit(
+        node: &crate::ir::VegaCompositionNode,
+        depth: usize,
+        limits: &InputLimits,
+        views: &mut usize,
+        points: &mut usize,
+        primitives: &mut usize,
+        geo_primitives: &mut usize,
+    ) -> Result<(), String> {
+        match node {
+            crate::ir::VegaCompositionNode::Unit(leaf) => {
+                *views = views.saturating_add(1);
+                if *views > limits.max_vega_composition_views {
+                    return Err(format!(
+                        "Vega-Lite composition exceeds max_vega_composition_views ({}) at {}",
+                        limits.max_vega_composition_views, leaf.path
+                    ));
+                }
+                validate_spec_base(&leaf.spec, limits)
+                    .map_err(|error| format!("{}: {error}", leaf.path))?;
+                let series_points = leaf.spec.series.iter().fold(0usize, |count, series| {
+                    count
+                        .saturating_add(series.values.len())
+                        .saturating_add(series.points.len())
+                        .saturating_add(series.box_points.len())
+                        .saturating_add(series.links.len())
+                });
+                let leaf_points = match &leaf.spec.kind {
+                    ChartKind::VegaRect { cells, .. } => {
+                        cells.iter().flatten().filter(|cell| cell.is_some()).count()
+                    }
+                    ChartKind::GeoShape { data } => data.features.len(),
+                    ChartKind::ErrorMark(data) => series_points.max(data.ranges.len()),
+                    ChartKind::VegaBoxPlot(data) => {
+                        data.groups.iter().fold(0usize, |count, group| {
+                            count.saturating_add(group.point_count)
+                        })
+                    }
+                    _ => series_points,
+                };
+                *points = points.saturating_add(leaf_points);
+                if *points > limits.max_total_data_points {
+                    return Err(format!(
+                        "Vega-Lite composition point count {} exceeds max_total_data_points ({}) at {}",
+                        *points, limits.max_total_data_points, leaf.path
+                    ));
+                }
+                let leaf_primitives = match &leaf.spec.kind {
+                    ChartKind::Bar { .. }
+                    | ChartKind::Line { .. }
+                    | ChartKind::Trail
+                    | ChartKind::Mixed => leaf
+                        .spec
+                        .series
+                        .len()
+                        .saturating_mul(leaf.spec.categories.len()),
+                    ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => leaf
+                        .spec
+                        .series
+                        .iter()
+                        .map(|series| series.points.len())
+                        .fold(0usize, usize::saturating_add),
+                    ChartKind::VegaRect { cells, .. } => {
+                        cells.iter().flatten().filter(|cell| cell.is_some()).count()
+                    }
+                    ChartKind::VegaImage(_) => leaf_points,
+                    ChartKind::GeoShape { data } => data.features.len(),
+                    ChartKind::ErrorMark(data) => data.ranges.len().saturating_mul(3),
+                    ChartKind::VegaBoxPlot(data) => {
+                        data.groups.iter().fold(0usize, |total, group| {
+                            total
+                                .saturating_add(5usize.saturating_add(group.summary.outliers.len()))
+                        })
+                    }
+                    _ => 0,
+                };
+                *primitives = primitives.saturating_add(leaf_primitives);
+                if *primitives > limits.max_categorical_primitives {
+                    return Err(format!(
+                        "Vega-Lite composition primitive count {} exceeds max_categorical_primitives ({}) at {}",
+                        *primitives, limits.max_categorical_primitives, leaf.path
+                    ));
+                }
+                if let ChartKind::GeoShape { data } = &leaf.spec.kind {
+                    let leaf_geo_primitives =
+                        data.features.iter().fold(0usize, |total, feature| {
+                            total.saturating_add(
+                                feature
+                                    .geometry
+                                    .as_ref()
+                                    .map(estimate_geo_primitives)
+                                    .unwrap_or(0),
+                            )
+                        });
+                    *geo_primitives = geo_primitives.saturating_add(leaf_geo_primitives);
+                    if *geo_primitives > limits.max_geo_primitives {
+                        return Err(format!(
+                            "Vega-Lite composition geoshape primitive count {} exceeds max_geo_primitives ({}) at {}",
+                            *geo_primitives, limits.max_geo_primitives, leaf.path
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            crate::ir::VegaCompositionNode::Layer(layer) => {
+                let node_depth = depth.saturating_add(1);
+                if node_depth > limits.max_vega_composition_depth {
+                    return Err(format!(
+                        "Vega-Lite composition depth {node_depth} exceeds max_vega_composition_depth ({}) at {}",
+                        limits.max_vega_composition_depth, layer.path
+                    ));
+                }
+                for child in &layer.children {
+                    visit(
+                        child,
+                        node_depth,
+                        limits,
+                        views,
+                        points,
+                        primitives,
+                        geo_primitives,
+                    )?;
+                }
+                Ok(())
+            }
+            crate::ir::VegaCompositionNode::HConcat(concat)
+            | crate::ir::VegaCompositionNode::VConcat(concat) => {
+                let node_depth = depth.saturating_add(1);
+                if node_depth > limits.max_vega_composition_depth {
+                    return Err(format!(
+                        "Vega-Lite composition depth {node_depth} exceeds max_vega_composition_depth ({}) at {}",
+                        limits.max_vega_composition_depth, concat.path
+                    ));
+                }
+                for child in &concat.children {
+                    visit(
+                        child,
+                        node_depth,
+                        limits,
+                        views,
+                        points,
+                        primitives,
+                        geo_primitives,
+                    )?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    let mut views = 0usize;
+    let mut points = 0usize;
+    let mut primitives = 0usize;
+    let mut geo_primitives = 0usize;
+    visit(
+        root,
+        0,
+        limits,
+        &mut views,
+        &mut points,
+        &mut primitives,
+        &mut geo_primitives,
+    )
+}
+
+fn estimate_geo_primitives(geometry: &crate::ir::GeoGeometry) -> usize {
+    use crate::ir::GeoGeometry;
+    match geometry {
+        GeoGeometry::Point(_) => 1,
+        GeoGeometry::MultiPoint(points) => points.len(),
+        GeoGeometry::LineString(points) => usize::from(!points.is_empty()),
+        GeoGeometry::MultiLineString(lines) => lines.len(),
+        GeoGeometry::Polygon(rings) => usize::from(!rings.is_empty()),
+        GeoGeometry::MultiPolygon(polygons) => polygons.len(),
+        GeoGeometry::GeometryCollection(geometries) => {
+            if geometries.is_empty() {
+                1
+            } else {
+                geometries.iter().fold(0usize, |count, geometry| {
+                    count.saturating_add(estimate_geo_primitives(geometry))
+                })
+            }
+        }
+    }
 }
 
 /// Validate normalized error-mark ranges and their worst-case Scene primitive count.
@@ -1484,7 +1695,34 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
 
 /// Validate retained Vega-Lite image references before any backend builds a scene.
 pub(crate) fn validate_vega_image(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
-    let crate::ir::ChartKind::VegaImage(data) = &spec.kind else {
+    if let ChartKind::VegaComposition(root) = &spec.kind {
+        fn visit(
+            node: &crate::ir::VegaCompositionNode,
+            limits: &InputLimits,
+        ) -> Result<(), String> {
+            match node {
+                crate::ir::VegaCompositionNode::Unit(leaf) => {
+                    validate_vega_image(&leaf.spec, limits)
+                        .map_err(|error| format!("{}: {error}", leaf.path))
+                }
+                crate::ir::VegaCompositionNode::Layer(layer) => {
+                    for child in &layer.children {
+                        visit(child, limits)?;
+                    }
+                    Ok(())
+                }
+                crate::ir::VegaCompositionNode::HConcat(concat)
+                | crate::ir::VegaCompositionNode::VConcat(concat) => {
+                    for child in &concat.children {
+                        visit(child, limits)?;
+                    }
+                    Ok(())
+                }
+            }
+        }
+        return visit(root, limits);
+    }
+    let ChartKind::VegaImage(data) = &spec.kind else {
         return Ok(());
     };
     if spec.series.len() != 1 {
