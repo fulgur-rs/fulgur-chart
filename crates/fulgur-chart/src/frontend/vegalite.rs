@@ -47,17 +47,27 @@ pub fn parse_with_limits(
     limits: &crate::guard::InputLimits,
 ) -> Result<ChartSpec, String> {
     let mut value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
-    let top = value
-        .as_object_mut()
+    parse_unit_value(&mut value, strict, limits)
+}
+
+pub(super) fn parse_unit_value(
+    value: &mut Value,
+    strict: bool,
+    limits: &crate::guard::InputLimits,
+) -> Result<ChartSpec, String> {
+    let object = value
+        .as_object()
         .ok_or_else(|| "トップレベルは object でなければなりません".to_string())?;
 
-    if read_mark_name(top) == Some("boxplot") {
+    if read_mark_name(object) == Some("boxplot") {
+        let top = value.as_object_mut().expect("object checked above");
         return super::vegalite_boxplot::parse_boxplot_spec(top, limits);
     }
-    if read_mark_name(top) == Some("image") {
+    if read_mark_name(object) == Some("image") {
+        let top = value.as_object_mut().expect("object checked above");
         return image::parse_image_spec(top, strict, limits);
     }
-    if top
+    if object
         .get("layer")
         .and_then(Value::as_array)
         .is_some_and(|layers| {
@@ -69,8 +79,10 @@ pub fn parse_with_limits(
         return Err("boxplot layer is not supported".into());
     }
     if strict {
-        check_unknown_keys(json)?;
+        check_unknown_value(value)?;
     }
+
+    let top = value.as_object_mut().expect("object checked above");
 
     if matches!(read_mark_name(top), Some("errorbar" | "errorband")) {
         return error_mark::parse_error_mark_spec(top, limits);
@@ -2628,11 +2640,16 @@ fn build_pie(
 
 /// strict 用: 既知キーのホワイトリストに照らし、最初の未知キーをパス付き Err で返す。
 /// 防御的に走査し、ノードが欠落/想定外の形なら Ok を返す（後段の通常パースに委ねる）。
+#[cfg(test)]
 fn check_unknown_keys(json: &str) -> Result<(), String> {
     let value: Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return Ok(()), // 不正 JSON は後段パースに委ねる
     };
+    check_unknown_value(&value)
+}
+
+pub(super) fn check_unknown_value(value: &Value) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(()); // object でなければ後段パースに委ねる
     };

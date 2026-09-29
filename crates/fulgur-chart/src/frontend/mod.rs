@@ -2,4 +2,5 @@
 pub mod chartjs;
 pub mod vegalite;
 mod vegalite_boxplot;
+mod vegalite_composition;
 mod vegalite_error;

@@ -145,6 +145,10 @@ pub struct InputLimits {
     pub max_geo_primitives: usize,
     /// ラベル・タイトル文字列の上限(バイト)。
     pub max_label_bytes: usize,
+    /// Vega-Lite composition nesting depth (root composition has depth 1).
+    pub max_vega_composition_depth: usize,
+    /// Vega-Lite unit-view count across layer/concat descendants.
+    pub max_vega_composition_views: usize,
     /// width/height の上限(px)。
     pub max_dimension_px: f64,
     /// width/height の下限(px)。
@@ -162,6 +166,8 @@ impl Default for InputLimits {
             max_geo_vertices: 1_000_000,
             max_geo_primitives: 1_000_000,
             max_label_bytes: DEFAULT_MAX_LABEL_BYTES,
+            max_vega_composition_depth: 32,
+            max_vega_composition_views: 256,
             max_dimension_px: DEFAULT_MAX_DIMENSION_PX,
             min_dimension_px: DEFAULT_MIN_DIMENSION_PX,
         }
