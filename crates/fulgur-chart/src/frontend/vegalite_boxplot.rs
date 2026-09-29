@@ -278,12 +278,12 @@ pub(super) fn parse_boxplot_spec(
                     .saturating_mul(4),
             );
         let endpoints = group.summary.whisker_low.is_some() && group.summary.whisker_high.is_some();
-        let whiskers = endpoints
-            .then(|| {
-                usize::from(style.rule_part.visible)
-                    .saturating_add(usize::from(style.ticks_part.visible).saturating_mul(2))
-            })
-            .unwrap_or(0);
+        let whiskers = if endpoints {
+            usize::from(style.rule_part.visible)
+                .saturating_add(usize::from(style.ticks_part.visible).saturating_mul(2))
+        } else {
+            0
+        };
         let outliers = if style.outliers_part.visible {
             group.summary.outliers.len()
         } else {

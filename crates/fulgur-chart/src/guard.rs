@@ -477,7 +477,7 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
             limits.max_categories
         ));
     }
-    if data.has_category != !data.categories.is_empty() {
+    if data.has_category == data.categories.is_empty() {
         return Err("Vega-Lite boxplot category metadata is inconsistent".into());
     }
     if let crate::ir::VegaBoxPlotExtent::Tukey { coefficient } = data.extent

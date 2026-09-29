@@ -406,10 +406,10 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
             .iter()
             .map(|group| {
                 let mut labels = Vec::new();
-                if let Some(index) = group.category_index {
-                    if let Some(label) = data.categories.get(index) {
-                        labels.push(label.as_str());
-                    }
+                if let Some(index) = group.category_index
+                    && let Some(label) = data.categories.get(index)
+                {
+                    labels.push(label.as_str());
                 }
                 if let Some(label) = group.color_label.as_deref() {
                     labels.push(label);
@@ -772,10 +772,10 @@ pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
     let mut model = build_model_core(spec);
     (model.meta.width, model.meta.height) = model_dimensions(spec, m);
     if let Some((x, y, y_ticks)) = compute_axes(spec, m) {
-        if matches!(spec.kind, ChartKind::ErrorMark(_)) {
-            model.counts.x_ticks = axis_tick_count(&x);
-            model.counts.y_ticks = axis_tick_count(&y);
-        } else if matches!(spec.kind, ChartKind::VegaBoxPlot(_)) {
+        if matches!(
+            spec.kind,
+            ChartKind::ErrorMark(_) | ChartKind::VegaBoxPlot(_)
+        ) {
             model.counts.x_ticks = axis_tick_count(&x);
             model.counts.y_ticks = axis_tick_count(&y);
         } else if x.kind == "temporal" {

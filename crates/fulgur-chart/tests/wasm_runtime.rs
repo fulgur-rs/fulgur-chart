@@ -65,6 +65,14 @@ fn sample_geoshape_spec() -> fulgur_chart::ir::ChartSpec {
     .expect("geoshape fixture parses")
 }
 
+fn sample_boxplot_spec() -> fulgur_chart::ir::ChartSpec {
+    vegalite::parse(
+        include_str!("../../../examples/specs/vegalite-boxplot.json"),
+        true,
+    )
+    .expect("boxplot fixture parses")
+}
+
 const PNG_SCALE: f32 = 2.0;
 const PNG_SIGNATURE: &[u8; 8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 // デフォルト 800x450 を PNG_SCALE 倍した寸法。
@@ -224,6 +232,36 @@ fn error_mark_examples_render_svg_and_png_deterministically() {
             "{name} PNG dimensions are invalid"
         );
     }
+}
+
+/// Vega-Lite boxplot example uses the shared native/WASM statistics and Scene path.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vegalite_boxplot_example_renders_deterministic_svg_and_png() {
+    let spec = sample_boxplot_spec();
+    let svg = render_chart(&spec);
+    let svg_again = render_chart(&spec);
+    assert_eq!(svg, svg_again, "boxplot SVG should be deterministic");
+    assert!(svg.starts_with("<svg"), "boxplot did not render SVG");
+    assert!(svg.contains("<rect"), "boxplot has no box geometry");
+    assert!(svg.contains("<line"), "boxplot has no whisker geometry");
+    assert!(svg.contains("<circle"), "boxplot has no outlier geometry");
+    let lower_svg = svg.to_ascii_lowercase();
+    assert!(
+        !lower_svg.contains("nan") && !lower_svg.contains("inf"),
+        "boxplot SVG contains a non-finite coordinate"
+    );
+
+    let png = render_chart_to_png_default(&spec, 1.0).expect("boxplot PNG 生成成功");
+    let png_again = render_chart_to_png_default(&spec, 1.0).expect("boxplot PNG 生成成功(2回目)");
+    assert_eq!(png, png_again, "boxplot PNG should be deterministic");
+    assert_eq!(&png[..8], PNG_SIGNATURE, "boxplot PNG signature is invalid");
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("boxplot PNG decodes");
+    assert_eq!(
+        (pixmap.width(), pixmap.height()),
+        (480, 280),
+        "boxplot example dimensions are invalid"
+    );
 }
 
 /// PNG: wasm32 と linux-x86_64 native で、linux-x86_64 の期待 byte と一致することを検証する。

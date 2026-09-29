@@ -187,19 +187,17 @@ fn mapped_value(frame: &VegaBoxPlotFrame, data: &VegaBoxPlotData, value: f64) ->
 
 fn add_line(
     items: &mut Vec<Prim>,
-    x1: f64,
-    y1: f64,
-    x2: f64,
-    y2: f64,
+    start: (f64, f64),
+    end: (f64, f64),
     color: Color,
     width: f64,
     dash: &[f64],
 ) {
     items.push(Prim::Line {
-        x1,
-        y1,
-        x2,
-        y2,
+        x1: start.0,
+        y1: start.1,
+        x2: end.0,
+        y2: end.1,
         stroke: color,
         stroke_width: width,
         dash: dash.to_vec(),
@@ -228,10 +226,8 @@ fn draw_axes(
                 if spec.y_axis.grid.display {
                     add_line(
                         items,
-                        frame.plot_left,
-                        y,
-                        frame.plot_right,
-                        y,
+                        (frame.plot_left, y),
+                        (frame.plot_right, y),
                         grid,
                         1.0,
                         &[],
@@ -252,10 +248,8 @@ fn draw_axes(
                 if spec.x_axis.grid.display {
                     add_line(
                         items,
-                        x,
-                        frame.plot_top,
-                        x,
-                        frame.plot_bottom,
+                        (x, frame.plot_top),
+                        (x, frame.plot_bottom),
                         grid,
                         1.0,
                         &[],
@@ -277,10 +271,8 @@ fn draw_axes(
         VegaBoxPlotOrient::Vertical => {
             add_line(
                 items,
-                frame.plot_left,
-                frame.plot_bottom,
-                frame.plot_right,
-                frame.plot_bottom,
+                (frame.plot_left, frame.plot_bottom),
+                (frame.plot_right, frame.plot_bottom),
                 ink,
                 1.0,
                 &[],
@@ -303,10 +295,8 @@ fn draw_axes(
         VegaBoxPlotOrient::Horizontal => {
             add_line(
                 items,
-                frame.plot_left,
-                frame.plot_top,
-                frame.plot_left,
-                frame.plot_bottom,
+                (frame.plot_left, frame.plot_top),
+                (frame.plot_left, frame.plot_bottom),
                 ink,
                 1.0,
                 &[],
@@ -449,10 +439,24 @@ fn draw_group(
             let stroke = component_color(box_stroke, style.opacity, group.opacity, &style.box_part);
             let stroke_width = style.box_part.stroke_width.unwrap_or(1.0);
             let dash = &style.box_part.stroke_dash;
-            add_line(items, x, y, x + w, y, stroke, stroke_width, dash);
-            add_line(items, x + w, y, x + w, y + h, stroke, stroke_width, dash);
-            add_line(items, x + w, y + h, x, y + h, stroke, stroke_width, dash);
-            add_line(items, x, y + h, x, y, stroke, stroke_width, dash);
+            add_line(items, (x, y), (x + w, y), stroke, stroke_width, dash);
+            add_line(
+                items,
+                (x + w, y),
+                (x + w, y + h),
+                stroke,
+                stroke_width,
+                dash,
+            );
+            add_line(
+                items,
+                (x + w, y + h),
+                (x, y + h),
+                stroke,
+                stroke_width,
+                dash,
+            );
+            add_line(items, (x, y + h), (x, y), stroke, stroke_width, dash);
         }
     }
     if style.median_part.visible {
@@ -484,10 +488,8 @@ fn draw_group(
         };
         add_line(
             items,
-            x1,
-            y1,
-            x2,
-            y2,
+            (x1, y1),
+            (x2, y2),
             color,
             style.median_part.stroke_width.unwrap_or(1.0),
             &style.median_part.stroke_dash,
@@ -513,10 +515,8 @@ fn draw_group(
             };
             add_line(
                 items,
-                x1,
-                y1,
-                x2,
-                y2,
+                (x1, y1),
+                (x2, y2),
                 color,
                 style.rule_part.stroke_width.unwrap_or(1.0),
                 &style.rule_part.stroke_dash,
@@ -546,10 +546,8 @@ fn draw_group(
                 };
                 add_line(
                     items,
-                    x1,
-                    y1,
-                    x2,
-                    y2,
+                    (x1, y1),
+                    (x2, y2),
                     color,
                     style.ticks_part.stroke_width.unwrap_or(1.0),
                     &style.ticks_part.stroke_dash,

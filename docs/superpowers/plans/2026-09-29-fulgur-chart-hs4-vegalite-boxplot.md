@@ -152,13 +152,13 @@
 - Add the example to a boxplot fixture helper in `wasm_runtime.rs`; native/WASM checks use the same JSON and public Vega-Lite parser/render APIs.
 - Regenerate the embedded schema using `cargo run --manifest-path crates/bindings/wasm/Cargo.toml --example regenerate_schemas`.
 
-- [ ] Add `examples/specs/vegalite-boxplot.json` with categorical groups, a color grouping, finite Tukey outliers, mark styling, and the dimensions used by other Vega-Lite examples.
-- [ ] Add the fixture to `golden_png.rs` and generate only its image with `UPDATE_GOLDEN=vegalite-boxplot cargo test -p fulgur-chart --test golden_png golden_png_matches`; verify no other golden changes.
-- [ ] Add `vegalite_boxplot_example_renders_deterministic_svg_and_png` to `wasm_runtime.rs`; assert repeated SVG/PNG output is identical, output is valid, and SVG contains box, rule, and outlier geometry.
-- [ ] Run `cargo run --manifest-path crates/bindings/wasm/Cargo.toml --example regenerate_schemas`; verify the regenerated Vega-Lite schema includes both mark forms and rejects unknown component-style keys through the schema tests.
-- [ ] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_`, `cargo test -p fulgur-chart --test render_vegalite_boxplot`, `cargo test -p fulgur-chart --test golden_png`, `cargo test --manifest-path crates/bindings/wasm/Cargo.toml`, and `wasm-pack test --node crates/fulgur-chart --test wasm_runtime`; confirm native and WASM exercise the same boxplot fixture.
-- [ ] Run repository CI quality gates: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo test --workspace --locked`; resolve failures before opening the PR.
-- [ ] Commit as `test(vegalite): cover boxplot native and wasm rendering`.
+- [x] Add `examples/specs/vegalite-boxplot.json` with categorical groups, a color grouping, finite Tukey outliers, mark styling, and the dimensions used by other Vega-Lite examples.
+- [x] Add the fixture to `golden_png.rs` and generate only its image with `UPDATE_GOLDEN=vegalite-boxplot cargo test -p fulgur-chart --test golden_png golden_png_matches`; verify no other golden changes.
+- [x] Add `vegalite_boxplot_example_renders_deterministic_svg_and_png` to `wasm_runtime.rs`; assert repeated SVG/PNG output is identical, output is valid, and SVG contains box, rule, and outlier geometry.
+- [x] Run `cargo run --manifest-path crates/bindings/wasm/Cargo.toml --example regenerate_schemas`; verify the regenerated Vega-Lite schema includes both mark forms and rejects unknown component-style keys through the schema tests.
+- [x] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_`, `cargo test -p fulgur-chart --test render_vegalite_boxplot`, `cargo test -p fulgur-chart --test golden_png`, `cargo test --manifest-path crates/bindings/wasm/Cargo.toml`, and `wasm-pack test --node crates/fulgur-chart --test wasm_runtime`; confirm native and WASM exercise the same boxplot fixture.
+- [x] Run repository CI quality gates: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, and `cargo test --workspace --locked`; resolve failures before opening the PR.
+- [x] Commit as `test(vegalite): cover boxplot native and wasm rendering`.
 
 ## Merge and issue handoff
 
