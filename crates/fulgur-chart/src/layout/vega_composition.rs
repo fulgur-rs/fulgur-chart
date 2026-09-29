@@ -307,20 +307,67 @@ fn strip_node_legend(
     items: &mut Vec<Prim>,
     measurer: &TextMeasurer<'_>,
 ) {
-    if let VegaCompositionNode::Unit(leaf) = node {
-        let mut spec = (*leaf.spec).clone();
-        spec.size_mode = crate::ir::SizeMode::Canvas;
-        apply_leaf_domains(&mut spec, &leaf.scales);
-        let frame = crate::layout::common::compute(&spec, measurer);
-        strip_leaf_legend(
-            items,
-            &spec,
-            frame.plot_left,
-            frame.plot_right,
-            frame.plot_top,
-            frame.plot_bottom,
-        );
+    match node {
+        VegaCompositionNode::Unit(leaf) => strip_unit_legend(leaf, items, measurer),
+        VegaCompositionNode::Layer(layer) => {
+            if has_independent_legend(&layer.resolve) {
+                return;
+            }
+            let Some(first) = layer.children.first() else {
+                return;
+            };
+            let Some(group) = items.iter_mut().find_map(group_children_mut) else {
+                return;
+            };
+            match first {
+                VegaCompositionNode::Unit(leaf) => strip_unit_legend(leaf, group, measurer),
+                nested => strip_node_legend(nested, group, measurer),
+            }
+        }
+        VegaCompositionNode::HConcat(concat) | VegaCompositionNode::VConcat(concat) => {
+            if has_independent_legend(&concat.resolve) {
+                return;
+            }
+            let mut groups = items.iter_mut().filter_map(group_children_mut);
+            for child in &concat.children {
+                let Some(child_items) = groups.next() else {
+                    break;
+                };
+                strip_node_legend(child, child_items, measurer);
+            }
+        }
     }
+}
+
+fn strip_unit_legend(
+    leaf: &crate::ir::VegaCompositionLeaf,
+    items: &mut Vec<Prim>,
+    measurer: &TextMeasurer<'_>,
+) {
+    let mut spec = (*leaf.spec).clone();
+    spec.size_mode = crate::ir::SizeMode::Canvas;
+    apply_leaf_domains(&mut spec, &leaf.scales);
+    let frame = crate::layout::common::compute(&spec, measurer);
+    strip_leaf_legend(
+        items,
+        &spec,
+        frame.plot_left,
+        frame.plot_right,
+        frame.plot_top,
+        frame.plot_bottom,
+    );
+}
+
+fn group_children_mut(prim: &mut Prim) -> Option<&mut Vec<Prim>> {
+    match prim {
+        Prim::Group { children, .. } => Some(children),
+        _ => None,
+    }
+}
+
+fn has_independent_legend(resolve: &crate::ir::VegaCompositionResolve) -> bool {
+    resolve.color_legend == crate::ir::VegaResolutionMode::Independent
+        || resolve.size_legend == crate::ir::VegaResolutionMode::Independent
 }
 
 fn strip_leaf_legend(

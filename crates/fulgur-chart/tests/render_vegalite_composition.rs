@@ -7,6 +7,10 @@ fn parsed(json: &str) -> fulgur_chart::ir::ChartSpec {
     vegalite::parse(json, false).expect("composition parses")
 }
 
+fn parsed_example(path: &str) -> fulgur_chart::ir::ChartSpec {
+    vegalite::parse(path, true).expect("composition example parses")
+}
+
 fn collect_groups(items: &[Prim], output: &mut Vec<(f64, f64, bool)>) {
     for item in items {
         if let Prim::Group {
@@ -354,6 +358,25 @@ fn concat_shared_legends_render_once() {
         2,
         "legend merging keeps both data point markers"
     );
+
+    let nested = parsed(
+        r#"{
+          "hconcat":[
+            {"mark":"line","data":{"values":[{"x":"A","y":1,"group":"North"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"color":{"field":"group"}}},
+            {"layer":[{"mark":"bar","encoding":{"y":{"field":"bar"}}},{"mark":"line","encoding":{"y":{"field":"line"}}}],"data":{"values":[{"x":"A","bar":2,"line":3,"group":"North"}]},"encoding":{"x":{"field":"x"},"color":{"field":"group"}}}
+          ]
+        }"#,
+    );
+    let nested_scene = fulgur_chart::layout::build_scene_checked(
+        &nested,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("nested concat scene builds");
+    assert_eq!(
+        count_text(&nested_scene.items, "North"),
+        1,
+        "a nested layer's shared legend is merged into its parent concat"
+    );
 }
 
 #[test]
@@ -473,4 +496,18 @@ fn composition_with_image_keeps_svg_reference_and_rejects_raster() {
         webp_error.contains("image marks") && webp_error.contains("SVG"),
         "{webp_error}"
     );
+}
+
+#[test]
+fn vegalite_layer_example_snapshot() {
+    let spec = parsed_example(include_str!("../../../examples/specs/vegalite-layer.json"));
+    insta::assert_snapshot!(fulgur_chart::render::render_chart(&spec));
+}
+
+#[test]
+fn vegalite_nested_concat_example_snapshot() {
+    let spec = parsed_example(include_str!(
+        "../../../examples/specs/vegalite-nested-concat.json"
+    ));
+    insta::assert_snapshot!(fulgur_chart::render::render_chart(&spec));
 }

@@ -135,6 +135,29 @@ fn vegalite_composition_inherits_and_overrides_data_and_encoding() {
 }
 
 #[test]
+fn vegalite_composition_accepts_boxplot_unit_marks_in_both_modes() {
+    let json = r#"{
+      "layer":[{"mark":"boxplot"}],
+      "data":{"values":[{"value":1}]},
+      "encoding":{"y":{"field":"value","type":"quantitative"}}
+    }"#;
+
+    for strict in [false, true] {
+        let parsed = vegalite::parse(json, strict).expect("boxplot composition parses");
+        let ChartKind::VegaComposition(root) = &parsed.kind else {
+            panic!("composition root expected: {:?}", parsed.kind);
+        };
+        let VegaCompositionNode::Layer(layer) = root.as_ref() else {
+            panic!("layer root expected");
+        };
+        let [VegaCompositionNode::Unit(leaf)] = layer.children.as_slice() else {
+            panic!("one boxplot leaf expected: {:?}", layer.children);
+        };
+        assert!(matches!(leaf.spec.kind, ChartKind::VegaBoxPlot(_)));
+    }
+}
+
+#[test]
 fn vegalite_composition_rejects_unsupported_nodes_in_both_modes() {
     let cases = [
         (

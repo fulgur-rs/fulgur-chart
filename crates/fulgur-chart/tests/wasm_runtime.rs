@@ -25,6 +25,7 @@ use wasm_bindgen_test::wasm_bindgen_test;
 
 use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::{chartjs, vegalite};
+use fulgur_chart::ir::VegaCompositionNode;
 use fulgur_chart::raster_direct::{render_chart_to_png_default, render_chart_to_webp};
 use fulgur_chart::render::render_chart;
 
@@ -81,11 +82,149 @@ fn sample_image_spec() -> fulgur_chart::ir::ChartSpec {
     .expect("image fixture parses")
 }
 
+fn composition_examples() -> [(&'static str, &'static str); 2] {
+    [
+        (
+            "vegalite-layer",
+            include_str!("../../../examples/specs/vegalite-layer.json"),
+        ),
+        (
+            "vegalite-nested-concat",
+            include_str!("../../../examples/specs/vegalite-nested-concat.json"),
+        ),
+    ]
+}
+
+fn composition_leaf_count(node: &VegaCompositionNode) -> usize {
+    match node {
+        VegaCompositionNode::Unit(_) => 1,
+        VegaCompositionNode::Layer(layer) => {
+            layer.children.iter().map(composition_leaf_count).sum()
+        }
+        VegaCompositionNode::HConcat(concat) | VegaCompositionNode::VConcat(concat) => {
+            concat.children.iter().map(composition_leaf_count).sum()
+        }
+    }
+}
+
 const PNG_SCALE: f32 = 2.0;
 const PNG_SIGNATURE: &[u8; 8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 // デフォルト 800x450 を PNG_SCALE 倍した寸法。
 const PNG_WIDTH: u32 = 1600;
 const PNG_HEIGHT: u32 = 900;
+
+/// Recursive composition parsing accepts both checked-in examples through the native/WASM API.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vegalite_composition_examples_parse_in_native_and_wasm() {
+    for (name, json) in composition_examples() {
+        let spec = vegalite::parse(json, true)
+            .unwrap_or_else(|error| panic!("{name} composition example did not parse: {error}"));
+        let fulgur_chart::ir::ChartKind::VegaComposition(root) = &spec.kind else {
+            panic!("{name} must parse to recursive composition IR");
+        };
+        let expected_leaves = if name == "vegalite-layer" { 2 } else { 4 };
+        assert_eq!(composition_leaf_count(root), expected_leaves, "{name}");
+        if name == "vegalite-nested-concat" {
+            assert!(matches!(root.as_ref(), VegaCompositionNode::VConcat(_)));
+            let VegaCompositionNode::VConcat(vconcat) = root.as_ref() else {
+                unreachable!()
+            };
+            assert!(matches!(
+                vconcat.children[0],
+                VegaCompositionNode::HConcat(_)
+            ));
+            assert!(matches!(vconcat.children[1], VegaCompositionNode::Unit(_)));
+        }
+    }
+}
+
+/// Composition examples use the same deterministic SVG path on native and WASM.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vegalite_composition_svg_is_deterministic() {
+    for (name, json) in composition_examples() {
+        let spec = vegalite::parse(json, true)
+            .unwrap_or_else(|error| panic!("{name} composition example did not parse: {error}"));
+        let svg = render_chart(&spec);
+        assert_eq!(
+            svg,
+            render_chart(&spec),
+            "{name} SVG should be deterministic"
+        );
+        let expected = match name {
+            "vegalite-layer" => (3_832, 0x22ce_9846_86c0_0ba6),
+            "vegalite-nested-concat" => (10_215, 0xe170_1d14_afb8_d0b7),
+            _ => unreachable!("composition fixture list is fixed"),
+        };
+        assert_eq!(
+            (svg.len(), fnv1a(svg.as_bytes())),
+            expected,
+            "{name} SVG must match the checked native/WASM reference bytes"
+        );
+        assert!(svg.starts_with("<svg"), "{name} did not render SVG");
+        assert!(
+            svg.contains("<path") || svg.contains("<rect"),
+            "{name} has no marks"
+        );
+        let lower = svg.to_ascii_lowercase();
+        assert!(
+            !lower.contains("nan") && !lower.contains("inf"),
+            "{name}: {svg}"
+        );
+    }
+}
+
+/// Composition PNGs decode with the dimensions reported by their recursively composed scenes.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vegalite_composition_png_is_valid_on_native_and_wasm() {
+    for (name, json) in composition_examples() {
+        let spec = vegalite::parse(json, true)
+            .unwrap_or_else(|error| panic!("{name} composition example did not parse: {error}"));
+        let png = render_chart_to_png_default(&spec, 1.0)
+            .unwrap_or_else(|error| panic!("{name} PNG render failed: {error}"));
+        assert_eq!(&png[..8], PNG_SIGNATURE, "{name} PNG signature is invalid");
+        let pixmap = tiny_skia::Pixmap::decode_png(&png)
+            .unwrap_or_else(|error| panic!("{name} PNG failed to decode: {error}"));
+        assert_eq!(
+            (pixmap.width(), pixmap.height()),
+            (spec.width as u32, spec.height as u32),
+            "{name} PNG dimensions must match the composed view"
+        );
+    }
+}
+
+/// Unsupported descendants keep stable paths in both strict and permissive parser modes.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vegalite_composition_errors_are_path_qualified_on_native_and_wasm() {
+    let unsupported = r#"{
+      "vconcat":[{"layer":[{"mark":"bar","transform":[{"filter":"datum.x > 0"}]}]}]
+    }"#;
+    for strict in [false, true] {
+        let error = vegalite::parse(unsupported, strict).unwrap_err();
+        assert!(
+            error.contains("vconcat[0].layer[0].transform"),
+            "strict={strict}: {error}"
+        );
+    }
+
+    let image = vegalite::parse(
+        r#"{
+          "hconcat":[
+            {"mark":{"type":"image","width":12,"height":8},"data":{"values":[{"x":1,"y":2,"src":"https://example.test/a.png"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"url":{"field":"src"}}}
+          ]
+        }"#,
+        true,
+    )
+    .expect("composed image spec parses");
+    let error = render_chart_to_png_default(&image, 1.0).unwrap_err();
+    assert!(
+        error.contains("image marks") && error.contains("SVG"),
+        "{error}"
+    );
+}
 
 // SVG は cross-platform 決定的なので全プラットフォーム共通の期待値。
 // (native の linux-x86_64 で観測。SVG の決定論は insta スナップショットが全 OS で実証。)
