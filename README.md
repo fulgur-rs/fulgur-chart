@@ -188,8 +188,8 @@ fulgur-chart render chart.vl.json -o chart.svg
 
 Supported subset: `mark` (`bar` / `line` / `area` / `trail` / `point` → scatter / `circle` → scatter /
 `square` → square scatter / `arc` → pie / `rect` → heatmap / `geoshape` / `errorbar` / `errorband`),
-inline `data.values`, and `encoding` fields `x` / `y` / `color` / `theta` / `shape`; `point` and
-`square` support quantitative `size` mapped to marker area, while `trail` uses quantitative `size`
+inline `data.values`, and `encoding` fields `x` / `y` / `color` / `theta` / `shape` / `size`;
+`point` and `square` support quantitative `size` mapped to marker area, while `trail` uses quantitative `size`
 for a variable line width (1–4 px by default, or a uniform 1 px when omitted). `area` stacks by default when `color` is present
 (`encoding.y.stack: null` to disable), matching Vega-Lite. Geoshape accepts Feature arrays and
 single Feature/FeatureCollection values directly; ordinary records put a GeoJSON Geometry,
