@@ -455,6 +455,185 @@ pub(crate) fn validate_error_mark(spec: &ChartSpec, primitive_limit: usize) -> R
     Ok(())
 }
 
+/// Validate dedicated Vega-Lite boxplot summaries, styles, and Scene primitive bounds.
+pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
+    let ChartKind::VegaBoxPlot(data) = &spec.kind else {
+        return Ok(());
+    };
+    if data.groups.is_empty() {
+        return Err("Vega-Lite boxplot must contain at least one group".into());
+    }
+    if data.groups.len() > limits.max_series {
+        return Err(format!(
+            "Vega-Lite boxplot group count {} exceeds max_series limit {}",
+            data.groups.len(),
+            limits.max_series
+        ));
+    }
+    if data.categories.len() > limits.max_categories {
+        return Err(format!(
+            "Vega-Lite boxplot category count {} exceeds max_categories limit {}",
+            data.categories.len(),
+            limits.max_categories
+        ));
+    }
+    if data.has_category != !data.categories.is_empty() {
+        return Err("Vega-Lite boxplot category metadata is inconsistent".into());
+    }
+    if let crate::ir::VegaBoxPlotExtent::Tukey { coefficient } = data.extent
+        && (!coefficient.is_finite() || coefficient < 0.0)
+    {
+        return Err("Vega-Lite boxplot Tukey coefficient must be finite and nonnegative".into());
+    }
+    if !data.style.opacity.is_finite() || !(0.0..=1.0).contains(&data.style.opacity) {
+        return Err("Vega-Lite boxplot opacity must be within 0..=1".into());
+    }
+    for (name, style) in [
+        ("box", &data.style.box_part),
+        ("median", &data.style.median_part),
+        ("outliers", &data.style.outliers_part),
+        ("rule", &data.style.rule_part),
+        ("ticks", &data.style.ticks_part),
+    ] {
+        if [style.stroke_width, style.size]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_finite() || value < 0.0)
+        {
+            return Err(format!(
+                "Vega-Lite boxplot {name} dimensions must be finite and nonnegative"
+            ));
+        }
+        if style
+            .opacity
+            .is_some_and(|opacity| !opacity.is_finite() || !(0.0..=1.0).contains(&opacity))
+        {
+            return Err(format!(
+                "Vega-Lite boxplot {name}.opacity must be within 0..=1"
+            ));
+        }
+        if style
+            .stroke_dash
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err(format!(
+                "Vega-Lite boxplot {name}.strokeDash must be finite and nonnegative"
+            ));
+        }
+        for color in [style.fill, style.stroke].into_iter().flatten() {
+            if !color.a.is_finite() || !(0.0..=1.0).contains(&color.a) {
+                return Err(format!(
+                    "Vega-Lite boxplot {name} color alpha must be within 0..=1"
+                ));
+            }
+        }
+    }
+
+    let mut points = 0usize;
+    let mut primitives = 0usize;
+    for (index, group) in data.groups.iter().enumerate() {
+        points = points.saturating_add(group.point_count);
+        if group.point_count == 0 || group.summary.outliers.len() > group.point_count {
+            return Err(format!(
+                "Vega-Lite boxplot group {index} has invalid point counts"
+            ));
+        }
+        if group
+            .category_index
+            .is_some_and(|category| category >= data.categories.len())
+            || (data.has_category != group.category_index.is_some())
+        {
+            return Err(format!(
+                "Vega-Lite boxplot group {index} has an invalid category index"
+            ));
+        }
+        if !group.opacity.is_finite() || !(0.0..=1.0).contains(&group.opacity) {
+            return Err(format!(
+                "Vega-Lite boxplot group {index} opacity must be within 0..=1"
+            ));
+        }
+        if group
+            .size
+            .is_some_and(|size| !size.is_finite() || size < 0.0)
+        {
+            return Err(format!(
+                "Vega-Lite boxplot group {index} size must be finite and nonnegative"
+            ));
+        }
+        if !group.color.a.is_finite() || !(0.0..=1.0).contains(&group.color.a) {
+            return Err(format!(
+                "Vega-Lite boxplot group {index} color alpha must be within 0..=1"
+            ));
+        }
+        let summary = &group.summary;
+        if ![
+            summary.q1,
+            summary.median,
+            summary.q3,
+            summary.data_min,
+            summary.data_max,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
+            || summary.q1 > summary.median
+            || summary.median > summary.q3
+            || summary.data_min > summary.q1
+            || summary.q3 > summary.data_max
+        {
+            return Err(format!(
+                "Vega-Lite boxplot group {index} summary is invalid"
+            ));
+        }
+        if summary
+            .whisker_low
+            .into_iter()
+            .chain(summary.whisker_high)
+            .any(|value| !value.is_finite() || value < summary.data_min || value > summary.data_max)
+            || summary.whisker_low.is_some() != summary.whisker_high.is_some()
+            || summary.outliers.iter().any(|value| {
+                !value.is_finite() || *value < summary.data_min || *value > summary.data_max
+            })
+        {
+            return Err(format!(
+                "Vega-Lite boxplot group {index} endpoints are invalid"
+            ));
+        }
+        let has_whiskers = summary.whisker_low.is_some();
+        primitives = primitives
+            .saturating_add(usize::from(data.style.box_part.visible))
+            .saturating_add(usize::from(data.style.median_part.visible))
+            .saturating_add(
+                usize::from(data.style.box_part.visible && data.style.box_part.stroke.is_some())
+                    .saturating_mul(4),
+            )
+            .saturating_add(if has_whiskers {
+                usize::from(data.style.rule_part.visible)
+                    .saturating_add(usize::from(data.style.ticks_part.visible).saturating_mul(2))
+            } else {
+                0
+            })
+            .saturating_add(if data.style.outliers_part.visible {
+                summary.outliers.len()
+            } else {
+                0
+            });
+    }
+    if points > limits.max_total_data_points {
+        return Err(format!(
+            "Vega-Lite boxplot point count {points} exceeds max_total_data_points limit {}",
+            limits.max_total_data_points
+        ));
+    }
+    if primitives > limits.max_categorical_primitives {
+        return Err(format!(
+            "Vega-Lite boxplot requires {primitives} primitives, exceeding max_categorical_primitives limit {}",
+            limits.max_categorical_primitives
+        ));
+    }
+    Ok(())
+}
+
 fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     // --- 寸法 ---
     if !spec.width.is_finite()
@@ -477,6 +656,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
     }
 
     validate_error_mark(spec, limits.max_categorical_primitives)?;
+    validate_vega_boxplot(spec, limits)?;
 
     // --- 系列数 ---
     if spec.series.len() > limits.max_series {

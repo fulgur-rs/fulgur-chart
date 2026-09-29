@@ -69,13 +69,13 @@
 - Add typed mark extent/orient definitions; represent each component property as boolean or `VlBoxPlotPartStyle`. The part style object admits only `color`, `fill`, `stroke`, `strokeWidth`, `strokeDash`, `opacity`, and `size`.
 - Add `VlBoxPlotEncoding` for x/y position, color, detail, size, and opacity. Position fields accept only quantitative/nominal/ordinal hints; categorical grouping channels reject quantitative hints; size accepts the quantitative/value forms in the spec; opacity is constrained to 0..1 when constant.
 
-- [ ] Add `vegalite_boxplot_schema_accepts_string_and_object_mark` and assert each mark form deserializes successfully through the typed `VegaLiteSpec` root.
-- [ ] Add `vegalite_boxplot_schema_accepts_supported_encoding_channels` and assert quantitative measurement plus categorical/detail/size/opacity definitions deserialize.
-- [ ] Add `vegalite_boxplot_schema_rejects_unknown_mark_and_part_keys` and assert unsupported properties are rejected by typed schema deserialization.
-- [ ] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_schema`; confirm the tests fail because the schema variant/types are absent.
-- [ ] Add the typed mark, part-style, encoding, and root spec definitions to `schema/vegalite.rs`; register `BoxPlot` in `VegaLiteSpec` and preserve the existing root fields.
-- [ ] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_schema`; confirm all three schema tests pass.
-- [ ] Commit as `feat(vegalite): add boxplot schema`.
+- [x] Add `vegalite_boxplot_schema_accepts_string_and_object_mark` and assert each mark form deserializes successfully through the typed `VegaLiteSpec` root.
+- [x] Add `vegalite_boxplot_schema_accepts_supported_encoding_channels` and assert quantitative measurement plus categorical/detail/size/opacity definitions deserialize.
+- [x] Add `vegalite_boxplot_schema_rejects_unknown_mark_and_part_keys` and assert unsupported properties are rejected by typed schema deserialization.
+- [x] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_schema`; confirm the tests fail because the schema variant/types are absent.
+- [x] Add the typed mark, part-style, encoding, and root spec definitions to `schema/vegalite.rs`; register `BoxPlot` in `VegaLiteSpec` and preserve the existing root fields.
+- [x] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_schema`; confirm all three schema tests pass.
+- [x] Commit as `feat(vegalite): add boxplot schema`.
 
 ## Task 2: Boxplot statistics helper
 
@@ -93,16 +93,16 @@
 - Change `VegaBoxPlotSummary.whisker_low` and `.whisker_high` to `Option<f64>`; both are `None` if no raw sample lies inside a Tukey fence, and both are `Some` for min-max.
 - Keep the helper pure: it does not depend on ChartSpec, parser mode, or Scene layout. Change the current `type7_quantile(sorted: &[f64], probability: f64) -> f64` in `frontend/vegalite_error.rs` to `pub(super)` and call that same formula without changing error mark behavior.
 
-- [ ] Add `boxplot_quantiles_use_type7_interpolation`; assert Q1/median/Q3 for `[1, 2, 3, 4, 5]` are `2`, `3`, and `4`.
-- [ ] Add `boxplot_tukey_uses_observed_whiskers_and_keeps_outliers`; assert `[1, 2, 3, 4, 5, 100]` uses actual in-fence whiskers and retains `100` as an outlier.
-- [ ] Add `boxplot_tukey_zero_omits_whiskers_when_fence_has_no_sample`; assert `[1, 2]` produces no whisker endpoints and both raw samples remain outliers.
-- [ ] Add `boxplot_min_max_uses_data_extrema_without_outliers`; assert minimum/maximum endpoints and an empty outlier list.
-- [ ] Add `boxplot_summary_handles_singleton_and_constant_samples`; assert finite identical quartiles/whiskers for singleton and all-equal inputs.
-- [ ] Add `boxplot_summary_rejects_empty_nonfinite_and_overflowing_fences`; assert errors for empty/non-finite values and a coefficient/sample combination whose derived fence is not finite.
-- [ ] Run `cargo test -p fulgur-chart boxplot_`; confirm helper tests fail before the summary implementation exists.
-- [ ] Change both whisker summary fields to `Option<f64>` and implement `summarize_boxplot` using type-7 quantiles, observed Tukey whisker endpoints, raw Tukey outliers, and min/max behavior from the spec. Sort a copy for quantiles while preserving raw outlier order; when the Tukey fence contains no raw point, return absent endpoints rather than fabricating coordinates.
-- [ ] Run `cargo test -p fulgur-chart boxplot_`; confirm all statistics and invalid-result tests pass.
-- [ ] Commit as `feat(vegalite): add boxplot statistics`.
+- [x] Add `boxplot_quantiles_use_type7_interpolation`; assert Q1/median/Q3 for `[1, 2, 3, 4, 5]` are `2`, `3`, and `4`.
+- [x] Add `boxplot_tukey_uses_observed_whiskers_and_keeps_outliers`; assert `[1, 2, 3, 4, 5, 100]` uses actual in-fence whiskers and retains `100` as an outlier.
+- [x] Add `boxplot_tukey_zero_omits_whiskers_when_fence_has_no_sample`; assert `[1, 2]` produces no whisker endpoints and both raw samples remain outliers.
+- [x] Add `boxplot_min_max_uses_data_extrema_without_outliers`; assert minimum/maximum endpoints and an empty outlier list.
+- [x] Add `boxplot_summary_handles_singleton_and_constant_samples`; assert finite identical quartiles/whiskers for singleton and all-equal inputs.
+- [x] Add `boxplot_summary_rejects_empty_nonfinite_and_overflowing_fences`; assert errors for empty/non-finite values and a coefficient/sample combination whose derived fence is not finite.
+- [x] Run `cargo test -p fulgur-chart boxplot_`; confirm helper tests fail before the summary implementation exists.
+- [x] Change both whisker summary fields to `Option<f64>` and implement `summarize_boxplot` using type-7 quantiles, observed Tukey whisker endpoints, raw Tukey outliers, and min/max behavior from the spec. Sort a copy for quantiles while preserving raw outlier order; when the Tukey fence contains no raw point, return absent endpoints rather than fabricating coordinates.
+- [x] Run `cargo test -p fulgur-chart boxplot_`; confirm all statistics and invalid-result tests pass.
+- [x] Commit as `feat(vegalite): add boxplot statistics`.
 
 ## Task 3: Parser, dedicated IR, guard, model, and Scene layout
 
@@ -124,18 +124,18 @@
 - Add `pub(crate) fn build_checked(spec: &ChartSpec, m: &TextMeasurer, primitive_limit: usize) -> Result<Scene, String>` to `layout/vega_boxplot.rs`; dispatch `ChartKind::VegaBoxPlot` to it from `layout/mod.rs`.
 - Guard the raw point count with `max_total_data_points`, category/group counts with existing category limits, and estimated output with `max_categorical_primitives` before group/Scene allocations.
 
-- [ ] Add parser tests `vegalite_boxplot_infers_horizontal_and_vertical_orientation`, `vegalite_boxplot_rejects_conflicting_orient`, and `vegalite_boxplot_groups_category_color_and_detail_in_first_seen_order`; assert x-measurement -> horizontal, y-measurement -> vertical, conflicting orient rejection, and stable category/color/detail group order.
-- [ ] Add `vegalite_boxplot_rejects_transform_layer_and_summary_in_both_modes`; assert each unsupported input errors in strict and non-strict modes.
-- [ ] Add `vegalite_boxplot_rejects_missing_or_null_measurement_and_group_fields` and `vegalite_boxplot_rejects_nonfinite_statistical_results`; assert no malformed values silently drop or enter the IR.
-- [ ] Add layout tests `boxplot_vertical_horizontal_and_1d_geometry`, `boxplot_groups_are_side_by_side_deterministically`, `boxplot_styles_apply_mark_encoding_and_part_precedence`, `vegalite_boxplot_handles_singleton_and_constant_groups`, `boxplot_extent_zero_omits_missing_whisker_primitives`, and `boxplot_axis_domain_includes_outliers_and_clips_to_hard_bounds`; assert geometry positions, component visibility/style precedence, finite singleton/constant geometry, absent endpoint handling, outlier domain, and clipping.
-- [ ] Add `vega_boxplot_guard_enforces_point_category_and_primitive_limits` and model test `vega_boxplot_model_reports_type_axes_and_groups`; assert each configurable limit and metadata.
-- [ ] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_` and `cargo test -p fulgur-chart --test render_vegalite_boxplot`; confirm the new integration tests fail before parser/IR/layout support.
-- [ ] Implement dedicated `VegaBoxPlotData` / group / style IR, then parse raw values, validate supported schema in both modes, preflight limits, infer/validate orientation, and group by position + color + detail in first-seen order. Return explicit errors for transform/layer/summary/URL and malformed fields.
-- [ ] Implement `parse_boxplot_spec` to resolve `extent`, type-7 summaries, color/size/opacity values, component styles, clip, title, dimensions, axes, and palette. Derive axis domain from every input value including outliers.
-- [ ] Implement the Vega-Lite model and guard branches, then `layout/vega_boxplot.rs` frame/mapping for numeric measurement axes and optional categorical position axes. Place 1D boxes at the orthogonal plot center; position category groups side-by-side deterministically; render box, median, available whisker rules/caps, and outlier points as Scene primitives.
-- [ ] Implement plot clipping and hard-bound mapping with existing axis/Scene primitives; ensure the parser and layout reject any non-finite derived value rather than emitting non-finite SVG coordinates.
-- [ ] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_`, `cargo test -p fulgur-chart --test render_vegalite_boxplot`, and focused `cargo test -p fulgur-chart --lib vega_boxplot`; confirm grouping, statistics integration, component geometry/styles, limits, hard bounds, and model assertions pass.
-- [ ] Commit as `feat(vegalite): parse and render boxplots`.
+- [x] Add parser tests `vegalite_boxplot_infers_horizontal_and_vertical_orientation`, `vegalite_boxplot_rejects_conflicting_orient`, and `vegalite_boxplot_groups_category_color_and_detail_in_first_seen_order`; assert x-measurement -> horizontal, y-measurement -> vertical, conflicting orient rejection, and stable category/color/detail group order.
+- [x] Add `vegalite_boxplot_rejects_transform_layer_and_summary_in_both_modes`; assert each unsupported input errors in strict and non-strict modes.
+- [x] Add `vegalite_boxplot_rejects_missing_or_null_measurement_and_group_fields` and `vegalite_boxplot_rejects_nonfinite_statistical_results`; assert no malformed values silently drop or enter the IR.
+- [x] Add layout tests `boxplot_vertical_horizontal_and_1d_geometry`, `boxplot_groups_are_side_by_side_deterministically`, `boxplot_styles_apply_mark_encoding_and_part_precedence`, `vegalite_boxplot_handles_singleton_and_constant_groups`, `boxplot_extent_zero_omits_missing_whisker_primitives`, and `boxplot_axis_domain_includes_outliers_and_clips_to_hard_bounds`; assert geometry positions, component visibility/style precedence, finite singleton/constant geometry, absent endpoint handling, outlier domain, and clipping.
+- [x] Add `vega_boxplot_guard_enforces_point_category_and_primitive_limits` and model test `vega_boxplot_model_reports_type_axes_and_groups`; assert each configurable limit and metadata.
+- [x] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_` and `cargo test -p fulgur-chart --test render_vegalite_boxplot`; confirm the new integration tests fail before parser/IR/layout support.
+- [x] Implement dedicated `VegaBoxPlotData` / group / style IR, then parse raw values, validate supported schema in both modes, preflight limits, infer/validate orientation, and group by position + color + detail in first-seen order. Return explicit errors for transform/layer/summary/URL and malformed fields.
+- [x] Implement `parse_boxplot_spec` to resolve `extent`, type-7 summaries, color/size/opacity values, component styles, clip, title, dimensions, axes, and palette. Derive axis domain from every input value including outliers.
+- [x] Implement the Vega-Lite model and guard branches, then `layout/vega_boxplot.rs` frame/mapping for numeric measurement axes and optional categorical position axes. Place 1D boxes at the orthogonal plot center; position category groups side-by-side deterministically; render box, median, available whisker rules/caps, and outlier points as Scene primitives.
+- [x] Implement plot clipping and hard-bound mapping with existing axis/Scene primitives; ensure the parser and layout reject any non-finite derived value rather than emitting non-finite SVG coordinates.
+- [x] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_`, `cargo test -p fulgur-chart --test render_vegalite_boxplot`, and focused `cargo test -p fulgur-chart --lib boxplot_`; confirm grouping, statistics integration, component geometry/styles, limits, hard bounds, and model assertions pass.
+- [x] Commit as `feat(vegalite): parse and render boxplots`.
 
 ## Task 4: Example, WASM schema parity, golden, and full verification
 

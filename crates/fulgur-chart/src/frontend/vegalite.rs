@@ -40,14 +40,28 @@ pub fn parse_with_limits(
     strict: bool,
     limits: &crate::guard::InputLimits,
 ) -> Result<ChartSpec, String> {
-    if strict {
-        check_unknown_keys(json)?;
-    }
-
     let mut value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
     let top = value
         .as_object_mut()
         .ok_or_else(|| "トップレベルは object でなければなりません".to_string())?;
+
+    if read_mark_name(top) == Some("boxplot") {
+        return super::vegalite_boxplot::parse_boxplot_spec(top, limits);
+    }
+    if top
+        .get("layer")
+        .and_then(Value::as_array)
+        .is_some_and(|layers| {
+            layers.iter().any(|layer| {
+                layer.as_object().and_then(|layer| read_mark_name(layer)) == Some("boxplot")
+            })
+        })
+    {
+        return Err("boxplot layer is not supported".into());
+    }
+    if strict {
+        check_unknown_keys(json)?;
+    }
 
     if matches!(read_mark_name(top), Some("errorbar" | "errorband")) {
         return error_mark::parse_error_mark_spec(top, limits);

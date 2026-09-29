@@ -346,6 +346,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",
         ChartKind::VegaRect { .. } => "vegaRect",
+        ChartKind::VegaBoxPlot(_) => "vegaBoxPlot",
         ChartKind::GeoShape { .. } => "geoshape",
         ChartKind::ErrorMark(data) => match data.kind {
             crate::ir::ErrorMarkKind::ErrorBar => "errorbar",
@@ -377,7 +378,7 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
         spec.kind,
         ChartKind::Pie { .. } | ChartKind::PolarArea | ChartKind::OutlabeledPie { .. }
     );
-    let series: Vec<SeriesModel> = spec
+    let mut series: Vec<SeriesModel> = spec
         .series
         .iter()
         .map(|s| {
@@ -399,6 +400,38 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
             }
         })
         .collect();
+    if let ChartKind::VegaBoxPlot(data) = &spec.kind {
+        series = data
+            .groups
+            .iter()
+            .map(|group| {
+                let mut labels = Vec::new();
+                if let Some(index) = group.category_index {
+                    if let Some(label) = data.categories.get(index) {
+                        labels.push(label.as_str());
+                    }
+                }
+                if let Some(label) = group.color_label.as_deref() {
+                    labels.push(label);
+                }
+                if let Some(label) = group.detail_label.as_deref() {
+                    labels.push(label);
+                }
+                let label = if labels.is_empty() {
+                    "boxplot".to_string()
+                } else {
+                    labels.join(" / ")
+                };
+                let color = rgba_string(&group.color);
+                SeriesModel {
+                    label,
+                    fill: vec![color.clone()],
+                    stroke: vec![color],
+                    values: vec![Some(group.summary.median)],
+                }
+            })
+            .collect();
+    }
     let legend_items = if crate::layout::common::temporal_plot_right_legend_title(spec).is_some() {
         spec.series.len()
     } else {
@@ -428,6 +461,25 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
         counts.legend_items = 0;
         counts.x_ticks = 0;
         counts.y_ticks = 0;
+    }
+    if let ChartKind::VegaBoxPlot(data) = &spec.kind {
+        counts.datasets = data.groups.len();
+        counts.legend_items = data
+            .groups
+            .iter()
+            .filter_map(|group| group.color_label.as_deref())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        counts.x_ticks = if data.orient == crate::ir::VegaBoxPlotOrient::Vertical {
+            data.categories.len()
+        } else {
+            0
+        };
+        counts.y_ticks = if data.orient == crate::ir::VegaBoxPlotOrient::Horizontal {
+            data.categories.len()
+        } else {
+            0
+        };
     }
     if matches!(spec.kind, ChartKind::ErrorMark(_)) {
         counts.datasets = spec.series.len();
@@ -684,6 +736,19 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
             let y = error_mark_axis_model(&frame.y);
             Some((x, y, frame.y.ticks.len()))
         }
+        ChartKind::VegaBoxPlot(data) => {
+            let frame = crate::layout::vega_boxplot::compute_frame(spec, m);
+            let value = linear_axis(&frame.value_ticks);
+            let category = category_axis(&data.categories);
+            match data.orient {
+                crate::ir::VegaBoxPlotOrient::Vertical => {
+                    Some((category, value, frame.value_ticks.ticks.len()))
+                }
+                crate::ir::VegaBoxPlotOrient::Horizontal => {
+                    Some((value, category, frame.value_ticks.ticks.len()))
+                }
+            }
+        }
         _ => None,
     }
 }
@@ -708,6 +773,9 @@ pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
     (model.meta.width, model.meta.height) = model_dimensions(spec, m);
     if let Some((x, y, y_ticks)) = compute_axes(spec, m) {
         if matches!(spec.kind, ChartKind::ErrorMark(_)) {
+            model.counts.x_ticks = axis_tick_count(&x);
+            model.counts.y_ticks = axis_tick_count(&y);
+        } else if matches!(spec.kind, ChartKind::VegaBoxPlot(_)) {
             model.counts.x_ticks = axis_tick_count(&x);
             model.counts.y_ticks = axis_tick_count(&y);
         } else if x.kind == "temporal" {

@@ -812,6 +812,61 @@ pub struct VegaBoxPlotSummary {
     pub outliers: Vec<f64>,
 }
 
+/// Measurement direction resolved from Vega-Lite's quantitative position channel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VegaBoxPlotOrient {
+    Horizontal,
+    Vertical,
+}
+
+/// One first-seen position/color/detail combination in a Vega-Lite boxplot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaBoxPlotGroup {
+    pub category_index: Option<usize>,
+    pub color_label: Option<String>,
+    pub detail_label: Option<String>,
+    pub color: Color,
+    pub size: Option<f64>,
+    pub opacity: f64,
+    pub point_count: usize,
+    pub summary: VegaBoxPlotSummary,
+}
+
+/// Resolved data and style for the Vega-Lite `boxplot` composite mark.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaBoxPlotData {
+    pub orient: VegaBoxPlotOrient,
+    pub categories: Vec<String>,
+    pub groups: Vec<VegaBoxPlotGroup>,
+    pub has_category: bool,
+    pub extent: VegaBoxPlotExtent,
+    pub style: VegaBoxPlotStyle,
+}
+
+/// Shared mark-level style and component visibility for a Vega-Lite boxplot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaBoxPlotStyle {
+    pub clip: bool,
+    pub opacity: f64,
+    pub box_part: VegaBoxPlotPartStyle,
+    pub median_part: VegaBoxPlotPartStyle,
+    pub outliers_part: VegaBoxPlotPartStyle,
+    pub rule_part: VegaBoxPlotPartStyle,
+    pub ticks_part: VegaBoxPlotPartStyle,
+}
+
+/// Optional overrides for one Vega-Lite boxplot component.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaBoxPlotPartStyle {
+    pub visible: bool,
+    pub fill: Option<Color>,
+    pub stroke: Option<Color>,
+    pub stroke_width: Option<f64>,
+    pub stroke_dash: Vec<f64>,
+    pub opacity: Option<f64>,
+    pub size: Option<f64>,
+}
+
 /// Vega-Lite composite mark kind represented by `ChartKind::ErrorMark`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ErrorMarkKind {
@@ -955,6 +1010,8 @@ pub enum ChartKind {
     },
     /// Vega-Lite `errorbar` / `errorband` normalized range mark.
     ErrorMark(Box<ErrorMarkData>),
+    /// Vega-Lite `boxplot` composite mark with dedicated statistics and layout.
+    VegaBoxPlot(Box<VegaBoxPlotData>),
     /// QuickChart 互換の progress バー。軸なし水平バー。
     /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。
     Progress,

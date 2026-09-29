@@ -736,6 +736,15 @@ pub struct VlBoxPlotPositionChannel {
     pub field: String,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub field_type: Option<VlBoxPlotPositionType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<VlBoxPlotScale>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotScale {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<Vec<f64>>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
