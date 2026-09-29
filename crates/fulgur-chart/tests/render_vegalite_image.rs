@@ -96,6 +96,7 @@ fn image_mark_rejects_non_image_or_unsafe_url_schemes() {
         "//example.test/image.png",
         "https:/missing-host",
         "https://example.test/has space.png",
+        "https://example.test/has\u{2003}space.png",
         "https://example.test:bad/image.png",
         "https://example.test:65536/image.png",
         "https://example.test/%zz",

@@ -254,7 +254,7 @@ pub(super) fn validate_image_url(url: &str, max_bytes: usize) -> Result<(), Stri
     if url.is_empty()
         || url.len() > max_bytes
         || url.chars().any(char::is_control)
-        || url.bytes().any(|byte| byte.is_ascii_whitespace())
+        || url.chars().any(char::is_whitespace)
     {
         return Err(invalid());
     }
