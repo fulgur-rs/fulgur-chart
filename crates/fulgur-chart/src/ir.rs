@@ -827,7 +827,7 @@ pub struct VegaBoxPlotGroup {
     pub detail_label: Option<String>,
     pub color: Color,
     pub size: Option<f64>,
-    pub opacity: f64,
+    pub opacity: Option<f64>,
     pub point_count: usize,
     pub summary: VegaBoxPlotSummary,
 }

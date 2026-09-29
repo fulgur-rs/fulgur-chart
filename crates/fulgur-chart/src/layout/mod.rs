@@ -123,9 +123,7 @@ fn build_chart_scene(
         ChartKind::ErrorMark(_) => {
             error_mark::build_checked(spec, m, limits.max_categorical_primitives)?
         }
-        ChartKind::VegaBoxPlot(_) => {
-            vega_boxplot::build_checked(spec, m, limits.max_categorical_primitives)?
-        }
+        ChartKind::VegaBoxPlot(_) => vega_boxplot::build_checked(spec, m, limits)?,
         ChartKind::Progress => progress::build(spec, m),
         ChartKind::BoxPlot => boxplot::build(spec, m),
         ChartKind::Violin { .. } => violin::build(spec, m),

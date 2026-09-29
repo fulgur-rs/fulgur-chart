@@ -71,10 +71,7 @@ pub(crate) fn compute_frame(spec: &ChartSpec, m: &TextMeasurer<'_>) -> VegaBoxPl
         + if has_title { 20.0 } else { 0.0 }
         + if has_legend { label_font + 10.0 } else { 0.0 };
     let (left, bottom) = match data.orient {
-        VegaBoxPlotOrient::Vertical => (
-            max_value_label + 18.0,
-            max_category_label.max(label_font) + 18.0,
-        ),
+        VegaBoxPlotOrient::Vertical => (max_value_label + 18.0, label_font + 18.0),
         VegaBoxPlotOrient::Horizontal => (
             if data.has_category {
                 max_category_label + 18.0
@@ -171,12 +168,14 @@ fn category_band(data: &VegaBoxPlotData, frame: &VegaBoxPlotFrame) -> f64 {
 fn component_color(
     color: Color,
     global_opacity: f64,
-    group_opacity: f64,
+    group_opacity: Option<f64>,
     part: &VegaBoxPlotPartStyle,
 ) -> Color {
-    let part_opacity = part.opacity.unwrap_or(1.0);
+    let opacity = part
+        .opacity
+        .unwrap_or_else(|| group_opacity.unwrap_or(global_opacity));
     Color {
-        a: (color.a as f64 * global_opacity * group_opacity * part_opacity).clamp(0.0, 1.0) as f32,
+        a: (color.a as f64 * opacity).clamp(0.0, 1.0) as f32,
         ..color
     }
 }
@@ -414,6 +413,41 @@ fn draw_group(
     };
     let style = &data.style;
     let width = group.size.unwrap_or(default_width);
+    if let (Some(low), Some(high)) = (group.summary.whisker_low, group.summary.whisker_high)
+        && style.rule_part.visible
+    {
+        let color = component_color(
+            style
+                .rule_part
+                .stroke
+                .or(style.rule_part.fill)
+                .unwrap_or(black),
+            style.opacity,
+            group.opacity,
+            &style.rule_part,
+        );
+        let stroke_width = style.rule_part.stroke_width.unwrap_or(1.0);
+        let dash = &style.rule_part.stroke_dash;
+        let point = |value| {
+            let value = mapped_value(frame, data, value);
+            match data.orient {
+                VegaBoxPlotOrient::Vertical => (center, value),
+                VegaBoxPlotOrient::Horizontal => (value, center),
+            }
+        };
+        if style.box_part.visible {
+            let q1 = group.summary.q1;
+            let q3 = group.summary.q3;
+            if low < q1 {
+                add_line(items, point(low), point(q1), color, stroke_width, dash);
+            }
+            if q3 < high {
+                add_line(items, point(q3), point(high), color, stroke_width, dash);
+            }
+        } else if low < high {
+            add_line(items, point(low), point(high), color, stroke_width, dash);
+        }
+    }
     if style.box_part.visible {
         let fill = component_color(
             style.box_part.fill.unwrap_or(group.color),
@@ -495,64 +529,38 @@ fn draw_group(
             &style.median_part.stroke_dash,
         );
     }
-    if let (Some(low), Some(high)) = (group.summary.whisker_low, group.summary.whisker_high) {
-        if style.rule_part.visible {
-            let color = component_color(
-                style
-                    .rule_part
-                    .stroke
-                    .or(style.rule_part.fill)
-                    .unwrap_or(black),
-                style.opacity,
-                group.opacity,
-                &style.rule_part,
-            );
-            let lower = mapped_value(frame, data, low);
-            let upper = mapped_value(frame, data, high);
+    if let (Some(low), Some(high)) = (group.summary.whisker_low, group.summary.whisker_high)
+        && style.ticks_part.visible
+    {
+        let color = component_color(
+            style
+                .ticks_part
+                .stroke
+                .or(style.ticks_part.fill)
+                .unwrap_or(black),
+            style.opacity,
+            group.opacity,
+            &style.ticks_part,
+        );
+        let cap = component_width(&style.ticks_part, group, width * 0.55);
+        for endpoint in [low, high] {
+            let value = mapped_value(frame, data, endpoint);
             let (x1, y1, x2, y2) = match data.orient {
-                VegaBoxPlotOrient::Vertical => (center, lower, center, upper),
-                VegaBoxPlotOrient::Horizontal => (lower, center, upper, center),
+                VegaBoxPlotOrient::Vertical => {
+                    (center - cap / 2.0, value, center + cap / 2.0, value)
+                }
+                VegaBoxPlotOrient::Horizontal => {
+                    (value, center - cap / 2.0, value, center + cap / 2.0)
+                }
             };
             add_line(
                 items,
                 (x1, y1),
                 (x2, y2),
                 color,
-                style.rule_part.stroke_width.unwrap_or(1.0),
-                &style.rule_part.stroke_dash,
+                style.ticks_part.stroke_width.unwrap_or(1.0),
+                &style.ticks_part.stroke_dash,
             );
-        }
-        if style.ticks_part.visible {
-            let color = component_color(
-                style
-                    .ticks_part
-                    .stroke
-                    .or(style.ticks_part.fill)
-                    .unwrap_or(black),
-                style.opacity,
-                group.opacity,
-                &style.ticks_part,
-            );
-            let cap = component_width(&style.ticks_part, group, width * 0.55);
-            for endpoint in [low, high] {
-                let value = mapped_value(frame, data, endpoint);
-                let (x1, y1, x2, y2) = match data.orient {
-                    VegaBoxPlotOrient::Vertical => {
-                        (center - cap / 2.0, value, center + cap / 2.0, value)
-                    }
-                    VegaBoxPlotOrient::Horizontal => {
-                        (value, center - cap / 2.0, value, center + cap / 2.0)
-                    }
-                };
-                add_line(
-                    items,
-                    (x1, y1),
-                    (x2, y2),
-                    color,
-                    style.ticks_part.stroke_width.unwrap_or(1.0),
-                    &style.ticks_part.stroke_dash,
-                );
-            }
         }
     }
     if style.outliers_part.visible {
@@ -594,16 +602,70 @@ fn draw_group(
     }
 }
 
+fn ensure_finite_geometry(items: &[Prim]) -> Result<(), String> {
+    for item in items {
+        let finite = match item {
+            Prim::Rect { x, y, w, h, .. } => [*x, *y, *w, *h].into_iter().all(f64::is_finite),
+            Prim::Line {
+                x1,
+                y1,
+                x2,
+                y2,
+                stroke_width,
+                dash,
+                ..
+            } => [*x1, *y1, *x2, *y2, *stroke_width]
+                .into_iter()
+                .chain(dash.iter().copied())
+                .all(f64::is_finite),
+            Prim::Circle {
+                cx,
+                cy,
+                r,
+                stroke_width,
+                ..
+            } => [*cx, *cy, *r, *stroke_width]
+                .into_iter()
+                .all(f64::is_finite),
+            Prim::Text {
+                x,
+                y,
+                size,
+                rotate_deg,
+                ..
+            } => [Some(*x), Some(*y), Some(*size), *rotate_deg]
+                .into_iter()
+                .flatten()
+                .all(f64::is_finite),
+            Prim::Group {
+                translate_x,
+                translate_y,
+                clip,
+                children,
+            } => {
+                [*translate_x, *translate_y].into_iter().all(f64::is_finite)
+                    && clip.as_deref().is_none_or(|clip| {
+                        [clip.x, clip.y, clip.w, clip.h]
+                            .into_iter()
+                            .all(f64::is_finite)
+                    })
+                    && ensure_finite_geometry(children).is_ok()
+            }
+            _ => true,
+        };
+        if !finite {
+            return Err("Vega-Lite boxplot generated non-finite geometry".into());
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn build_checked(
     spec: &ChartSpec,
     m: &TextMeasurer<'_>,
-    primitive_limit: usize,
+    limits: &crate::guard::InputLimits,
 ) -> Result<Scene, String> {
-    let limits = crate::guard::InputLimits {
-        max_categorical_primitives: primitive_limit,
-        ..crate::guard::InputLimits::default()
-    };
-    crate::guard::validate_vega_boxplot(spec, &limits)?;
+    crate::guard::validate_vega_boxplot(spec, limits)?;
     let data = data(spec);
     let frame = compute_frame(spec, m);
     if ![
@@ -641,6 +703,7 @@ pub(crate) fn build_checked(
     } else {
         items.extend(marks);
     }
+    ensure_finite_geometry(&items)?;
     Ok(Scene {
         width: spec.width,
         height: spec.height,

@@ -183,6 +183,24 @@ fn boxplot_size_and_opacity_encodings_reach_component_geometry() {
 }
 
 #[test]
+fn boxplot_opacity_precedence_is_component_then_encoding_then_mark() {
+    let mark_only = scene(
+        r##"{"mark":{"type":"boxplot","clip":false,"opacity":0.2},"data":{"values":[{"group":"A","value":1},{"group":"A","value":2},{"group":"A","value":3},{"group":"A","value":4}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}"##,
+    );
+    assert!((box_rects(&mark_only)[0].4.a - 0.2).abs() < 1e-6);
+
+    let encoding_over_mark = scene(
+        r##"{"mark":{"type":"boxplot","clip":false,"opacity":0.2},"data":{"values":[{"group":"A","value":1},{"group":"A","value":2},{"group":"A","value":3},{"group":"A","value":4}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"},"opacity":{"value":0.5}}}"##,
+    );
+    assert!((box_rects(&encoding_over_mark)[0].4.a - 0.5).abs() < 1e-6);
+
+    let component_over_encoding = scene(
+        r##"{"mark":{"type":"boxplot","clip":false,"opacity":0.2,"box":{"fill":"red","opacity":0.75}},"data":{"values":[{"group":"A","value":1},{"group":"A","value":2},{"group":"A","value":3},{"group":"A","value":4}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"},"opacity":{"value":0.5}}}"##,
+    );
+    assert!((box_rects(&component_over_encoding)[0].4.a - 0.75).abs() < 1e-6);
+}
+
+#[test]
 fn boxplot_component_visibility_and_style_objects_are_applied() {
     let rendered = scene(
         r##"{"mark":{"type":"boxplot","extent":"min-max","box":false,"median":false,"outliers":false,"rule":false,"ticks":{"color":"blue","size":18}},"data":{"values":[{"value":1},{"value":2},{"value":3}]},"encoding":{"y":{"field":"value","type":"quantitative"}}}"##,
@@ -397,4 +415,100 @@ fn vega_boxplot_guard_enforces_point_category_and_primitive_limits() {
         fulgur_chart::guard::validate_spec(&outlined, &underestimated_primitive_limit).is_err(),
         "box outline edges must count toward the primitive budget"
     );
+}
+
+#[test]
+fn boxplot_whiskers_do_not_cross_the_box_in_either_orientation() {
+    for (json, vertical) in [
+        (
+            r##"{"width":320,"height":220,"mark":{"type":"boxplot","clip":false},"data":{"values":[{"group":"A","value":1},{"group":"A","value":2},{"group":"A","value":3},{"group":"A","value":4},{"group":"A","value":5}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}"##,
+            true,
+        ),
+        (
+            r##"{"width":320,"height":220,"mark":{"type":"boxplot","clip":false},"data":{"values":[{"group":"A","value":1},{"group":"A","value":2},{"group":"A","value":3},{"group":"A","value":4},{"group":"A","value":5}]},"encoding":{"x":{"field":"value","type":"quantitative"},"y":{"field":"group","type":"nominal"}}}"##,
+            false,
+        ),
+    ] {
+        let rendered = scene(json);
+        let rect = box_rects(&rendered)[0];
+        let center_x = rect.0 + rect.2 / 2.0;
+        let center_y = rect.1 + rect.3 / 2.0;
+        let rules = line_strokes(&rendered)
+            .into_iter()
+            .filter(|line| {
+                line.0.r == 0
+                    && line.0.g == 0
+                    && line.0.b == 0
+                    && if vertical {
+                        (line.2 - center_x).abs() < 1e-6 && (line.4 - center_x).abs() < 1e-6
+                    } else {
+                        (line.3 - center_y).abs() < 1e-6 && (line.5 - center_y).abs() < 1e-6
+                    }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rules.len(), 2, "whiskers should stop at the box edges");
+        for line in rules {
+            let (start, end, box_start, box_end) = if vertical {
+                (
+                    line.3.min(line.5),
+                    line.3.max(line.5),
+                    rect.1,
+                    rect.1 + rect.3,
+                )
+            } else {
+                (
+                    line.2.min(line.4),
+                    line.2.max(line.4),
+                    rect.0,
+                    rect.0 + rect.2,
+                )
+            };
+            assert!(
+                end <= box_start + 1e-6 || start >= box_end - 1e-6,
+                "whisker {start}..{end} crosses box {box_start}..{box_end}"
+            );
+        }
+    }
+}
+
+#[test]
+fn boxplot_long_category_label_keeps_measurement_plot_area() {
+    let category = "a".repeat(50);
+    let json = format!(
+        r#"{{"width":320,"height":220,"mark":{{"type":"boxplot","clip":false}},"data":{{"values":[{{"group":"{category}","value":1}},{{"group":"{category}","value":2}},{{"group":"{category}","value":3}},{{"group":"{category}","value":4}},{{"group":"{category}","value":5}}]}},"encoding":{{"x":{{"field":"group","type":"nominal"}},"y":{{"field":"value","type":"quantitative"}}}}}}"#
+    );
+    let rendered = scene(&json);
+    let box_rect = box_rects(&rendered)[0];
+    assert!(
+        box_rect.3 > 20.0,
+        "long horizontal category labels must not collapse the value-axis plot area: {box_rect:?}"
+    );
+}
+
+#[test]
+fn boxplot_render_honors_relaxed_caller_series_limit() {
+    let values = (0..1001)
+        .map(|index| format!(r#"{{"group":"A","detail":"{index}","value":{index}}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = format!(
+        r#"{{"mark":"boxplot","data":{{"values":[{values}]}},"encoding":{{"x":{{"field":"group","type":"nominal"}},"y":{{"field":"value","type":"quantitative"}},"detail":{{"field":"detail","type":"nominal"}}}}}}"#
+    );
+    let limits = fulgur_chart::guard::InputLimits {
+        max_series: 1100,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let spec = vegalite::parse_with_limits(&json, true, &limits).unwrap();
+    fulgur_chart::guard::validate_spec(&spec, &limits).unwrap();
+    layout::build_scene_checked_with_limits(&spec, &measurer(), &limits)
+        .expect("layout should keep the caller's relaxed max_series limit");
+}
+
+#[test]
+fn boxplot_rejects_nonfinite_mapped_outlier_geometry() {
+    let spec = parse(
+        r##"{"width":320,"height":220,"mark":{"type":"boxplot","clip":false},"data":{"values":[{"value":1},{"value":2},{"value":3},{"value":4},{"value":1e308}]},"encoding":{"y":{"field":"value","type":"quantitative","scale":{"domain":[0,1]}}}}"##,
+    );
+    let error = layout::build_scene_checked(&spec, &measurer()).unwrap_err();
+    assert!(error.contains("finite"), "unexpected error: {error}");
 }

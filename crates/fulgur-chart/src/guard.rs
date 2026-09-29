@@ -548,7 +548,10 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
                 "Vega-Lite boxplot group {index} has an invalid category index"
             ));
         }
-        if !group.opacity.is_finite() || !(0.0..=1.0).contains(&group.opacity) {
+        if group
+            .opacity
+            .is_some_and(|opacity| !opacity.is_finite() || !(0.0..=1.0).contains(&opacity))
+        {
             return Err(format!(
                 "Vega-Lite boxplot group {index} opacity must be within 0..=1"
             ));
@@ -609,6 +612,7 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
             )
             .saturating_add(if has_whiskers {
                 usize::from(data.style.rule_part.visible)
+                    .saturating_mul(if data.style.box_part.visible { 2 } else { 1 })
                     .saturating_add(usize::from(data.style.ticks_part.visible).saturating_mul(2))
             } else {
                 0

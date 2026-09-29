@@ -17,7 +17,7 @@ struct GroupBuilder {
     detail_label: Option<String>,
     color: Color,
     size: Option<f64>,
-    opacity: f64,
+    opacity: Option<f64>,
     values: Vec<f64>,
 }
 
@@ -39,8 +39,6 @@ pub(super) fn parse_boxplot_spec(
     if encoding.contains_key("x2") || encoding.contains_key("y2") {
         return Err("pre-aggregated boxplot summaries are not supported".into());
     }
-    validate_boxplot_schema(top)?;
-
     let data = top
         .get("data")
         .and_then(Value::as_object)
@@ -48,6 +46,10 @@ pub(super) fn parse_boxplot_spec(
     if data.contains_key("url") {
         return Err("boxplot data.url is not supported; use data.values".into());
     }
+    if let Some(key) = data.keys().find(|key| key.as_str() != "values") {
+        return Err(format!("boxplot data.{key} is not supported"));
+    }
+    validate_boxplot_schema(top)?;
     let values = data
         .get("values")
         .and_then(Value::as_array)
@@ -208,7 +210,7 @@ pub(super) fn parse_boxplot_spec(
         };
         let group_key = (category_index, color_key.clone(), detail_key);
         let size_value = numeric_channel_value(&size, record, "size")?.or(Some(mark_size));
-        let opacity_value = numeric_channel_value(&opacity, record, "opacity")?.unwrap_or(1.0);
+        let opacity_value = numeric_channel_value(&opacity, record, "opacity")?;
         let measurement_value = numeric_value(
             required_value(record, &measurement.field)?,
             &measurement.field,
@@ -280,6 +282,7 @@ pub(super) fn parse_boxplot_spec(
         let endpoints = group.summary.whisker_low.is_some() && group.summary.whisker_high.is_some();
         let whiskers = if endpoints {
             usize::from(style.rule_part.visible)
+                .saturating_mul(if style.box_part.visible { 2 } else { 1 })
                 .saturating_add(usize::from(style.ticks_part.visible).saturating_mul(2))
         } else {
             0

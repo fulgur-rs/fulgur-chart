@@ -4938,3 +4938,29 @@ fn vegalite_boxplot_schema_accepts_hard_domain_and_rejects_other_scale_extension
     assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(valid).is_ok());
     assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&invalid).is_err());
 }
+
+#[test]
+fn vegalite_boxplot_rejects_unsupported_data_keys_in_both_modes() {
+    let base = serde_json::json!({
+        "mark": "boxplot",
+        "data": {"values": [{"group": "A", "value": 1}, {"group": "A", "value": 2}]},
+        "encoding": {
+            "x": {"field": "group", "type": "nominal"},
+            "y": {"field": "value", "type": "quantitative"}
+        }
+    });
+    for (key, value) in [
+        ("format", serde_json::json!({"parse": {"value": "boolean"}})),
+        ("unsupported", serde_json::json!(true)),
+    ] {
+        let mut spec = base.clone();
+        spec["data"][key] = value;
+        let json = serde_json::to_string(&spec).unwrap();
+        for strict in [false, true] {
+            assert!(
+                vegalite::parse(&json, strict).is_err(),
+                "data.{key} must be rejected in strict={strict} mode"
+            );
+        }
+    }
+}
