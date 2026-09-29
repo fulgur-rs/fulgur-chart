@@ -564,17 +564,16 @@ fn validate_shared_channel_types(node: &ResolvedRawNode) -> Result<(), String> {
         }
         let mut kinds = Vec::new();
         collect_shared_channel_types(node, channel, &mut kinds);
-        if let Some((first_path, first_kind)) = kinds.first() {
-            if let Some((other_path, other_kind)) = kinds
+        if let Some((first_path, first_kind)) = kinds.first()
+            && let Some((other_path, other_kind)) = kinds
                 .iter()
                 .find(|(_, other_kind)| other_kind != first_kind)
-            {
-                let path = raw_node_path(node);
-                return Err(format!(
-                    "{}.resolve.scale.{channel} has incompatible scale types: {first_kind:?} at {first_path} and {other_kind:?} at {other_path}",
-                    path_or_root(path)
-                ));
-            }
+        {
+            let path = raw_node_path(node);
+            return Err(format!(
+                "{}.resolve.scale.{channel} has incompatible scale types: {first_kind:?} at {first_path} and {other_kind:?} at {other_path}",
+                path_or_root(path)
+            ));
         }
     }
     match node {
@@ -1625,10 +1624,10 @@ fn expand_node(
             effective_object.insert("encoding".into(), encoding);
         }
         for (key, inherited_value) in [("width", &inherited.width), ("height", &inherited.height)] {
-            if !effective_object.contains_key(key) {
-                if let Some(value) = inherited_value {
-                    effective_object.insert(key.into(), value.clone());
-                }
+            if !effective_object.contains_key(key)
+                && let Some(value) = inherited_value
+            {
+                effective_object.insert(key.into(), value.clone());
             }
         }
         if strict

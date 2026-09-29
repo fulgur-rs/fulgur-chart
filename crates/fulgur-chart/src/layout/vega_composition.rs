@@ -669,9 +669,9 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
                     .iter()
                     .map(|label| domain.iter().position(|candidate| candidate == label))
                     .collect::<Vec<_>>();
-                for row in 0..cells.len() {
+                for (row_index, row_cells) in cells.iter_mut().enumerate() {
                     let mut expanded = vec![None; domain.len()];
-                    if let Some(old_row) = old_cells.get(row) {
+                    if let Some(old_row) = old_cells.get(row_index) {
                         for (old_column, new_column) in new_positions.iter().enumerate() {
                             if let (Some(new_column), Some(cell)) =
                                 (new_column, old_row.get(old_column))
@@ -680,7 +680,7 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
                             }
                         }
                     }
-                    cells[row] = expanded;
+                    *row_cells = expanded;
                 }
                 *x_labels = domain.to_vec();
             } else {

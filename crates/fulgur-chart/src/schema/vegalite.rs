@@ -38,7 +38,7 @@ pub enum VlCompositionChildSpec {
     Layer(Box<VlLayerSpec>),
     HConcat(Box<VlHConcatSpec>),
     VConcat(Box<VlVConcatSpec>),
-    Unit(VlCompositionUnitSpec),
+    Unit(Box<VlCompositionUnitSpec>),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -139,7 +139,7 @@ pub struct VlCompositionEncoding {
 pub struct VlLayerSpec {
     #[serde(deserialize_with = "deserialize_nonempty_composition_children")]
     #[schemars(length(min = 1))]
-    pub layer: Vec<Box<VlCompositionChildSpec>>,
+    pub layer: Vec<VlCompositionChildSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<VlCompositionData>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -163,7 +163,7 @@ pub struct VlLayerSpec {
 pub struct VlHConcatSpec {
     #[serde(deserialize_with = "deserialize_nonempty_composition_children")]
     #[schemars(length(min = 1))]
-    pub hconcat: Vec<Box<VlCompositionChildSpec>>,
+    pub hconcat: Vec<VlCompositionChildSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<VlCompositionData>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -187,7 +187,7 @@ pub struct VlHConcatSpec {
 pub struct VlVConcatSpec {
     #[serde(deserialize_with = "deserialize_nonempty_composition_children")]
     #[schemars(length(min = 1))]
-    pub vconcat: Vec<Box<VlCompositionChildSpec>>,
+    pub vconcat: Vec<VlCompositionChildSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<VlCompositionData>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -257,11 +257,11 @@ pub enum VlResolveMode {
 
 fn deserialize_nonempty_composition_children<'de, D>(
     deserializer: D,
-) -> Result<Vec<Box<VlCompositionChildSpec>>, D::Error>
+) -> Result<Vec<VlCompositionChildSpec>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let children = Vec::<Box<VlCompositionChildSpec>>::deserialize(deserializer)?;
+    let children = Vec::<VlCompositionChildSpec>::deserialize(deserializer)?;
     if children.is_empty() {
         return Err(serde::de::Error::custom(
             "composition child array must contain at least one spec",

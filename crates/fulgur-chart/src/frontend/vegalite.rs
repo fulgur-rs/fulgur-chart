@@ -2617,6 +2617,7 @@ fn temporal_axis_grid(
 
 /// point（scatter）の系列を組む。
 /// color.field があれば色値ごとに 1 系列、なければ全点を単一系列に。
+#[allow(clippy::too_many_arguments)]
 fn build_scatter(
     records: &[Map<String, Value>],
     x_field: &Option<String>,
