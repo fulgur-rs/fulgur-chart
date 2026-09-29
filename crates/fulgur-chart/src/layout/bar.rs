@@ -259,29 +259,25 @@ pub struct BarBox {
     pub h: f64,
 }
 
-/// Returns contiguous ranges for the category-major boxes from `vertical_bar_boxes`.
-fn category_bar_box_ranges(
-    bar_boxes: &[BarBox],
-    category_count: usize,
-) -> Vec<std::ops::Range<usize>> {
-    let mut ranges = Vec::with_capacity(category_count);
-    let mut cursor = 0;
-    for category in 0..category_count {
-        while cursor < bar_boxes.len() && bar_boxes[cursor].index < category {
-            cursor += 1;
+/// Finds later visible segments in one reverse pass over category-major bars with strictly
+/// increasing series indices within each category. Tuples contain (category, stack group, finite
+/// value, visible). A category stamp avoids clearing all groups between categories; signed zero
+/// follows the existing `signum()` comparison.
+fn stacked_bar_has_later_segments(
+    segments: impl DoubleEndedIterator<Item = (usize, usize, f64, bool)> + ExactSizeIterator,
+    stack_group_count: usize,
+) -> Vec<bool> {
+    let mut seen_at_category = vec![[None; 2]; stack_group_count];
+    let mut result = vec![false; segments.len()];
+    for (index, (category, group, value, visible)) in segments.enumerate().rev() {
+        let sign = usize::from(value.is_sign_negative());
+        let seen = &mut seen_at_category[group][sign];
+        result[index] = *seen == Some(category);
+        if visible {
+            *seen = Some(category);
         }
-        let start = cursor;
-        while cursor < bar_boxes.len() && bar_boxes[cursor].index == category {
-            cursor += 1;
-        }
-        ranges.push(start..cursor);
     }
-    debug_assert_eq!(
-        cursor,
-        bar_boxes.len(),
-        "bar boxes must fit their categories"
-    );
-    ranges
+    result
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -887,33 +883,31 @@ fn build_vertical(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let stacked = placement_stacked && value_stacked;
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let positive_moves_up = frame.ys.map(frame.ticks.max) < frame.ys.map(frame.ticks.min);
-    let (stack_groups, _) = super::common::stack_group_indices(&spec.series);
+    let (stack_groups, stack_group_count) = super::common::stack_group_indices(&spec.series);
     let bar_boxes = vertical_bar_boxes(spec, &frame);
-    let category_ranges = if stacked {
-        category_bar_box_ranges(&bar_boxes, spec.categories.len())
-    } else {
-        Vec::new()
-    };
-    for b in &bar_boxes {
+    let has_later_same_sign = stacked.then(|| {
+        stacked_bar_has_later_segments(
+            bar_boxes.iter().map(|b| {
+                (
+                    b.index,
+                    stack_groups[b.series],
+                    b.value,
+                    b.h > 0.0 && is_renderable_value(b.value, is_log),
+                )
+            }),
+            stack_group_count,
+        )
+    });
+    for (box_index, b) in bar_boxes.iter().enumerate() {
         let ser = &spec.series[b.series];
         let base_side = if (b.value >= 0.0) == positive_moves_up {
             BarSide::Bottom
         } else {
             BarSide::Top
         };
-        let has_later_same_sign = if stacked {
-            bar_boxes[category_ranges[b.index].clone()]
-                .iter()
-                .any(|next| {
-                    next.series > b.series
-                        && next.h > 0.0
-                        && stack_groups[next.series] == stack_groups[b.series]
-                        && is_renderable_value(next.value, is_log)
-                        && next.value.signum() == b.value.signum()
-                })
-        } else {
-            false
-        };
+        let has_later_same_sign = has_later_same_sign
+            .as_ref()
+            .is_some_and(|result| result[box_index]);
         let primitive = bar_primitive(
             BarBounds {
                 x: b.x,
@@ -1617,7 +1611,18 @@ fn build_horizontal_with_geometry_using_temporal_values(
                 });
             }
 
-            for segment in &stacked_segments {
+            let has_later_same_sign = stacked_bar_has_later_segments(
+                stacked_segments.iter().map(|segment| {
+                    (
+                        i,
+                        segment.stack_group,
+                        segment.value,
+                        segment.bounds.w > 0.0,
+                    )
+                }),
+                stack_group_count,
+            );
+            for (segment_index, segment) in stacked_segments.iter().enumerate() {
                 let ser = &spec.series[segment.series_index];
                 horizontal_bars.push(HorizontalBarBox {
                     series: segment.series_index,
@@ -1626,12 +1631,6 @@ fn build_horizontal_with_geometry_using_temporal_values(
                     y: segment.bounds.y,
                     w: segment.bounds.w,
                     h: segment.bounds.h,
-                });
-                let has_later_same_sign = stacked_segments.iter().any(|next| {
-                    next.series_index > segment.series_index
-                        && next.stack_group == segment.stack_group
-                        && next.bounds.w > 0.0
-                        && next.value.signum() == segment.value.signum()
                 });
                 items.push(bar_primitive(
                     segment.bounds,
@@ -1642,7 +1641,7 @@ fn build_horizontal_with_geometry_using_temporal_values(
                     } else {
                         BarSide::Right
                     },
-                    !has_later_same_sign,
+                    !has_later_same_sign[segment_index],
                 ));
                 if spec.data_labels
                     && super::common::axis_value_in_bounds(segment.value, &ticks)
@@ -1963,38 +1962,50 @@ mod geom_tests {
     }
 
     #[test]
-    fn vertical_bar_box_category_ranges_exclude_other_categories() {
-        let boxes = [
-            BarBox {
-                series: 0,
-                index: 0,
-                value: 2.0,
-                x: 0.0,
-                y: 0.0,
-                w: 1.0,
-                h: 1.0,
-            },
-            BarBox {
-                series: 1,
-                index: 0,
-                value: 3.0,
-                x: 0.0,
-                y: 0.0,
-                w: 1.0,
-                h: 1.0,
-            },
-            BarBox {
-                series: 0,
-                index: 2,
-                value: 4.0,
-                x: 0.0,
-                y: 0.0,
-                w: 1.0,
-                h: 1.0,
-            },
+    fn stacked_endpoints_ignore_other_categories_groups_signs_and_clipped_segments() {
+        // (category, stack group, value, visible). Each category is in series order.
+        let segments = [
+            (0, 0, 2.0, true),
+            (0, 1, -3.0, true),
+            (0, 0, -1.0, true),
+            (0, 0, 0.0, true),
+            (0, 0, -0.0, true),
+            (0, 1, -7.0, false),
+            (0, 0, 9.0, false),
+            // Category 1 is empty; later categories must not affect category 0.
+            (2, 0, 4.0, true),
+            (2, 0, 5.0, true),
+            (3, 0, -0.0, true),
+            (3, 0, 2.0, true),
         ];
+        assert_eq!(
+            stacked_bar_has_later_segments(segments.into_iter(), 2),
+            [
+                true, false, true, false, false, false, false, true, false, false, false
+            ]
+        );
+        assert!(stacked_bar_has_later_segments(std::iter::empty(), 0).is_empty());
+    }
 
-        assert_eq!(category_bar_box_ranges(&boxes, 3), vec![0..2, 2..2, 2..3],);
+    #[test]
+    fn visible_signed_zero_segments_preserve_rounded_stack_endpoints() {
+        for index_axis in ["x", "y"] {
+            for (zero, rounded) in [("0.0", false), ("-0.0", true)] {
+                let json = format!(
+                    r#"{{"type":"bar","data":{{"labels":["A"],"datasets":[{{"stack":"s","data":[2],"borderRadius":4}},{{"stack":"s","data":[{zero}],"borderRadius":4,"minBarLength":10}}]}},"options":{{"indexAxis":"{index_axis}","scales":{{"x":{{"stacked":true}},"y":{{"stacked":true}}}}}}}}"#
+                );
+                let (spec, scene) = scene_for(&json);
+                let first_fill = spec.series[0].fill_at(0);
+                assert_eq!(
+                    scene.items.iter().any(|prim| matches!(
+                        prim,
+                        Prim::Path { fill: Some(fill), .. } if *fill == first_fill
+                    )),
+                    rounded,
+                    "indexAxis={index_axis}, later value={zero}"
+                );
+            }
+        }
     }
 
     fn path_bounds(data: &str) -> (f64, f64, f64, f64) {
