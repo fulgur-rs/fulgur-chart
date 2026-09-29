@@ -80,6 +80,7 @@
 **Files:**
 
 - Modify `crates/fulgur-chart/src/frontend/mod.rs`.
+- Modify `crates/fulgur-chart/src/frontend/vegalite_error.rs`.
 - Create `crates/fulgur-chart/src/frontend/vegalite_boxplot.rs`.
 - Test helper unit tests in `crates/fulgur-chart/src/frontend/vegalite_boxplot.rs`.
 
