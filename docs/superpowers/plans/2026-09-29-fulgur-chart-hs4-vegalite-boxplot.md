@@ -15,6 +15,7 @@
 - `mark` は文字列 `"boxplot"` と `{ "type": "boxplot", ... }` を受理する。
 - data source は `data.values` の inline record array とし、URL、欠落 data、空配列、record 以外の要素は parse error にする。
 - 測定 channel は x/y の一方だけ quantitative とし、他方は省略または categorical とする。orient は測定軸から自動決定し、矛盾する明示値を拒否する。
+- 測定軸 position channel は有限な 2 要素の `scale.domain` を受理し、他の scale 拡張は parser error にする。
 - 位置カテゴリ、color、detail の group と category order は first-seen 順で決定的に保つ。
 - quantile は線形補間 type-7 とし、extent は既定 1.5 の Tukey、有限な 0 以上の係数、または `"min-max"` とする。Tukey whisker は fence 内の実データ端点、外れ値は fence 外の raw values とする。
 - extent 0 などで fence 内に実データがない場合、whisker endpoints は `None` として rule/caps を省き、fence 外の全 raw values を outlier として保持する。
@@ -108,12 +109,14 @@
 **Files:**
 
 - Modify `crates/fulgur-chart/src/ir.rs`, `frontend/mod.rs`, `frontend/vegalite.rs`, `guard.rs`, `model.rs`, and `layout/mod.rs`.
+- Modify `crates/fulgur-chart/src/schema/vegalite.rs` to add the approved measurement `scale.domain` contract.
 - Create `crates/fulgur-chart/src/layout/vega_boxplot.rs`.
 - Test `crates/fulgur-chart/tests/frontend_vegalite.rs`, `crates/fulgur-chart/tests/render_vegalite_boxplot.rs`, and relevant unit tests in the parser/layout/guard/model modules.
 
 **Interfaces:**
 
 - Add public `VegaBoxPlotOrient::{Horizontal, Vertical}` and `VegaBoxPlotGroup { pub category_index: Option<usize>, pub color_label: Option<String>, pub detail_label: Option<String>, pub color: Color, pub size: Option<f64>, pub opacity: f64, pub summary: VegaBoxPlotSummary }` in `ir.rs`. Vector order is the first-seen group order.
+- Add `point_count: usize` to `VegaBoxPlotGroup` so guard validation retains the raw sample count after aggregation.
 - Add public `VegaBoxPlotData { pub orient: VegaBoxPlotOrient, pub categories: Vec<String>, pub groups: Vec<VegaBoxPlotGroup>, pub has_category: bool, pub extent: VegaBoxPlotExtent, pub style: VegaBoxPlotStyle }`.
 - Add public `VegaBoxPlotStyle { pub clip: bool, pub opacity: f64, pub box_part: VegaBoxPlotPartStyle, pub median_part: VegaBoxPlotPartStyle, pub outliers_part: VegaBoxPlotPartStyle, pub rule_part: VegaBoxPlotPartStyle, pub ticks_part: VegaBoxPlotPartStyle }` and `VegaBoxPlotPartStyle { pub visible: bool, pub fill: Option<Color>, pub stroke: Option<Color>, pub stroke_width: Option<f64>, pub stroke_dash: Vec<f64>, pub opacity: Option<f64>, pub size: Option<f64> }`.
 - Add `ChartKind::VegaBoxPlot(Box<VegaBoxPlotData>)`; keep `ChartKind::BoxPlot` and `Series` unchanged. Add chart type/model metadata and exhaustive dispatch arms in the same task so the branch compiles at every commit.

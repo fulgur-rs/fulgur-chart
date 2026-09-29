@@ -11,6 +11,7 @@ Vega-Lite v6 の複合 mark `boxplot` を、inline raw data の単体 view で�
 - `mark` は文字列 `"boxplot"` と `{ "type": "boxplot", ... }` を受理する。
 - data source は `data.values` の inline record array とする。`data.url`、欠落した data、空の配列、record 以外の要素は明示的な parse error にする。
 - `encoding.x` と `encoding.y` のうち、測定値には quantitative field をひとつ指定する。反対側の position channel は省略するか、カテゴリ field にする。x/y が両方 quantitative、または両方とも測定値として解釈できない入力は拒否する。
+- 測定軸の `scale.domain` は有限な `[min, max]` の hard bounds として受理する。それ以外の scale 拡張は明示エラーにする。
 - 測定値を x に置くと horizontal、y に置くと vertical とし、`mark.orient` の省略時はこれを自動判定する。明示値は `"horizontal"` / `"vertical"` を受理するが、測定軸と矛盾する場合は parse error にする。
 - 位置カテゴリ、`color`、`detail` の組み合わせごとにひとつの箱を作る。カテゴリ値と group はデータの first-seen 順で安定させる。カテゴリ位置が省略された 1D boxplot は測定値軸と直交する plot 中央に配置する。
 - `transform`、`layer`、pre-aggregated summary、URL data は対象外とし、strict/non-strict の両 parser mode で書き込みや描画前に明示エラーにする。これらを raw records と混在させない。
