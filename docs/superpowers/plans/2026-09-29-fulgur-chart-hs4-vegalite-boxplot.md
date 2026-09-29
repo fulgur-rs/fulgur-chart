@@ -54,6 +54,7 @@
 
 **Files:**
 
+- Modify `crates/fulgur-chart/src/ir.rs`.
 - Modify `crates/fulgur-chart/src/schema/vegalite.rs`.
 - Test `crates/fulgur-chart/tests/frontend_vegalite.rs`.
 
@@ -66,7 +67,7 @@
 - Add typed mark extent/orient definitions; represent each component property as boolean or `VlBoxPlotPartStyle`. The part style object admits only `color`, `fill`, `stroke`, `strokeWidth`, `strokeDash`, `opacity`, and `size`.
 - Add `VlBoxPlotEncoding` for x/y position, color, detail, size, and opacity. Position fields accept only quantitative/nominal/ordinal hints; categorical grouping channels reject quantitative hints; size accepts the quantitative/value forms in the spec; opacity is constrained to 0..1 when constant.
 
-- [ ] Add `vegalite_boxplot_schema_accepts_string_and_object_mark` and assert each mark form deserializes to `VegaLiteSpec::BoxPlot`.
+- [ ] Add `vegalite_boxplot_schema_accepts_string_and_object_mark` and assert each mark form deserializes successfully through the typed `VegaLiteSpec` root.
 - [ ] Add `vegalite_boxplot_schema_accepts_supported_encoding_channels` and assert quantitative measurement plus categorical/detail/size/opacity definitions deserialize.
 - [ ] Add `vegalite_boxplot_schema_rejects_unknown_mark_and_part_keys` and assert unsupported properties are rejected by typed schema deserialization.
 - [ ] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_schema`; confirm the tests fail because the schema variant/types are absent.
