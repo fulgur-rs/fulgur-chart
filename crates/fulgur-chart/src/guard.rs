@@ -1481,12 +1481,16 @@ pub(crate) fn validate_vega_image(spec: &ChartSpec, limits: &InputLimits) -> Res
     let crate::ir::ChartKind::VegaImage(data) = &spec.kind else {
         return Ok(());
     };
-    if data.hrefs.len() > limits.max_total_data_points
-        || data.hrefs.len() > limits.max_categorical_primitives
+    if spec.series.len() != 1 {
+        return Err("Vega-Lite image references must align with one image series".into());
+    }
+    let points = &spec.series[0].points;
+    if points.len() > limits.max_total_data_points
+        || points.len() > limits.max_categorical_primitives
     {
         return Err(format!(
             "Vega-Lite image count {} exceeds the configured point or primitive limit",
-            data.hrefs.len()
+            points.len()
         ));
     }
     if !data.width.is_finite()
@@ -1500,18 +1504,26 @@ pub(crate) fn validate_vega_image(spec: &ChartSpec, limits: &InputLimits) -> Res
     {
         return Err("Vega-Lite image width and height must be finite positive dimensions".into());
     }
-    if spec.series.len() != 1 || spec.series[0].points.len() != data.hrefs.len() {
-        return Err("Vega-Lite image references must align with the image point data".into());
-    }
-    if spec.series[0]
-        .points
+    if points
         .iter()
         .any(|point| !point.x.is_finite() || !point.y.is_finite())
     {
         return Err("Vega-Lite image positions must be finite".into());
     }
-    for href in &data.hrefs {
-        crate::frontend::vegalite::validate_vega_image_url(href, limits.max_label_bytes)?;
+    match &data.urls {
+        crate::ir::VegaImageUrls::Constant(href) => {
+            crate::frontend::vegalite::validate_vega_image_url(href, limits.max_label_bytes)?;
+        }
+        crate::ir::VegaImageUrls::PerPoint(hrefs) => {
+            if hrefs.len() != points.len() {
+                return Err(
+                    "Vega-Lite image references must align with the image point data".into(),
+                );
+            }
+            for href in hrefs {
+                crate::frontend::vegalite::validate_vega_image_url(href, limits.max_label_bytes)?;
+            }
+        }
     }
     Ok(())
 }

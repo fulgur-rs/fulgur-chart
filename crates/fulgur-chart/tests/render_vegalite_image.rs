@@ -55,6 +55,40 @@ fn image_mark_emits_data_urls_at_scaled_data_positions_without_fetching() {
 }
 
 #[test]
+fn image_mark_uses_encoded_position_as_the_top_left_anchor() {
+    let spec = vegalite::parse(IMAGE_SPEC, true).unwrap();
+    let original_svg = render_chart(&spec);
+    let original = image_tags(&original_svg);
+
+    let larger = IMAGE_SPEC
+        .replace("\"width\":48", "\"width\":96")
+        .replace("\"height\":32", "\"height\":64");
+    let larger = vegalite::parse(&larger, true).unwrap();
+    let larger_svg = render_chart(&larger);
+    let larger = image_tags(&larger_svg);
+
+    assert_eq!(attr(original[0], "x"), attr(larger[0], "x"));
+    assert_eq!(attr(original[0], "y"), attr(larger[0], "y"));
+}
+
+#[test]
+fn image_mark_constant_url_is_stored_once_for_all_records() {
+    let mut value: serde_json::Value = serde_json::from_str(IMAGE_SPEC).unwrap();
+    value["encoding"]["url"] = serde_json::json!({"value":"https://example.test/shared.png"});
+    let json = serde_json::to_string(&value).unwrap();
+    let spec = vegalite::parse(&json, true).unwrap();
+
+    let fulgur_chart::ir::ChartKind::VegaImage(data) = &spec.kind else {
+        panic!("expected image mark IR");
+    };
+    assert!(matches!(
+        &data.urls,
+        fulgur_chart::ir::VegaImageUrls::Constant(_)
+    ));
+    assert_eq!(image_tags(&render_chart(&spec)).len(), 2);
+}
+
+#[test]
 fn image_mark_rejects_non_image_or_unsafe_url_schemes() {
     for url in [
         "javascript:alert(1)",
@@ -107,17 +141,54 @@ fn png_and_webp_rendering_report_image_mark_as_unsupported() {
 }
 
 #[test]
-fn image_mark_schema_accepts_channel_and_mark_level_urls() {
+fn png_and_webp_reject_image_marks_even_with_empty_data() {
+    let mut value: serde_json::Value = serde_json::from_str(IMAGE_SPEC).unwrap();
+    value["data"]["values"] = serde_json::json!([]);
+    let json = serde_json::to_string(&value).unwrap();
+    let spec = vegalite::parse(&json, true).expect("empty image mark parses");
+
+    let png_error = render_chart_to_png_default(&spec, 1.0).unwrap_err();
+    assert!(png_error.contains("image marks") && png_error.contains("SVG"));
+    let webp_error = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT).unwrap_err();
+    assert!(webp_error.contains("image marks") && webp_error.contains("SVG"));
+}
+
+#[test]
+fn image_mark_schema_accepts_field_and_value_url_channels() {
     let _: fulgur_chart::schema::VegaLiteSpec = serde_json::from_str(IMAGE_SPEC).unwrap();
 
-    let mark_url = r#"{"mark":{"type":"image","width":8,"height":6,"url":"https://example.test/image.png"},"data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}}"#;
-    let _: fulgur_chart::schema::VegaLiteSpec = serde_json::from_str(mark_url).unwrap();
-    let spec = vegalite::parse(mark_url, true).unwrap();
+    let value_url = r#"{"mark":{"type":"image","width":8,"height":6},"data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"url":{"value":"https://example.test/image.png"}}}"#;
+    let _: fulgur_chart::schema::VegaLiteSpec = serde_json::from_str(value_url).unwrap();
+    let spec = vegalite::parse(value_url, true).unwrap();
     assert_eq!(image_tags(&render_chart(&spec)).len(), 1);
+
+    let mark_url = r#"{"mark":{"type":"image","width":8,"height":6,"url":"https://example.test/image.png"},"data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}}"#;
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(mark_url).is_err());
+    assert!(vegalite::parse(mark_url, true).is_err());
+    assert!(vegalite::parse(mark_url, false).is_err());
 
     let no_dimensions = r#"{"mark":"image","data":{"values":[{"x":1,"y":2,"src":"https://example.test/image.png"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"url":{"field":"src"}}}"#;
     assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(no_dimensions).is_err());
     assert!(vegalite::parse(no_dimensions, true).is_err());
+}
+
+#[test]
+fn image_mark_schema_requires_positive_dimensions_and_a_url_channel() {
+    let schema =
+        serde_json::to_value(schemars::schema_for!(fulgur_chart::schema::VegaLiteSpec)).unwrap();
+    assert_eq!(
+        schema.pointer("/$defs/MarkImageObject/properties/width/exclusiveMinimum"),
+        Some(&serde_json::json!(0.0))
+    );
+    assert_eq!(
+        schema.pointer("/$defs/MarkImageObject/properties/height/exclusiveMinimum"),
+        Some(&serde_json::json!(0.0))
+    );
+    let required = schema
+        .pointer("/$defs/VlImageEncoding/required")
+        .and_then(serde_json::Value::as_array)
+        .unwrap();
+    assert!(required.iter().any(|key| key == "url"));
 }
 
 #[test]

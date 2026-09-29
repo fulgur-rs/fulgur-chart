@@ -78,8 +78,11 @@ pub(super) fn parse_image_spec(
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    let url_source = parse_url_source(encoding.get("url"), mark_object.get("url"))?;
-    let hrefs = match url_source {
+    if mark_object.contains_key("url") {
+        return Err("mark.url is unsupported; use encoding.url.value instead".to_string());
+    }
+    let url_source = parse_url_source(encoding.get("url"))?;
+    let urls = match url_source {
         UrlSource::Field(field) => records
             .iter()
             .enumerate()
@@ -88,12 +91,13 @@ pub(super) fn parse_image_spec(
                     format!("image mark data.values[{index}].{field} must be a URL string")
                 })?;
                 validate_image_url(href, limits.max_label_bytes)?;
-                Ok(href.to_owned())
+                Ok(std::sync::Arc::<str>::from(href))
             })
-            .collect::<Result<Vec<_>, String>>()?,
+            .collect::<Result<Vec<_>, String>>()
+            .map(VegaImageUrls::PerPoint)?,
         UrlSource::Value(href) => {
             validate_image_url(&href, limits.max_label_bytes)?;
-            vec![href; records.len()]
+            VegaImageUrls::Constant(std::sync::Arc::<str>::from(href))
         }
     };
 
@@ -143,7 +147,7 @@ pub(super) fn parse_image_spec(
 
     Ok(ChartSpec {
         kind: ChartKind::VegaImage(Box::new(VegaImageData {
-            hrefs,
+            urls,
             width,
             height,
         })),
@@ -174,44 +178,32 @@ enum UrlSource {
     Value(String),
 }
 
-fn parse_url_source(
-    channel: Option<&Value>,
-    mark_url: Option<&Value>,
-) -> Result<UrlSource, String> {
-    if let Some(channel) = channel.filter(|value| !value.is_null()) {
-        let channel = channel
-            .as_object()
-            .ok_or_else(|| "encoding.url must be an object".to_string())?;
-        match (channel.get("field"), channel.get("value")) {
-            (Some(Value::String(field)), None) if !field.is_empty() => {
-                if let Some(field_type) = channel.get("type").filter(|value| !value.is_null())
-                    && field_type.as_str() != Some("nominal")
-                    && field_type.as_str() != Some("ordinal")
-                {
-                    return Err("encoding.url.type must be nominal or ordinal".to_string());
-                }
-                Ok(UrlSource::Field(field.clone()))
+fn parse_url_source(channel: Option<&Value>) -> Result<UrlSource, String> {
+    let channel = channel
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| "image mark requires encoding.url".to_string())?
+        .as_object()
+        .ok_or_else(|| "encoding.url must be an object".to_string())?;
+    match (channel.get("field"), channel.get("value")) {
+        (Some(Value::String(field)), None) if !field.is_empty() => {
+            if let Some(field_type) = channel.get("type").filter(|value| !value.is_null())
+                && field_type.as_str() != Some("nominal")
+                && field_type.as_str() != Some("ordinal")
+            {
+                return Err("encoding.url.type must be nominal or ordinal".to_string());
             }
-            (None, Some(Value::String(value))) => {
-                if channel.contains_key("type") {
-                    return Err(
-                        "encoding.url.type cannot be combined with encoding.url.value".into(),
-                    );
-                }
-                Ok(UrlSource::Value(value.clone()))
-            }
-            (Some(_), None) => Err("encoding.url.field must be a non-empty string".into()),
-            (None, Some(_)) => Err("encoding.url.value must be a string".into()),
-            (Some(_), Some(_)) => Err("encoding.url cannot combine field and value".into()),
-            (None, None) => Err("encoding.url requires field or value".into()),
+            Ok(UrlSource::Field(field.clone()))
         }
-    } else if let Some(mark_url) = mark_url {
-        let value = mark_url
-            .as_str()
-            .ok_or_else(|| "mark.url must be a string".to_string())?;
-        Ok(UrlSource::Value(value.to_owned()))
-    } else {
-        Err("image mark requires encoding.url or mark.url".into())
+        (None, Some(Value::String(value))) => {
+            if channel.contains_key("type") {
+                return Err("encoding.url.type cannot be combined with encoding.url.value".into());
+            }
+            Ok(UrlSource::Value(value.clone()))
+        }
+        (Some(_), None) => Err("encoding.url.field must be a non-empty string".into()),
+        (None, Some(_)) => Err("encoding.url.value must be a string".into()),
+        (Some(_), Some(_)) => Err("encoding.url cannot combine field and value".into()),
+        (None, None) => Err("encoding.url requires field or value".into()),
     }
 }
 
@@ -391,7 +383,7 @@ fn check_unknown_keys(top: &Map<String, Value>) -> Result<(), String> {
         "",
     )?;
     if let Some(mark) = top.get("mark").and_then(Value::as_object) {
-        check_keys(mark, &["type", "width", "height", "url"], "mark")?;
+        check_keys(mark, &["type", "width", "height"], "mark")?;
     }
     if let Some(data) = top.get("data").and_then(Value::as_object) {
         check_keys(data, &["values", "url"], "data")?;

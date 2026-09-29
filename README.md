@@ -202,7 +202,7 @@ to chart.js input.
 ### Image marks
 
 `image` requires a mark object with positive `width` and `height`, quantitative `encoding.x` and
-`encoding.y`, and either a field/value in `encoding.url` or a constant `mark.url`. URLs must use
+`encoding.y`, and either a field or value in `encoding.url`. URLs must use
 `http`, `https`, or `data:image`. The core keeps each URL as an SVG `<image>` reference and does
 not fetch it. SVG output preserves the reference; PNG and WebP rendering return an unsupported
 format error for image marks. See the [image fixture](examples/specs/vegalite-image.json).

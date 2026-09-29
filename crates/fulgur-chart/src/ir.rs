@@ -1,6 +1,6 @@
 //! IR: フロントエンド(DSL) と描画コアの安定境界。
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 /// 解決済みの色（不透明 RGB + アルファ）。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -792,10 +792,27 @@ pub struct GeoShape {
     pub style: GeoShapeStyle,
 }
 
+/// Image URLs may be shared by every record (`encoding.url.value`) or vary per record.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VegaImageUrls {
+    Constant(Arc<str>),
+    PerPoint(Vec<Arc<str>>),
+}
+
+impl VegaImageUrls {
+    /// Return the retained URL for a point without copying its contents.
+    pub fn get(&self, index: usize) -> Option<Arc<str>> {
+        match self {
+            Self::Constant(href) => Some(Arc::clone(href)),
+            Self::PerPoint(hrefs) => hrefs.get(index).cloned(),
+        }
+    }
+}
+
 /// Vega-Lite image references retained for SVG output. URLs are never fetched by the core.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VegaImageData {
-    pub hrefs: Vec<String>,
+    pub urls: VegaImageUrls,
     pub width: f64,
     pub height: f64,
 }

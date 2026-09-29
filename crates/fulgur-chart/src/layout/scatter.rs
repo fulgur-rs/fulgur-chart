@@ -743,12 +743,12 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     // 6. 点。共有 scatter_points(単一真実源)から描画。
     if let ChartKind::VegaImage(data) = &spec.kind {
         for point in scatter_points(spec, &layout) {
-            let Some(href) = data.hrefs.get(point.index) else {
+            let Some(href) = data.urls.get(point.index) else {
                 continue;
             };
             items.push(Prim::Image {
-                x: point.cx - data.width / 2.0,
-                y: point.cy - data.height / 2.0,
+                x: point.cx,
+                y: point.cy,
                 width: data.width,
                 height: data.height,
                 href: href.clone(),

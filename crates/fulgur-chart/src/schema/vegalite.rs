@@ -245,12 +245,18 @@ pub enum MarkImageName {
 pub struct MarkImageObject {
     #[serde(rename = "type")]
     pub mark_type: MarkImageName,
-    #[schemars(range(min = 0.0, max = 32_768.0))]
+    #[schemars(schema_with = "positive_image_dimension_schema")]
     pub width: f64,
-    #[schemars(range(min = 0.0, max = 32_768.0))]
+    #[schemars(schema_with = "positive_image_dimension_schema")]
     pub height: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
+}
+
+fn positive_image_dimension_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": "number",
+        "exclusiveMinimum": 0.0,
+        "maximum": 32_768.0
+    })
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -1366,8 +1372,7 @@ pub struct VlImageSpec {
 pub struct VlImageEncoding {
     pub x: VlImagePositionChannel,
     pub y: VlImagePositionChannel,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<VlImageUrlChannel>,
+    pub url: VlImageUrlChannel,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

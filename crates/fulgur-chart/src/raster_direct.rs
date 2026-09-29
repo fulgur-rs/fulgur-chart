@@ -196,6 +196,7 @@ fn render_chart_to_png_with_options(
     limits: &crate::guard::InputLimits,
     compression: PngCompression,
 ) -> Result<Vec<u8>, String> {
+    validate_raster_chart_kind(spec)?;
     let face =
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
@@ -243,6 +244,7 @@ pub fn render_chart_to_webp_with_limits(
     font_bytes: &[u8],
     limits: &crate::guard::InputLimits,
 ) -> Result<Vec<u8>, String> {
+    validate_raster_chart_kind(spec)?;
     let face =
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
@@ -518,6 +520,16 @@ fn validate_raster_supported_prims(items: &[Prim]) -> Result<(), String> {
             Prim::Group { children, .. } => validate_raster_supported_prims(children)?,
             _ => {}
         }
+    }
+    Ok(())
+}
+
+fn validate_raster_chart_kind(spec: &crate::ir::ChartSpec) -> Result<(), String> {
+    if matches!(&spec.kind, crate::ir::ChartKind::VegaImage(_)) {
+        return Err(
+            "PNG and WebP rendering does not support Vega-Lite image marks; use SVG output"
+                .to_string(),
+        );
     }
     Ok(())
 }

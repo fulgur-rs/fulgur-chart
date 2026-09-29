@@ -1,6 +1,7 @@
 //! 描画プリミティブの中間表現。幾何 + スタイルのみを持ち、解釈は含まない。
 
 use crate::ir::Color;
+use std::sync::Arc;
 
 /// テキストの水平アンカー。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,7 +36,7 @@ pub enum Prim {
         y: f64,
         width: f64,
         height: f64,
-        href: String,
+        href: Arc<str>,
     },
     Line {
         x1: f64,
