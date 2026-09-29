@@ -521,6 +521,13 @@ pub(super) fn parse_unit_value_with_overrides(
     } else {
         None
     };
+    let vega_size_legend = size_legend(
+        encoding,
+        size_field.as_deref(),
+        &records,
+        scale_overrides.size_numeric_domain,
+        square_mark,
+    );
 
     // VL トップレベルの width/height/title を反映する(無ければ既定 800x450・無題)。
     // title は文字列、または `{"text": "..."}` オブジェクトを受ける。
@@ -606,6 +613,7 @@ pub(super) fn parse_unit_value_with_overrides(
         },
         legend_options: crate::ir::LegendOptions::default(),
         legend_title,
+        vega_size_legend,
         title,
         chartjs_title: None,
         chartjs_subtitle: None,
@@ -788,6 +796,7 @@ fn parse_geoshape_spec(
         legend: LegendPos::None,
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
+        vega_size_legend: None,
         title,
         chartjs_title: None,
         chartjs_subtitle: None,
@@ -2724,6 +2733,56 @@ fn point_size_area(value: f64, domain_min: f64, domain_max: f64) -> f64 {
 /// Convert pixel area to the circle radius consumed by ChartKind::Bubble.
 fn point_size_radius(value: f64, domain_min: f64, domain_max: f64) -> f64 {
     (point_size_area(value, domain_min, domain_max) / std::f64::consts::PI).sqrt()
+}
+
+fn size_legend(
+    encoding: &Map<String, Value>,
+    field: Option<&str>,
+    records: &[Map<String, Value>],
+    domain_override: Option<(f64, f64)>,
+    square: bool,
+) -> Option<VegaSizeLegend> {
+    let field = field?;
+    let channel = encoding.get("size")?.as_object()?;
+    let legend = channel.get("legend");
+    if matches!(legend, Some(Value::Null | Value::Bool(false))) {
+        return None;
+    }
+    let (min, max) = domain_override.or_else(|| numeric_domain(records, field))?;
+    let mut values = vec![min];
+    if min < max {
+        // Halve first to avoid overflowing when both finite extrema are near f64::MAX.
+        values.push(min / 2.0 + max / 2.0);
+        values.push(max);
+    }
+    let title = legend
+        .and_then(Value::as_object)
+        .and_then(|legend| legend.get("title"))
+        .or_else(|| channel.get("title"));
+    let title = match title {
+        Some(Value::Null) => None,
+        Some(Value::String(text)) => Some(text.clone()),
+        _ => Some(field.to_string()),
+    };
+    Some(VegaSizeLegend {
+        title,
+        entries: values
+            .into_iter()
+            .map(|value| VegaSizeLegendEntry {
+                label: if value == 0.0 {
+                    "0".to_string()
+                } else {
+                    value.to_string()
+                },
+                radius: if square {
+                    square_size_half_side(value, min, max)
+                } else {
+                    point_size_radius(value, min, max)
+                },
+            })
+            .collect(),
+        square,
+    })
 }
 
 /// Convert pixel area to the square half-side stored in `Point.r`.

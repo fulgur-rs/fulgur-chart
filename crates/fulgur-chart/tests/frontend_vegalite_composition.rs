@@ -158,6 +158,50 @@ fn vegalite_composition_accepts_boxplot_unit_marks_in_both_modes() {
 }
 
 #[test]
+fn shared_measurement_scales_infer_horizontal_boxplot_and_error_mark_types() {
+    let horizontal_boxplot = r#"{
+      "resolve":{"scale":{"x":"shared"}},
+      "hconcat":[
+        {
+          "mark":"boxplot",
+          "data":{"values":[
+            {"group":"A","value":1},
+            {"group":"A","value":2},
+            {"group":"A","value":3},
+            {"group":"A","value":4}
+          ]},
+          "encoding":{"x":{"field":"value"},"y":{"field":"group"}}
+        },
+        {
+          "mark":"point",
+          "data":{"values":[{"x":2,"y":3}]},
+          "encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}
+        }
+      ]
+    }"#;
+    let horizontal_error_mark = r#"{
+      "resolve":{"scale":{"x":"shared"}},
+      "hconcat":[
+        {
+          "mark":{"type":"errorbar","orient":"horizontal"},
+          "data":{"values":[{"group":"A","value":1},{"group":"A","value":3}]},
+          "encoding":{"x":{"field":"value"},"y":{"field":"group"}}
+        },
+        {
+          "mark":"point",
+          "data":{"values":[{"x":2,"y":3}]},
+          "encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}
+        }
+      ]
+    }"#;
+
+    for json in [horizontal_boxplot, horizontal_error_mark] {
+        let parsed = vegalite::parse(json, false).expect("horizontal measurement scale is shared");
+        assert!(matches!(parsed.kind, ChartKind::VegaComposition(_)));
+    }
+}
+
+#[test]
 fn vegalite_composition_rejects_unsupported_nodes_in_both_modes() {
     let cases = [
         (
@@ -251,4 +295,50 @@ fn composition_guard_aggregates_geoshape_points_and_primitives_across_views() {
     };
     let error = vegalite::parse_with_limits(json, false, &primitive_limit).unwrap_err();
     assert!(error.contains("max_geo_primitives"), "{error}");
+}
+
+#[test]
+fn composition_guard_counts_actual_boxplot_primitives_across_views() {
+    let json = r##"{
+      "data":{"values":[
+        {"group":"A","value":1},
+        {"group":"A","value":2},
+        {"group":"A","value":3},
+        {"group":"A","value":4}
+      ]},
+      "hconcat":[
+        {"mark":{"type":"boxplot","extent":"min-max","box":{"stroke":"#000000"}},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}},
+        {"mark":{"type":"boxplot","extent":"min-max","box":{"stroke":"#000000"}},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}},
+        {"mark":{"type":"boxplot","extent":"min-max","box":{"stroke":"#000000"}},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}
+      ]
+    }"##;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_categorical_primitives: 16,
+        ..Default::default()
+    };
+
+    let error = vegalite::parse_with_limits(json, false, &limits).unwrap_err();
+    assert!(error.contains("max_categorical_primitives"), "{error}");
+}
+
+#[test]
+fn size_legend_title_respects_label_limit() {
+    let json = r#"{
+      "hconcat":[{
+        "mark":"point",
+        "data":{"values":[{"x":1,"y":2,"amount":3}]},
+        "encoding":{
+          "x":{"field":"x","type":"quantitative"},
+          "y":{"field":"y","type":"quantitative"},
+          "size":{"field":"amount","type":"quantitative","legend":{"title":"large title"}}
+        }
+      }]
+    }"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_label_bytes: 4,
+        ..Default::default()
+    };
+
+    let error = vegalite::parse_with_limits(json, false, &limits).unwrap_err();
+    assert!(error.contains("size legend title"), "{error}");
 }

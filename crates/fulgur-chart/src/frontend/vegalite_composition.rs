@@ -429,6 +429,20 @@ fn raw_channel_kind(
     if let Some(hinted) = hinted {
         return Ok(hinted);
     }
+    if matches!(channel, "x" | "y") && matches!(mark, "boxplot" | "errorbar" | "errorband") {
+        return Ok(
+            if records
+                .iter()
+                .filter_map(|record| record.get(field))
+                .find(|value| !value.is_null())
+                .is_some_and(Value::is_number)
+            {
+                Numeric
+            } else {
+                Categories
+            },
+        );
+    }
     Ok(match channel {
         "size" => Numeric,
         "color"

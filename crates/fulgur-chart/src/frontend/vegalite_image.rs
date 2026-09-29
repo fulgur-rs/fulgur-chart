@@ -160,6 +160,7 @@ pub(super) fn parse_image_spec(
         legend: LegendPos::None,
         legend_options: LegendOptions::default(),
         legend_title: None,
+        vega_size_legend: None,
         title,
         chartjs_title: None,
         chartjs_subtitle: None,

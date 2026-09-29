@@ -348,7 +348,7 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                         *points, limits.max_total_data_points, leaf.path
                     ));
                 }
-                let leaf_primitives = match &leaf.spec.kind {
+                let leaf_mark_primitives = match &leaf.spec.kind {
                     ChartKind::Bar { .. }
                     | ChartKind::Line { .. }
                     | ChartKind::Trail
@@ -369,14 +369,21 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                     ChartKind::VegaImage(_) => leaf_points,
                     ChartKind::GeoShape { data } => data.features.len(),
                     ChartKind::ErrorMark(data) => data.ranges.len().saturating_mul(3),
-                    ChartKind::VegaBoxPlot(data) => {
-                        data.groups.iter().fold(0usize, |total, group| {
-                            total
-                                .saturating_add(5usize.saturating_add(group.summary.outliers.len()))
-                        })
-                    }
+                    ChartKind::VegaBoxPlot(data) => vega_boxplot_primitive_count(data),
                     _ => 0,
                 };
+                let leaf_size_legend_primitives = leaf
+                    .spec
+                    .vega_size_legend
+                    .as_ref()
+                    .map(|guide| {
+                        1usize
+                            .saturating_add(guide.entries.len().saturating_mul(2))
+                            .saturating_add(usize::from(guide.title.is_some()))
+                    })
+                    .unwrap_or(0);
+                let leaf_primitives =
+                    leaf_mark_primitives.saturating_add(leaf_size_legend_primitives);
                 *primitives = primitives.saturating_add(leaf_primitives);
                 if *primitives > limits.max_categorical_primitives {
                     return Err(format!(
@@ -831,26 +838,7 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
                 "Vega-Lite boxplot group {index} endpoints are invalid"
             ));
         }
-        let has_whiskers = summary.whisker_low.is_some();
-        primitives = primitives
-            .saturating_add(usize::from(data.style.box_part.visible))
-            .saturating_add(usize::from(data.style.median_part.visible))
-            .saturating_add(
-                usize::from(data.style.box_part.visible && data.style.box_part.stroke.is_some())
-                    .saturating_mul(4),
-            )
-            .saturating_add(if has_whiskers {
-                usize::from(data.style.rule_part.visible)
-                    .saturating_mul(if data.style.box_part.visible { 2 } else { 1 })
-                    .saturating_add(usize::from(data.style.ticks_part.visible).saturating_mul(2))
-            } else {
-                0
-            })
-            .saturating_add(if data.style.outliers_part.visible {
-                summary.outliers.len()
-            } else {
-                0
-            });
+        primitives = primitives.saturating_add(vega_boxplot_group_primitive_count(data, group));
     }
     if points > limits.max_total_data_points {
         return Err(format!(
@@ -865,6 +853,37 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
         ));
     }
     Ok(())
+}
+
+pub(crate) fn vega_boxplot_primitive_count(data: &crate::ir::VegaBoxPlotData) -> usize {
+    data.groups.iter().fold(0usize, |total, group| {
+        total.saturating_add(vega_boxplot_group_primitive_count(data, group))
+    })
+}
+
+fn vega_boxplot_group_primitive_count(
+    data: &crate::ir::VegaBoxPlotData,
+    group: &crate::ir::VegaBoxPlotGroup,
+) -> usize {
+    let has_whiskers = group.summary.whisker_low.is_some();
+    usize::from(data.style.box_part.visible)
+        .saturating_add(usize::from(data.style.median_part.visible))
+        .saturating_add(
+            usize::from(data.style.box_part.visible && data.style.box_part.stroke.is_some())
+                .saturating_mul(4),
+        )
+        .saturating_add(if has_whiskers {
+            usize::from(data.style.rule_part.visible)
+                .saturating_mul(if data.style.box_part.visible { 2 } else { 1 })
+                .saturating_add(usize::from(data.style.ticks_part.visible).saturating_mul(2))
+        } else {
+            0
+        })
+        .saturating_add(if data.style.outliers_part.visible {
+            group.summary.outliers.len()
+        } else {
+            0
+        })
 }
 
 fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
@@ -1376,6 +1395,34 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
             title.len(),
             limits.max_label_bytes,
         ));
+    }
+    if let Some(guide) = &spec.vega_size_legend {
+        if let Some(title) = &guide.title
+            && title.len() > limits.max_label_bytes
+        {
+            return Err(format!(
+                "size legend title length {} bytes exceeds limit {}",
+                title.len(),
+                limits.max_label_bytes,
+            ));
+        }
+        for entry in &guide.entries {
+            if entry.label.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "size legend label length {} bytes exceeds limit {}",
+                    entry.label.len(),
+                    limits.max_label_bytes,
+                ));
+            }
+            if !entry.radius.is_finite()
+                || entry.radius < 0.0
+                || entry.radius > MAX_MARKER_RADIUS_PX
+            {
+                return Err(
+                    "size legend marker radius must be finite and within the marker limit".into(),
+                );
+            }
+        }
     }
     for (axis, title) in [
         ("x", spec.x_axis.title.as_ref()),

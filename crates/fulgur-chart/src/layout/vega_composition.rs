@@ -91,15 +91,18 @@ fn build_node(
             let independent_x = layer.resolve.x_axis == crate::ir::VegaResolutionMode::Independent;
             let mut independent_y_guides = Vec::new();
             let mut independent_x_guides = Vec::new();
+            let mut independent_color_guides = Vec::new();
+            let mut independent_size_guides = Vec::new();
             for (index, (child_node, child)) in layer.children.iter().zip(children).enumerate() {
                 if let VegaCompositionNode::Unit(leaf) = child_node {
                     let mut frame_spec = (*leaf.spec).clone();
                     frame_spec.size_mode = crate::ir::SizeMode::Canvas;
                     apply_leaf_domains(&mut frame_spec, &leaf.scales);
                     let frame = crate::layout::common::compute(&frame_spec, measurer);
-                    let (marks, y_guides, x_guides) = split_layer_scene_items(
+                    let (marks, y_guides, x_guides, title_items) = split_layer_scene_items(
                         &child.items,
                         &leaf.spec.kind,
+                        leaf.spec.title.as_deref(),
                         frame.plot_left,
                         frame.plot_bottom,
                     );
@@ -123,11 +126,46 @@ fn build_node(
                             children: guides,
                         });
                     } else {
+                        if layer.resolve.color_legend == crate::ir::VegaResolutionMode::Independent
+                        {
+                            let guides = leaf_color_legend_items(
+                                &child.items,
+                                &leaf.spec,
+                                frame.plot_left,
+                                frame.plot_right,
+                                frame.plot_top,
+                                frame.plot_bottom,
+                            );
+                            if !guides.is_empty() {
+                                independent_color_guides.push(guides);
+                            }
+                        }
+                        if layer.resolve.size_legend == crate::ir::VegaResolutionMode::Independent
+                            && let Some(guide) = &leaf.spec.vega_size_legend
+                        {
+                            let guides = leaf_size_legend_items(&child.items, guide);
+                            if !guides.is_empty() {
+                                independent_size_guides.push(guides);
+                            }
+                        }
                         if independent_y {
                             independent_y_guides.push((index, y_guides));
                         }
                         if independent_x {
                             independent_x_guides.push((index, x_guides));
+                        }
+                        if !title_items.is_empty() {
+                            items.push(Prim::Group {
+                                translate_x: 0.0,
+                                translate_y: content_y,
+                                clip: Some(Box::new(ClipRect {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    w: view_width,
+                                    h: view_height,
+                                })),
+                                children: title_items,
+                            });
                         }
                     }
                     items.push(Prim::Group {
@@ -141,31 +179,63 @@ fn build_node(
                         })),
                         children: marks,
                     });
-                } else if index == 0 {
-                    items.push(Prim::Group {
-                        translate_x: 0.0,
-                        translate_y: content_y,
-                        clip: Some(Box::new(ClipRect {
-                            x: 0.0,
-                            y: 0.0,
-                            w: view_width,
-                            h: view_height,
-                        })),
-                        children: child.items,
-                    });
                 } else {
+                    let mut child_items = child.items;
+                    let translate_y = if index == 0 { content_y } else { title_height };
+                    if index > 0 {
+                        let shared_legends = LegendChannels {
+                            color: layer.resolve.color_legend
+                                == crate::ir::VegaResolutionMode::Shared,
+                            size: layer.resolve.size_legend
+                                == crate::ir::VegaResolutionMode::Shared,
+                        };
+                        if shared_legends.any() {
+                            strip_node_legend(
+                                child_node,
+                                &mut child_items,
+                                measurer,
+                                shared_legends,
+                            );
+                        }
+                    }
                     items.push(Prim::Group {
                         translate_x: 0.0,
-                        translate_y: title_height,
+                        translate_y,
                         clip: Some(Box::new(ClipRect {
                             x: 0.0,
                             y: 0.0,
                             w: view_width,
                             h: view_height,
                         })),
-                        children: child.items,
+                        children: child_items,
                     });
                 }
+            }
+            for guides in independent_color_guides {
+                items.push(Prim::Group {
+                    translate_x: 0.0,
+                    translate_y: content_y,
+                    clip: Some(Box::new(ClipRect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: view_width,
+                        h: view_height,
+                    })),
+                    children: guides,
+                });
+            }
+            for guides in independent_size_guides {
+                items.push(Prim::Group {
+                    translate_x: 0.0,
+                    translate_y: content_y,
+                    clip: Some(Box::new(ClipRect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: view_width,
+                        h: view_height,
+                    })),
+                    children: guides,
+                });
             }
             for (index, mut guides) in independent_y_guides {
                 if guides.is_empty() {
@@ -216,8 +286,10 @@ fn build_node(
             concat.spacing,
             concat.title.as_deref(),
             concat.background,
-            concat.resolve.color_legend == crate::ir::VegaResolutionMode::Shared
-                || concat.resolve.size_legend == crate::ir::VegaResolutionMode::Shared,
+            LegendChannels {
+                color: concat.resolve.color_legend == crate::ir::VegaResolutionMode::Shared,
+                size: concat.resolve.size_legend == crate::ir::VegaResolutionMode::Shared,
+            },
             true,
             measurer,
             limits,
@@ -229,12 +301,26 @@ fn build_node(
             concat.spacing,
             concat.title.as_deref(),
             concat.background,
-            concat.resolve.color_legend == crate::ir::VegaResolutionMode::Shared
-                || concat.resolve.size_legend == crate::ir::VegaResolutionMode::Shared,
+            LegendChannels {
+                color: concat.resolve.color_legend == crate::ir::VegaResolutionMode::Shared,
+                size: concat.resolve.size_legend == crate::ir::VegaResolutionMode::Shared,
+            },
             false,
             measurer,
             limits,
         ),
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct LegendChannels {
+    color: bool,
+    size: bool,
+}
+
+impl LegendChannels {
+    fn any(self) -> bool {
+        self.color || self.size
     }
 }
 
@@ -246,7 +332,7 @@ fn build_concat_node(
     spacing: f64,
     title: Option<&str>,
     background: Option<Color>,
-    merge_shared_legend: bool,
+    shared_legends: LegendChannels,
     horizontal: bool,
     measurer: &TextMeasurer<'_>,
     limits: &InputLimits,
@@ -267,8 +353,8 @@ fn build_concat_node(
     let mut x = 0.0;
     let mut y = title_height;
     for (index, (node, mut child)) in nodes.iter().zip(children).enumerate() {
-        if merge_shared_legend && index > 0 {
-            strip_node_legend(node, &mut child.items, measurer);
+        if shared_legends.any() && index > 0 {
+            strip_node_legend(node, &mut child.items, measurer, shared_legends);
         }
         let (translate_x, translate_y) = if horizontal {
             (x, title_height)
@@ -306,11 +392,27 @@ fn strip_node_legend(
     node: &VegaCompositionNode,
     items: &mut Vec<Prim>,
     measurer: &TextMeasurer<'_>,
+    requested: LegendChannels,
 ) {
     match node {
-        VegaCompositionNode::Unit(leaf) => strip_unit_legend(leaf, items, measurer),
+        VegaCompositionNode::Unit(leaf) => {
+            if requested.color {
+                strip_unit_legend_color(leaf, items, measurer);
+            }
+            if requested.size
+                && let Some(guide) = &leaf.spec.vega_size_legend
+            {
+                strip_leaf_size_legend(items, guide);
+            }
+        }
         VegaCompositionNode::Layer(layer) => {
-            if has_independent_legend(&layer.resolve) {
+            let channels = LegendChannels {
+                color: requested.color
+                    && layer.resolve.color_legend == crate::ir::VegaResolutionMode::Shared,
+                size: requested.size
+                    && layer.resolve.size_legend == crate::ir::VegaResolutionMode::Shared,
+            };
+            if !channels.any() {
                 return;
             }
             let Some(first) = layer.children.first() else {
@@ -320,12 +422,27 @@ fn strip_node_legend(
                 return;
             };
             match first {
-                VegaCompositionNode::Unit(leaf) => strip_unit_legend(leaf, group, measurer),
-                nested => strip_node_legend(nested, group, measurer),
+                VegaCompositionNode::Unit(leaf) => {
+                    if channels.color {
+                        strip_unit_legend_color(leaf, group, measurer);
+                    }
+                    if channels.size
+                        && let Some(guide) = &leaf.spec.vega_size_legend
+                    {
+                        strip_leaf_size_legend(group, guide);
+                    }
+                }
+                nested => strip_node_legend(nested, group, measurer, channels),
             }
         }
         VegaCompositionNode::HConcat(concat) | VegaCompositionNode::VConcat(concat) => {
-            if has_independent_legend(&concat.resolve) {
+            let channels = LegendChannels {
+                color: requested.color
+                    && concat.resolve.color_legend == crate::ir::VegaResolutionMode::Shared,
+                size: requested.size
+                    && concat.resolve.size_legend == crate::ir::VegaResolutionMode::Shared,
+            };
+            if !channels.any() {
                 return;
             }
             let mut groups = items.iter_mut().filter_map(group_children_mut);
@@ -333,13 +450,13 @@ fn strip_node_legend(
                 let Some(child_items) = groups.next() else {
                     break;
                 };
-                strip_node_legend(child, child_items, measurer);
+                strip_node_legend(child, child_items, measurer, channels);
             }
         }
     }
 }
 
-fn strip_unit_legend(
+fn strip_unit_legend_color(
     leaf: &crate::ir::VegaCompositionLeaf,
     items: &mut Vec<Prim>,
     measurer: &TextMeasurer<'_>,
@@ -348,7 +465,7 @@ fn strip_unit_legend(
     spec.size_mode = crate::ir::SizeMode::Canvas;
     apply_leaf_domains(&mut spec, &leaf.scales);
     let frame = crate::layout::common::compute(&spec, measurer);
-    strip_leaf_legend(
+    strip_leaf_color_legend(
         items,
         &spec,
         frame.plot_left,
@@ -365,12 +482,7 @@ fn group_children_mut(prim: &mut Prim) -> Option<&mut Vec<Prim>> {
     }
 }
 
-fn has_independent_legend(resolve: &crate::ir::VegaCompositionResolve) -> bool {
-    resolve.color_legend == crate::ir::VegaResolutionMode::Independent
-        || resolve.size_legend == crate::ir::VegaResolutionMode::Independent
-}
-
-fn strip_leaf_legend(
+fn strip_leaf_color_legend(
     items: &mut Vec<Prim>,
     spec: &ChartSpec,
     plot_left: f64,
@@ -389,8 +501,15 @@ fn strip_leaf_legend(
         .chain(crate::layout::common::legend_title(spec))
         .collect::<Vec<_>>();
     items.retain_mut(|item| {
+        if spec
+            .vega_size_legend
+            .as_ref()
+            .is_some_and(|guide| is_size_legend_group(item, guide))
+        {
+            return true;
+        }
         if let Prim::Group { children, .. } = item {
-            strip_leaf_legend(children, spec, plot_left, plot_right, plot_top, plot_bottom);
+            strip_leaf_color_legend(children, spec, plot_left, plot_right, plot_top, plot_bottom);
             return !children.is_empty();
         }
         let (x, y) = prim_position(item);
@@ -419,6 +538,110 @@ fn strip_leaf_legend(
                 plot_bottom,
             )
     });
+}
+
+fn strip_leaf_size_legend(items: &mut Vec<Prim>, guide: &crate::ir::VegaSizeLegend) {
+    items.retain_mut(|item| {
+        if is_size_legend_group(item, guide) {
+            return false;
+        }
+        if let Prim::Group { children, .. } = item {
+            strip_leaf_size_legend(children, guide);
+            return !children.is_empty();
+        }
+        true
+    });
+}
+
+fn leaf_size_legend_items(items: &[Prim], guide: &crate::ir::VegaSizeLegend) -> Vec<Prim> {
+    items
+        .iter()
+        .filter(|item| is_size_legend_group(item, guide))
+        .cloned()
+        .collect()
+}
+
+fn is_size_legend_group(item: &Prim, guide: &crate::ir::VegaSizeLegend) -> bool {
+    let Prim::Group {
+        clip: Some(_),
+        children,
+        ..
+    } = item
+    else {
+        return false;
+    };
+    let mut texts = Vec::new();
+    collect_prim_text(children, &mut texts);
+    guide
+        .entries
+        .iter()
+        .all(|entry| texts.contains(&entry.label.as_str()))
+        && guide
+            .title
+            .as_ref()
+            .is_none_or(|title| texts.contains(&title.as_str()))
+}
+
+fn collect_prim_text<'a>(items: &'a [Prim], output: &mut Vec<&'a str>) {
+    for item in items {
+        match item {
+            Prim::Text { content, .. } => output.push(content),
+            Prim::StyledText(text) => output.push(&text.content),
+            Prim::Group { children, .. } => collect_prim_text(children, output),
+            _ => {}
+        }
+    }
+}
+
+fn leaf_color_legend_items(
+    items: &[Prim],
+    spec: &ChartSpec,
+    plot_left: f64,
+    plot_right: f64,
+    plot_top: f64,
+    plot_bottom: f64,
+) -> Vec<Prim> {
+    if spec.legend == crate::ir::LegendPos::None {
+        return Vec::new();
+    }
+    let labels = spec
+        .series
+        .iter()
+        .filter(|series| !series.name.is_empty())
+        .map(|series| series.name.as_str())
+        .chain(crate::layout::common::legend_title(spec))
+        .collect::<Vec<_>>();
+    items
+        .iter()
+        .filter(|item| {
+            let (x, y) = prim_position(item);
+            let in_band = match spec.legend {
+                crate::ir::LegendPos::Right => x >= plot_right + 2.0,
+                crate::ir::LegendPos::Left => x <= plot_left - 2.0,
+                crate::ir::LegendPos::Top => y <= plot_top - 2.0,
+                crate::ir::LegendPos::Bottom => y >= plot_bottom + 2.0,
+                crate::ir::LegendPos::None => false,
+            };
+            if !in_band {
+                return false;
+            }
+            let is_label = match item {
+                Prim::Text { content, .. } => labels.contains(&content.as_str()),
+                Prim::StyledText(text) => labels.contains(&text.content.as_str()),
+                _ => false,
+            };
+            is_label
+                || is_legend_marker(
+                    item,
+                    spec.legend,
+                    plot_left,
+                    plot_right,
+                    plot_top,
+                    plot_bottom,
+                )
+        })
+        .cloned()
+        .collect()
 }
 
 fn prim_position(prim: &Prim) -> (f64, f64) {
@@ -468,15 +691,19 @@ fn is_legend_marker(
 fn split_layer_scene_items(
     items: &[Prim],
     kind: &ChartKind,
+    title: Option<&str>,
     plot_left: f64,
     plot_bottom: f64,
-) -> (Vec<Prim>, Vec<Prim>, Vec<Prim>) {
+) -> (Vec<Prim>, Vec<Prim>, Vec<Prim>, Vec<Prim>) {
     let mut marks = Vec::new();
     let mut y_guides = Vec::new();
     let mut x_guides = Vec::new();
+    let mut titles = Vec::new();
     for item in items {
         if is_mark_primitive(item, kind) {
             marks.push(item.clone());
+        } else if is_title_primitive(item, title) {
+            titles.push(item.clone());
         } else if let Prim::Text {
             x, y, rotate_deg, ..
         } = item
@@ -488,7 +715,16 @@ fn split_layer_scene_items(
             }
         }
     }
-    (marks, y_guides, x_guides)
+    (marks, y_guides, x_guides, titles)
+}
+
+fn is_title_primitive(prim: &Prim, title: Option<&str>) -> bool {
+    let Some(title) = title else { return false };
+    match prim {
+        Prim::Text { content, .. } => content == title,
+        Prim::StyledText(text) => text.content == title,
+        _ => false,
+    }
 }
 
 fn is_mark_primitive(prim: &Prim, kind: &ChartKind) -> bool {

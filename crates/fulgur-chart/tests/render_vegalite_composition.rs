@@ -60,6 +60,29 @@ fn count_circles(items: &[Prim]) -> usize {
         .sum()
 }
 
+fn size_legend_groups<'a>(items: &'a [Prim], title: &str) -> Vec<&'a [Prim]> {
+    let mut groups = Vec::new();
+    for item in items {
+        if let Prim::Group {
+            clip: Some(_),
+            children,
+            ..
+        } = item
+        {
+            let has_title = children.iter().any(|child| match child {
+                Prim::Text { content, .. } => content == title,
+                Prim::StyledText(text) => text.content == title,
+                _ => false,
+            });
+            if has_title {
+                groups.push(children.as_slice());
+            }
+            groups.extend(size_legend_groups(children, title));
+        }
+    }
+    groups
+}
+
 fn collect_text_positions(items: &[Prim], content: &str, output: &mut Vec<(f64, f64)>) {
     for item in items {
         match item {
@@ -174,6 +197,26 @@ fn layer_bar_line_keeps_paint_order_and_shared_frame() {
         bar < line,
         "earlier layer mark must paint before later line mark"
     );
+}
+
+#[test]
+fn layer_keeps_titles_from_every_unit_child() {
+    let spec = parsed(
+        r##"{
+          "layer":[
+            {"mark":"bar","title":"First unit","data":{"values":[{"x":"A","y":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}},
+            {"mark":"line","title":"Second unit","data":{"values":[{"x":"A","y":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}
+          ]
+        }"##,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("layer titles render");
+
+    assert_eq!(count_text(&scene.items, "First unit"), 1);
+    assert_eq!(count_text(&scene.items, "Second unit"), 1);
 }
 
 #[test]
@@ -377,6 +420,133 @@ fn concat_shared_legends_render_once() {
         1,
         "a nested layer's shared legend is merged into its parent concat"
     );
+}
+
+#[test]
+fn concat_resolves_color_and_size_legends_independently() {
+    let spec = parsed(
+        r#"{
+          "hconcat":[
+            {"mark":"point","data":{"values":[{"x":1,"y":2,"group":"north","size":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"},"size":{"field":"size","type":"quantitative"}}},
+            {"mark":"point","data":{"values":[{"x":3,"y":4,"group":"south","size":20}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"},"size":{"field":"size","type":"quantitative"}}}
+          ],
+          "resolve":{"legend":{"color":"independent","size":"shared"}}
+        }"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("independent color and shared size guides build");
+
+    assert_eq!(count_text(&scene.items, "north"), 1);
+    assert_eq!(count_text(&scene.items, "south"), 1);
+    let guides = size_legend_groups(&scene.items, "size");
+    assert_eq!(guides.len(), 1, "shared size guide appears once");
+    assert_eq!(count_text(guides[0], "2"), 1);
+    assert_eq!(count_text(guides[0], "20"), 1);
+    let radii = guides[0]
+        .iter()
+        .filter_map(|item| match item {
+            Prim::Circle { r, .. } => Some(r),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        radii.len(),
+        3,
+        "the guide shows minimum, midpoint, and maximum"
+    );
+    assert!(radii[0] < radii[1] && radii[1] < radii[2]);
+}
+
+#[test]
+fn layer_keeps_independent_color_legends_from_each_unit() {
+    let spec = parsed(
+        r#"{
+          "layer":[
+            {"mark":"point","data":{"values":[{"x":1,"y":2,"group":"north"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}},
+            {"mark":"point","data":{"values":[{"x":3,"y":4,"group":"south"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}
+          ],
+          "resolve":{"legend":{"color":"independent"}}
+        }"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("independent layer legends build");
+
+    assert_eq!(count_text(&scene.items, "north"), 1);
+    assert_eq!(count_text(&scene.items, "south"), 1);
+}
+
+#[test]
+fn layer_resolves_legends_from_nested_layer_children() {
+    let spec = parsed(
+        r#"{
+          "layer":[
+            {"layer":[{"mark":"point","data":{"values":[{"x":1,"y":2,"group":"north"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}]},
+            {"layer":[{"mark":"point","data":{"values":[{"x":3,"y":4,"group":"south"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}]}
+          ]
+        }"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("nested layer children build");
+
+    assert_eq!(count_text(&scene.items, "north"), 1);
+    assert_eq!(count_text(&scene.items, "south"), 0);
+}
+
+#[test]
+fn layer_keeps_independent_size_legends_from_each_unit() {
+    let spec = parsed(
+        r#"{
+          "data":{"values":[{"x":1,"y":2,"first":2,"second":8},{"x":3,"y":4,"first":4,"second":10}]},
+          "layer":[
+            {"mark":"point","encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"size":{"field":"first","type":"quantitative","title":"first size"}}},
+            {"mark":"point","encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"size":{"field":"second","type":"quantitative","title":"second size"}}}
+          ],
+          "resolve":{"scale":{"size":"independent"},"legend":{"size":"independent"}}
+        }"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("independent layer size guides build");
+
+    assert_eq!(size_legend_groups(&scene.items, "first size").len(), 1);
+    assert_eq!(size_legend_groups(&scene.items, "second size").len(), 1);
+}
+
+#[test]
+fn concat_resolves_shared_color_and_independent_size_legends() {
+    let spec = parsed(
+        r#"{
+          "hconcat":[
+            {"mark":"point","data":{"values":[{"x":1,"y":2,"group":"shared","size":2},{"x":2,"y":3,"group":"shared","size":4}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"},"size":{"field":"size","type":"quantitative"}}},
+            {"mark":"point","data":{"values":[{"x":3,"y":4,"group":"shared","size":6},{"x":4,"y":5,"group":"shared","size":8}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"},"size":{"field":"size","type":"quantitative"}}}
+          ],
+          "resolve":{"scale":{"size":"independent"},"legend":{"color":"shared","size":"independent"}}
+        }"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("shared color and independent size guides build");
+
+    assert_eq!(count_text(&scene.items, "shared"), 1);
+    let guides = size_legend_groups(&scene.items, "size");
+    assert_eq!(guides.len(), 2, "independent size guides remain per view");
+    assert_eq!(count_text(guides[0], "2"), 1);
+    assert_eq!(count_text(guides[0], "4"), 1);
+    assert_eq!(count_text(guides[1], "6"), 1);
+    assert_eq!(count_text(guides[1], "8"), 1);
 }
 
 #[test]

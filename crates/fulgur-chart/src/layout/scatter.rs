@@ -103,15 +103,23 @@ pub fn compute_scatter_layout(spec: &ChartSpec, m: &TextMeasurer) -> ScatterLayo
     } else {
         0.0
     };
-    let legend_height =
-        legend_horizontal_band_height(&spec.legend_options, label_font, legend_title.is_some());
-    let legend_top = if legend && spec.legend == LegendPos::Top {
-        legend_height
+    let color_legend_height = if legend {
+        legend_horizontal_band_height(&spec.legend_options, label_font, legend_title.is_some())
     } else {
         0.0
     };
-    let legend_bottom = if legend && spec.legend == LegendPos::Bottom {
-        legend_height
+    let size_legend_height = spec
+        .vega_size_legend
+        .as_ref()
+        .map(|guide| size_legend_band_height(guide, label_font))
+        .unwrap_or(0.0);
+    let legend_top = if spec.legend == LegendPos::Top {
+        color_legend_height + size_legend_height
+    } else {
+        0.0
+    };
+    let legend_bottom = if spec.legend == LegendPos::Bottom {
+        color_legend_height + size_legend_height
     } else {
         0.0
     };
@@ -516,8 +524,16 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         0.0
     };
     let legend_title = super::common::legend_title(spec);
-    let legend_height =
-        legend_horizontal_band_height(&spec.legend_options, label_font, legend_title.is_some());
+    let color_legend_height = if legend {
+        legend_horizontal_band_height(&spec.legend_options, label_font, legend_title.is_some())
+    } else {
+        0.0
+    };
+    let size_legend_height = spec
+        .vega_size_legend
+        .as_ref()
+        .map(|guide| size_legend_band_height(guide, label_font))
+        .unwrap_or(0.0);
     let legend_right = if legend && spec.legend == LegendPos::Right {
         let mut series_names: Vec<String> = spec.series.iter().map(|s| s.name.clone()).collect();
         series_names.extend(legend_title.map(str::to_owned));
@@ -783,9 +799,9 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             .map(|series| (series.name.clone(), series.fill_at(0)))
             .collect();
         let legend_cy = if spec.legend == LegendPos::Top {
-            OUTER_PAD + title_band + legend_height / 2.0
+            OUTER_PAD + title_band + color_legend_height / 2.0
         } else {
-            spec.height - OUTER_PAD - legend_height / 2.0
+            spec.height - OUTER_PAD - size_legend_height - color_legend_height / 2.0
         };
         draw_horizontal_legend(
             &mut items,
@@ -797,6 +813,25 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             ink,
             m,
             &spec.legend_options,
+        );
+    }
+
+    if let Some(guide) = spec.vega_size_legend.as_ref()
+        && matches!(spec.legend, LegendPos::Top | LegendPos::Bottom)
+    {
+        let size_guide_center_y = if spec.legend == LegendPos::Top {
+            OUTER_PAD + title_band + color_legend_height + size_legend_height / 2.0
+        } else {
+            spec.height - OUTER_PAD - size_legend_height / 2.0
+        };
+        draw_vega_size_legend(
+            &mut items,
+            guide,
+            spec.width,
+            size_guide_center_y,
+            label_font,
+            ink,
+            m,
         );
     }
 
@@ -879,6 +914,101 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 }
 
+fn size_legend_band_height(guide: &crate::ir::VegaSizeLegend, font_size: f64) -> f64 {
+    let max_diameter = guide
+        .entries
+        .iter()
+        .map(|entry| entry.radius.max(0.0) * 2.0)
+        .fold(0.0_f64, f64::max);
+    let row_height = (font_size + 8.0).max(max_diameter + 4.0);
+    row_height + guide.title.as_ref().map_or(0.0, |_| font_size + 6.0)
+}
+
+fn draw_vega_size_legend(
+    items: &mut Vec<Prim>,
+    guide: &crate::ir::VegaSizeLegend,
+    width: f64,
+    band_center_y: f64,
+    font_size: f64,
+    ink: Color,
+    measurer: &TextMeasurer<'_>,
+) {
+    let band_height = size_legend_band_height(guide, font_size);
+    let title_height = guide.title.as_ref().map_or(0.0, |_| font_size + 6.0);
+    let row_height = band_height - title_height;
+    let band_top = band_center_y - band_height / 2.0;
+    let mut children = Vec::with_capacity(guide.entries.len() * 2 + 1);
+    if let Some(title) = &guide.title {
+        children.push(Prim::Text {
+            x: width / 2.0,
+            y: band_top + font_size + 1.0,
+            size: font_size * 0.9,
+            anchor: Anchor::Middle,
+            fill: ink,
+            content: title.clone(),
+            rotate_deg: None,
+        });
+    }
+    let row_center_y = band_top + title_height + row_height / 2.0;
+    let entries = guide
+        .entries
+        .iter()
+        .map(|entry| {
+            let diameter = entry.radius.max(0.0) * 2.0;
+            let label_width = measurer.width(&entry.label, font_size as f32) as f64;
+            (entry, diameter + 6.0 + label_width + 14.0)
+        })
+        .collect::<Vec<_>>();
+    let total_width = entries
+        .iter()
+        .map(|(_, entry_width)| entry_width)
+        .sum::<f64>();
+    let mut cursor_x = ((width - total_width) / 2.0).max(0.0);
+    let color = Color { a: 0.72, ..ink };
+    for (entry, entry_width) in entries {
+        let radius = entry.radius.max(0.0);
+        if guide.square {
+            children.push(Prim::Rect {
+                x: cursor_x,
+                y: row_center_y - radius,
+                w: radius * 2.0,
+                h: radius * 2.0,
+                fill: color,
+            });
+        } else {
+            children.push(Prim::Circle {
+                cx: cursor_x + radius,
+                cy: row_center_y,
+                r: radius,
+                fill: color,
+                stroke: ink,
+                stroke_width: 0.5,
+            });
+        }
+        children.push(Prim::Text {
+            x: cursor_x + radius * 2.0 + 6.0,
+            y: row_center_y + font_size * 0.35,
+            size: font_size,
+            anchor: Anchor::Start,
+            fill: ink,
+            content: entry.label.clone(),
+            rotate_deg: None,
+        });
+        cursor_x += entry_width;
+    }
+    items.push(Prim::Group {
+        translate_x: 0.0,
+        translate_y: 0.0,
+        clip: Some(Box::new(crate::scene::ClipRect {
+            x: 0.0,
+            y: band_top,
+            w: width,
+            h: band_height,
+        })),
+        children,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -954,6 +1084,7 @@ mod tests {
             legend: LegendPos::None,
             legend_options: crate::ir::LegendOptions::default(),
             legend_title: None,
+            vega_size_legend: None,
             title: None,
             chartjs_title: None,
             chartjs_subtitle: None,

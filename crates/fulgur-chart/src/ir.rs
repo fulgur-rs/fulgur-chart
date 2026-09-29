@@ -1236,6 +1236,22 @@ pub struct VegaCompositionLeaf {
     pub scales: VegaLeafScaleDomains,
 }
 
+/// Quantitative Vega-Lite size legend entry after area scaling has been resolved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaSizeLegendEntry {
+    pub label: String,
+    /// Radius for point marks or half-side for square marks, in pixels.
+    pub radius: f64,
+}
+
+/// Legend guide for a quantitative Vega-Lite size encoding.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaSizeLegend {
+    pub title: Option<String>,
+    pub entries: Vec<VegaSizeLegendEntry>,
+    pub square: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct VegaLayerNode {
     pub path: String,
@@ -1283,6 +1299,8 @@ pub struct ChartSpec {
     pub legend: LegendPos,
     pub legend_options: LegendOptions,
     pub legend_title: Option<String>,
+    /// Vega-Lite quantitative size guide, currently used by point/square marks.
+    pub vega_size_legend: Option<VegaSizeLegend>,
     /// Legacy shared title channel used by Vega-Lite and native `ChartSpec` callers.
     pub title: Option<String>,
     /// Independent Chart.js title plugin configuration.
@@ -1578,6 +1596,7 @@ mod radial_axis_tests {
             legend: LegendPos::None,
             legend_options: LegendOptions::default(),
             legend_title: None,
+            vega_size_legend: None,
             title: None,
             chartjs_title: None,
             chartjs_subtitle: None,
