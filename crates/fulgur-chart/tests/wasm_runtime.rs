@@ -73,6 +73,14 @@ fn sample_boxplot_spec() -> fulgur_chart::ir::ChartSpec {
     .expect("boxplot fixture parses")
 }
 
+fn sample_image_spec() -> fulgur_chart::ir::ChartSpec {
+    vegalite::parse(
+        include_str!("../../../examples/specs/vegalite-image.json"),
+        true,
+    )
+    .expect("image fixture parses")
+}
+
 const PNG_SCALE: f32 = 2.0;
 const PNG_SIGNATURE: &[u8; 8] = &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n'];
 // デフォルト 800x450 を PNG_SCALE 倍した寸法。
@@ -145,6 +153,21 @@ fn geoshape_svg_and_png_render_validly_and_deterministically() {
     assert_eq!(&png[..8], PNG_SIGNATURE);
     let image = tiny_skia::Pixmap::decode_png(&png).expect("生成 PNG がデコード可能");
     assert_eq!((image.width(), image.height()), (480, 280));
+}
+
+/// Image URLs pass through the same synchronous SVG path on native and WASM; raster output is rejected.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn image_mark_emits_svg_references_and_rejects_raster_output() {
+    let spec = sample_image_spec();
+    let svg = render_chart(&spec);
+    assert_eq!(svg.matches("<image ").count(), 2);
+    assert!(svg.contains("href=\"data:image/svg+xml,"));
+
+    let png_error = render_chart_to_png_default(&spec, 1.0).unwrap_err();
+    assert!(png_error.contains("image marks") && png_error.contains("SVG"));
+    let webp_error = render_chart_to_webp(&spec, 1.0, DEFAULT_FONT).unwrap_err();
+    assert!(webp_error.contains("image marks") && webp_error.contains("SVG"));
 }
 
 /// Projection failures travel back as render errors in native and WASM builds.

@@ -29,6 +29,14 @@ pub enum Prim {
         h: f64,
         fill: Color,
     },
+    /// External image reference serialized as an SVG `<image>` element.
+    Image {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        href: String,
+    },
     Line {
         x1: f64,
         y1: f64,

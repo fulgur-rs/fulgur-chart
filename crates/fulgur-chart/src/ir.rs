@@ -792,6 +792,14 @@ pub struct GeoShape {
     pub style: GeoShapeStyle,
 }
 
+/// Vega-Lite image references retained for SVG output. URLs are never fetched by the core.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaImageData {
+    pub hrefs: Vec<String>,
+    pub width: f64,
+    pub height: f64,
+}
+
 /// Whisker extent rule for a Vega-Lite boxplot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VegaBoxPlotExtent {
@@ -1008,6 +1016,8 @@ pub enum ChartKind {
     GeoShape {
         data: Box<GeoShape>,
     },
+    /// Vega-Lite `mark: "image"`; external resources remain SVG references.
+    VegaImage(Box<VegaImageData>),
     /// Vega-Lite `errorbar` / `errorband` normalized range mark.
     ErrorMark(Box<ErrorMarkData>),
     /// Vega-Lite `boxplot` composite mark with dedicated statistics and layout.

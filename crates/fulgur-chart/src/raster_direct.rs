@@ -474,6 +474,7 @@ fn scene_to_pixmap_with(
     limits: &RasterLimits,
     min_run: usize,
 ) -> Result<Pixmap, String> {
+    validate_raster_supported_prims(&scene.items)?;
     // scale が 0 以下/非有限なら 1.0 にフォールバック。+Inf 等は u32 で飽和し、
     // 続く limits.check が pixmap を確保する前に弾く。
     let scale = if scale > 0.0 { scale } else { 1.0 };
@@ -503,6 +504,22 @@ fn scene_to_pixmap_with(
     );
 
     Ok(pixmap)
+}
+
+fn validate_raster_supported_prims(items: &[Prim]) -> Result<(), String> {
+    for item in items {
+        match item {
+            Prim::Image { .. } => {
+                return Err(
+                    "PNG and WebP rendering does not support Vega-Lite image marks; use SVG output"
+                        .to_string(),
+                );
+            }
+            Prim::Group { children, .. } => validate_raster_supported_prims(children)?,
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1007,6 +1024,8 @@ fn render_prim(
             paint.anti_alias = false;
             pixmap.fill_path(&path, &paint, FillRule::Winding, transform, inherited_clip);
         }
+
+        Prim::Image { .. } => (),
 
         Prim::Line {
             x1,

@@ -23,6 +23,7 @@ pub enum VegaLiteSpec {
     Square(VlSquareSpec),
     Arc(VlArcSpec),
     Rect(VlRectSpec),
+    Image(VlImageSpec),
     GeoShape(Box<VlGeoShapeSpec>),
 }
 
@@ -231,6 +232,25 @@ pub struct MarkSquareObject {
 pub enum MarkSquare {
     String(MarkSquareName),
     Object(MarkSquareObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkImageName {
+    Image,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkImageObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkImageName,
+    #[schemars(range(min = 0.0, max = 32_768.0))]
+    pub width: f64,
+    #[schemars(range(min = 0.0, max = 32_768.0))]
+    pub height: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -1317,6 +1337,66 @@ pub struct VlSquareEncoding {
     pub color: Option<VlChannel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<VlPointSizeChannel>,
+}
+
+// ────────────────────────────────────────────────
+// Image plot (mark: "image")
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlImageSpec {
+    pub mark: MarkImageObject,
+    pub data: VlData,
+    pub encoding: VlImageEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlImageEncoding {
+    pub x: VlImagePositionChannel,
+    pub y: VlImagePositionChannel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<VlImageUrlChannel>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlImagePositionChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlQuantitativeType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlImageUrlFieldChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlCategoricalType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlImageUrlValueChannel {
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlImageUrlChannel {
+    Field(VlImageUrlFieldChannel),
+    Value(VlImageUrlValueChannel),
 }
 
 // ────────────────────────────────────────────────

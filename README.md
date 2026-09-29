@@ -187,8 +187,8 @@ fulgur-chart render chart.vl.json -o chart.svg
 ```
 
 Supported subset: `mark` (`bar` / `line` / `area` / `trail` / `point` → scatter / `circle` → scatter /
-`square` → square scatter / `arc` → pie / `rect` → heatmap / `geoshape` / `errorbar` / `errorband`),
-inline `data.values`, and `encoding` fields `x` / `y` / `color` / `theta` / `shape` / `size`;
+`square` → square scatter / `arc` → pie / `rect` → heatmap / `image` / `geoshape` / `errorbar` / `errorband`),
+inline `data.values`, and `encoding` fields `x` / `y` / `color` / `theta` / `shape` / `size` / `url`;
 `point` and `square` support quantitative `size` mapped to marker area, while `trail` uses quantitative `size`
 for a variable line width (1–4 px by default, or a uniform 1 px when omitted). `area` stacks by default when `color` is present
 (`encoding.y.stack: null` to disable), matching Vega-Lite. Geoshape accepts Feature arrays and
@@ -198,6 +198,14 @@ projections with automatic fitting. URL data and TopoJSON are not supported for 
 palette is applied automatically to categorical Vega-Lite encodings. Input is converted to a
 shared intermediate representation, so output determinism and Fulgur integration are identical
 to chart.js input.
+
+### Image marks
+
+`image` requires a mark object with positive `width` and `height`, quantitative `encoding.x` and
+`encoding.y`, and either a field/value in `encoding.url` or a constant `mark.url`. URLs must use
+`http`, `https`, or `data:image`. The core keeps each URL as an SVG `<image>` reference and does
+not fetch it. SVG output preserves the reference; PNG and WebP rendering return an unsupported
+format error for image marks. See the [image fixture](examples/specs/vegalite-image.json).
 
 ### Error bars and bands
 

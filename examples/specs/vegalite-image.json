@@ -1,0 +1,30 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 320,
+  "height": 220,
+  "title": "SVG image references",
+  "mark": {
+    "type": "image",
+    "width": 36,
+    "height": 36
+  },
+  "data": {
+    "values": [
+      {
+        "x": 0,
+        "y": 0,
+        "src": "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%2210%22%20height=%2210%22%3E%3Ccircle%20cx=%225%22%20cy=%225%22%20r=%224%22%20fill=%22tomato%22/%3E%3C/svg%3E"
+      },
+      {
+        "x": 10,
+        "y": 10,
+        "src": "data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22%20width=%2210%22%20height=%2210%22%3E%3Ccircle%20cx=%225%22%20cy=%225%22%20r=%224%22%20fill=%22tomato%22/%3E%3C/svg%3E"
+      }
+    ]
+  },
+  "encoding": {
+    "x": { "field": "x", "type": "quantitative" },
+    "y": { "field": "y", "type": "quantitative" },
+    "url": { "field": "src", "type": "nominal" }
+  }
+}

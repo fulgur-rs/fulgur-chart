@@ -229,7 +229,7 @@ fn compute_base_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry>
                 elements,
             })
         }
-        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => {
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square | ChartKind::VegaImage(_) => {
             let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
             let pw = layout.plot_right - layout.plot_left;
             let ph = layout.plot_bottom - layout.plot_top;
@@ -250,12 +250,16 @@ fn compute_base_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry>
                     kind: b.kind.to_string(),
                     nx: (b.cx - layout.plot_left) / pw,
                     ny: (b.cy - layout.plot_top) / ph,
-                    nw: if matches!(b.kind, "bubble" | "square") {
-                        b.r / pw
-                    } else {
-                        0.0
+                    nw: match &spec.kind {
+                        ChartKind::VegaImage(data) => data.width / pw,
+                        _ if matches!(b.kind, "bubble" | "square") => b.r / pw,
+                        _ => 0.0,
                     },
-                    nh: if b.kind == "square" { b.r / ph } else { 0.0 },
+                    nh: match &spec.kind {
+                        ChartKind::VegaImage(data) => data.height / ph,
+                        _ if b.kind == "square" => b.r / ph,
+                        _ => 0.0,
+                    },
                 })
                 .collect();
             Some(Geometry {
@@ -342,6 +346,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Scatter => "scatter",
         ChartKind::Bubble => "bubble",
         ChartKind::Square => "square",
+        ChartKind::VegaImage(_) => "image",
         ChartKind::Radar => "radar",
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",
@@ -686,7 +691,7 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
             Some((index_axis, value_model, t.ticks.len()))
         }
         // scatter/bubble/square: x・y とも数値軸。renderer と同じ layout/ticks を共有する。
-        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => {
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square | ChartKind::VegaImage(_) => {
             let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
             let x = if matches!(
                 spec.x_axis.scale_kind,

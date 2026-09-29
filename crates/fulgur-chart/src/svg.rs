@@ -142,6 +142,24 @@ fn write_prim(
             )
             .unwrap();
         }
+        Prim::Image {
+            x,
+            y,
+            width,
+            height,
+            href,
+        } => {
+            write!(
+                s,
+                r#"<image x="{}" y="{}" width="{}" height="{}" href="{}"/>"#,
+                fmt_num(*x),
+                fmt_num(*y),
+                fmt_num(*width),
+                fmt_num(*height),
+                xml_escape_attr(href),
+            )
+            .unwrap();
+        }
         Prim::Line {
             x1,
             y1,
