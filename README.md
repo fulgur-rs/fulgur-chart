@@ -187,10 +187,10 @@ fulgur-chart render chart.vl.json -o chart.svg
 ```
 
 Supported subset: `mark` (`bar` / `line` / `area` / `trail` / `point` → scatter / `circle` → scatter /
-`square` → square scatter / `arc` → pie / `rect` → heatmap / `geoshape`), inline `data.values`, and
-`encoding` fields `x` / `y` / `color` / `theta` / `shape`; `point` and `square` support quantitative
-`size` mapped to marker area, while `trail` uses quantitative `size` for a variable line width (1–4 px
-by default, or a uniform 1 px when omitted). `area` stacks by default when `color` is present
+`square` → square scatter / `arc` → pie / `rect` → heatmap / `geoshape` / `errorbar` / `errorband`),
+inline `data.values`, and `encoding` fields `x` / `y` / `color` / `theta` / `shape`; `point` and
+`square` support quantitative `size` mapped to marker area, while `trail` uses quantitative `size`
+for a variable line width (1–4 px by default, or a uniform 1 px when omitted). `area` stacks by default when `color` is present
 (`encoding.y.stack: null` to disable), matching Vega-Lite. Geoshape accepts Feature arrays and
 single Feature/FeatureCollection values directly; ordinary records put a GeoJSON Geometry,
 Feature, or FeatureCollection in `encoding.shape.field`. It supports all 16 Vega-Lite v6
@@ -198,6 +198,35 @@ projections with automatic fitting. URL data and TopoJSON are not supported for 
 palette is applied automatically to categorical Vega-Lite encodings. Input is converted to a
 shared intermediate representation, so output determinism and Fulgur integration are identical
 to chart.js input.
+
+### Error bars and bands
+
+`errorbar` and `errorband` accept a string mark or an object with `type`, and require inline
+`data.values` records.
+
+- **Raw samples:** use one quantitative `x` or `y` field as the measured value. `mark.extent` accepts
+  `stderr` (default; sample standard deviation divided by √n), `stdev` (sample standard deviation),
+  `ci` (a 95% bootstrap interval), or `iqr` (type-7 first and third quartiles). The other positional
+  channel is optional and supplies the independent coordinate; set `mark.orient` to `horizontal` or
+  `vertical` if both axes are quantitative and the measured axis is ambiguous.
+- **Pre-aggregated ranges:** use `encoding.x` with `x2` or `encoding.y` with `y2` for lower and upper
+  endpoints. Alternatively, use `x` / `y` as the center with `xError` / `xError2` or
+  `yError` / `yError2` as offsets; a missing `*Error2` channel makes the range symmetric. Raw and
+  pre-aggregated inputs cannot be mixed.
+- **Channels and styles:** categorical field-based `encoding.color` and `encoding.detail` split
+  series; `encoding.color.value` or `mark.color` sets a constant color. Constant opacity is available
+  through `mark.opacity` or `encoding.opacity.value`. `errorbar` draws `rule` by default and adds endpoint
+  `ticks` when requested. `errorband` fills `band` by default (opacity 0.3) and draws `borders` when
+  requested. Style objects accept `color`, `fill`, `stroke`, `opacity`, `strokeWidth`, and
+  `strokeDash`; `rule` and `ticks` also accept `size`. Both marks support `clip` (default `true`);
+  error bands also support `interpolate` and `tension`.
+- **Renderers:** native SVG and PNG and the WASM binding use the same rendering scene.
+
+Examples: [raw errorbar](examples/specs/vegalite-errorbar-raw.json),
+[pre-aggregated errorbar](examples/specs/vegalite-errorbar-preaggregated.json),
+[raw errorband](examples/specs/vegalite-errorband-raw.json), and
+[pre-aggregated errorband](examples/specs/vegalite-errorband-preaggregated.json).
+URL data, transforms, and interactive tooltips or selections are not supported.
 
 For example, a quantitative choropleth can provide GeoJSON features directly in `data.values`:
 
