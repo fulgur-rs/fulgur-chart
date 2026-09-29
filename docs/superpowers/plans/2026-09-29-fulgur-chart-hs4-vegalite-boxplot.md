@@ -17,6 +17,7 @@
 - 測定 channel は x/y の一方だけ quantitative とし、他方は省略または categorical とする。orient は測定軸から自動決定し、矛盾する明示値を拒否する。
 - 位置カテゴリ、color、detail の group と category order は first-seen 順で決定的に保つ。
 - quantile は線形補間 type-7 とし、extent は既定 1.5 の Tukey、有限な 0 以上の係数、または `"min-max"` とする。Tukey whisker は fence 内の実データ端点、外れ値は fence 外の raw values とする。
+- extent 0 などで fence 内に実データがない場合、whisker endpoints は `None` として rule/caps を省き、fence 外の全 raw values を outlier として保持する。
 - `transform`、`layer`、pre-aggregated summary、URL data、および未対応 mark/channel/style/scale/legend extension は strict/non-strict 両 mode で明示エラーにする。
 - mark/encoding/component style は spec の範囲と優先順位を守り、opacity は 0..1、size/strokeWidth/strokeDash は有限な 0 以上の値とする。
 - data point、category/group、生成 primitive 数を既存 `InputLimits` で preflight し、上限超過を切り詰めない。
@@ -61,7 +62,7 @@
 **Interfaces:**
 
 - Add `VegaLiteSpec::BoxPlot(VlBoxPlotSpec)`.
-- Add public IR types `VegaBoxPlotExtent::{Tukey { coefficient: f64 }, MinMax}` and `VegaBoxPlotSummary { pub q1: f64, pub median: f64, pub q3: f64, pub whisker_low: f64, pub whisker_high: f64, pub data_min: f64, pub data_max: f64, pub outliers: Vec<f64> }` in `ir.rs`; do not add the ChartKind variant until Task 3 so existing layout/model exhaustive matches keep compiling.
+- Add public IR types `VegaBoxPlotExtent::{Tukey { coefficient: f64 }, MinMax}` and `VegaBoxPlotSummary { pub q1: f64, pub median: f64, pub q3: f64, pub whisker_low: Option<f64>, pub whisker_high: Option<f64>, pub data_min: f64, pub data_max: f64, pub outliers: Vec<f64> }` in `ir.rs`; do not add the ChartKind variant until Task 3 so existing layout/model exhaustive matches keep compiling.
 - Add `VlBoxPlotSpec { mark: MarkBoxPlot, data: VlData, encoding: VlBoxPlotEncoding, schema: Option<String>, width: Option<f64>, height: Option<f64>, title: Option<VlTitle>, background: Option<String>, config: Option<VlConfig> }` with the existing serde field renames and `deny_unknown_fields` convention.
 - Add `MarkBoxPlot` as an untagged string/object wrapper; `MarkBoxPlotObject` admits only `type`, `extent`, `orient`, `size`, `color`, `opacity`, `clip`, `box`, `median`, `outliers`, `rule`, and `ticks`.
 - Add typed mark extent/orient definitions; represent each component property as boolean or `VlBoxPlotPartStyle`. The part style object admits only `color`, `fill`, `stroke`, `strokeWidth`, `strokeDash`, `opacity`, and `size`.
@@ -79,6 +80,7 @@
 
 **Files:**
 
+- Modify `crates/fulgur-chart/src/ir.rs`.
 - Modify `crates/fulgur-chart/src/frontend/mod.rs`.
 - Modify `crates/fulgur-chart/src/frontend/vegalite_error.rs`.
 - Create `crates/fulgur-chart/src/frontend/vegalite_boxplot.rs`.
@@ -87,15 +89,17 @@
 **Interfaces:**
 
 - Add `pub(super) fn summarize_boxplot(values: &[f64], extent: VegaBoxPlotExtent) -> Result<VegaBoxPlotSummary, String>` in `vegalite_boxplot.rs`, using the public types from `ir.rs`. It rejects empty/non-finite input and any non-finite derived quantile/fence/endpoint.
+- Change `VegaBoxPlotSummary.whisker_low` and `.whisker_high` to `Option<f64>`; both are `None` if no raw sample lies inside a Tukey fence, and both are `Some` for min-max.
 - Keep the helper pure: it does not depend on ChartSpec, parser mode, or Scene layout. Change the current `type7_quantile(sorted: &[f64], probability: f64) -> f64` in `frontend/vegalite_error.rs` to `pub(super)` and call that same formula without changing error mark behavior.
 
 - [ ] Add `boxplot_quantiles_use_type7_interpolation`; assert Q1/median/Q3 for `[1, 2, 3, 4, 5]` are `2`, `3`, and `4`.
 - [ ] Add `boxplot_tukey_uses_observed_whiskers_and_keeps_outliers`; assert `[1, 2, 3, 4, 5, 100]` uses actual in-fence whiskers and retains `100` as an outlier.
+- [ ] Add `boxplot_tukey_zero_omits_whiskers_when_fence_has_no_sample`; assert `[1, 2]` produces no whisker endpoints and both raw samples remain outliers.
 - [ ] Add `boxplot_min_max_uses_data_extrema_without_outliers`; assert minimum/maximum endpoints and an empty outlier list.
 - [ ] Add `boxplot_summary_handles_singleton_and_constant_samples`; assert finite identical quartiles/whiskers for singleton and all-equal inputs.
 - [ ] Add `boxplot_summary_rejects_empty_nonfinite_and_overflowing_fences`; assert errors for empty/non-finite values and a coefficient/sample combination whose derived fence is not finite.
 - [ ] Run `cargo test -p fulgur-chart boxplot_`; confirm helper tests fail before the summary implementation exists.
-- [ ] Implement `summarize_boxplot` using type-7 quantiles, observed Tukey whisker endpoints, raw Tukey outliers, and min/max behavior from the spec. Sort a copy for quantiles while preserving raw outlier order.
+- [ ] Change both whisker summary fields to `Option<f64>` and implement `summarize_boxplot` using type-7 quantiles, observed Tukey whisker endpoints, raw Tukey outliers, and min/max behavior from the spec. Sort a copy for quantiles while preserving raw outlier order; when the Tukey fence contains no raw point, return absent endpoints rather than fabricating coordinates.
 - [ ] Run `cargo test -p fulgur-chart boxplot_`; confirm all statistics and invalid-result tests pass.
 - [ ] Commit as `feat(vegalite): add boxplot statistics`.
 
@@ -120,12 +124,12 @@
 - [ ] Add parser tests `vegalite_boxplot_infers_horizontal_and_vertical_orientation`, `vegalite_boxplot_rejects_conflicting_orient`, and `vegalite_boxplot_groups_category_color_and_detail_in_first_seen_order`; assert x-measurement -> horizontal, y-measurement -> vertical, conflicting orient rejection, and stable category/color/detail group order.
 - [ ] Add `vegalite_boxplot_rejects_transform_layer_and_summary_in_both_modes`; assert each unsupported input errors in strict and non-strict modes.
 - [ ] Add `vegalite_boxplot_rejects_missing_or_null_measurement_and_group_fields` and `vegalite_boxplot_rejects_nonfinite_statistical_results`; assert no malformed values silently drop or enter the IR.
-- [ ] Add layout tests `boxplot_vertical_horizontal_and_1d_geometry`, `boxplot_groups_are_side_by_side_deterministically`, `boxplot_styles_apply_mark_encoding_and_part_precedence`, `vegalite_boxplot_handles_singleton_and_constant_groups`, and `boxplot_axis_domain_includes_outliers_and_clips_to_hard_bounds`; assert geometry positions, component visibility/style precedence, finite singleton/constant geometry, outlier domain, and clipping.
+- [ ] Add layout tests `boxplot_vertical_horizontal_and_1d_geometry`, `boxplot_groups_are_side_by_side_deterministically`, `boxplot_styles_apply_mark_encoding_and_part_precedence`, `vegalite_boxplot_handles_singleton_and_constant_groups`, `boxplot_extent_zero_omits_missing_whisker_primitives`, and `boxplot_axis_domain_includes_outliers_and_clips_to_hard_bounds`; assert geometry positions, component visibility/style precedence, finite singleton/constant geometry, absent endpoint handling, outlier domain, and clipping.
 - [ ] Add `vega_boxplot_guard_enforces_point_category_and_primitive_limits` and model test `vega_boxplot_model_reports_type_axes_and_groups`; assert each configurable limit and metadata.
 - [ ] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_` and `cargo test -p fulgur-chart --test render_vegalite_boxplot`; confirm the new integration tests fail before parser/IR/layout support.
 - [ ] Implement dedicated `VegaBoxPlotData` / group / style IR, then parse raw values, validate supported schema in both modes, preflight limits, infer/validate orientation, and group by position + color + detail in first-seen order. Return explicit errors for transform/layer/summary/URL and malformed fields.
 - [ ] Implement `parse_boxplot_spec` to resolve `extent`, type-7 summaries, color/size/opacity values, component styles, clip, title, dimensions, axes, and palette. Derive axis domain from every input value including outliers.
-- [ ] Implement the Vega-Lite model and guard branches, then `layout/vega_boxplot.rs` frame/mapping for numeric measurement axes and optional categorical position axes. Place 1D boxes at the orthogonal plot center; position category groups side-by-side deterministically; render box, median, whisker rule, endpoint ticks, and outlier points as Scene primitives.
+- [ ] Implement the Vega-Lite model and guard branches, then `layout/vega_boxplot.rs` frame/mapping for numeric measurement axes and optional categorical position axes. Place 1D boxes at the orthogonal plot center; position category groups side-by-side deterministically; render box, median, available whisker rules/caps, and outlier points as Scene primitives.
 - [ ] Implement plot clipping and hard-bound mapping with existing axis/Scene primitives; ensure the parser and layout reject any non-finite derived value rather than emitting non-finite SVG coordinates.
 - [ ] Run `cargo test -p fulgur-chart --test frontend_vegalite vegalite_boxplot_`, `cargo test -p fulgur-chart --test render_vegalite_boxplot`, and focused `cargo test -p fulgur-chart --lib vega_boxplot`; confirm grouping, statistics integration, component geometry/styles, limits, hard bounds, and model assertions pass.
 - [ ] Commit as `feat(vegalite): parse and render boxplots`.

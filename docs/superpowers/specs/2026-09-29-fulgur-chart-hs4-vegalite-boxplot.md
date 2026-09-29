@@ -21,7 +21,7 @@ Vega-Lite v6 の複合 mark `boxplot` を、inline raw data の単体 view で�
 各カテゴリ・color・detail group の測定値から、線形補間による type-7 quantile で Q1、median、Q3 を求める。IQR は `Q3 - Q1` とする。入力順と group の first-seen order を保ち、同一入力の結果は決定的にする。
 
 - `extent` の既定値は Tukey の係数 `1.5`。有限で 0 以上の数値を指定した場合はその係数を使う。
-- Tukey fence を `[Q1 - k * IQR, Q3 + k * IQR]` とし、whisker endpoint は fence 内にある実データの最小値と最大値にする。範囲外の各 raw observation を outlier として保持する。
+- Tukey fence を `[Q1 - k * IQR, Q3 + k * IQR]` とし、whisker endpoint は fence 内にある実データの最小値と最大値にする。fence 内に実データがひとつもない場合（例: extent 0）は両 endpoint を持たず、whisker rule/caps を省く。範囲外の各 raw observation は outlier として保持する。
 - `extent: "min-max"` は実データの最小値と最大値を whisker endpoint にし、outlier primitive は生成しない。
 - 統計に使う点数、グループ数、および layout が生成する primitive 数は既存 `InputLimits` を拡張して検査する。上限超過を切り詰めずエラーにし、上限検査は大きな集計・Scene allocation の前に行う。
 - 軸 domain は whisker だけでなく全入力測定値から決め、outlier も含める。明示 scale bounds は既存 axis の hard-bound / clipping 規則に従う。
