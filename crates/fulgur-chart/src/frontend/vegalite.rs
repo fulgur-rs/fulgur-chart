@@ -21,6 +21,12 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[path = "vegalite_error_mark.rs"]
 mod error_mark;
+#[path = "vegalite_image.rs"]
+mod image;
+
+pub(crate) fn validate_vega_image_url(url: &str, max_bytes: usize) -> Result<(), String> {
+    image::validate_image_url(url, max_bytes)
+}
 
 /// Vega-Lite サブセットを [`ChartSpec`] へ変換する。
 ///
@@ -47,6 +53,9 @@ pub fn parse_with_limits(
 
     if read_mark_name(top) == Some("boxplot") {
         return super::vegalite_boxplot::parse_boxplot_spec(top, limits);
+    }
+    if read_mark_name(top) == Some("image") {
+        return image::parse_image_spec(top, strict, limits);
     }
     if top
         .get("layer")

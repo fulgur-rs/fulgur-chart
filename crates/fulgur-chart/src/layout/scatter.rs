@@ -370,6 +370,7 @@ pub fn scatter_points(spec: &ChartSpec, layout: &ScatterLayout) -> Vec<PointBox>
     let kind = match &spec.kind {
         ChartKind::Bubble => "bubble",
         ChartKind::Square => "square",
+        ChartKind::VegaImage(_) => "image",
         _ => "scatter",
     };
     let mut pts = Vec::new();
@@ -740,23 +741,38 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     }
 
     // 6. 点。共有 scatter_points(単一真実源)から描画。
-    for b in scatter_points(spec, &layout) {
-        let ser = &spec.series[b.series];
-        let point_style = if matches!(spec.kind, ChartKind::Square) {
-            Some(DatasetPointStyle::Rect)
-        } else {
-            ser.line_style.as_ref().and_then(|style| style.point_style)
-        };
-        super::common::dataset_point_marker(
-            &mut items,
-            b.cx,
-            b.cy,
-            b.r,
-            ser.fill_at(b.index),
-            ser.stroke_at(b.index),
-            ser.stroke_width,
-            point_style,
-        );
+    if let ChartKind::VegaImage(data) = &spec.kind {
+        for point in scatter_points(spec, &layout) {
+            let Some(href) = data.urls.get(point.index) else {
+                continue;
+            };
+            items.push(Prim::Image {
+                x: point.cx,
+                y: point.cy,
+                width: data.width,
+                height: data.height,
+                href: href.clone(),
+            });
+        }
+    } else {
+        for b in scatter_points(spec, &layout) {
+            let ser = &spec.series[b.series];
+            let point_style = if matches!(spec.kind, ChartKind::Square) {
+                Some(DatasetPointStyle::Rect)
+            } else {
+                ser.line_style.as_ref().and_then(|style| style.point_style)
+            };
+            super::common::dataset_point_marker(
+                &mut items,
+                b.cx,
+                b.cy,
+                b.r,
+                ser.fill_at(b.index),
+                ser.stroke_at(b.index),
+                ser.stroke_width,
+                point_style,
+            );
+        }
     }
 
     // 7. 凡例(Top/Bottom: 横並び。draw_frame と同じ配置)。

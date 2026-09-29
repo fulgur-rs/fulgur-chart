@@ -673,6 +673,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
 
     validate_error_mark(spec, limits.max_categorical_primitives)?;
     validate_vega_boxplot(spec, limits)?;
+    validate_vega_image(spec, limits)?;
 
     // --- 系列数 ---
     if spec.series.len() > limits.max_series {
@@ -1472,6 +1473,58 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         }
     }
 
+    Ok(())
+}
+
+/// Validate retained Vega-Lite image references before any backend builds a scene.
+pub(crate) fn validate_vega_image(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
+    let crate::ir::ChartKind::VegaImage(data) = &spec.kind else {
+        return Ok(());
+    };
+    if spec.series.len() != 1 {
+        return Err("Vega-Lite image references must align with one image series".into());
+    }
+    let points = &spec.series[0].points;
+    if points.len() > limits.max_total_data_points
+        || points.len() > limits.max_categorical_primitives
+    {
+        return Err(format!(
+            "Vega-Lite image count {} exceeds the configured point or primitive limit",
+            points.len()
+        ));
+    }
+    if !data.width.is_finite()
+        || data.width <= 0.0
+        || data.width > 32_768.0
+        || data.width > limits.max_dimension_px
+        || !data.height.is_finite()
+        || data.height <= 0.0
+        || data.height > 32_768.0
+        || data.height > limits.max_dimension_px
+    {
+        return Err("Vega-Lite image width and height must be finite positive dimensions".into());
+    }
+    if points
+        .iter()
+        .any(|point| !point.x.is_finite() || !point.y.is_finite())
+    {
+        return Err("Vega-Lite image positions must be finite".into());
+    }
+    match &data.urls {
+        crate::ir::VegaImageUrls::Constant(href) => {
+            crate::frontend::vegalite::validate_vega_image_url(href, limits.max_label_bytes)?;
+        }
+        crate::ir::VegaImageUrls::PerPoint(hrefs) => {
+            if hrefs.len() != points.len() {
+                return Err(
+                    "Vega-Lite image references must align with the image point data".into(),
+                );
+            }
+            for href in hrefs {
+                crate::frontend::vegalite::validate_vega_image_url(href, limits.max_label_bytes)?;
+            }
+        }
+    }
     Ok(())
 }
 

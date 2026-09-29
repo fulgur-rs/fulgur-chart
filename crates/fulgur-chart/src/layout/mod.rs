@@ -45,6 +45,7 @@ pub fn build_scene_checked_with_limits(
     m: &TextMeasurer,
     limits: &crate::guard::InputLimits,
 ) -> Result<Scene, String> {
+    crate::guard::validate_vega_image(spec, limits)?;
     let mut scene = if !chartjs_title::has_visible_chartjs_titles(spec) {
         build_chart_scene(spec, m, limits)?
     } else {
@@ -112,7 +113,9 @@ fn build_chart_scene(
         ChartKind::Pie { .. } => pie::build(spec, m),
         ChartKind::PolarArea => polar_area::build(spec, m),
         // scatter/bubble/square は同じレイアウト。マーカー形状・サイズは scatter.rs で分岐。
-        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => scatter::build(spec, m),
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square | ChartKind::VegaImage(_) => {
+            scatter::build(spec, m)
+        }
         ChartKind::Radar => radar::build(spec, m),
         ChartKind::Mixed => mixed::build(spec, m),
         ChartKind::Matrix { .. } => matrix::build(spec, m),
