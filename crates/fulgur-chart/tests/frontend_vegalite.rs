@@ -4769,3 +4769,66 @@ fn vegalite_error_mark_schema_rejects_unknown_part_keys() {
         serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unsupported_band_size).is_err()
     );
 }
+
+#[test]
+fn vegalite_boxplot_schema_accepts_string_and_object_mark() {
+    let string_mark = r##"{
+      "mark":"boxplot",
+      "data":{"values":[{"group":"A","value":1}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+    let object_mark = r##"{
+      "mark":{"type":"boxplot","extent":"min-max","orient":"vertical","clip":true,
+              "box":{"fill":"#ddeeff","strokeWidth":1},"outliers":false},
+      "data":{"values":[{"group":"A","value":1}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(string_mark).is_ok(),
+        "typed schema must accept the string boxplot mark"
+    );
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(object_mark).is_ok(),
+        "typed schema must accept the boxplot object mark and component styles"
+    );
+}
+
+#[test]
+fn vegalite_boxplot_schema_accepts_supported_encoding_channels() {
+    let json = r##"{
+      "mark":"boxplot",
+      "data":{"values":[{"group":"A","series":"one","detail":"left","value":1,"size":4}]},
+      "encoding":{
+        "x":{"field":"group","type":"nominal"},
+        "y":{"field":"value","type":"quantitative"},
+        "color":{"field":"series","type":"nominal"},
+        "detail":{"field":"detail","type":"ordinal"},
+        "size":{"field":"size","type":"quantitative"},
+        "opacity":{"value":0.5}
+      }
+    }"##;
+
+    assert!(
+        serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(json).is_ok(),
+        "typed schema must accept boxplot position, grouping, size, and opacity channels"
+    );
+}
+
+#[test]
+fn vegalite_boxplot_schema_rejects_unknown_mark_and_part_keys() {
+    let valid = r##"{
+      "mark":{"type":"boxplot","box":{"color":"#334455","strokeDash":[1,2],"size":5}},
+      "data":{"values":[{"group":"A","value":1}]},
+      "encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}
+    }"##;
+    let unknown_mark = valid.replace(
+        "\"type\":\"boxplot\"",
+        "\"type\":\"boxplot\",\"futureOption\":true",
+    );
+    let unknown_part = valid.replace("\"size\":5", "\"size\":5,\"futureOption\":true");
+
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(valid).is_ok());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unknown_mark).is_err());
+    assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unknown_part).is_err());
+}

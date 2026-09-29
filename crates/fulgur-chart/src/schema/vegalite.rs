@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum VegaLiteSpec {
     ErrorBar(VlErrorBarSpec),
     ErrorBand(VlErrorBandSpec),
+    BoxPlot(VlBoxPlotSpec),
     Bar(VlBarSpec),
     TemporalTrail(VlTemporalTrailSpec),
     CategoricalTrail(VlCategoricalTrailSpec),
@@ -609,6 +610,222 @@ pub struct VlErrorBandSpec {
     pub mark: MarkErrorBand,
     pub data: VlData,
     pub encoding: VlErrorMarkEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<VlConfig>,
+}
+
+// ────────────────────────────────────────────────
+// Box plot (composite mark)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkBoxPlotName {
+    Boxplot,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlBoxPlotOrient {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum VlBoxPlotExtentName {
+    MinMax,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlBoxPlotExtent {
+    Coefficient(f64),
+    Name(VlBoxPlotExtentName),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotPartStyle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stroke: Option<String>,
+    #[serde(rename = "strokeWidth", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub stroke_width: Option<f64>,
+    #[serde(rename = "strokeDash", skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(range(min = 0.0)))]
+    pub stroke_dash: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub size: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlBoxPlotPart {
+    Flag(bool),
+    Style(VlBoxPlotPartStyle),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkBoxPlotObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkBoxPlotName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extent: Option<VlBoxPlotExtent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orient: Option<VlBoxPlotOrient>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub r#box: Option<VlBoxPlotPart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median: Option<VlBoxPlotPart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outliers: Option<VlBoxPlotPart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<VlBoxPlotPart>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticks: Option<VlBoxPlotPart>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkBoxPlot {
+    String(MarkBoxPlotName),
+    Object(Box<MarkBoxPlotObject>),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlBoxPlotPositionType {
+    Quantitative,
+    Nominal,
+    Ordinal,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotPositionChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlBoxPlotPositionType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotCategoricalChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlCategoricalType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotColorValueChannel {
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlBoxPlotColorChannel {
+    Field(VlBoxPlotCategoricalChannel),
+    Value(VlBoxPlotColorValueChannel),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotSizeFieldChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlQuantitativeType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotSizeValueChannel {
+    #[schemars(range(min = 0.0))]
+    pub value: f64,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlBoxPlotSizeChannel {
+    Field(VlBoxPlotSizeFieldChannel),
+    Value(VlBoxPlotSizeValueChannel),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotOpacityFieldChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlQuantitativeType>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotOpacityValueChannel {
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub value: f64,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlBoxPlotOpacityChannel {
+    Field(VlBoxPlotOpacityFieldChannel),
+    Value(VlBoxPlotOpacityValueChannel),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotEncoding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<VlBoxPlotPositionChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<VlBoxPlotPositionChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlBoxPlotColorChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<VlBoxPlotCategoricalChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<VlBoxPlotSizeChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<VlBoxPlotOpacityChannel>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlBoxPlotSpec {
+    pub mark: MarkBoxPlot,
+    pub data: VlData,
+    pub encoding: VlBoxPlotEncoding,
     #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

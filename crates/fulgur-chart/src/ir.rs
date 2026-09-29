@@ -792,6 +792,26 @@ pub struct GeoShape {
     pub style: GeoShapeStyle,
 }
 
+/// Whisker extent rule for a Vega-Lite boxplot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VegaBoxPlotExtent {
+    Tukey { coefficient: f64 },
+    MinMax,
+}
+
+/// Resolved quartiles, observed whisker endpoints, and raw outliers for one group.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaBoxPlotSummary {
+    pub q1: f64,
+    pub median: f64,
+    pub q3: f64,
+    pub whisker_low: f64,
+    pub whisker_high: f64,
+    pub data_min: f64,
+    pub data_max: f64,
+    pub outliers: Vec<f64>,
+}
+
 /// Vega-Lite composite mark kind represented by `ChartKind::ErrorMark`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ErrorMarkKind {
