@@ -569,6 +569,18 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
                 "Vega-Lite boxplot group {index} color alpha must be within 0..=1"
             ));
         }
+        for label in [group.color_label.as_deref(), group.detail_label.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if label.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "Vega-Lite boxplot group {index} label length {} bytes exceeds limit {}",
+                    label.len(),
+                    limits.max_label_bytes
+                ));
+            }
+        }
         let summary = &group.summary;
         if ![
             summary.q1,

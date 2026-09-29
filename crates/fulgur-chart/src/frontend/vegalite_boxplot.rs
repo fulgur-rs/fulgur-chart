@@ -305,7 +305,7 @@ pub(super) fn parse_boxplot_spec(
     }
 
     let mut theme = vegalite_theme();
-    if let Some(background) = top.get("background") {
+    if let Some(background) = optional_value(top, "background") {
         theme.background = Some(
             background
                 .as_str()
@@ -384,7 +384,7 @@ fn parse_position(
     encoding: &Map<String, Value>,
     channel: &str,
 ) -> Result<Option<PositionField>, String> {
-    let Some(value) = encoding.get(channel) else {
+    let Some(value) = optional_value(encoding, channel) else {
         return Ok(None);
     };
     let object = value
@@ -400,38 +400,38 @@ fn parse_position(
         .get("type")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let scale_domain = match object.get("scale") {
+    let scale_domain = match optional_value(object, "scale") {
         None => None,
-        Some(Value::Object(scale)) => {
-            let Some(domain) = scale.get("domain") else {
-                return Err("boxplot scale supports only a domain pair".into());
-            };
-            let pair = domain
-                .as_array()
-                .filter(|pair| pair.len() == 2)
-                .ok_or_else(|| {
-                    "boxplot scale.domain must contain exactly two numbers".to_string()
-                })?;
-            let low = pair[0]
-                .as_f64()
-                .filter(|number| number.is_finite())
-                .ok_or_else(|| {
-                    "boxplot scale.domain endpoints must be finite numbers".to_string()
-                })?;
-            let high = pair[1]
-                .as_f64()
-                .filter(|number| number.is_finite())
-                .ok_or_else(|| {
-                    "boxplot scale.domain endpoints must be finite numbers".to_string()
-                })?;
-            if low >= high {
-                return Err("boxplot scale.domain must be in ascending order".into());
+        Some(Value::Object(scale)) => match optional_value(scale, "domain") {
+            None => None,
+            Some(domain) => {
+                let pair = domain
+                    .as_array()
+                    .filter(|pair| pair.len() == 2)
+                    .ok_or_else(|| {
+                        "boxplot scale.domain must contain exactly two numbers".to_string()
+                    })?;
+                let low = pair[0]
+                    .as_f64()
+                    .filter(|number| number.is_finite())
+                    .ok_or_else(|| {
+                        "boxplot scale.domain endpoints must be finite numbers".to_string()
+                    })?;
+                let high = pair[1]
+                    .as_f64()
+                    .filter(|number| number.is_finite())
+                    .ok_or_else(|| {
+                        "boxplot scale.domain endpoints must be finite numbers".to_string()
+                    })?;
+                if low >= high {
+                    return Err("boxplot scale.domain must be in ascending order".into());
+                }
+                if !(high - low).is_finite() {
+                    return Err("boxplot scale.domain span must be finite".into());
+                }
+                Some((low, high))
             }
-            if !(high - low).is_finite() {
-                return Err("boxplot scale.domain span must be finite".into());
-            }
-            Some((low, high))
-        }
+        },
         Some(_) => {
             return Err(format!(
                 "boxplot encoding.{channel}.scale must be an object"
@@ -526,7 +526,7 @@ struct ColorChannel {
 }
 
 fn parse_color_channel(encoding: &Map<String, Value>) -> Result<ColorChannel, String> {
-    match encoding.get("color") {
+    match optional_value(encoding, "color") {
         None => Ok(ColorChannel {
             field: None,
             value: None,
@@ -568,7 +568,7 @@ fn parse_categorical_channel(
     encoding: &Map<String, Value>,
     channel: &str,
 ) -> Result<Option<String>, String> {
-    let Some(value) = encoding.get(channel) else {
+    let Some(value) = optional_value(encoding, channel) else {
         return Ok(None);
     };
     let object = value
@@ -592,7 +592,7 @@ fn parse_numeric_channel(
     channel: &str,
     unit_interval: bool,
 ) -> Result<Option<NumericChannel>, String> {
-    let Some(value) = encoding.get(channel) else {
+    let Some(value) = optional_value(encoding, channel) else {
         return Ok(None);
     };
     let object = value
@@ -656,7 +656,13 @@ fn numeric_channel_value(
 }
 
 fn mark_value<'a>(top: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
-    top.get("mark")?.as_object()?.get(key)
+    top.get("mark")?
+        .as_object()
+        .and_then(|mark| optional_value(mark, key))
+}
+
+fn optional_value<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
+    object.get(key).filter(|value| !value.is_null())
 }
 
 fn parse_mark_number(
@@ -730,8 +736,7 @@ fn parse_part_style(top: &Map<String, Value>, key: &str) -> Result<VegaBoxPlotPa
         Value::Bool(visible) => style.visible = *visible,
         Value::Object(object) => {
             style.visible = true;
-            let color = object
-                .get("color")
+            let color = optional_value(object, "color")
                 .map(|value| parse_style_color(value, key, "color"))
                 .transpose()?;
             if key == "outliers" {
@@ -740,15 +745,15 @@ fn parse_part_style(top: &Map<String, Value>, key: &str) -> Result<VegaBoxPlotPa
                 style.fill = color;
                 style.stroke = color;
             }
-            if let Some(value) = object.get("fill") {
+            if let Some(value) = optional_value(object, "fill") {
                 style.fill = Some(parse_style_color(value, key, "fill")?);
             }
-            if let Some(value) = object.get("stroke") {
+            if let Some(value) = optional_value(object, "stroke") {
                 style.stroke = Some(parse_style_color(value, key, "stroke")?);
             }
             style.stroke_width = parse_optional_nonnegative(object, "strokeWidth", key)?;
             style.size = parse_optional_nonnegative(object, "size", key)?;
-            if let Some(value) = object.get("strokeDash") {
+            if let Some(value) = optional_value(object, "strokeDash") {
                 let dash = value
                     .as_array()
                     .ok_or_else(|| format!("boxplot {key}.strokeDash must be an array"))?;
@@ -766,7 +771,7 @@ fn parse_part_style(top: &Map<String, Value>, key: &str) -> Result<VegaBoxPlotPa
                     })
                     .collect::<Result<Vec<_>, _>>()?;
             }
-            if let Some(value) = object.get("opacity") {
+            if let Some(value) = optional_value(object, "opacity") {
                 let opacity = value
                     .as_f64()
                     .filter(|number| number.is_finite() && (0.0..=1.0).contains(number))
@@ -795,8 +800,7 @@ fn parse_optional_nonnegative(
     key: &str,
     part: &str,
 ) -> Result<Option<f64>, String> {
-    object
-        .get(key)
+    optional_value(object, key)
         .map(|value| {
             value
                 .as_f64()

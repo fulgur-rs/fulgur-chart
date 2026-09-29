@@ -4964,3 +4964,54 @@ fn vegalite_boxplot_rejects_unsupported_data_keys_in_both_modes() {
         }
     }
 }
+
+#[test]
+fn vegalite_boxplot_treats_schema_null_options_as_omitted_in_both_modes() {
+    for scale in [serde_json::Value::Null, serde_json::json!({"domain": null})] {
+        let spec = serde_json::json!({
+            "mark": {
+                "type": "boxplot",
+                "extent": null,
+                "orient": null,
+                "size": null,
+                "color": null,
+                "opacity": null,
+                "clip": null,
+                "box": {
+                    "color": null,
+                    "fill": null,
+                    "stroke": null,
+                    "strokeWidth": null,
+                    "strokeDash": null,
+                    "opacity": null,
+                    "size": null
+                },
+                "median": null,
+                "outliers": null,
+                "rule": null,
+                "ticks": null
+            },
+            "data": {"values": [{"value": 1}, {"value": 2}]},
+            "encoding": {
+                "x": null,
+                "y": {"field": "value", "type": null, "scale": scale},
+                "color": null,
+                "detail": null,
+                "size": null,
+                "opacity": null
+            },
+            "background": null
+        });
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&json).is_ok(),
+            "typed schema should accept optional null fields: {json}"
+        );
+        for strict in [false, true] {
+            let parsed = vegalite::parse(&json, strict).unwrap_or_else(|error| {
+                panic!("schema-valid null options must be omitted in strict={strict}: {error}")
+            });
+            assert!(matches!(parsed.kind, ChartKind::VegaBoxPlot(_)));
+        }
+    }
+}

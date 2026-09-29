@@ -418,6 +418,26 @@ fn vega_boxplot_guard_enforces_point_category_and_primitive_limits() {
 }
 
 #[test]
+fn boxplot_guard_enforces_group_label_byte_limit() {
+    let limits = fulgur_chart::guard::InputLimits {
+        max_label_bytes: 4,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    for json in [
+        r##"{"mark":"boxplot","data":{"values":[{"c":"long-color","value":1} ]},"encoding":{"y":{"field":"value","type":"quantitative"},"color":{"field":"c","type":"nominal"}}}"##,
+        r##"{"mark":"boxplot","data":{"values":[{"d":"long-detail","value":1} ]},"encoding":{"y":{"field":"value","type":"quantitative"},"detail":{"field":"d","type":"nominal"}}}"##,
+    ] {
+        let error = fulgur_chart::guard::validate_spec(&parse(json), &limits).unwrap_err();
+        assert!(error.contains("group 0"), "unexpected error: {error}");
+        assert!(error.contains("label length"), "unexpected error: {error}");
+        assert!(
+            error.contains("exceeds limit 4"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
 fn boxplot_whiskers_do_not_cross_the_box_in_either_orientation() {
     for (json, vertical) in [
         (
