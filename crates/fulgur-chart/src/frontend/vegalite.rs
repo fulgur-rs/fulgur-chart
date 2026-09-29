@@ -55,13 +55,31 @@ pub(super) fn parse_unit_value(
     strict: bool,
     limits: &crate::guard::InputLimits,
 ) -> Result<ChartSpec, String> {
+    parse_unit_value_with_overrides(
+        value,
+        strict,
+        limits,
+        &super::vegalite_composition::VegaUnitScaleOverrides::default(),
+    )
+}
+
+pub(super) fn parse_unit_value_with_overrides(
+    value: &mut Value,
+    strict: bool,
+    limits: &crate::guard::InputLimits,
+    scale_overrides: &super::vegalite_composition::VegaUnitScaleOverrides,
+) -> Result<ChartSpec, String> {
     let object = value
         .as_object()
         .ok_or_else(|| "トップレベルは object でなければなりません".to_string())?;
 
     if read_mark_name(object) == Some("boxplot") {
         let top = value.as_object_mut().expect("object checked above");
-        return super::vegalite_boxplot::parse_boxplot_spec(top, limits);
+        let mut spec = super::vegalite_boxplot::parse_boxplot_spec(top, limits)?;
+        if has_color_field(top) {
+            apply_special_color_domain(&mut spec, scale_overrides.color_categories.as_deref());
+        }
+        return Ok(spec);
     }
     if read_mark_name(object) == Some("image") {
         let top = value.as_object_mut().expect("object checked above");
@@ -85,12 +103,16 @@ pub(super) fn parse_unit_value(
     let top = value.as_object_mut().expect("object checked above");
 
     if matches!(read_mark_name(top), Some("errorbar" | "errorband")) {
-        return error_mark::parse_error_mark_spec(top, limits);
+        let mut spec = error_mark::parse_error_mark_spec(top, limits)?;
+        if has_color_field(top) {
+            apply_special_color_domain(&mut spec, scale_overrides.color_categories.as_deref());
+        }
+        return Ok(spec);
     }
 
     let mut kind = parse_mark(top.get("mark"))?;
     if matches!(&kind, ChartKind::GeoShape { .. }) {
-        return parse_geoshape_spec(top, limits);
+        return parse_geoshape_spec(top, limits, scale_overrides);
     }
     let is_area = read_mark_name(top) == Some("area");
     // Reject this immediately, before validating data or encoding, so the unsupported
@@ -367,6 +389,8 @@ pub(super) fn parse_unit_value(
             aggregate,
             &theme.palette,
             limits,
+            scale_overrides.color_numeric_domain,
+            scale_overrides.color_categories.as_deref(),
         )?;
     }
 
@@ -374,7 +398,7 @@ pub(super) fn parse_unit_value(
         validate_temporal_color_channel(encoding)?;
         validate_temporal_view(top)?;
         validate_temporal_color_scheme(encoding)?;
-        Some(build_temporal_line(
+        Some(build_temporal_line_with_overrides(
             &records,
             &x_field,
             &y_field,
@@ -393,6 +417,8 @@ pub(super) fn parse_unit_value(
             trail_size_field.as_deref(),
             is_trail,
             limits,
+            scale_overrides.color_categories.as_deref(),
+            scale_overrides.size_numeric_domain,
         )?)
     } else {
         None
@@ -414,6 +440,7 @@ pub(super) fn parse_unit_value(
                         &color_field,
                         &theta_field,
                         &theme,
+                        scale_overrides.color_categories.as_deref(),
                     ),
                     distinct_categories(&records, cat_field),
                     None,
@@ -428,6 +455,8 @@ pub(super) fn parse_unit_value(
                     size_field.as_deref(),
                     square_mark,
                     &theme,
+                    scale_overrides.color_categories.as_deref(),
+                    scale_overrides.size_numeric_domain,
                 ),
                 vec![],
                 None,
@@ -443,6 +472,8 @@ pub(super) fn parse_unit_value(
                     trail_size_field.as_deref(),
                     &theme,
                     limits,
+                    scale_overrides.color_categories.as_deref(),
+                    scale_overrides.size_numeric_domain,
                 )?,
                 distinct_categories(&records, x_field.as_deref()),
                 None,
@@ -585,9 +616,41 @@ pub(super) fn parse_unit_value(
     })
 }
 
+fn apply_special_color_domain(spec: &mut ChartSpec, shared_categories: Option<&[String]>) {
+    let Some(shared_categories) = shared_categories else {
+        return;
+    };
+    if let ChartKind::VegaBoxPlot(data) = &mut spec.kind {
+        for group in &mut data.groups {
+            if let Some(label) = group.color_label.as_deref()
+                && let Some(index) = shared_categories.iter().position(|value| value == label)
+            {
+                group.color = palette_pick(&spec.theme.palette, index);
+            }
+        }
+    }
+    for (index, series) in spec.series.iter_mut().enumerate() {
+        let palette_index = category_palette_index(&series.name, index, Some(shared_categories));
+        let color = palette_pick(&spec.theme.palette, palette_index);
+        series.fill = vec![color];
+        series.stroke = vec![color];
+    }
+}
+
+fn has_color_field(top: &Map<String, Value>) -> bool {
+    top.get("encoding")
+        .and_then(Value::as_object)
+        .and_then(|encoding| encoding.get("color"))
+        .and_then(Value::as_object)
+        .and_then(|color| color.get("field"))
+        .and_then(Value::as_str)
+        .is_some()
+}
+
 fn parse_geoshape_spec(
     top: &Map<String, Value>,
     limits: &crate::guard::InputLimits,
+    scale_overrides: &super::vegalite_composition::VegaUnitScaleOverrides,
 ) -> Result<ChartSpec, String> {
     let data = top
         .get("data")
@@ -648,8 +711,14 @@ fn parse_geoshape_spec(
         .is_some_and(|mark| mark.contains_key("fill") || mark.contains_key("color"));
     let mut feature_fills = vec![None; features.len()];
     if let Some(GeoshapeColorEncoding::Field(field, type_hint)) = &color_encoding {
-        feature_fills =
-            resolve_geoshape_colors(&features, field, type_hint.clone(), VEGALITE_PALETTE)?;
+        feature_fills = resolve_geoshape_colors(
+            &features,
+            field,
+            type_hint.clone(),
+            VEGALITE_PALETTE,
+            scale_overrides.color_categories.as_deref(),
+            scale_overrides.color_numeric_domain,
+        )?;
         // A missing choropleth value remains unfilled; mark.fill/color is only a default when
         // there is no field encoding.
         style.fill = None;
@@ -874,6 +943,8 @@ fn resolve_geoshape_colors(
     field: &str,
     type_hint: Option<String>,
     palette: &[Color],
+    shared_categories: Option<&[String]>,
+    shared_numeric_domain: Option<(f64, f64)>,
 ) -> Result<Vec<Option<Color>>, String> {
     let values = features
         .iter()
@@ -932,8 +1003,12 @@ fn resolve_geoshape_colors(
                     }
                 }
             }
-            let min = numbers.iter().flatten().copied().reduce(f64::min);
-            let max = numbers.iter().flatten().copied().reduce(f64::max);
+            let min = shared_numeric_domain
+                .map(|domain| domain.0)
+                .or_else(|| numbers.iter().flatten().copied().reduce(f64::min));
+            let max = shared_numeric_domain
+                .map(|domain| domain.1)
+                .or_else(|| numbers.iter().flatten().copied().reduce(f64::max));
             let Some((min, max)) = min.zip(max) else {
                 return Ok(vec![None; values.len()]);
             };
@@ -966,10 +1041,16 @@ fn resolve_geoshape_colors(
                     let category = geoshape_category(value).ok_or_else(|| {
                         format!("encoding.color.field {field:?} must be scalar at feature {index}")
                     })?;
-                    let color = *categories.entry(category).or_insert_with(|| {
-                        let color = palette_pick(palette, next_index);
-                        next_index += 1;
-                        color
+                    let color = *categories.entry(category.clone()).or_insert_with(|| {
+                        let index =
+                            category_palette_index(&category, next_index, shared_categories);
+                        if shared_categories
+                            .and_then(|domain| domain.iter().position(|value| value == &category))
+                            .is_none()
+                        {
+                            next_index += 1;
+                        }
+                        palette_pick(palette, index)
                     });
                     Ok(Some(color))
                 })
@@ -1509,6 +1590,16 @@ fn palette_pick(palette: &[Color], i: usize) -> Color {
     palette[i % palette.len()]
 }
 
+fn category_palette_index(
+    category: &str,
+    local_index: usize,
+    shared_domain: Option<&[String]>,
+) -> usize {
+    shared_domain
+        .and_then(|domain| domain.iter().position(|value| value == category))
+        .unwrap_or(local_index)
+}
+
 /// bar/line（カテゴリ系）の系列を組む。
 /// color.field があれば色値ごとに 1 系列、なければ単一系列。
 /// `series.values[k]` = x==categories[k] かつ color が一致するレコードの y 合計。
@@ -1522,6 +1613,8 @@ fn build_categorical(
     trail_size_field: Option<&str>,
     theme: &Theme,
     limits: &crate::guard::InputLimits,
+    color_palette_domain: Option<&[String]>,
+    size_domain_override: Option<(f64, f64)>,
 ) -> Result<Vec<Series>, String> {
     let categories = distinct_categories(records, x_field.as_deref());
     let is_trail = matches!(kind, ChartKind::Trail);
@@ -1616,7 +1709,10 @@ fn build_categorical(
             }
             values
         };
-        let color = palette_pick(&theme.palette, series_index);
+        let color = palette_pick(
+            &theme.palette,
+            category_palette_index(group, series_index, color_palette_domain),
+        );
         series.push(Series {
             name: group.clone(),
             values,
@@ -1652,6 +1748,7 @@ fn build_categorical(
                     max = max.max(value);
                 }
             }
+            let (min, max) = size_domain_override.unwrap_or((min, max));
             for (series, values) in series.iter_mut().zip(size_values) {
                 series.trail_widths = Some(Box::new(
                     values
@@ -1787,6 +1884,7 @@ fn cmp_temporal_group_orders(
 /// `(normalized instant, normalized group index)` で引く。出力 series は
 /// `O(records + groups * domain)` で構築する。
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn build_temporal_line(
     records: &[Map<String, Value>],
     x_field: &Option<String>,
@@ -1798,6 +1896,37 @@ fn build_temporal_line(
     trail_size_field: Option<&str>,
     is_trail: bool,
     limits: &crate::guard::InputLimits,
+) -> Result<TemporalLineData, String> {
+    build_temporal_line_with_overrides(
+        records,
+        x_field,
+        y_field,
+        color_field,
+        theme,
+        point,
+        interpolation,
+        trail_size_field,
+        is_trail,
+        limits,
+        None,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_temporal_line_with_overrides(
+    records: &[Map<String, Value>],
+    x_field: &Option<String>,
+    y_field: &Option<String>,
+    color_field: &Option<String>,
+    theme: &Theme,
+    point: bool,
+    interpolation: LineInterpolation,
+    trail_size_field: Option<&str>,
+    is_trail: bool,
+    limits: &crate::guard::InputLimits,
+    color_palette_domain: Option<&[String]>,
+    size_domain_override: Option<(f64, f64)>,
 ) -> Result<TemporalLineData, String> {
     let x_field = require_field(x_field, "x")?;
     let y_field = require_field(y_field, "y")?;
@@ -1956,7 +2085,10 @@ fn build_temporal_line(
         } else {
             None
         };
-        let color = palette_pick(&theme.palette, palette_index);
+        let color = palette_pick(
+            &theme.palette,
+            category_palette_index(&name, palette_index, color_palette_domain),
+        );
         series.push(Series {
             name,
             values,
@@ -1996,6 +2128,7 @@ fn build_temporal_line(
                 .flatten()
                 .copied()
                 .fold(f64::NEG_INFINITY, f64::max);
+            let (min, max) = size_domain_override.unwrap_or((min, max));
             for (series, sizes) in series.iter_mut().zip(trail_size_values) {
                 series.trail_widths = Some(Box::new(
                     sizes
@@ -2485,8 +2618,11 @@ fn build_scatter(
     size_field: Option<&str>,
     square_mark: bool,
     theme: &Theme,
+    color_palette_domain: Option<&[String]>,
+    size_domain_override: Option<(f64, f64)>,
 ) -> Vec<Series> {
-    let size_domain = size_field.and_then(|field| numeric_domain(records, field));
+    let size_domain = size_field
+        .and_then(|field| size_domain_override.or_else(|| numeric_domain(records, field)));
     let group_names: Vec<String> = match color_field {
         Some(_) => distinct_categories(records, color_field.as_deref()),
         None => vec![String::new()],
@@ -2515,7 +2651,10 @@ fn build_scatter(
                     }),
                 })
                 .collect();
-            let color = palette_pick(&theme.palette, si);
+            let color = palette_pick(
+                &theme.palette,
+                category_palette_index(group, si, color_palette_domain),
+            );
             Series {
                 name: group.clone(),
                 values: vec![],
@@ -2593,6 +2732,7 @@ fn build_pie(
     color_field: &Option<String>,
     theta_field: &Option<String>,
     theme: &Theme,
+    color_palette_domain: Option<&[String]>,
 ) -> Vec<Series> {
     let cat_field = color_field.as_deref().or(x_field.as_deref());
     let categories = distinct_categories(records, cat_field);
@@ -2611,7 +2751,17 @@ fn build_pie(
         .collect();
 
     let n = categories.len();
-    let colors: Vec<Color> = (0..n).map(|i| palette_pick(&theme.palette, i)).collect();
+    let colors: Vec<Color> = categories
+        .iter()
+        .enumerate()
+        .take(n)
+        .map(|(index, category)| {
+            palette_pick(
+                &theme.palette,
+                category_palette_index(category, index, color_palette_domain),
+            )
+        })
+        .collect();
 
     vec![Series {
         name: String::new(),
@@ -3359,12 +3509,24 @@ fn parse_rect_kind(
     aggregate: Aggregate,
     palette: &[Color],
     limits: &crate::guard::InputLimits,
+    color_numeric_domain: Option<(f64, f64)>,
+    color_categories: Option<&[String]>,
 ) -> Result<ChartKind, String> {
     let xf = require_field(x_field, "x")?;
     let yf = require_field(y_field, "y")?;
     let cf = require_field(color_field, "color")?;
-    let (x_labels, y_labels, cells) =
-        build_rect(records, xf, yf, cf, color_type, aggregate, palette, limits)?;
+    let (x_labels, y_labels, cells) = build_rect(
+        records,
+        xf,
+        yf,
+        cf,
+        color_type,
+        aggregate,
+        palette,
+        limits,
+        color_numeric_domain,
+        color_categories,
+    )?;
     Ok(ChartKind::VegaRect {
         x_labels,
         y_labels,
@@ -3393,6 +3555,8 @@ fn build_rect(
     aggregate: Aggregate,
     palette: &[Color],
     limits: &crate::guard::InputLimits,
+    color_numeric_domain: Option<(f64, f64)>,
+    color_categories: Option<&[String]>,
 ) -> Result<(Vec<String>, Vec<String>, Vec<Vec<Option<Color>>>), String> {
     // guard::validate_spec と同じ上限を parse 時点で先取り。
     // validate_spec は frontend::parse の後段で走るため、ここで dense grid を確保する
@@ -3541,6 +3705,10 @@ fn build_rect(
                     }
                 }
             }
+            if let Some((domain_min, domain_max)) = color_numeric_domain {
+                min_v = domain_min;
+                max_v = domain_max;
+            }
             // range = max - min が inf に overflow するケース(例: min=-1e308, max=1e308)は
             // 下の lerp で NaN → 0 → LO (白) に silently 潰れるため degenerate 扱いにする。
             let raw_range = max_v - min_v;
@@ -3575,7 +3743,8 @@ fn build_rect(
         }
         ColorType::Nominal => {
             // 色カテゴリの first-seen 順を採取。cat → palette index (mod len)。
-            let color_cats = distinct_categories(records, Some(color_field));
+            let local_color_cats = distinct_categories(records, Some(color_field));
+            let color_cats = color_categories.unwrap_or(&local_color_cats);
             let color_idx: HashMap<&str, usize> = color_cats
                 .iter()
                 .enumerate()
