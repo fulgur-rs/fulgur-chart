@@ -1908,7 +1908,7 @@ mod nested_guide_transform_tests {
         let ChartKind::VegaComposition(root) = &spec.kind else {
             panic!("composition node expected")
         };
-        let measurer = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let measurer = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let mut layout = build_node(root, &measurer, &InputLimits::default())
             .expect("nested layer scene builds");
         let frame = layout.plot_rect.expect("layer has a plot frame");
