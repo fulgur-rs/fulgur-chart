@@ -187,7 +187,7 @@ fulgur-chart render chart.vl.json -o chart.svg
 ```
 
 Supported subset: `mark` (`bar` / `line` / `area` / `trail` / `point` → scatter / `circle` → scatter /
-`square` → square scatter / `arc` → pie / `rect` → heatmap / `text` / `image` / `geoshape` / `errorbar` / `errorband`),
+`square` → square scatter / `arc` → pie / `rect` → heatmap / `text` / `image` / `geoshape` / `rule` / `errorbar` / `errorband`),
 inline `data.values`, and `encoding` fields `x` / `y` / `color` / `theta` / `shape` / `size` / `opacity` / `url` / `text`;
 `point` and `square` support quantitative `size` mapped to marker area, while `trail` uses quantitative `size`
 for a variable line width (1–4 px by default, or a uniform 1 px when omitted). `area` stacks by default when `color` is present
@@ -241,6 +241,16 @@ See the [text mark example](examples/specs/vegalite_text.json).
 `http`, `https`, or `data:image`. The core keeps each URL as an SVG `<image>` reference and does
 not fetch it. SVG output preserves the reference; PNG and WebP rendering return an unsupported
 format error for image marks. See the [image fixture](examples/specs/vegalite-image.json).
+
+### Rule marks
+
+`rule` accepts inline `data.values` and one-dimensional `encoding.x` or `encoding.y` for a
+plot-spanning vertical or horizontal line. Provide both `x` and `y` to define a segment; optional
+`x2` and `y2` set its end coordinates. Positions can be categorical, quantitative, or temporal.
+`mark.color`, `mark.opacity`, `mark.strokeWidth`, `mark.strokeDash`, and `mark.clip`, plus a
+categorical `encoding.color`, are supported. Transformations and aggregation are rejected. Rule
+marks can appear in Cartesian layers and share the layer's scales. See the
+[rule mark example](examples/specs/vegalite-rule.json).
 
 ### Error bars and bands
 

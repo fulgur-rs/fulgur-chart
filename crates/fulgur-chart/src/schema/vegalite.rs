@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum VegaLiteSpec {
     ErrorBar(VlErrorBarSpec),
     ErrorBand(VlErrorBandSpec),
+    Rule(VlRuleSpec),
     BoxPlot(VlBoxPlotSpec),
     Bar(VlBarSpec),
     TemporalTrail(VlTemporalTrailSpec),
@@ -83,6 +84,7 @@ pub enum VlCompositionMark {
     GeoShape(MarkGeoShape),
     ErrorBar(MarkErrorBar),
     ErrorBand(MarkErrorBand),
+    Rule(MarkRule),
     BoxPlot(MarkBoxPlot),
     Text(Box<MarkText>),
 }
@@ -814,6 +816,78 @@ pub struct MarkErrorBandObject {
 pub enum MarkErrorBand {
     String(MarkErrorBandName),
     Object(Box<MarkErrorBandObject>),
+}
+
+// ────────────────────────────────────────────────
+// Rule (primitive mark)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkRuleName {
+    Rule,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkRuleObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkRuleName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: Option<f64>,
+    #[serde(rename = "strokeWidth", skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub stroke_width: Option<f64>,
+    #[serde(rename = "strokeDash", skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(range(min = 0.0)))]
+    pub stroke_dash: Option<Vec<f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkRule {
+    String(MarkRuleName),
+    Object(MarkRuleObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRuleSpec {
+    pub mark: MarkRule,
+    pub data: VlData,
+    pub encoding: VlRuleEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<VlConfig>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlRuleEncoding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<VlErrorAxisChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<VlErrorAxisChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x2: Option<VlErrorAxisChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y2: Option<VlErrorAxisChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlErrorColorChannel>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

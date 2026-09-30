@@ -395,6 +395,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Square => "square",
         ChartKind::VegaImage(_) => "image",
         ChartKind::VegaText(_) => "text",
+        ChartKind::VegaRule(_) => "rule",
         ChartKind::Radar => "radar",
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",
@@ -510,9 +511,14 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
         counts.x_ticks = x_labels.len();
         counts.y_ticks = y_labels.len();
     }
-    if matches!(spec.kind, ChartKind::VegaText(_)) {
+    if matches!(spec.kind, ChartKind::VegaText(_) | ChartKind::VegaRule(_)) {
         counts.datasets = 1;
-        counts.legend_items = 0;
+        counts.legend_items = usize::from(matches!(spec.kind, ChartKind::VegaRule(_)))
+            * spec
+                .series
+                .iter()
+                .filter(|series| !series.name.is_empty())
+                .count();
     }
     if let ChartKind::GeoShape { data } = &spec.kind {
         counts.datasets = data.features.len();
@@ -798,6 +804,12 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
             let y = error_mark_axis_model(&frame.y);
             Some((x, y, frame.y.ticks.len()))
         }
+        ChartKind::VegaRule(_) => {
+            let frame = crate::layout::vega_rule::compute_frame(spec, m);
+            let x = error_mark_axis_model(&frame.x);
+            let y = error_mark_axis_model(&frame.y);
+            Some((x, y, frame.y.ticks.len()))
+        }
         ChartKind::VegaBoxPlot(data) => {
             let frame = crate::layout::vega_boxplot::compute_frame(spec, m);
             let value = linear_axis(&frame.value_ticks);
@@ -836,7 +848,7 @@ pub fn build_model(spec: &ChartSpec, m: &TextMeasurer) -> ChartModel {
     if let Some((x, y, y_ticks)) = compute_axes(spec, m) {
         if matches!(
             spec.kind,
-            ChartKind::ErrorMark(_) | ChartKind::VegaBoxPlot(_)
+            ChartKind::ErrorMark(_) | ChartKind::VegaRule(_) | ChartKind::VegaBoxPlot(_)
         ) {
             model.counts.x_ticks = axis_tick_count(&x);
             model.counts.y_ticks = axis_tick_count(&y);

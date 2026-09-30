@@ -990,6 +990,38 @@ pub struct ErrorMarkStyle {
     pub tension: f64,
 }
 
+/// One coordinate used by a Vega-Lite `rule` endpoint. Full-axis edges are used only by
+/// width/height-spanning rules; data coordinates retain their axis type for layout mapping.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VegaRulePosition {
+    FullAxisStart,
+    FullAxisEnd,
+    Category(usize),
+    Quantitative(f64),
+    Temporal(i64),
+}
+
+/// One resolved Vega-Lite rule segment.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaRuleSegment {
+    pub x1: VegaRulePosition,
+    pub y1: VegaRulePosition,
+    pub x2: VegaRulePosition,
+    pub y2: VegaRulePosition,
+    pub color: Color,
+}
+
+/// Resolved coordinates and styles for a Vega-Lite `mark: "rule"` unit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaRuleData {
+    pub x_categories: Vec<String>,
+    pub y_categories: Vec<String>,
+    pub segments: Vec<VegaRuleSegment>,
+    pub stroke_width: f64,
+    pub stroke_dash: Vec<f64>,
+    pub clip: bool,
+}
+
 /// Resolved style for one rule, cap, band, or boundary component.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ErrorPartStyle {
@@ -1080,6 +1112,8 @@ pub enum ChartKind {
     VegaText(Box<VegaTextData>),
     /// Vega-Lite `errorbar` / `errorband` normalized range mark.
     ErrorMark(Box<ErrorMarkData>),
+    /// Vega-Lite `rule` primitive mark with typed Cartesian endpoints.
+    VegaRule(Box<VegaRuleData>),
     /// Vega-Lite `boxplot` composite mark with dedicated statistics and layout.
     VegaBoxPlot(Box<VegaBoxPlotData>),
     /// Recursive Vega-Lite `layer` / `hconcat` / `vconcat` composition root.

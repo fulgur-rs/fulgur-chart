@@ -364,7 +364,7 @@ mod schema_fixture_tests {
     }
 
     #[test]
-    fn embedded_vegalite_schema_covers_error_marks_and_rejects_unknown_keys() {
+    fn embedded_vegalite_schema_covers_rule_and_error_marks_and_rejects_unknown_keys() {
         use serde_json::Value;
 
         for (name, example) in [
@@ -383,6 +383,10 @@ mod schema_fixture_tests {
             (
                 "pre-aggregated errorband",
                 include_str!("../../../../examples/specs/vegalite-errorband-preaggregated.json"),
+            ),
+            (
+                "rule mark",
+                include_str!("../../../../examples/specs/vegalite-rule.json"),
             ),
             (
                 "layer composition",
@@ -417,6 +421,17 @@ mod schema_fixture_tests {
             serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(unsupported_channel)
                 .is_err(),
             "unsupported error mark encoding channels must be rejected"
+        );
+
+        let mut unsupported_rule_style: Value = serde_json::from_str(include_str!(
+            "../../../../examples/specs/vegalite-rule.json"
+        ))
+        .unwrap();
+        unsupported_rule_style["mark"]["futureOption"] = Value::Bool(true);
+        assert!(
+            serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(unsupported_rule_style)
+                .is_err(),
+            "unsupported rule mark styles must be rejected"
         );
     }
 

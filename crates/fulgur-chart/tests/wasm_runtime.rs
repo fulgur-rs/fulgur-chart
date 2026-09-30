@@ -404,6 +404,31 @@ fn error_mark_examples_render_svg_and_png_deterministically() {
     }
 }
 
+/// Vega-Lite rule marks use the shared native/WASM Scene geometry.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vegalite_rule_example_renders_deterministic_svg_and_png() {
+    let spec = vegalite::parse(
+        include_str!("../../../examples/specs/vegalite-rule.json"),
+        true,
+    )
+    .expect("rule example parses");
+    let svg = render_chart(&spec);
+    assert_eq!(svg, render_chart(&spec), "rule SVG should be deterministic");
+    assert!(
+        svg.contains("<line"),
+        "rule SVG should contain line geometry"
+    );
+    let lower_svg = svg.to_ascii_lowercase();
+    assert!(!lower_svg.contains("nan") && !lower_svg.contains("inf"));
+
+    let png = render_chart_to_png_default(&spec, 1.0).expect("rule PNG should render");
+    assert_eq!(png, render_chart_to_png_default(&spec, 1.0).unwrap());
+    assert_eq!(&png[..8], PNG_SIGNATURE);
+    let image = tiny_skia::Pixmap::decode_png(&png).expect("rule PNG should decode");
+    assert_eq!((image.width(), image.height()), (480, 280));
+}
+
 /// Vega-Lite boxplot example uses the shared native/WASM statistics and Scene path.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]

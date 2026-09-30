@@ -129,6 +129,33 @@ impl ErrorMarkFrame {
         }
     }
 
+    pub(crate) fn map_rule_position(
+        &self,
+        axis: ErrorAxis,
+        position: crate::ir::VegaRulePosition,
+    ) -> Result<f64, String> {
+        use crate::ir::VegaRulePosition;
+        match position {
+            VegaRulePosition::FullAxisStart => Ok(match axis {
+                ErrorAxis::X => self.plot_left,
+                ErrorAxis::Y => self.plot_top,
+            }),
+            VegaRulePosition::FullAxisEnd => Ok(match axis {
+                ErrorAxis::X => self.plot_right,
+                ErrorAxis::Y => self.plot_bottom,
+            }),
+            VegaRulePosition::Category(index) => {
+                self.map_position(axis, ErrorPosition::Category(index))
+            }
+            VegaRulePosition::Quantitative(value) => {
+                self.map_position(axis, ErrorPosition::Quantitative(value))
+            }
+            VegaRulePosition::Temporal(millis) => {
+                self.map_position(axis, ErrorPosition::Temporal(millis))
+            }
+        }
+    }
+
     fn full_axis_extent(&self, axis: ErrorAxis) -> (f64, f64) {
         match axis {
             ErrorAxis::X => (self.plot_left, self.plot_right),
@@ -174,33 +201,42 @@ fn is_measured_axis(data: &ErrorMarkData, axis: ErrorAxis) -> bool {
 
 fn axis_domain(spec: &ChartSpec, axis: ErrorAxis) -> AxisDomain {
     let data = error_data(spec);
+    let positions = if is_measured_axis(data, axis) {
+        data.ranges
+            .iter()
+            .flat_map(|range| [range.lower, range.upper])
+            .map(ErrorPosition::Quantitative)
+            .collect::<Vec<_>>()
+    } else {
+        data.ranges
+            .iter()
+            .map(|range| range.position)
+            .collect::<Vec<_>>()
+    };
+    axis_domain_for_positions(spec, axis, &positions, &spec.categories)
+}
+
+fn axis_domain_for_positions(
+    spec: &ChartSpec,
+    axis: ErrorAxis,
+    positions: &[ErrorPosition],
+    category_labels: &[String],
+) -> AxisDomain {
     let axis_spec = match axis {
         ErrorAxis::X => &spec.x_axis,
         ErrorAxis::Y => &spec.y_axis,
     };
-    let measured = is_measured_axis(data, axis);
-    let positions = data
-        .ranges
-        .iter()
-        .map(|range| {
-            if measured {
-                ErrorPosition::Quantitative(range.center)
-            } else {
-                range.position
-            }
-        })
-        .collect::<Vec<_>>();
     let first = positions
         .first()
         .copied()
         .unwrap_or(ErrorPosition::FullAxis);
     match first {
         ErrorPosition::Category(_) => {
-            let count = spec.categories.len().max(1);
+            let count = category_labels.len().max(1);
             AxisDomain {
                 info: ErrorAxisInfo {
                     kind: ErrorAxisKind::Category,
-                    labels: spec.categories.clone(),
+                    labels: category_labels.to_vec(),
                     min: None,
                     max: None,
                     ticks: Vec::new(),
@@ -234,7 +270,7 @@ fn axis_domain(spec: &ChartSpec, axis: ErrorAxis) -> AxisDomain {
             },
             mapper_kind: AxisMapperKind::FullAxis,
         },
-        ErrorPosition::Temporal(_) if !measured => {
+        ErrorPosition::Temporal(_) => {
             let mut values = positions
                 .iter()
                 .filter_map(|position| match position {
@@ -278,15 +314,14 @@ fn axis_domain(spec: &ChartSpec, axis: ErrorAxis) -> AxisDomain {
                 mapper_kind: AxisMapperKind::Continuous,
             }
         }
-        ErrorPosition::Quantitative(_) | ErrorPosition::Temporal(_) => {
-            let mut values = Vec::new();
-            for range in &data.ranges {
-                if measured {
-                    values.extend([range.lower, range.upper]);
-                } else if let ErrorPosition::Quantitative(value) = range.position {
-                    values.push(value);
-                }
-            }
+        ErrorPosition::Quantitative(_) => {
+            let values = positions
+                .iter()
+                .filter_map(|position| match position {
+                    ErrorPosition::Quantitative(value) => Some(*value),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
             let finite_min = values
                 .iter()
                 .copied()
@@ -393,8 +428,37 @@ fn has_legend(spec: &ChartSpec) -> bool {
 
 /// Computes axis domains, chart frame margins, and plot-space coordinate mappings.
 pub(crate) fn compute_frame(spec: &ChartSpec, m: &TextMeasurer) -> ErrorMarkFrame {
-    let x_domain = axis_domain(spec, ErrorAxis::X);
-    let y_domain = axis_domain(spec, ErrorAxis::Y);
+    compute_frame_for_domains(
+        spec,
+        m,
+        axis_domain(spec, ErrorAxis::X),
+        axis_domain(spec, ErrorAxis::Y),
+    )
+}
+
+/// Builds the same axis frame for marks that supply typed positions on both axes.
+pub(crate) fn compute_frame_for_positions(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    x_positions: &[ErrorPosition],
+    x_categories: &[String],
+    y_positions: &[ErrorPosition],
+    y_categories: &[String],
+) -> ErrorMarkFrame {
+    compute_frame_for_domains(
+        spec,
+        m,
+        axis_domain_for_positions(spec, ErrorAxis::X, x_positions, x_categories),
+        axis_domain_for_positions(spec, ErrorAxis::Y, y_positions, y_categories),
+    )
+}
+
+fn compute_frame_for_domains(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    x_domain: AxisDomain,
+    y_domain: AxisDomain,
+) -> ErrorMarkFrame {
     let y_labels = axis_tick_labels(&y_domain.info, &spec.y_axis);
     let font = spec.theme.font_size;
     let y_axis_label_width = y_labels
@@ -1799,26 +1863,34 @@ fn draw_errorbands(
     Ok(())
 }
 
+pub(crate) fn build_axes_scene(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    frame: &ErrorMarkFrame,
+) -> Scene {
+    let mut items = Vec::new();
+    draw_chart_title(&mut items, spec, frame);
+    draw_axis(&mut items, spec, frame, ErrorAxis::X);
+    draw_axis(&mut items, spec, frame, ErrorAxis::Y);
+    draw_legend(&mut items, spec, frame, m);
+    Scene {
+        width: frame.width,
+        height: frame.height,
+        items,
+    }
+}
+
 fn build_with_bands_parts(
     spec: &ChartSpec,
     m: &TextMeasurer,
     frame: ErrorMarkFrame,
     bands: Vec<MappedErrorBand>,
 ) -> Result<(Scene, usize), String> {
-    let mut items = Vec::new();
-    draw_chart_title(&mut items, spec, &frame);
-    draw_axis(&mut items, spec, &frame, ErrorAxis::X);
-    draw_axis(&mut items, spec, &frame, ErrorAxis::Y);
-    draw_legend(&mut items, spec, &frame, m);
-    let mark_start = items.len();
-    draw_errorbars(&mut items, spec, &frame)?;
-    draw_errorbands(&mut items, spec, &frame, &bands)?;
-    let mark_count = items.len() - mark_start;
-    let scene = Scene {
-        width: frame.width,
-        height: frame.height,
-        items,
-    };
+    let mut scene = build_axes_scene(spec, m, &frame);
+    let mark_start = scene.items.len();
+    draw_errorbars(&mut scene.items, spec, &frame)?;
+    draw_errorbands(&mut scene.items, spec, &frame, &bands)?;
+    let mark_count = scene.items.len() - mark_start;
     Ok((scene, mark_count))
 }
 
