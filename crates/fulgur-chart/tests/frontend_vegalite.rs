@@ -1858,6 +1858,29 @@ fn color_split_creates_one_series_per_group() {
 }
 
 #[test]
+fn categorical_group_sums_keep_record_order() {
+    let json = r#"{
+        "mark": "bar",
+        "data": {"values": [
+            {"cat":"A","val":10000000000000000,"g":"x"},
+            {"cat":"B","val":7,"g":"y"},
+            {"cat":"A","val":1,"g":"x"},
+            {"cat":"A","val":-10000000000000000,"g":"x"},
+            {"cat":"B","val":2,"g":"y"}
+        ]},
+        "encoding": {
+            "x":{"field":"cat"},"y":{"field":"val"},"color":{"field":"g"}
+        }
+    }"#;
+    let spec = vegalite::parse(json, false).unwrap();
+    assert_eq!(spec.categories, ["A", "B"]);
+    assert_eq!(spec.series[0].name, "x");
+    assert_eq!(spec.series[0].values, [0.0, 0.0]);
+    assert_eq!(spec.series[1].name, "y");
+    assert_eq!(spec.series[1].values, [0.0, 9.0]);
+}
+
+#[test]
 fn line_mark_maps_to_line() {
     let json = r#"{
         "mark": "line",
@@ -2307,6 +2330,26 @@ fn line_with_sparse_color_errors() {
         "encoding": {"x":{"field":"cat"},"y":{"field":"val"},"color":{"field":"g"}}
     }"#;
     assert!(vegalite::parse(json, false).is_err());
+}
+
+#[test]
+fn line_with_dense_color_preflights_product_limit() {
+    let json = r#"{
+        "mark": "line",
+        "data": {"values": [
+            {"cat":"A","val":1,"g":"x"},{"cat":"B","val":2,"g":"x"},
+            {"cat":"A","val":3,"g":"y"},{"cat":"B","val":4,"g":"y"}
+        ]},
+        "encoding": {
+            "x":{"field":"cat"},"y":{"field":"val"},"color":{"field":"g"}
+        }
+    }"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_categorical_primitives: 3,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, false, &limits).unwrap_err();
+    assert!(error.contains("max_categorical_primitives"), "{error}");
 }
 
 #[test]

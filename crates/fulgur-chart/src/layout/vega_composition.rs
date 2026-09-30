@@ -4,6 +4,7 @@ use crate::guard::InputLimits;
 use crate::ir::{ChartKind, ChartSpec, Color, VegaCompositionNode};
 use crate::scene::{Anchor, ClipRect, Prim, Scene};
 use crate::text::TextMeasurer;
+use std::collections::HashMap;
 
 const COMPOSITION_TITLE_BAND: f64 = crate::layout::common::TITLE_BAND;
 
@@ -1632,9 +1633,14 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
         spec.categories = domain.to_vec();
         return;
     }
+    let mut domain_positions = HashMap::with_capacity(domain.len());
+    for (index, category) in domain.iter().enumerate() {
+        // Like slice::position, keep the first index if a domain contains duplicates.
+        domain_positions.entry(category.as_str()).or_insert(index);
+    }
     let positions = previous
         .iter()
-        .map(|category| domain.iter().position(|candidate| candidate == category))
+        .map(|category| domain_positions.get(category.as_str()).copied())
         .collect::<Vec<_>>();
     let per_category_values = !matches!(
         &spec.kind,
@@ -1677,16 +1683,11 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
             cells,
         } => {
             if channel == "x" {
-                let old_labels = x_labels.clone();
                 let old_cells = cells.clone();
-                let new_positions = old_labels
-                    .iter()
-                    .map(|label| domain.iter().position(|candidate| candidate == label))
-                    .collect::<Vec<_>>();
                 for (row_index, row_cells) in cells.iter_mut().enumerate() {
                     let mut expanded = vec![None; domain.len()];
                     if let Some(old_row) = old_cells.get(row_index) {
-                        for (old_column, new_column) in new_positions.iter().enumerate() {
+                        for (old_column, new_column) in positions.iter().enumerate() {
                             if let (Some(new_column), Some(cell)) =
                                 (new_column, old_row.get(old_column))
                             {
@@ -1698,15 +1699,10 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
                 }
                 *x_labels = domain.to_vec();
             } else {
-                let old_labels = y_labels.clone();
                 let old_cells = cells.clone();
-                let new_positions = old_labels
-                    .iter()
-                    .map(|label| domain.iter().position(|candidate| candidate == label))
-                    .collect::<Vec<_>>();
                 let columns = x_labels.len();
                 let mut expanded = vec![vec![None; columns]; domain.len()];
-                for (old_row, new_row) in new_positions.iter().enumerate() {
+                for (old_row, new_row) in positions.iter().enumerate() {
                     if let (Some(new_row), Some(row)) = (new_row, old_cells.get(old_row)) {
                         expanded[*new_row] = row.clone();
                     }
@@ -1716,13 +1712,10 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
             }
         }
         ChartKind::VegaBoxPlot(data) => {
-            let old_categories = data.categories.clone();
             for group in &mut data.groups {
-                group.category_index = group.category_index.and_then(|index| {
-                    old_categories.get(index).and_then(|category| {
-                        domain.iter().position(|candidate| candidate == category)
-                    })
-                });
+                group.category_index = group
+                    .category_index
+                    .and_then(|index| positions.get(index).copied().flatten());
             }
             data.categories = domain.to_vec();
         }
@@ -1782,6 +1775,58 @@ fn path_prefix(path: &str) -> String {
 mod tests {
     use super::*;
     use crate::frontend::vegalite;
+
+    #[test]
+    fn category_remap_moves_rect_cells_with_their_labels() {
+        let mut spec = vegalite::parse(
+            r#"{"mark":"rect","data":{"values":[{"x":"A","y":"row","v":1},{"x":"B","y":"row","v":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"nominal"},"color":{"field":"v","type":"quantitative"}}}"#,
+            true,
+        )
+        .expect("rect parses");
+        let ChartKind::VegaRect { cells, .. } = &spec.kind else {
+            panic!("rect kind is preserved")
+        };
+        let original = cells[0].clone();
+
+        remap_categories(&mut spec, "x", &["B".into(), "A".into(), "C".into()]);
+
+        let ChartKind::VegaRect {
+            x_labels, cells, ..
+        } = &spec.kind
+        else {
+            panic!("rect kind is preserved")
+        };
+        assert_eq!(x_labels, &["B", "A", "C"]);
+        assert_eq!(cells[0], [original[1], original[0], None]);
+    }
+
+    #[test]
+    fn category_remap_moves_boxplot_groups_with_their_labels() {
+        let mut spec = vegalite::parse(
+            include_str!("../../../../examples/specs/vegalite-boxplot.json"),
+            false,
+        )
+        .expect("boxplot parses");
+        let ChartKind::VegaBoxPlot(data) = &spec.kind else {
+            panic!("boxplot kind is preserved")
+        };
+        assert_eq!(data.categories, ["North", "South"]);
+        let original_positions = data
+            .groups
+            .iter()
+            .map(|group| group.category_index)
+            .collect::<Vec<_>>();
+
+        remap_categories(&mut spec, "x", &["South".into(), "North".into()]);
+
+        let ChartKind::VegaBoxPlot(data) = &spec.kind else {
+            panic!("boxplot kind is preserved")
+        };
+        assert_eq!(data.categories, ["South", "North"]);
+        for (group, old_position) in data.groups.iter().zip(original_positions) {
+            assert_eq!(group.category_index, old_position.map(|index| 1 - index));
+        }
+    }
 
     #[test]
     fn category_remap_keeps_error_range_centers_aligned() {

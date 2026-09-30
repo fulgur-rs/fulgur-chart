@@ -288,54 +288,44 @@ pub(super) fn parse_unit_value_with_overrides(
         }
         if is_trail {
             preflight_trail_shape(cats.len(), groups.len(), limits)?;
-            let category_indexes = cats
-                .iter()
-                .enumerate()
-                .map(|(index, category)| (category.as_str(), index))
-                .collect::<HashMap<_, _>>();
-            let group_indexes = groups
-                .iter()
-                .enumerate()
-                .map(|(index, group)| (group.as_str(), index))
-                .collect::<HashMap<_, _>>();
-            let product = cats.len().saturating_mul(groups.len());
-            let mut present_pairs = HashSet::with_capacity(records.len().min(product));
-            for record in &records {
-                let category = field_category(record, x_field.as_deref());
-                let group = field_category(record, color_field.as_deref());
-                let Some(&category_index) = category_indexes.get(category.as_str()) else {
-                    return Err("trail category index is inconsistent with input data".to_string());
-                };
-                let Some(&group_index) = group_indexes.get(group.as_str()) else {
-                    return Err(
-                        "trail color group index is inconsistent with input data".to_string()
-                    );
-                };
-                present_pairs.insert((category_index, group_index));
-            }
-            for group_index in 0..groups.len() {
-                for category_index in 0..cats.len() {
-                    if !present_pairs.contains(&(category_index, group_index)) {
-                        return Err(
-                            "色分け trail は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
-                                .to_string(),
-                        );
+        } else if !is_area {
+            preflight_categorical_line_shape(cats.len(), groups.len(), limits)?;
+        }
+        let category_indexes = cats
+            .iter()
+            .enumerate()
+            .map(|(index, category)| (category.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        let group_indexes = groups
+            .iter()
+            .enumerate()
+            .map(|(index, group)| (group.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        let mut present_pairs = HashSet::new();
+        for record in &records {
+            let category = field_category(record, x_field.as_deref());
+            let group = field_category(record, color_field.as_deref());
+            let Some(&category_index) = category_indexes.get(category.as_str()) else {
+                return Err(
+                    "categorical category index is inconsistent with input data".to_string()
+                );
+            };
+            let Some(&group_index) = group_indexes.get(group.as_str()) else {
+                return Err(
+                    "categorical color group index is inconsistent with input data".to_string(),
+                );
+            };
+            present_pairs.insert((category_index, group_index));
+        }
+        for group_index in 0..groups.len() {
+            for category_index in 0..cats.len() {
+                if !present_pairs.contains(&(category_index, group_index)) {
+                    return Err(if is_trail {
+                        "色分け trail は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
+                    } else {
+                        "色分け折れ線(line + color)は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
                     }
-                }
-            }
-        } else {
-            for group in &groups {
-                for cat in &cats {
-                    let present = records.iter().any(|r| {
-                        &field_category(r, x_field.as_deref()) == cat
-                            && &field_category(r, color_field.as_deref()) == group
-                    });
-                    if !present {
-                        return Err(
-                            "色分け折れ線(line + color)は全カテゴリに値が揃ったデータのみ対応です(疎なデータは未対応)"
-                                .to_string(),
-                        );
-                    }
+                    .to_string());
                 }
             }
         }
@@ -1298,6 +1288,39 @@ fn parse_geo_pair(value: Option<&Value>, path: &str) -> Result<Option<[f64; 2]>,
     Ok(Some([first, second]))
 }
 
+fn preflight_categorical_line_shape(
+    category_count: usize,
+    series_count: usize,
+    limits: &crate::guard::InputLimits,
+) -> Result<(), String> {
+    if category_count > limits.max_categories {
+        return Err(format!(
+            "categorical line category count {category_count} exceeds max_categories limit {}",
+            limits.max_categories
+        ));
+    }
+    if series_count > limits.max_series {
+        return Err(format!(
+            "categorical line series count {series_count} exceeds max_series limit {}",
+            limits.max_series
+        ));
+    }
+    let product = category_count.saturating_mul(series_count);
+    if product > limits.max_categorical_primitives {
+        return Err(format!(
+            "categorical line series × categories product {product} exceeds max_categorical_primitives limit {}",
+            limits.max_categorical_primitives
+        ));
+    }
+    if product > limits.max_total_data_points {
+        return Err(format!(
+            "categorical line series × categories product {product} exceeds max_total_data_points limit {}",
+            limits.max_total_data_points
+        ));
+    }
+    Ok(())
+}
+
 fn preflight_stacked_area_shape(
     category_count: usize,
     series_count: usize,
@@ -1718,27 +1741,56 @@ fn build_categorical(
         }
     }
 
+    let mut categorical_sums = HashMap::<(usize, usize), f64>::new();
+    if !is_trail {
+        let category_indexes = categories
+            .iter()
+            .enumerate()
+            .map(|(index, category)| (category.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        let group_indexes = group_names
+            .iter()
+            .enumerate()
+            .map(|(index, group)| (group.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        for record in records {
+            let category = field_category(record, x_field.as_deref());
+            let Some(&category_index) = category_indexes.get(category.as_str()) else {
+                return Err(
+                    "categorical category index is inconsistent with input data".to_string()
+                );
+            };
+            let series_index = if color_field.is_some() {
+                let group = field_category(record, color_field.as_deref());
+                let Some(&series_index) = group_indexes.get(group.as_str()) else {
+                    return Err(
+                        "categorical color group index is inconsistent with input data".to_string(),
+                    );
+                };
+                series_index
+            } else {
+                0
+            };
+            *categorical_sums
+                .entry((series_index, category_index))
+                .or_insert(0.0) += field_f64(record, y_field.as_deref());
+        }
+    }
+
     let mut series = Vec::with_capacity(group_names.len());
 
     for (series_index, group) in group_names.iter().enumerate() {
         let values = if is_trail {
             std::mem::take(&mut value_sums[series_index])
         } else {
-            let mut values = Vec::with_capacity(categories.len());
-            for category in &categories {
-                let mut value_sum = 0.0;
-                for record in records.iter().filter(|record| {
-                    &field_category(record, x_field.as_deref()) == category
-                        && match color_field {
-                            Some(_) => &field_category(record, color_field.as_deref()) == group,
-                            None => true,
-                        }
-                }) {
-                    value_sum += field_f64(record, y_field.as_deref());
-                }
-                values.push(value_sum);
-            }
-            values
+            (0..categories.len())
+                .map(|category_index| {
+                    categorical_sums
+                        .get(&(series_index, category_index))
+                        .copied()
+                        .unwrap_or(0.0)
+                })
+                .collect()
         };
         let color = palette_pick(
             &theme.palette,
