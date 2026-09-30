@@ -1225,13 +1225,13 @@ fn transform_path_data(
             'H' => values[0] = values[0] * scale_x + if apply_offset { offset_x } else { 0.0 },
             'V' => values[0] = values[0] * scale_y + if apply_offset { offset_y } else { 0.0 },
             'C' => {
-                for pair in values.chunks_exact_mut(2) {
+                for pair in values.as_chunks_mut::<2>().0 {
                     pair[0] = pair[0] * scale_x + if apply_offset { offset_x } else { 0.0 };
                     pair[1] = pair[1] * scale_y + if apply_offset { offset_y } else { 0.0 };
                 }
             }
             'S' | 'Q' => {
-                for pair in values.chunks_exact_mut(2) {
+                for pair in values.as_chunks_mut::<2>().0 {
                     pair[0] = pair[0] * scale_x + if apply_offset { offset_x } else { 0.0 };
                     pair[1] = pair[1] * scale_y + if apply_offset { offset_y } else { 0.0 };
                 }
