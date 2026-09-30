@@ -1003,6 +1003,8 @@ pub struct VlErrorAxisChannel {
     pub field: String,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub field_type: Option<VlErrorAxisType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

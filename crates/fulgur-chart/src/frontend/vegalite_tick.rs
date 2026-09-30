@@ -2,7 +2,8 @@
 
 use super::*;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 
 const OPACITY_SCALE_RANGE: (f64, f64) = (0.3, 0.8);
 
@@ -84,6 +85,7 @@ pub(super) fn parse_tick_spec(
 ) -> Result<ChartSpec, String> {
     check_unknown_keys(top)?;
     preflight_rows(top, limits)?;
+    preflight_category_limits(top, limits)?;
     validate_view_config(top)?;
 
     let mark = top.get("mark").and_then(Value::as_object);
@@ -150,15 +152,15 @@ pub(super) fn parse_tick_spec(
         .collect::<HashMap<_, _>>();
 
     let size_field = field_source(size_source.as_ref());
-    let size_domain = size_field
-        .and_then(|field| numeric_domain(&records, field))
-        .or(scale_overrides.size_numeric_domain)
+    let size_domain = scale_overrides
+        .size_numeric_domain
+        .or_else(|| size_field.and_then(|field| numeric_domain(&records, field)))
         .unwrap_or((0.0, 1.0));
     let size_domain = (size_domain.0.min(0.0), size_domain.1.max(0.0));
     let opacity_field = field_source(opacity_source.as_ref());
-    let opacity_domain = opacity_field
-        .and_then(|field| numeric_domain(&records, field))
-        .or(scale_overrides.opacity_numeric_domain)
+    let opacity_domain = scale_overrides
+        .opacity_numeric_domain
+        .or_else(|| opacity_field.and_then(|field| numeric_domain(&records, field)))
         .unwrap_or((0.0, 1.0));
 
     let color_constant = channel_value(color_source.as_ref())
@@ -406,6 +408,135 @@ fn preflight_rows(
                 values.len()
             ));
         }
+    }
+    Ok(())
+}
+
+fn preflight_category_limits(
+    top: &Map<String, Value>,
+    limits: &crate::guard::InputLimits,
+) -> Result<(), String> {
+    let values = top
+        .get("data")
+        .and_then(Value::as_object)
+        .and_then(|data| data.get("values"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "tick mark requires inline data.values".to_string())?;
+    let Some(encoding) = top.get("encoding").and_then(Value::as_object) else {
+        return Ok(());
+    };
+
+    let x_field = preflight_category_position_field(values, encoding, "x");
+    let y_field = preflight_category_position_field(values, encoding, "y");
+    let color_field = encoding
+        .get("color")
+        .and_then(Value::as_object)
+        .filter(|channel| !channel.contains_key("value"))
+        .and_then(|channel| channel.get("field"))
+        .and_then(Value::as_str);
+
+    let mut x_categories = HashSet::<Cow<'_, str>>::new();
+    let mut y_categories = HashSet::<Cow<'_, str>>::new();
+    let mut color_categories = HashSet::<Cow<'_, str>>::new();
+    for value in values {
+        let Some(record) = value.as_object() else {
+            continue;
+        };
+        if let Some(field) = x_field {
+            if let Some(value) = record.get(field).filter(|value| !value.is_null()) {
+                if let Some(label) = category_label_for_preflight(value) {
+                    check_preflight_label_length(label.as_ref(), limits, "x")?;
+                    if x_categories.insert(label)
+                        && x_categories.len().saturating_add(y_categories.len())
+                            > limits.max_categories
+                    {
+                        return Err(format!(
+                            "tick mark category count exceeds max_categories limit {} (pre-allocation)",
+                            limits.max_categories
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(field) = y_field {
+            if let Some(value) = record.get(field).filter(|value| !value.is_null()) {
+                if let Some(label) = category_label_for_preflight(value) {
+                    check_preflight_label_length(label.as_ref(), limits, "y")?;
+                    if y_categories.insert(label)
+                        && x_categories.len().saturating_add(y_categories.len())
+                            > limits.max_categories
+                    {
+                        return Err(format!(
+                            "tick mark category count exceeds max_categories limit {} (pre-allocation)",
+                            limits.max_categories
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(field) = color_field
+            && let Some(value) = record.get(field).filter(|value| !value.is_null())
+            && let Some(label) = category_label_for_preflight(value)
+        {
+            check_preflight_label_length(label.as_ref(), limits, "color")?;
+            if color_categories.insert(label) && color_categories.len() > limits.max_series {
+                return Err(format!(
+                    "tick mark series count exceeds max_series limit {} (pre-allocation)",
+                    limits.max_series
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn preflight_category_position_field<'a>(
+    values: &'a [Value],
+    encoding: &'a Map<String, Value>,
+    channel: &str,
+) -> Option<&'a str> {
+    let object = encoding.get(channel)?.as_object()?;
+    let field = object.get("field")?.as_str()?;
+    match object.get("type") {
+        Some(Value::String(kind)) => {
+            matches!(kind.as_str(), "nominal" | "ordinal").then_some(field)
+        }
+        Some(Value::Null) | None => values
+            .iter()
+            .filter_map(Value::as_object)
+            .filter_map(|record| record.get(field))
+            .filter(|value| !value.is_null())
+            .find_map(|value| match value {
+                Value::String(_) | Value::Bool(_) => Some(true),
+                Value::Number(_) => Some(false),
+                _ => None,
+            })
+            .and_then(|is_category| is_category.then_some(field)),
+        Some(_) => None,
+    }
+}
+
+fn category_label_for_preflight(value: &Value) -> Option<Cow<'_, str>> {
+    match value {
+        Value::String(label) => Some(Cow::Borrowed(label)),
+        Value::Number(number) => Some(Cow::Owned(number.to_string())),
+        Value::Bool(value) => Some(Cow::Borrowed(if *value { "true" } else { "false" })),
+        _ => None,
+    }
+}
+
+fn check_preflight_label_length(
+    label: &str,
+    limits: &crate::guard::InputLimits,
+    channel: &str,
+) -> Result<(), String> {
+    if label.len() > limits.max_label_bytes {
+        return Err(format!(
+            "tick mark {channel} category label length {} exceeds max_label_bytes limit {} (pre-allocation)",
+            label.len(),
+            limits.max_label_bytes
+        ));
     }
     Ok(())
 }

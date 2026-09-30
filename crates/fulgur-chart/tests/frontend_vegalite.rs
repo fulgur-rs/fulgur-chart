@@ -5269,7 +5269,7 @@ fn vegalite_tick_schema_accepts_string_and_object_marks_with_config() {
         "mark": "tick",
         "data": {"values": [{"x": 2, "group": "A"}]},
         "encoding": {
-            "x": {"field": "x", "type": "quantitative"},
+            "x": {"field": "x", "type": "quantitative", "title": "Measurement"},
             "y": {"field": "group", "type": "nominal"}
         },
         "config": {"tick": {"bandSize": 14, "thickness": 2}}
@@ -5374,6 +5374,45 @@ fn vegalite_tick_guard_counts_each_record_and_rejects_invalid_style_values() {
     let error = fulgur_chart::guard::validate_spec(&spec, &primitive_limit)
         .expect_err("one tick rectangle per record counts toward primitive limits");
     assert!(error.contains("max_categorical_primitives"), "{error}");
+}
+
+#[test]
+fn vegalite_tick_category_and_label_limits_are_preflighted() {
+    let cases = [
+        (
+            r#"{"mark":"tick","data":{"values":[{"x":"a","y":"b"}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"nominal"}}}"#,
+            fulgur_chart::guard::InputLimits {
+                max_categories: 1,
+                ..fulgur_chart::guard::InputLimits::default()
+            },
+            "max_categories",
+        ),
+        (
+            r#"{"mark":"tick","data":{"values":[{"x":1,"group":"a"},{"x":2,"group":"b"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}"#,
+            fulgur_chart::guard::InputLimits {
+                max_series: 1,
+                ..fulgur_chart::guard::InputLimits::default()
+            },
+            "max_series",
+        ),
+        (
+            r#"{"mark":"tick","data":{"values":[{"x":"long-label"}]},"encoding":{"x":{"field":"x","type":"nominal"}}}"#,
+            fulgur_chart::guard::InputLimits {
+                max_label_bytes: 4,
+                ..fulgur_chart::guard::InputLimits::default()
+            },
+            "max_label_bytes",
+        ),
+    ];
+
+    for (json, limits, limit_name) in cases {
+        let error = vegalite::parse_with_limits(json, false, &limits)
+            .expect_err("tick category limits must be rejected during preflight");
+        assert!(
+            error.contains(limit_name) && error.contains("pre-allocation"),
+            "expected a pre-allocation {limit_name} error, got {error:?}"
+        );
+    }
 }
 
 #[test]

@@ -44,24 +44,24 @@
 - Produce `VegaTickData` in `ChartKind::VegaTick`, containing validated per-record coordinates, resolved styles, orientation, and category domains.
 - Dispatch `mark: "tick"` to `frontend::vegalite_tick::parse_tick_spec` before generic mark parsing, including composition leaves.
 
-- [ ] **Step 1: Add failing parser and schema tests**
+- [x] **Step 1: Add failing parser and schema tests**
 
 Add tests for string/object tick mark forms, inline-data record retention, `x`-only and `y`-only position encodings, supported channel styles, `config.tick` keys, and rejection of URL data, transform, unsupported types, and unknown strict keys.
 
-- [ ] **Step 2: Run the tests to verify expected failures**
+- [x] **Step 2: Run the tests to verify expected failures**
 
 Run: `cargo test -p fulgur-chart --test frontend_vegalite tick_ --locked --offline`
 Expected: typed schema rejects `tick` or the parser reports `未対応の mark: tick` before this feature is implemented.
 
-- [ ] **Step 3: Add typed schema and VegaTick IR**
+- [x] **Step 3: Add typed schema and VegaTick IR**
 
 Add string/object mark types for tick, add tick to unit and composition mark unions, define typed tick config under `VlConfig`, and add the IR structs and `ChartKind` variant.
 
-- [ ] **Step 4: Implement bounded tick parsing**
+- [x] **Step 4: Implement bounded tick parsing**
 
 In `frontend/vegalite_tick.rs`, validate supported field types and inline records, preserve deterministic category order and per-record values, resolve constant/field styles and config defaults, reject unsupported properties, and check allocation limits before building segment vectors.
 
-- [ ] **Step 5: Add guard accounting and run parser tests**
+- [x] **Step 5: Add guard accounting and run parser tests**
 
 Include tick records and emitted rectangles in point/primitive accounting. Run the focused parser/schema tests and `cargo test -p fulgur-chart --test frontend_vegalite --locked --offline`.
 
@@ -79,24 +79,24 @@ Include tick records and emitted rectangles in point/primitive accounting. Run t
 - Consume `ChartKind::VegaTick(VegaTickData)` from Task 1.
 - Produce plot bounds and `Prim::Rect` ticks through the shared Scene builder for native and WASM.
 
-- [ ] **Step 1: Add failing layout tests**
+- [x] **Step 1: Add failing layout tests**
 
 Cover horizontal quantitative-x/nominal-y ticks, vertical nominal-x/quantitative-y ticks, x-only and y-only centered placement, configured thickness/band size, and field-driven size/color/opacity. Assert the number, dimensions, and positions of rendered rectangles.
 
-- [ ] **Step 2: Run the tests to verify expected failures**
+- [x] **Step 2: Run the tests to verify expected failures**
 
 Run: `cargo test -p fulgur-chart --test render_vegalite_tick --locked --offline`
 Expected: the feature-missing test fails at parsing or layout, with no compilation-only failure.
 
-- [ ] **Step 3: Implement tick coordinate scales and rectangle layout**
+- [x] **Step 3: Implement tick coordinate scales and rectangle layout**
 
 Map numeric/temporal positions through the continuous scale and categorical positions through first-seen category centers. Use configured thickness across the mark and band size along its orientation; center missing orthogonal positions. Clip via the existing Vega-Lite layer/plot path.
 
-- [ ] **Step 4: Integrate composition domains and leaf validation**
+- [x] **Step 4: Integrate composition domains and leaf validation**
 
 Register tick as an allowed composition leaf, return its position domains/category labels from composition parsing, include its mark geometry in primitive detection and layer sizing, and dispatch the dedicated layout for unit and composed charts.
 
-- [ ] **Step 5: Run focused render and composition tests**
+- [x] **Step 5: Run focused render and composition tests**
 
 Run: `cargo test -p fulgur-chart --test render_vegalite_tick --test render_vegalite_composition --locked --offline`.
 Expected: both orientations, one-axis placement, styles, and composition pass.
@@ -112,19 +112,19 @@ Expected: both orientations, one-axis placement, styles, and composition pass.
 - Modify: `crates/bindings/wasm/__test__/fixtures.mjs`
 - Modify: `crates/bindings/wasm/__test__/browser-smoke.mjs`
 
-- [ ] **Step 1: Add an example exercising categorical and quantitative strip-plot positions**
+- [x] **Step 1: Add an example exercising categorical and quantitative strip-plot positions**
 
 Use inline values and an explicit orient/style configuration that demonstrates one tick per record.
 
-- [ ] **Step 2: Add native/WASM rendering regressions and golden fixture registration**
+- [x] **Step 2: Add native/WASM rendering regressions and golden fixture registration**
 
 Verify deterministic SVG/PNG output through shared rendering and browser smoke. Add the fixture to the fixed golden test list and create its PNG golden with `UPDATE_GOLDEN=vegalite-tick cargo test -p fulgur-chart --test golden_png --locked --offline`.
 
-- [ ] **Step 3: Document the supported tick subset and example**
+- [x] **Step 3: Document the supported tick subset and example**
 
 Add the mark and its supported channels, config defaults, and explicit unsupported inputs to the Vega-Lite README list.
 
-- [ ] **Step 4: Run feature and quality gates**
+- [x] **Step 4: Run feature and quality gates**
 
 Run: `cargo fmt --all -- --check`
 Run: `cargo test -p fulgur-chart --locked --offline`

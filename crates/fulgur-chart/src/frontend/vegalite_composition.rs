@@ -2659,6 +2659,49 @@ mod tests {
     }
 
     #[test]
+    fn composition_leaf_tick_uses_shared_size_and_opacity_domains() {
+        let mut value = json!({
+            "data": {"values": [
+                {"x": 1, "row": "A", "size": 10, "opacity": 0.2},
+                {"x": 2, "row": "B", "size": 20, "opacity": 0.8}
+            ]},
+            "mark": "tick",
+            "encoding": {
+                "x": {"field": "x", "type": "quantitative"},
+                "y": {"field": "row", "type": "nominal"},
+                "size": {"field": "size", "type": "quantitative"},
+                "opacity": {"field": "opacity", "type": "quantitative"}
+            }
+        });
+        let overrides = VegaUnitScaleOverrides {
+            size_numeric_domain: Some((0.0, 100.0)),
+            opacity_numeric_domain: Some((0.0, 1.0)),
+            ..VegaUnitScaleOverrides::default()
+        };
+        let parsed = crate::frontend::vegalite::parse_unit_value_with_overrides(
+            &mut value,
+            false,
+            &crate::guard::InputLimits::default(),
+            &overrides,
+        )
+        .expect("tick leaf accepts resolved shared scale domains");
+        let crate::ir::ChartKind::VegaTick(data) = parsed.kind else {
+            panic!("tick leaf did not normalize to VegaTick")
+        };
+
+        let crate::ir::VegaTickSize::Scaled(first_size) = data.marks[0].size else {
+            panic!("field size should map to the shared numeric domain")
+        };
+        let crate::ir::VegaTickSize::Scaled(second_size) = data.marks[1].size else {
+            panic!("field size should map to the shared numeric domain")
+        };
+        assert!((first_size - 0.1).abs() < 1e-12);
+        assert!((second_size - 0.2).abs() < 1e-12);
+        assert!((data.marks[0].fill.a - 0.4).abs() < 1e-6);
+        assert!((data.marks[1].fill.a - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
     fn composition_leaf_rect_uses_shared_quantitative_color_domain() {
         let mut value = json!({
             "data": {"values": [{"x": "a", "y": "row", "value": 10.0}]},
