@@ -1262,6 +1262,7 @@ fn validate_layer_children(
                         | crate::ir::ChartKind::VegaRect { .. }
                         | crate::ir::ChartKind::VegaImage(_)
                         | crate::ir::ChartKind::VegaText(_)
+                        | crate::ir::ChartKind::VegaTick(_)
                         | crate::ir::ChartKind::ErrorMark(_)
                         | crate::ir::ChartKind::VegaRule(_)
                         | crate::ir::ChartKind::VegaBoxPlot(_)
@@ -1484,6 +1485,34 @@ fn parsed_leaf_domains(spec: &crate::ir::ChartSpec) -> crate::ir::VegaLeafScaleD
                 .flat_map(|segment| [segment.y1, segment.y2]);
             domains.x = rule_position_domain(x_values, &data.x_categories);
             domains.y = rule_position_domain(y_values, &data.y_categories);
+        }
+        ChartKind::VegaTick(data) => {
+            let x_values = data.marks.iter().map(|mark| match mark.x {
+                crate::ir::VegaTickPosition::Center => crate::ir::ErrorPosition::FullAxis,
+                crate::ir::VegaTickPosition::Category(index) => {
+                    crate::ir::ErrorPosition::Category(index)
+                }
+                crate::ir::VegaTickPosition::Quantitative(value) => {
+                    crate::ir::ErrorPosition::Quantitative(value)
+                }
+                crate::ir::VegaTickPosition::Temporal(value) => {
+                    crate::ir::ErrorPosition::Temporal(value)
+                }
+            });
+            let y_values = data.marks.iter().map(|mark| match mark.y {
+                crate::ir::VegaTickPosition::Center => crate::ir::ErrorPosition::FullAxis,
+                crate::ir::VegaTickPosition::Category(index) => {
+                    crate::ir::ErrorPosition::Category(index)
+                }
+                crate::ir::VegaTickPosition::Quantitative(value) => {
+                    crate::ir::ErrorPosition::Quantitative(value)
+                }
+                crate::ir::VegaTickPosition::Temporal(value) => {
+                    crate::ir::ErrorPosition::Temporal(value)
+                }
+            });
+            domains.x = error_position_domain(x_values, &data.x_categories);
+            domains.y = error_position_domain(y_values, &data.y_categories);
         }
         ChartKind::VegaBoxPlot(data) => {
             let values = data.groups.iter().flat_map(|group| {

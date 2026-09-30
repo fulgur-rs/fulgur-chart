@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum VegaLiteSpec {
     ErrorBar(VlErrorBarSpec),
     ErrorBand(VlErrorBandSpec),
+    Tick(VlTickSpec),
     Rule(VlRuleSpec),
     BoxPlot(VlBoxPlotSpec),
     Bar(VlBarSpec),
@@ -84,6 +85,7 @@ pub enum VlCompositionMark {
     GeoShape(MarkGeoShape),
     ErrorBar(MarkErrorBar),
     ErrorBand(MarkErrorBand),
+    Tick(MarkTick),
     Rule(MarkRule),
     BoxPlot(MarkBoxPlot),
     Text(Box<MarkText>),
@@ -890,6 +892,102 @@ pub struct VlRuleEncoding {
     pub color: Option<VlErrorColorChannel>,
 }
 
+// ────────────────────────────────────────────────
+// Tick (strip-plot primitive mark)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkTickName {
+    Tick,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlTickOrient {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarkTickObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkTickName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orient: Option<VlTickOrient>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub size: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkTick {
+    String(MarkTickName),
+    Object(MarkTickObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTickSpec {
+    pub mark: MarkTick,
+    pub data: VlData,
+    pub encoding: VlTickEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<VlConfig>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTickEncoding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<VlErrorAxisChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<VlErrorAxisChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlTickStyleChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<VlTickStyleChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<VlTickStyleChannel>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlTickChannelType {
+    Quantitative,
+    Nominal,
+    Ordinal,
+    Temporal,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTickStyleChannel {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlTickChannelType>,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum VlErrorAxisType {
@@ -1589,6 +1687,19 @@ pub struct VlConfig {
     pub view: Option<VlViewConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub axis: Option<VlAxisConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tick: Option<VlTickConfig>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VlTickConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub band_size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0))]
+    pub thickness: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

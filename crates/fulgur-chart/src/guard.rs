@@ -362,6 +362,7 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                     }
                     ChartKind::GeoShape { data } => data.features.len(),
                     ChartKind::VegaText(data) => data.marks.len(),
+                    ChartKind::VegaTick(data) => data.marks.len(),
                     ChartKind::VegaRule(data) => data.segments.len(),
                     ChartKind::ErrorMark(data) => series_points.max(data.ranges.len()),
                     ChartKind::VegaBoxPlot(data) => {
@@ -398,6 +399,7 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                     }
                     ChartKind::VegaImage(_) => leaf_points,
                     ChartKind::VegaText(data) => data.marks.len(),
+                    ChartKind::VegaTick(data) => data.marks.len(),
                     ChartKind::VegaRule(data) => data.segments.len(),
                     ChartKind::GeoShape { data } => data.features.len(),
                     ChartKind::ErrorMark(data) => data.ranges.len().saturating_mul(3),
@@ -960,6 +962,105 @@ pub(crate) fn validate_vega_rule(spec: &ChartSpec, limits: &InputLimits) -> Resu
     Ok(())
 }
 
+/// Validate Vega-Lite tick positions and bound its per-record rectangle allocation.
+pub(crate) fn validate_vega_tick(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
+    let ChartKind::VegaTick(data) = &spec.kind else {
+        return Ok(());
+    };
+    let marks = data.marks.len();
+    if marks > limits.max_total_data_points {
+        return Err(format!(
+            "Vega-Lite tick point count {marks} exceeds max_total_data_points limit {}",
+            limits.max_total_data_points
+        ));
+    }
+    if marks > limits.max_categorical_primitives {
+        return Err(format!(
+            "Vega-Lite tick primitive count {marks} exceeds max_categorical_primitives limit {}",
+            limits.max_categorical_primitives
+        ));
+    }
+    let category_count = data
+        .x_categories
+        .len()
+        .saturating_add(data.y_categories.len());
+    if category_count > limits.max_categories {
+        return Err(format!(
+            "Vega-Lite tick category count {category_count} exceeds max_categories limit {}",
+            limits.max_categories
+        ));
+    }
+    for (axis_name, categories) in [
+        ("x", data.x_categories.as_slice()),
+        ("y", data.y_categories.as_slice()),
+    ] {
+        for (index, label) in categories.iter().enumerate() {
+            if label.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "Vega-Lite tick {axis_name} category label length {} exceeds max_label_bytes limit {} at index {index}",
+                    label.len(),
+                    limits.max_label_bytes
+                ));
+            }
+        }
+    }
+    if !data.thickness.is_finite()
+        || data.thickness < 0.0
+        || data.thickness > limits.max_dimension_px
+    {
+        return Err(format!(
+            "Vega-Lite tick thickness must be finite and within [0, {}]",
+            limits.max_dimension_px
+        ));
+    }
+    if data
+        .band_size
+        .is_some_and(|size| !size.is_finite() || size < 0.0 || size > limits.max_dimension_px)
+    {
+        return Err(format!(
+            "Vega-Lite tick bandSize must be finite and within [0, {}]",
+            limits.max_dimension_px
+        ));
+    }
+
+    for (index, mark) in data.marks.iter().enumerate() {
+        for (axis_name, position, categories) in [
+            ("x", mark.x, data.x_categories.as_slice()),
+            ("y", mark.y, data.y_categories.as_slice()),
+        ] {
+            let valid = match position {
+                crate::ir::VegaTickPosition::Center => true,
+                crate::ir::VegaTickPosition::Category(category) => category < categories.len(),
+                crate::ir::VegaTickPosition::Quantitative(value) => value.is_finite(),
+                crate::ir::VegaTickPosition::Temporal(value) => {
+                    (-8_640_000_000_000_000..=8_640_000_000_000_000).contains(&value)
+                }
+            };
+            if !valid {
+                return Err(format!(
+                    "Vega-Lite tick mark {index} {axis_name} position is invalid"
+                ));
+            }
+        }
+        let valid_size = match mark.size {
+            crate::ir::VegaTickSize::Default => true,
+            crate::ir::VegaTickSize::Pixels(value) => {
+                value.is_finite() && (0.0..=limits.max_dimension_px).contains(&value)
+            }
+            crate::ir::VegaTickSize::Scaled(value) => {
+                value.is_finite() && (0.0..=1.0).contains(&value)
+            }
+        };
+        if !valid_size {
+            return Err(format!("Vega-Lite tick mark {index} size is invalid"));
+        }
+        if !mark.fill.a.is_finite() || !(0.0..=1.0).contains(&mark.fill.a) {
+            return Err(format!("Vega-Lite tick mark {index} alpha is invalid"));
+        }
+    }
+    Ok(())
+}
+
 /// Validate Vega-Lite text marks before the Scene allocates one primitive per label.
 pub(crate) fn validate_vega_text(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     let ChartKind::VegaText(data) = &spec.kind else {
@@ -1086,6 +1187,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
     validate_vega_boxplot(spec, limits)?;
     validate_vega_text(spec, limits)?;
     validate_vega_rule(spec, limits)?;
+    validate_vega_tick(spec, limits)?;
     validate_vega_image(spec, limits)?;
 
     // --- 系列数 ---
@@ -1212,8 +1314,10 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
     }
 
     if let XPositions::Temporal { unix_millis } = &spec.x_positions {
-        if !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
-            && unix_millis.len() != spec.categories.len()
+        if !matches!(
+            spec.kind,
+            ChartKind::ErrorMark(_) | ChartKind::VegaRule(_) | ChartKind::VegaTick(_)
+        ) && unix_millis.len() != spec.categories.len()
         {
             return Err(format!(
                 "temporal x position count {} does not match category count {}",
@@ -1221,16 +1325,20 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                 spec.categories.len()
             ));
         }
-        if !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
-            && spec
-                .series
-                .iter()
-                .any(|series| series.values.len() != unix_millis.len())
+        if !matches!(
+            spec.kind,
+            ChartKind::ErrorMark(_) | ChartKind::VegaRule(_) | ChartKind::VegaTick(_)
+        ) && spec
+            .series
+            .iter()
+            .any(|series| series.values.len() != unix_millis.len())
         {
             return Err("temporal x position count does not match every line series".to_string());
         }
-        if !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
-            && !x_is_temporal_scale
+        if !matches!(
+            spec.kind,
+            ChartKind::ErrorMark(_) | ChartKind::VegaRule(_) | ChartKind::VegaTick(_)
+        ) && !x_is_temporal_scale
             && unix_millis.windows(2).any(|pair| pair[0] >= pair[1])
         {
             return Err("temporal x positions must be strictly increasing".to_string());
@@ -1238,7 +1346,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         let allowed = matches!(
             spec.kind,
             ChartKind::Line { .. } | ChartKind::Trail | ChartKind::Mixed
-        ) || matches!(spec.kind, ChartKind::VegaRule(_))
+        ) || matches!(spec.kind, ChartKind::VegaRule(_) | ChartKind::VegaTick(_))
             || matches!(
                 spec.kind,
                 ChartKind::Bar {
@@ -1254,8 +1362,10 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         }
     }
     if let XPositions::Temporal { unix_millis } = &spec.y_positions {
-        if !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
-            && unix_millis.len() != spec.categories.len()
+        if !matches!(
+            spec.kind,
+            ChartKind::ErrorMark(_) | ChartKind::VegaRule(_) | ChartKind::VegaTick(_)
+        ) && unix_millis.len() != spec.categories.len()
         {
             return Err(format!(
                 "temporal y position count {} does not match category count {}",
@@ -1263,11 +1373,13 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                 spec.categories.len()
             ));
         }
-        if !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
-            && spec
-                .series
-                .iter()
-                .any(|series| series.values.len() != unix_millis.len())
+        if !matches!(
+            spec.kind,
+            ChartKind::ErrorMark(_) | ChartKind::VegaRule(_) | ChartKind::VegaTick(_)
+        ) && spec
+            .series
+            .iter()
+            .any(|series| series.values.len() != unix_millis.len())
         {
             return Err("temporal y position count does not match every bar series".to_string());
         }
@@ -1279,7 +1391,10 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                     ..
                 }
             ))
-            && !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
+            && !matches!(
+                spec.kind,
+                ChartKind::ErrorMark(_) | ChartKind::VegaRule(_) | ChartKind::VegaTick(_)
+            )
         {
             return Err(
                 "temporal y positions are only supported on horizontal bar index axes".to_string(),

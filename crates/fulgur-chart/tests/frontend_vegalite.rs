@@ -5262,3 +5262,134 @@ fn vegalite_text_rejects_ambiguous_style_channel_sources() {
         );
     }
 }
+
+#[test]
+fn vegalite_tick_schema_accepts_string_and_object_marks_with_config() {
+    let string_mark = serde_json::json!({
+        "mark": "tick",
+        "data": {"values": [{"x": 2, "group": "A"}]},
+        "encoding": {
+            "x": {"field": "x", "type": "quantitative"},
+            "y": {"field": "group", "type": "nominal"}
+        },
+        "config": {"tick": {"bandSize": 14, "thickness": 2}}
+    });
+    let object_mark = serde_json::json!({
+        "mark": {"type": "tick", "orient": "vertical", "size": 9},
+        "data": {"values": [{"x": "A", "y": 3}]},
+        "encoding": {
+            "x": {"field": "x", "type": "ordinal"},
+            "y": {"field": "y", "type": "quantitative"}
+        }
+    });
+
+    for value in [string_mark, object_mark] {
+        serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(value.clone())
+            .expect("tick string and object forms should be in the public schema");
+        let json = serde_json::to_string(&value).unwrap();
+        vegalite::parse(&json, true).expect("strict tick spec should parse");
+    }
+
+    let unknown_tick_config = serde_json::json!({
+        "mark": "tick",
+        "data": {"values": [{"x": 1}]},
+        "encoding": {"x": {"field": "x", "type": "quantitative"}},
+        "config": {"tick": {"unknown": 1}}
+    });
+    assert!(
+        serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(unknown_tick_config).is_err()
+    );
+}
+
+#[test]
+fn vegalite_tick_requires_inline_data_and_supported_position_channels() {
+    let invalid_specs = [
+        (
+            serde_json::json!({
+                "mark": "tick",
+                "data": {"url": "points.json"},
+                "encoding": {"x": {"field": "x", "type": "quantitative"}}
+            }),
+            "URL data",
+        ),
+        (
+            serde_json::json!({
+                "mark": "tick",
+                "data": {"values": [{"x": 1}]},
+                "transform": [{"filter": "datum.x > 0"}],
+                "encoding": {"x": {"field": "x", "type": "quantitative"}}
+            }),
+            "transform",
+        ),
+        (
+            serde_json::json!({
+                "mark": "tick",
+                "data": {"values": [{"x": 1}]},
+                "encoding": {"x": {"field": "x", "type": "geojson"}}
+            }),
+            "encoding.x.type",
+        ),
+        (
+            serde_json::json!({
+                "mark": "tick",
+                "data": {"values": [{"x": 1}]},
+                "encoding": {"color": {"value": "red"}}
+            }),
+            "encoding.x or encoding.y",
+        ),
+    ];
+
+    for (value, expected_error) in invalid_specs {
+        let json = serde_json::to_string(&value).unwrap();
+        let error = vegalite::parse(&json, false).expect_err("unsupported tick input must fail");
+        assert!(
+            error.contains(expected_error),
+            "expected error containing {expected_error:?}, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn vegalite_tick_guard_counts_each_record_and_rejects_invalid_style_values() {
+    let json = r#"{
+        "mark": {"type": "tick", "size": 6},
+        "data": {"values": [{"x": 1}, {"x": 2}]},
+        "encoding": {"x": {"field": "x", "type": "quantitative"}}
+    }"#;
+    let spec =
+        vegalite::parse(json, false).expect("tick data should parse before custom-limit checks");
+
+    let point_limit = fulgur_chart::guard::InputLimits {
+        max_total_data_points: 1,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = fulgur_chart::guard::validate_spec(&spec, &point_limit)
+        .expect_err("tick records count toward max_total_data_points");
+    assert!(error.contains("max_total_data_points"), "{error}");
+
+    let primitive_limit = fulgur_chart::guard::InputLimits {
+        max_categorical_primitives: 1,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = fulgur_chart::guard::validate_spec(&spec, &primitive_limit)
+        .expect_err("one tick rectangle per record counts toward primitive limits");
+    assert!(error.contains("max_categorical_primitives"), "{error}");
+}
+
+#[test]
+fn vegalite_tick_rejects_unimplemented_scale_range_overrides() {
+    for (json, expected) in [
+        (
+            r##"{"mark":"tick","config":{"scale":{"minBandSize":4}},"data":{"values":[{"x":1,"size":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"size":{"field":"size","type":"quantitative"}}}"##,
+            "config.scale",
+        ),
+        (
+            r##"{"mark":"tick","config":{"scale":{"maxOpacity":0.9}},"data":{"values":[{"x":1,"opacity":0.5}]},"encoding":{"x":{"field":"x","type":"quantitative"},"opacity":{"field":"opacity","type":"quantitative"}}}"##,
+            "config.scale",
+        ),
+    ] {
+        let error =
+            vegalite::parse(json, true).expect_err("unimplemented overrides must be explicit");
+        assert!(error.contains(expected), "{error}");
+    }
+}

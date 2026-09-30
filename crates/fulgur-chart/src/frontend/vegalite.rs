@@ -27,6 +27,8 @@ mod image;
 mod rule;
 #[path = "vegalite_text.rs"]
 mod text;
+#[path = "vegalite_tick.rs"]
+mod tick;
 
 pub(super) fn preflight_text_label_bytes(
     data: Option<&Value>,
@@ -93,6 +95,9 @@ pub(super) fn parse_unit_value_with_overrides(
         .as_object()
         .ok_or_else(|| "トップレベルは object でなければなりません".to_string())?;
 
+    if read_mark_name(object) == Some("tick") {
+        return tick::parse_tick_spec(object, limits, scale_overrides);
+    }
     if read_mark_name(object) == Some("rule") {
         return rule::parse_rule_spec(object, limits, scale_overrides);
     }

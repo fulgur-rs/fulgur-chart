@@ -76,6 +76,7 @@ fn plot_rect_for_spec(spec: &ChartSpec, measurer: &TextMeasurer<'_>) -> Option<P
         }
         ChartKind::VegaRect { .. } => crate::layout::vega_rect::plot_rect(spec, measurer),
         ChartKind::VegaRule(_) => crate::layout::vega_rule::plot_rect(spec, measurer),
+        ChartKind::VegaTick(_) => crate::layout::vega_tick::plot_rect(spec, measurer),
         ChartKind::ErrorMark(_) => {
             let frame = crate::layout::error_mark::compute_frame(spec, measurer);
             (
@@ -1507,6 +1508,7 @@ fn is_mark_primitive(prim: &Prim, kind: &ChartKind) -> bool {
         }
         ChartKind::VegaImage(_) => matches!(prim, Prim::Image { .. }),
         ChartKind::VegaText(_) => matches!(prim, Prim::StyledText(_)),
+        ChartKind::VegaTick(_) => matches!(prim, Prim::Rect { .. }),
         ChartKind::VegaRect { .. } => matches!(prim, Prim::Rect { .. }),
         ChartKind::ErrorMark(_) | ChartKind::VegaBoxPlot(_) => false,
         _ => false,
@@ -1612,6 +1614,13 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
                 !data.y_categories.is_empty()
             }
         }
+        ChartKind::VegaTick(data) => {
+            if channel == "x" {
+                !data.x_categories.is_empty()
+            } else {
+                !data.y_categories.is_empty()
+            }
+        }
         ChartKind::ErrorMark(data) => {
             if data.orient == crate::ir::ErrorMarkOrient::Vertical {
                 channel == "x"
@@ -1637,6 +1646,8 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
         (ChartKind::VegaBoxPlot(data), "x" | "y") => data.categories.clone(),
         (ChartKind::VegaRule(data), "x") => data.x_categories.clone(),
         (ChartKind::VegaRule(data), "y") => data.y_categories.clone(),
+        (ChartKind::VegaTick(data), "x") => data.x_categories.clone(),
+        (ChartKind::VegaTick(data), "y") => data.y_categories.clone(),
         _ => spec.categories.clone(),
     };
     if previous == domain {
@@ -1658,6 +1669,7 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
             | ChartKind::VegaBoxPlot(_)
             | ChartKind::VegaRect { .. }
             | ChartKind::VegaRule(_)
+            | ChartKind::VegaTick(_)
     );
     if per_category_values {
         for series in &mut spec.series {
@@ -1768,6 +1780,27 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
                             .and_then(|position| *position)
                             .unwrap_or(*index);
                     }
+                }
+            }
+            *category_channel = domain.to_vec();
+        }
+        ChartKind::VegaTick(data) => {
+            let category_channel = if channel == "x" {
+                &mut data.x_categories
+            } else {
+                &mut data.y_categories
+            };
+            for mark in &mut data.marks {
+                let position = if channel == "x" {
+                    &mut mark.x
+                } else {
+                    &mut mark.y
+                };
+                if let crate::ir::VegaTickPosition::Category(index) = position {
+                    *index = positions
+                        .get(*index)
+                        .and_then(|position| *position)
+                        .unwrap_or(*index);
                 }
             }
             *category_channel = domain.to_vec();

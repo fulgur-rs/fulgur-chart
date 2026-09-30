@@ -1024,6 +1024,53 @@ pub struct VegaRuleData {
     pub clip: bool,
 }
 
+/// Orientation of a Vega-Lite `tick` mark. Horizontal ticks use width for their length;
+/// vertical ticks use height.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VegaTickOrient {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+/// One resolved position for a Vega-Lite tick mark.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VegaTickPosition {
+    /// Position channel omitted; use the center of the orthogonal plot dimension.
+    Center,
+    Category(usize),
+    Quantitative(f64),
+    Temporal(i64),
+}
+
+/// Length of one tick. A scaled fraction is mapped to the plot's tick-size range at layout time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VegaTickSize {
+    Default,
+    Pixels(f64),
+    Scaled(f64),
+}
+
+/// One resolved Vega-Lite tick record.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaTickMark {
+    pub x: VegaTickPosition,
+    pub y: VegaTickPosition,
+    pub size: VegaTickSize,
+    pub fill: Color,
+}
+
+/// Resolved data and styles for a Vega-Lite `mark: "tick"` unit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaTickData {
+    pub x_categories: Vec<String>,
+    pub y_categories: Vec<String>,
+    pub marks: Vec<VegaTickMark>,
+    pub orient: VegaTickOrient,
+    pub band_size: Option<f64>,
+    pub thickness: f64,
+}
+
 /// Resolved style for one rule, cap, band, or boundary component.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ErrorPartStyle {
@@ -1116,6 +1163,8 @@ pub enum ChartKind {
     ErrorMark(Box<ErrorMarkData>),
     /// Vega-Lite `rule` primitive mark with typed Cartesian endpoints.
     VegaRule(Box<VegaRuleData>),
+    /// Vega-Lite `tick` primitive mark for strip plots.
+    VegaTick(Box<VegaTickData>),
     /// Vega-Lite `boxplot` composite mark with dedicated statistics and layout.
     VegaBoxPlot(Box<VegaBoxPlotData>),
     /// Recursive Vega-Lite `layer` / `hconcat` / `vconcat` composition root.
