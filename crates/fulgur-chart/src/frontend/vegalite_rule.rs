@@ -16,21 +16,51 @@ enum PositionKind {
     Temporal,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CategoryValueType {
+    String,
+    Number,
+    Boolean,
+}
+
 #[derive(Default)]
 struct CategoryDomain {
     labels: Vec<String>,
     indexes: HashMap<String, usize>,
+    value_types: HashMap<String, CategoryValueType>,
 }
 
 impl CategoryDomain {
-    fn index(&mut self, label: String) -> usize {
-        if let Some(index) = self.indexes.get(&label) {
-            return *index;
+    fn index(
+        &mut self,
+        value: &Value,
+        label: String,
+        index: usize,
+        channel: &str,
+    ) -> Result<usize, String> {
+        let value_type = match value {
+            Value::String(_) => CategoryValueType::String,
+            Value::Number(_) => CategoryValueType::Number,
+            Value::Bool(_) => CategoryValueType::Boolean,
+            _ => unreachable!("category values are validated before indexing"),
+        };
+        if self
+            .value_types
+            .get(&label)
+            .is_some_and(|existing| *existing != value_type)
+        {
+            return Err(format!(
+                "rule data.values[{index}].{channel} category label {label:?} has conflicting JSON value types"
+            ));
         }
-        let index = self.labels.len();
+        self.value_types.insert(label.clone(), value_type);
+        if let Some(index) = self.indexes.get(&label) {
+            return Ok(*index);
+        }
+        let category_index = self.labels.len();
         self.labels.push(label.clone());
-        self.indexes.insert(label, index);
-        index
+        self.indexes.insert(label, category_index);
+        Ok(category_index)
     }
 }
 
@@ -202,10 +232,21 @@ pub(super) fn parse_rule_spec(
     if let Some(field) = color_field.as_deref() {
         super::validate_category(&records, field)?;
     }
-    let color_categories = color_field
-        .as_deref()
-        .map(|field| super::distinct_categories(&records, Some(field)))
-        .unwrap_or_default();
+    let mut local_color_domain = CategoryDomain::default();
+    if let Some(field) = color_field.as_deref() {
+        for (index, record) in records.iter().enumerate() {
+            let value = record
+                .get(field)
+                .expect("color fields are validated before building their domain");
+            local_color_domain.index(
+                value,
+                super::field_category(record, Some(field)),
+                index,
+                "color",
+            )?;
+        }
+    }
+    let color_categories = local_color_domain.labels;
     let color_domain = scale_overrides
         .color_categories
         .as_deref()
@@ -507,9 +548,12 @@ fn position(
                     "rule data.values[{index}].{field} must be a category value for {channel}"
                 ));
             }
-            Ok(VegaRulePosition::Category(
-                domain.index(super::field_category(record, Some(field))),
-            ))
+            Ok(VegaRulePosition::Category(domain.index(
+                value,
+                super::field_category(record, Some(field)),
+                index,
+                channel,
+            )?))
         }
         PositionKind::Quantitative => value
             .as_f64()

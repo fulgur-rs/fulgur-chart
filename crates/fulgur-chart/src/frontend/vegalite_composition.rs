@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, PartialEq)]
 enum ExpandedCompositionNode {
@@ -99,10 +99,19 @@ enum RawScaleType {
     Temporal,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RawCategoryValueType {
+    String,
+    Number,
+    Boolean,
+}
+
 #[derive(Clone, Debug)]
 struct RawUnitScales {
     domains: crate::ir::VegaLeafScaleDomains,
     kinds: BTreeMap<&'static str, RawScaleType>,
+    mark: String,
+    category_values: BTreeMap<&'static str, Vec<(String, RawCategoryValueType)>>,
 }
 
 #[derive(Clone, Debug)]
@@ -393,6 +402,7 @@ fn raw_unit_scales(spec: &Value, path: &str) -> Result<RawUnitScales, String> {
     let records = raw_scale_records(object, mark);
     let mut domains = crate::ir::VegaLeafScaleDomains::default();
     let mut kinds = BTreeMap::new();
+    let mut category_values = BTreeMap::new();
     for channel in ["x", "y", "color", "size", "opacity"] {
         let Some(binding) = encoding.get(channel).and_then(Value::as_object) else {
             continue;
@@ -403,6 +413,10 @@ fn raw_unit_scales(spec: &Value, path: &str) -> Result<RawUnitScales, String> {
         let kind = raw_channel_kind(channel, mark, binding, &records, field)
             .map_err(|error| format!("{}.encoding.{channel}: {error}", path_or_root(path)))?;
         kinds.insert(channel, kind);
+        if kind == RawScaleType::Categories {
+            let values = raw_category_value_types(&records, field);
+            category_values.insert(channel, values);
+        }
         let domain = raw_channel_domain(kind, &records, field);
         match channel {
             "x" => domains.x = domain,
@@ -413,7 +427,12 @@ fn raw_unit_scales(spec: &Value, path: &str) -> Result<RawUnitScales, String> {
             _ => unreachable!(),
         }
     }
-    Ok(RawUnitScales { domains, kinds })
+    Ok(RawUnitScales {
+        domains,
+        kinds,
+        mark: mark.to_string(),
+        category_values,
+    })
 }
 
 fn raw_channel_kind(
@@ -567,6 +586,56 @@ fn raw_category_value(value: &Value) -> Option<String> {
     }
 }
 
+fn raw_category_value_type(value: &Value) -> Option<RawCategoryValueType> {
+    match value {
+        Value::String(_) => Some(RawCategoryValueType::String),
+        Value::Number(_) => Some(RawCategoryValueType::Number),
+        Value::Bool(_) => Some(RawCategoryValueType::Boolean),
+        _ => None,
+    }
+}
+
+fn raw_category_value_types(
+    records: &[serde_json::Map<String, Value>],
+    field: &str,
+) -> Vec<(String, RawCategoryValueType)> {
+    let mut label_types = BTreeMap::<String, u8>::new();
+    for value in records.iter().filter_map(|record| record.get(field)) {
+        let (Some(label), Some(value_type)) =
+            (raw_category_value(value), raw_category_value_type(value))
+        else {
+            continue;
+        };
+        let bit = match value_type {
+            RawCategoryValueType::String => 1,
+            RawCategoryValueType::Number => 2,
+            RawCategoryValueType::Boolean => 4,
+        };
+        *label_types.entry(label).or_default() |= bit;
+    }
+
+    label_types
+        .into_iter()
+        .flat_map(|(label, types)| {
+            [
+                RawCategoryValueType::String,
+                RawCategoryValueType::Number,
+                RawCategoryValueType::Boolean,
+            ]
+            .into_iter()
+            .filter(move |value_type| {
+                let bit = match value_type {
+                    RawCategoryValueType::String => 1,
+                    RawCategoryValueType::Number => 2,
+                    RawCategoryValueType::Boolean => 4,
+                };
+                types & bit != 0
+            })
+            .map(move |value_type| (label.clone(), value_type))
+        })
+        .collect()
+}
+
 fn numeric_field_domain(
     records: &[serde_json::Map<String, Value>],
     field: &str,
@@ -602,6 +671,7 @@ fn validate_shared_channel_types(node: &ResolvedRawNode) -> Result<(), String> {
                 path_or_root(path)
             ));
         }
+        validate_shared_category_value_types(node, channel)?;
     }
     match node {
         ResolvedRawNode::Unit { .. } => Ok(()),
@@ -610,6 +680,67 @@ fn validate_shared_channel_types(node: &ResolvedRawNode) -> Result<(), String> {
         | ResolvedRawNode::VConcat { children, .. } => {
             for child in children {
                 validate_shared_channel_types(child)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_shared_category_value_types(
+    node: &ResolvedRawNode,
+    channel: &str,
+) -> Result<(), String> {
+    let mut seen = HashMap::new();
+    collect_shared_category_values(node, channel, &mut seen)
+}
+
+fn collect_shared_category_values<'a>(
+    node: &'a ResolvedRawNode,
+    channel: &str,
+    seen: &mut HashMap<&'a str, Vec<(RawCategoryValueType, &'a str, &'a str)>>,
+) -> Result<(), String> {
+    match node {
+        ResolvedRawNode::Unit { path, scales } => {
+            if scales.kinds.get(channel) == Some(&RawScaleType::Categories) {
+                let mark = scales.mark.as_str();
+                for (label, value_type) in scales.category_values.get(channel).into_iter().flatten()
+                {
+                    let occurrences = seen.entry(label.as_str()).or_default();
+                    if let Some((previous_type, previous_path, _)) =
+                        occurrences
+                            .iter()
+                            .find(|(previous_type, _, previous_mark)| {
+                                previous_type != value_type
+                                    && (mark == "rule" || *previous_mark == "rule")
+                            })
+                    {
+                        return Err(format!(
+                            "{}.resolve.scale.{channel} category label {label:?} has conflicting JSON value types at {previous_path} ({previous_type:?}) and {path} ({value_type:?})",
+                            path_or_root(raw_node_path(node))
+                        ));
+                    }
+                    if !occurrences.iter().any(|(seen_type, _, seen_mark)| {
+                        seen_type == value_type && *seen_mark == mark
+                    }) {
+                        occurrences.push((*value_type, path, mark));
+                    }
+                }
+            }
+            Ok(())
+        }
+        ResolvedRawNode::Layer {
+            resolve, children, ..
+        }
+        | ResolvedRawNode::HConcat {
+            resolve, children, ..
+        }
+        | ResolvedRawNode::VConcat {
+            resolve, children, ..
+        } => {
+            if scale_mode(resolve, channel) == crate::ir::VegaResolutionMode::Shared {
+                for child in children {
+                    collect_shared_category_values(child, channel, seen)?;
+                }
             }
             Ok(())
         }

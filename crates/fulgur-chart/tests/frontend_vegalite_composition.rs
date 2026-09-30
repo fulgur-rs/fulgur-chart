@@ -425,3 +425,39 @@ fn vegalite_composition_schema_accepts_text_mark_layer_leaf() {
         "typed schema should accept text as a composition mark"
     );
 }
+
+#[test]
+fn rule_rejects_stringified_category_collisions_on_shared_composition_scales() {
+    let specs = [
+        r##"{"layer":[
+          {"mark":"rule","data":{"values":[{"x":1}]},"encoding":{"x":{"field":"x","type":"nominal"}}},
+          {"mark":"rule","data":{"values":[{"x":"1"}]},"encoding":{"x":{"field":"x","type":"nominal"}}}
+        ]}"##,
+        r##"{"layer":[
+          {"mark":"rule","data":{"values":[{"x":1,"group":1}]},"encoding":{"x":{"field":"x","type":"quantitative"},"color":{"field":"group","type":"nominal"}}},
+          {"mark":"point","data":{"values":[{"x":2,"y":3,"group":"1"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}
+        ]}"##,
+        r##"{"layer":[
+          {"mark":"point","data":{"values":[{"x":1,"y":1,"group":1}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}},
+          {"mark":"point","data":{"values":[{"x":2,"y":2,"group":"1"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}},
+          {"mark":"rule","data":{"values":[{"x":3,"group":1}]},"encoding":{"x":{"field":"x","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}
+        ]}"##,
+    ];
+
+    for json in specs {
+        let result = vegalite::parse(json, true);
+
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(|error| error.contains("JSON value types")),
+            "shared rule scales should reject colliding category labels, got {result:?}"
+        );
+    }
+
+    let independent_scales = r##"{"layer":[
+      {"mark":"rule","data":{"values":[{"x":1}]},"encoding":{"x":{"field":"x","type":"nominal"}}},
+      {"mark":"rule","data":{"values":[{"x":"1"}]},"encoding":{"x":{"field":"x","type":"nominal"}}}
+    ],"resolve":{"scale":{"x":"independent"}}}"##;
+    assert!(vegalite::parse(independent_scales, true).is_ok());
+}
