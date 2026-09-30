@@ -272,6 +272,10 @@ pub(super) fn parse_boxplot_spec(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let outlier_primitives_per_point = 1usize.saturating_add(usize::from(
+        !style.outliers_part.stroke_dash.is_empty()
+            && style.outliers_part.stroke_width.unwrap_or(1.0) > 0.0,
+    ));
     let estimated_primitives = groups.iter().fold(0usize, |total, group| {
         let fixed = usize::from(style.box_part.visible)
             .saturating_add(usize::from(style.median_part.visible))
@@ -288,7 +292,11 @@ pub(super) fn parse_boxplot_spec(
             0
         };
         let outliers = if style.outliers_part.visible {
-            group.summary.outliers.len()
+            group
+                .summary
+                .outliers
+                .len()
+                .saturating_mul(outlier_primitives_per_point)
         } else {
             0
         };
@@ -316,11 +324,7 @@ pub(super) fn parse_boxplot_spec(
     let (width, height) = parse_dimensions(top);
     let title = parse_title(top);
     let has_category = category.is_some();
-    let value_axis_grid = AxisGrid {
-        display: true,
-        color: Some(theme.grid_color),
-        ..AxisGrid::default()
-    };
+    let value_axis_grid = parse_value_axis_grid(top, theme.grid_color)?;
     let category_axis_grid = AxisGrid {
         display: false,
         ..AxisGrid::default()
@@ -826,6 +830,41 @@ fn make_axis(domain: Option<(f64, f64)>, grid: AxisGrid) -> AxisSpec {
         time: None,
         ticks: AxisTickOptions::default(),
     }
+}
+
+fn parse_value_axis_grid(
+    top: &Map<String, Value>,
+    theme_grid_color: Color,
+) -> Result<AxisGrid, String> {
+    let axis = top
+        .get("config")
+        .and_then(Value::as_object)
+        .and_then(|config| config.get("axis"))
+        .and_then(Value::as_object);
+    let display = match axis.and_then(|axis| optional_value(axis, "grid")) {
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| "config.axis.grid must be a boolean".to_string())?,
+        None => true,
+    };
+    let opacity = match axis.and_then(|axis| optional_value(axis, "gridOpacity")) {
+        Some(value) => Some(
+            value
+                .as_f64()
+                .filter(|opacity| opacity.is_finite() && (0.0..=1.0).contains(opacity))
+                .ok_or_else(|| "config.axis.gridOpacity must be between 0.0 and 1.0".to_string())?,
+        ),
+        None => None,
+    };
+    let mut color = theme_grid_color;
+    if let Some(opacity) = opacity {
+        color.a *= opacity as f32;
+    }
+    Ok(AxisGrid {
+        display,
+        color: Some(color),
+        ..AxisGrid::default()
+    })
 }
 
 fn parse_dimensions(top: &Map<String, Value>) -> (f64, f64) {
