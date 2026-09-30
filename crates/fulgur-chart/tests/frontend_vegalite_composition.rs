@@ -17,7 +17,7 @@ fn vegalite_composition_schema_accepts_each_operator_and_recursive_children() {
         "y":{"field":"sales","type":"quantitative"}
       },
       "resolve":{
-        "scale":{"x":"shared","color":"independent"},
+        "scale":{"x":"shared","color":"independent","opacity":"shared"},
         "axis":{"x":"shared"},
         "legend":{"color":"independent"}
       }
@@ -206,6 +206,18 @@ fn vegalite_layer_accepts_text_leaf_with_inherited_data() {
     assert_eq!(data.marks.len(), 2);
     assert_eq!(data.marks[0].text, "North");
     assert_eq!(data.marks[1].text, "South");
+}
+
+#[test]
+fn composition_preflight_counts_expanded_text_label_bytes_across_leaves() {
+    let json = r#"{"data":{"values":[{"x":0,"y":0,"label":"AB"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}},"layer":[{"mark":"text"},{"mark":"text"}]}"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: 3,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("expanded labels across layer leaves exceed the shared budget");
+    assert!(error.contains("text label bytes 4"), "{error}");
 }
 
 #[test]

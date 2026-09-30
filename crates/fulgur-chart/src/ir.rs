@@ -1249,6 +1249,7 @@ pub struct VegaCompositionResolve {
     pub y_scale: VegaResolutionMode,
     pub color_scale: VegaResolutionMode,
     pub size_scale: VegaResolutionMode,
+    pub opacity_scale: VegaResolutionMode,
     pub x_axis: VegaResolutionMode,
     pub y_axis: VegaResolutionMode,
     pub color_legend: VegaResolutionMode,
@@ -1269,6 +1270,7 @@ pub struct VegaLeafScaleDomains {
     pub y: Option<VegaScaleDomain>,
     pub color: Option<VegaScaleDomain>,
     pub size: Option<VegaScaleDomain>,
+    pub opacity: Option<VegaScaleDomain>,
 }
 
 /// Fully parsed unit chart plus the scale context inherited from its composition ancestors.

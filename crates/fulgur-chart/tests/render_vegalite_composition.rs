@@ -354,6 +354,44 @@ fn vegalite_layer_shares_text_color_size_scales_and_plot_frame() {
 }
 
 #[test]
+fn vegalite_layer_shares_text_opacity_domain() {
+    let spec = parsed(
+        r#"{
+          "layer":[
+            {"mark":"text","data":{"values":[{"x":0,"y":0,"label":"first","opacity":10},{"x":1,"y":1,"label":"low","opacity":0}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"},"opacity":{"field":"opacity","type":"quantitative"}}},
+            {"mark":"text","data":{"values":[{"x":0,"y":0,"label":"second","opacity":10},{"x":1,"y":1,"label":"high","opacity":100}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"},"opacity":{"field":"opacity","type":"quantitative"}}}
+          ]
+        }"#,
+    );
+    let ChartKind::VegaComposition(root) = &spec.kind else {
+        panic!("composition chart kind expected");
+    };
+    let VegaCompositionNode::Layer(layer) = root.as_ref() else {
+        panic!("layer node expected");
+    };
+    let alpha_for = |node: &VegaCompositionNode, content: &str| {
+        let VegaCompositionNode::Unit(leaf) = node else {
+            panic!("unit text leaf expected");
+        };
+        let ChartKind::VegaText(data) = &leaf.spec.kind else {
+            panic!("text mark expected");
+        };
+        data.marks
+            .iter()
+            .find(|mark| mark.text == content)
+            .expect("text label exists")
+            .fill
+            .a
+    };
+    let first = alpha_for(&layer.children[0], "first");
+    let second = alpha_for(&layer.children[1], "second");
+    assert!(
+        (first - second).abs() < 1e-6,
+        "shared opacity value mapped to {first} and {second}"
+    );
+}
+
+#[test]
 fn layer_keeps_titles_from_every_unit_child() {
     let spec = parsed(
         r##"{

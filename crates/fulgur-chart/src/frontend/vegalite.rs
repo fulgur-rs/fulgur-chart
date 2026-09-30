@@ -26,6 +26,15 @@ mod image;
 #[path = "vegalite_text.rs"]
 mod text;
 
+pub(super) fn preflight_text_label_bytes(
+    data: Option<&Value>,
+    encoding: Option<&Value>,
+    mark: Option<&Value>,
+    limits: &crate::guard::InputLimits,
+) -> Result<usize, String> {
+    text::preflight_label_bytes(data, encoding, mark, limits)
+}
+
 pub(crate) fn validate_vega_image_url(url: &str, max_bytes: usize) -> Result<(), String> {
     image::validate_image_url(url, max_bytes)
 }

@@ -226,6 +226,9 @@ Cartesian `layer` views. `encoding.color` accepts a nominal field or constant va
 and `encoding.opacity` accept quantitative fields or constant values. Quantitative size fields map
 font size to 8–40 px and opacity fields map to 0.3–0.8. Mark properties include `font`, `fontSize`,
 `fontWeight`, `fontStyle`, `align`, `baseline`, `angle`, `dx`, and `dy`.
+Raster output uses the supplied font face for text marks. An explicit `mark.font` must match that
+font's family; the bundled Noto Sans JP font also accepts `sans-serif`. Incompatible families
+return an error instead of being silently ignored. SVG output retains the requested CSS family.
 
 Categorical or temporal positions, custom text formats, conditions, multiline labels, truncation,
 URL data, and transforms are rejected. Native and WASM use the same Scene for SVG and PNG output.

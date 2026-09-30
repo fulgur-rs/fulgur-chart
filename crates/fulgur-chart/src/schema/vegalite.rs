@@ -232,6 +232,8 @@ pub struct VlScaleResolution {
     pub color: Option<VlResolveMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<VlResolveMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<VlResolveMode>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

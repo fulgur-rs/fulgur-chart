@@ -75,6 +75,9 @@ pub const DEFAULT_MAX_CATEGORICAL_PRIMITIVES: usize = 1_000_000;
 /// ラベル・タイトル文字列の上限(バイト)。
 pub const DEFAULT_MAX_LABEL_BYTES: usize = 4_096;
 
+/// Vega-Lite text marks の展開後ラベル文字数上限(バイト)。
+pub const DEFAULT_MAX_TOTAL_TEXT_BYTES: usize = 16 * 1024 * 1024;
+
 /// Maximum number of explicit lines in one Chart.js title or subtitle.
 const MAX_CHARTJS_TITLE_LINES: usize = 1_024;
 
@@ -145,6 +148,8 @@ pub struct InputLimits {
     pub max_geo_primitives: usize,
     /// ラベル・タイトル文字列の上限(バイト)。
     pub max_label_bytes: usize,
+    /// Vega-Lite text mark labels' expanded total size in bytes.
+    pub max_total_text_bytes: usize,
     /// Vega-Lite composition nesting depth (root composition has depth 1).
     pub max_vega_composition_depth: usize,
     /// Vega-Lite unit-view count across layer/concat descendants.
@@ -166,6 +171,7 @@ impl Default for InputLimits {
             max_geo_vertices: 1_000_000,
             max_geo_primitives: 1_000_000,
             max_label_bytes: DEFAULT_MAX_LABEL_BYTES,
+            max_total_text_bytes: DEFAULT_MAX_TOTAL_TEXT_BYTES,
             max_vega_composition_depth: 32,
             max_vega_composition_views: 256,
             max_dimension_px: DEFAULT_MAX_DIMENSION_PX,
@@ -301,19 +307,25 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
         return Ok(());
     };
 
+    #[derive(Default)]
+    struct Counts {
+        views: usize,
+        points: usize,
+        primitives: usize,
+        geo_primitives: usize,
+        text_bytes: usize,
+    }
+
     fn visit(
         node: &crate::ir::VegaCompositionNode,
         depth: usize,
         limits: &InputLimits,
-        views: &mut usize,
-        points: &mut usize,
-        primitives: &mut usize,
-        geo_primitives: &mut usize,
+        counts: &mut Counts,
     ) -> Result<(), String> {
         match node {
             crate::ir::VegaCompositionNode::Unit(leaf) => {
-                *views = views.saturating_add(1);
-                if *views > limits.max_vega_composition_views {
+                counts.views = counts.views.saturating_add(1);
+                if counts.views > limits.max_vega_composition_views {
                     return Err(format!(
                         "Vega-Lite composition exceeds max_vega_composition_views ({}) at {}",
                         limits.max_vega_composition_views, leaf.path
@@ -321,6 +333,19 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                 }
                 validate_spec_base(&leaf.spec, limits)
                     .map_err(|error| format!("{}: {error}", leaf.path))?;
+                if let ChartKind::VegaText(data) = &leaf.spec.kind {
+                    let leaf_text_bytes = data
+                        .marks
+                        .iter()
+                        .fold(0usize, |total, mark| total.saturating_add(mark.text.len()));
+                    counts.text_bytes = counts.text_bytes.saturating_add(leaf_text_bytes);
+                    if counts.text_bytes > limits.max_total_text_bytes {
+                        return Err(format!(
+                            "Vega-Lite composition text label bytes {} exceeds max_total_text_bytes ({}) at {}",
+                            counts.text_bytes, limits.max_total_text_bytes, leaf.path
+                        ));
+                    }
+                }
                 let series_points = leaf.spec.series.iter().fold(0usize, |count, series| {
                     count
                         .saturating_add(series.values.len())
@@ -342,11 +367,11 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                     }
                     _ => series_points,
                 };
-                *points = points.saturating_add(leaf_points);
-                if *points > limits.max_total_data_points {
+                counts.points = counts.points.saturating_add(leaf_points);
+                if counts.points > limits.max_total_data_points {
                     return Err(format!(
                         "Vega-Lite composition point count {} exceeds max_total_data_points ({}) at {}",
-                        *points, limits.max_total_data_points, leaf.path
+                        counts.points, limits.max_total_data_points, leaf.path
                     ));
                 }
                 let leaf_mark_primitives = match &leaf.spec.kind {
@@ -386,11 +411,11 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                     .unwrap_or(0);
                 let leaf_primitives =
                     leaf_mark_primitives.saturating_add(leaf_size_legend_primitives);
-                *primitives = primitives.saturating_add(leaf_primitives);
-                if *primitives > limits.max_categorical_primitives {
+                counts.primitives = counts.primitives.saturating_add(leaf_primitives);
+                if counts.primitives > limits.max_categorical_primitives {
                     return Err(format!(
                         "Vega-Lite composition primitive count {} exceeds max_categorical_primitives ({}) at {}",
-                        *primitives, limits.max_categorical_primitives, leaf.path
+                        counts.primitives, limits.max_categorical_primitives, leaf.path
                     ));
                 }
                 if let ChartKind::GeoShape { data } = &leaf.spec.kind {
@@ -404,11 +429,12 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                                     .unwrap_or(0),
                             )
                         });
-                    *geo_primitives = geo_primitives.saturating_add(leaf_geo_primitives);
-                    if *geo_primitives > limits.max_geo_primitives {
+                    counts.geo_primitives =
+                        counts.geo_primitives.saturating_add(leaf_geo_primitives);
+                    if counts.geo_primitives > limits.max_geo_primitives {
                         return Err(format!(
                             "Vega-Lite composition geoshape primitive count {} exceeds max_geo_primitives ({}) at {}",
-                            *geo_primitives, limits.max_geo_primitives, leaf.path
+                            counts.geo_primitives, limits.max_geo_primitives, leaf.path
                         ));
                     }
                 }
@@ -423,15 +449,7 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                     ));
                 }
                 for child in &layer.children {
-                    visit(
-                        child,
-                        node_depth,
-                        limits,
-                        views,
-                        points,
-                        primitives,
-                        geo_primitives,
-                    )?;
+                    visit(child, node_depth, limits, counts)?;
                 }
                 Ok(())
             }
@@ -445,34 +463,14 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                     ));
                 }
                 for child in &concat.children {
-                    visit(
-                        child,
-                        node_depth,
-                        limits,
-                        views,
-                        points,
-                        primitives,
-                        geo_primitives,
-                    )?;
+                    visit(child, node_depth, limits, counts)?;
                 }
                 Ok(())
             }
         }
     }
 
-    let mut views = 0usize;
-    let mut points = 0usize;
-    let mut primitives = 0usize;
-    let mut geo_primitives = 0usize;
-    visit(
-        root,
-        0,
-        limits,
-        &mut views,
-        &mut points,
-        &mut primitives,
-        &mut geo_primitives,
-    )
+    visit(root, 0, limits, &mut Counts::default())
 }
 
 fn estimate_geo_primitives(geometry: &crate::ir::GeoGeometry) -> usize {
@@ -875,12 +873,20 @@ pub(crate) fn validate_vega_text(spec: &ChartSpec, limits: &InputLimits) -> Resu
             limits.max_categorical_primitives
         ));
     }
+    let mut total_text_bytes = 0usize;
     for (index, mark) in data.marks.iter().enumerate() {
         if mark.text.len() > limits.max_label_bytes {
             return Err(format!(
                 "Vega-Lite text label length {} bytes exceeds max_label_bytes limit {} at mark {index}",
                 mark.text.len(),
                 limits.max_label_bytes
+            ));
+        }
+        total_text_bytes = total_text_bytes.saturating_add(mark.text.len());
+        if total_text_bytes > limits.max_total_text_bytes {
+            return Err(format!(
+                "Vega-Lite text label bytes {total_text_bytes} exceeds max_total_text_bytes limit {}",
+                limits.max_total_text_bytes
             ));
         }
         if !mark.point.x.is_finite() || !mark.point.y.is_finite() {
@@ -2095,6 +2101,14 @@ mod tests {
         };
         let error = validate_spec(&standalone, &primitive_limit).unwrap_err();
         assert!(error.contains("text primitive count"), "{error}");
+
+        let total_text_limit = InputLimits {
+            max_total_text_bytes: 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&standalone, &total_text_limit).unwrap_err();
+        assert!(error.contains("text label bytes 2"), "{error}");
+
         let measurer = crate::text::TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let error = crate::layout::build_scene_checked_with_limits(
             &standalone,
@@ -2134,6 +2148,13 @@ mod tests {
         };
         let error = validate_spec(&composition, &composition_primitive_limit).unwrap_err();
         assert!(error.contains("composition primitive count 2"), "{error}");
+
+        let composition_text_limit = InputLimits {
+            max_total_text_bytes: 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&composition, &composition_text_limit).unwrap_err();
+        assert!(error.contains("composition text label bytes 2"), "{error}");
 
         let composition_label = vegalite::parse(
             r#"{"layer":[{"mark":"text","data":{"values":[{"x":0,"y":1,"label":"あ"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}}]}"#,

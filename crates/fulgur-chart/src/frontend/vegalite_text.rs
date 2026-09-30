@@ -67,6 +67,7 @@ pub(super) fn parse_text_spec(
     let x_field = parse_position_field(encoding.get("x"), "x")?;
     let y_field = parse_position_field(encoding.get("y"), "y")?;
     let text_source = parse_text_source(encoding.get("text"), mark_object)?;
+    total_label_bytes_for_records(&records, &text_source, limits)?;
 
     let points = records
         .iter()
@@ -189,7 +190,10 @@ pub(super) fn parse_text_spec(
         .or_else(|| numeric_domain(&size_values))
         .unwrap_or((0.0, 1.0));
     let opacity_values = numeric_field_values(&records, opacity_field.as_deref(), "opacity")?;
-    let opacity_domain = numeric_domain(&opacity_values).unwrap_or((0.0, 1.0));
+    let opacity_domain = scale_overrides
+        .opacity_numeric_domain
+        .or_else(|| numeric_domain(&opacity_values))
+        .unwrap_or((0.0, 1.0));
 
     let encoding_size_value = parse_channel_number_value(encoding.get("size"), "size")?;
     let encoding_opacity_value = parse_channel_number_value(encoding.get("opacity"), "opacity")?;
@@ -300,6 +304,120 @@ pub(super) fn parse_text_spec(
 enum TextSource {
     Field(String),
     Value(String),
+}
+
+fn total_label_bytes_for_records(
+    records: &[Map<String, Value>],
+    source: &TextSource,
+    limits: &crate::guard::InputLimits,
+) -> Result<usize, String> {
+    let mut total = 0usize;
+    match source {
+        TextSource::Value(text) => {
+            if text.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "text mark label length {} exceeds max_label_bytes limit {}",
+                    text.len(),
+                    limits.max_label_bytes
+                ));
+            }
+            total = text.len().saturating_mul(records.len());
+        }
+        TextSource::Field(field) => {
+            for (index, record) in records.iter().enumerate() {
+                let path = format!("text mark data.values[{index}].{field}");
+                let bytes = scalar_text_byte_len(record.get(field), &path)?;
+                if bytes > limits.max_label_bytes {
+                    return Err(format!(
+                        "text mark label length {bytes} exceeds max_label_bytes limit {} at data.values[{index}]",
+                        limits.max_label_bytes
+                    ));
+                }
+                total = total.saturating_add(bytes);
+                if total > limits.max_total_text_bytes {
+                    return Err(total_text_bytes_error(total, limits.max_total_text_bytes));
+                }
+            }
+        }
+    }
+    if total > limits.max_total_text_bytes {
+        return Err(total_text_bytes_error(total, limits.max_total_text_bytes));
+    }
+    Ok(total)
+}
+
+fn scalar_text_byte_len(value: Option<&Value>, path: &str) -> Result<usize, String> {
+    match value {
+        Some(Value::String(text)) => Ok(text.len()),
+        Some(Value::Number(number)) => Ok(number.to_string().len()),
+        Some(Value::Bool(value)) => Ok(value.to_string().len()),
+        _ => Err(format!(
+            "{path} must be a non-null string, number, or boolean"
+        )),
+    }
+}
+
+fn total_text_bytes_error(total: usize, limit: usize) -> String {
+    format!("text mark label bytes {total} exceeds max_total_text_bytes limit {limit}")
+}
+
+/// Count the expanded labels for a raw text unit before composition parsing clones them into IR.
+pub(super) fn preflight_label_bytes(
+    data: Option<&Value>,
+    encoding: Option<&Value>,
+    mark: Option<&Value>,
+    limits: &crate::guard::InputLimits,
+) -> Result<usize, String> {
+    let source = parse_text_source(
+        encoding
+            .and_then(Value::as_object)
+            .and_then(|encoding| encoding.get("text")),
+        mark.and_then(Value::as_object),
+    )?;
+    let records = data
+        .and_then(Value::as_object)
+        .and_then(|data| data.get("values"))
+        .and_then(Value::as_array);
+    let count = records.map_or(0, Vec::len);
+    let total = match &source {
+        TextSource::Value(text) => {
+            if text.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "text mark label length {} exceeds max_label_bytes limit {}",
+                    text.len(),
+                    limits.max_label_bytes
+                ));
+            }
+            text.len().saturating_mul(count)
+        }
+        TextSource::Field(field) => {
+            let mut total = 0usize;
+            if let Some(records) = records {
+                for (index, record) in records.iter().enumerate() {
+                    let value = record.as_object().and_then(|record| record.get(field));
+                    let bytes = scalar_text_byte_len(
+                        value,
+                        &format!("text mark data.values[{index}].{field}"),
+                    )?;
+                    if bytes > limits.max_label_bytes {
+                        return Err(format!(
+                            "text mark label length {bytes} exceeds max_label_bytes limit {} at data.values[{index}]",
+                            limits.max_label_bytes
+                        ));
+                    }
+                    total = total.saturating_add(bytes);
+                    if total > limits.max_total_text_bytes {
+                        return Err(total_text_bytes_error(total, limits.max_total_text_bytes));
+                    }
+                }
+            }
+            total
+        }
+    };
+    if total > limits.max_total_text_bytes {
+        return Err(total_text_bytes_error(total, limits.max_total_text_bytes));
+    }
+    Ok(total)
 }
 
 fn parse_text_source(

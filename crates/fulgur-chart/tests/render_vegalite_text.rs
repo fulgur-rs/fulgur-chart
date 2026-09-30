@@ -118,3 +118,44 @@ fn vegalite_text_scene_applies_baseline_and_offsets() {
     );
     assert_eq!(data.marks[0].align, VegaTextAlign::Right);
 }
+
+#[test]
+fn raster_rejects_text_font_family_that_the_selected_font_cannot_supply() {
+    let json = r#"{"mark":{"type":"text","font":"serif"},"data":{"values":[{"x":0,"y":0,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}}}"#;
+    let spec = vegalite::parse(json, true).expect("text font parses for SVG output");
+    let png_error = fulgur_chart::raster_direct::render_chart_to_png_default(&spec, 1.0)
+        .expect_err("raster must not silently ignore an unavailable mark font family");
+    assert!(png_error.contains("font family"), "{png_error}");
+    let webp_error = fulgur_chart::raster_direct::render_chart_to_webp(
+        &spec,
+        1.0,
+        fulgur_chart::font::DEFAULT_FONT,
+    )
+    .expect_err("WebP must not silently ignore an unavailable mark font family");
+    assert!(webp_error.contains("font family"), "{webp_error}");
+
+    let composed = vegalite::parse(
+        r#"{"layer":[{"mark":{"type":"text","font":"serif"},"data":{"values":[{"x":0,"y":0,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}}}]}"#,
+        true,
+    )
+    .expect("composed text font parses");
+    let error = fulgur_chart::raster_direct::render_chart_to_png_default(&composed, 1.0)
+        .expect_err("font validation must include text leaves in compositions");
+    assert!(error.contains("font family"), "{error}");
+}
+
+#[test]
+fn raster_accepts_sans_serif_alias_for_bundled_text_font() {
+    let json = r#"{"mark":{"type":"text","font":"sans-serif"},"data":{"values":[{"x":0,"y":0,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}}}"#;
+    let spec = vegalite::parse(json, true).expect("text font parses");
+    fulgur_chart::raster_direct::render_chart_to_png_default(&spec, 1.0)
+        .expect("bundled Noto Sans JP supplies the sans-serif alias");
+    fulgur_chart::raster_direct::render_chart_to_webp(&spec, 1.0, fulgur_chart::font::DEFAULT_FONT)
+        .expect("WebP uses the same bundled text font mapping");
+
+    let explicit_json = json.replace("sans-serif", "Noto Sans JP");
+    let explicit_family =
+        vegalite::parse(&explicit_json, true).expect("exact bundled family parses");
+    fulgur_chart::raster_direct::render_chart_to_png_default(&explicit_family, 1.0)
+        .expect("the exact supplied family is accepted");
+}

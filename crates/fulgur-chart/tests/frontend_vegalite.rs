@@ -5044,6 +5044,18 @@ fn vegalite_text_rejects_multiple_text_sources() {
 }
 
 #[test]
+fn vegalite_text_rejects_expanded_label_bytes_over_limit() {
+    let json = r#"{"mark":"text","data":{"values":[{"x":1,"y":2},{"x":2,"y":3}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"value":"abc"}}}"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: 5,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("expanded literal labels exceed the total byte budget");
+    assert!(error.contains("label bytes 6"), "{error}");
+}
+
+#[test]
 fn vegalite_text_rejects_unsupported_inputs() {
     let base = serde_json::json!({
         "mark":"text",
