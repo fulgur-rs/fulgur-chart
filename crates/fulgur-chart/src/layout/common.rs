@@ -2040,9 +2040,9 @@ fn legend_marker(items: &mut Vec<Prim>, x: f64, y: f64, color: Color, options: &
         let mut data = String::new();
         for (index, (px, py)) in points.iter().enumerate() {
             if index == 0 {
-                data.push_str(&format!("M{} {}", fmt_num(*px), fmt_num(*py)));
+                data.push_str(&format!("M {} {}", fmt_num(*px), fmt_num(*py)));
             } else {
-                data.push_str(&format!(" L{} {}", fmt_num(*px), fmt_num(*py)));
+                data.push_str(&format!(" L {} {}", fmt_num(*px), fmt_num(*py)));
             }
         }
         data.push_str(" Z");
@@ -4926,5 +4926,49 @@ mod radial_domain_tests {
         // 両側 hard で min == max == f64::MAX の矛盾指定でも壊れないこと。
         let (lo, hi) = resolve_radial_domain(&ra(Some(v), Some(v), None, None, false), v, v);
         assert!(lo.is_finite() && hi.is_finite() && hi > lo, "[{lo}, {hi}]");
+    }
+}
+
+#[cfg(test)]
+mod legend_marker_path_tests {
+    use super::*;
+
+    #[test]
+    fn polygon_legend_markers_separate_svg_commands_from_coordinates() {
+        for style in [
+            LegendPointStyle::RectRot,
+            LegendPointStyle::Triangle,
+            LegendPointStyle::Star,
+        ] {
+            let options = LegendOptions {
+                labels_use_point_style: true,
+                labels_point_style: Some(style),
+                ..LegendOptions::default()
+            };
+            let mut items = Vec::new();
+            legend_marker(
+                &mut items,
+                1.0,
+                2.0,
+                Color {
+                    r: 20,
+                    g: 40,
+                    b: 60,
+                    a: 1.0,
+                },
+                &options,
+            );
+
+            let [Prim::Path { d, .. }] = items.as_slice() else {
+                panic!("polygon marker produces one SVG path")
+            };
+            let tokens = d.split_ascii_whitespace().collect::<Vec<_>>();
+            assert_eq!(tokens.first(), Some(&"M"));
+            assert!(tokens.contains(&"L"));
+            assert_eq!(tokens.last(), Some(&"Z"));
+            assert!(tokens.iter().all(|token| {
+                matches!(*token, "M" | "L" | "Z") || token.parse::<f64>().is_ok()
+            }));
+        }
     }
 }

@@ -372,11 +372,13 @@ fn build_node(
                 } else {
                     let mut child_items = child.items;
                     if let Some(frame) = child.plot_rect {
+                        let protected_guides =
+                            node_legend_items(child_node, &child_items, measurer);
                         transform_layer_scene_to_rect(
                             &mut child_items,
                             frame,
                             common_plot_rect,
-                            &[],
+                            &protected_guides,
                             None,
                             child.width,
                             child.height,
@@ -594,6 +596,125 @@ fn node_has_size_legend(node: &VegaCompositionNode) -> bool {
             concat.children.iter().any(node_has_size_legend)
         }
         _ => false,
+    }
+}
+
+fn node_legend_items(
+    node: &VegaCompositionNode,
+    items: &[Prim],
+    measurer: &TextMeasurer<'_>,
+) -> Vec<Prim> {
+    let mut guides = Vec::new();
+    collect_node_legend_items(node, items, measurer, &mut guides);
+    guides
+}
+
+fn collect_node_legend_items(
+    node: &VegaCompositionNode,
+    items: &[Prim],
+    measurer: &TextMeasurer<'_>,
+    guides: &mut Vec<Prim>,
+) {
+    match node {
+        VegaCompositionNode::Unit(leaf) => {
+            let mut spec = (*leaf.spec).clone();
+            spec.size_mode = crate::ir::SizeMode::Canvas;
+            apply_leaf_domains(&mut spec, &leaf.scales);
+            if let Some(frame) = plot_rect_for_spec(&spec, measurer) {
+                let labels = leaf_color_legend_labels(leaf);
+                collect_leaf_color_legend_items(items, &spec, &labels, frame, guides);
+            }
+            if let Some(guide) = &leaf.spec.vega_size_legend {
+                collect_leaf_size_legend_items(items, guide, guides);
+            }
+        }
+        VegaCompositionNode::Layer(layer) => {
+            for child in &layer.children {
+                collect_node_legend_items(child, items, measurer, guides);
+            }
+        }
+        VegaCompositionNode::HConcat(concat) | VegaCompositionNode::VConcat(concat) => {
+            let mut child_items = items.iter().filter_map(|item| match item {
+                Prim::Group { children, .. } => Some(children.as_slice()),
+                _ => None,
+            });
+            for child in &concat.children {
+                let Some(child_items) = child_items.next() else {
+                    break;
+                };
+                collect_node_legend_items(child, child_items, measurer, guides);
+            }
+        }
+    }
+}
+
+fn collect_leaf_color_legend_items(
+    items: &[Prim],
+    spec: &ChartSpec,
+    labels: &[String],
+    frame: PlotRect,
+    guides: &mut Vec<Prim>,
+) {
+    if spec.legend == crate::ir::LegendPos::None {
+        return;
+    }
+    for item in items {
+        if spec
+            .vega_size_legend
+            .as_ref()
+            .is_some_and(|guide| is_size_legend_group(item, guide))
+        {
+            continue;
+        }
+        if let Prim::Group { children, .. } = item {
+            collect_leaf_color_legend_items(children, spec, labels, frame, guides);
+            continue;
+        }
+        let (x, y) = prim_position(item);
+        let in_band = match spec.legend {
+            crate::ir::LegendPos::Right => x >= frame.right + 2.0,
+            crate::ir::LegendPos::Left => x <= frame.left - 2.0,
+            crate::ir::LegendPos::Top => y <= frame.top - 2.0,
+            crate::ir::LegendPos::Bottom => y >= frame.bottom + 2.0,
+            crate::ir::LegendPos::None => false,
+        };
+        if !in_band {
+            continue;
+        }
+        let is_label = match item {
+            Prim::Text { content, .. } => labels.iter().any(|label| label == content),
+            Prim::StyledText(text) => labels.iter().any(|label| label == &text.content),
+            _ => false,
+        };
+        if (is_label
+            || is_legend_marker(
+                item,
+                spec.legend,
+                frame.left,
+                frame.right,
+                frame.top,
+                frame.bottom,
+            ))
+            && !guides.contains(item)
+        {
+            guides.push(item.clone());
+        }
+    }
+}
+
+fn collect_leaf_size_legend_items(
+    items: &[Prim],
+    guide: &crate::ir::VegaSizeLegend,
+    guides: &mut Vec<Prim>,
+) {
+    for item in items {
+        if is_size_legend_group(item, guide) {
+            if !guides.contains(item) {
+                guides.push(item.clone());
+            }
+        } else if let Prim::Group { children, .. } = item {
+            collect_leaf_size_legend_items(children, guide, guides);
+        }
     }
 }
 
@@ -962,6 +1083,7 @@ fn prim_position(prim: &Prim) -> (f64, f64) {
         Prim::StyledText(text) => (text.x, text.y),
         Prim::Rect { x, y, w, h, .. } => (x + w / 2.0, y + h / 2.0),
         Prim::Circle { cx, cy, .. } | Prim::ClippedCircle { cx, cy, .. } => (*cx, *cy),
+        Prim::Path { d, .. } | Prim::ClippedPath { d, .. } => path_position(d),
         Prim::Line { x1, y1, x2, y2, .. } => ((x1 + x2) / 2.0, (y1 + y2) / 2.0),
         Prim::Polyline { points, .. } | Prim::StyledPolyline { points, .. } => points
             .first()
@@ -969,6 +1091,34 @@ fn prim_position(prim: &Prim) -> (f64, f64) {
             .unwrap_or((f64::NEG_INFINITY, f64::NEG_INFINITY)),
         _ => (f64::NEG_INFINITY, f64::NEG_INFINITY),
     }
+}
+
+fn path_position(data: &str) -> (f64, f64) {
+    let values = data
+        .split_ascii_whitespace()
+        .filter_map(|token| token.parse::<f64>().ok())
+        .collect::<Vec<_>>();
+    if values.len() < 2 || values.len() % 2 != 0 {
+        return (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    }
+    let points = values.chunks_exact(2).collect::<Vec<_>>();
+    let min_x = points
+        .iter()
+        .map(|point| point[0])
+        .fold(f64::INFINITY, f64::min);
+    let max_x = points
+        .iter()
+        .map(|point| point[0])
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_y = points
+        .iter()
+        .map(|point| point[1])
+        .fold(f64::INFINITY, f64::min);
+    let max_y = points
+        .iter()
+        .map(|point| point[1])
+        .fold(f64::NEG_INFINITY, f64::max);
+    ((min_x + max_x) / 2.0, (min_y + max_y) / 2.0)
 }
 
 fn is_legend_marker(
@@ -1027,13 +1177,18 @@ fn transform_layer_scene_to_rect(
         return Ok(());
     }
     for item in items {
-        if protected_guides.contains(item)
-            || is_title_primitive(item, title)
-            || is_full_background(item, scene_width, scene_height)
-        {
+        if is_title_primitive(item, title) || is_full_background(item, scene_width, scene_height) {
             continue;
         }
-        transform_primitive(item, scale_x, scale_y, offset_x, offset_y, true)?;
+        transform_primitive(
+            item,
+            scale_x,
+            scale_y,
+            offset_x,
+            offset_y,
+            true,
+            protected_guides,
+        )?;
     }
     Ok(())
 }
@@ -1055,7 +1210,11 @@ fn transform_primitive(
     offset_x: f64,
     offset_y: f64,
     apply_offset: bool,
+    protected_guides: &[Prim],
 ) -> Result<(), String> {
+    if protected_guides.contains(prim) {
+        return Ok(());
+    }
     let x = |value: f64| value * scale_x + if apply_offset { offset_x } else { 0.0 };
     let y = |value: f64| value * scale_y + if apply_offset { offset_y } else { 0.0 };
     let clip = |clip: &mut ClipRect, add_offset: bool| {
@@ -1153,7 +1312,7 @@ fn transform_primitive(
                 clip(clip_rect, false);
             }
             for child in children {
-                transform_primitive(child, scale_x, scale_y, 0.0, 0.0, false)?;
+                transform_primitive(child, scale_x, scale_y, 0.0, 0.0, false, protected_guides)?;
             }
         }
     }
@@ -1656,5 +1815,129 @@ mod tests {
         assert_eq!(spec.series[0].values[0..2], [5.0, 10.0]);
         assert!(spec.series[0].values[2].is_nan());
         assert_eq!(spec.series[0].trail_widths_slice(), [4.0, 1.0, 1.0]);
+    }
+}
+
+#[cfg(test)]
+mod nested_guide_transform_tests {
+    use super::*;
+
+    fn text_x(items: &[Prim], content: &str, output: &mut Vec<f64>) {
+        for item in items {
+            match item {
+                Prim::Text {
+                    x, content: text, ..
+                } if text == content => output.push(*x),
+                Prim::StyledText(text) if text.content == content => output.push(text.x),
+                Prim::Group { children, .. } => text_x(children, content, output),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn protected_guide_inside_composition_groups_is_not_scaled() {
+        let legend = Prim::Text {
+            x: 50.0,
+            y: 30.0,
+            size: 12.0,
+            anchor: Anchor::Start,
+            fill: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+            content: "north".into(),
+            rotate_deg: None,
+        };
+        let mut items = vec![Prim::Group {
+            translate_x: 0.0,
+            translate_y: 0.0,
+            clip: None,
+            children: vec![legend.clone()],
+        }];
+
+        transform_layer_scene_to_rect(
+            &mut items,
+            PlotRect {
+                left: 0.0,
+                top: 0.0,
+                right: 100.0,
+                bottom: 100.0,
+            },
+            PlotRect {
+                left: 10.0,
+                top: 10.0,
+                right: 60.0,
+                bottom: 60.0,
+            },
+            &[legend],
+            None,
+            100.0,
+            100.0,
+        )
+        .expect("nested guide aligns");
+
+        let Prim::Group { children, .. } = &items[0] else {
+            panic!("composition group remains present")
+        };
+        let Prim::Text { x, y, .. } = &children[0] else {
+            panic!("legend label remains text")
+        };
+        assert_eq!((*x, *y), (50.0, 30.0));
+    }
+
+    #[test]
+    fn nested_node_legend_items_protect_nested_guides_from_plot_scaling() {
+        let spec = crate::frontend::vegalite::parse(
+            r#"{
+              "layer":[{
+                "mark":"point",
+                "data":{"values":[{"x":1,"y":2,"group":"north"}]},
+                "encoding":{
+                  "x":{"field":"x","type":"quantitative"},
+                  "y":{"field":"y","type":"quantitative"},
+                  "color":{"field":"group","type":"nominal"}
+                }
+              }]
+            }"#,
+            true,
+        )
+        .expect("nested layer parses");
+        let ChartKind::VegaComposition(root) = &spec.kind else {
+            panic!("composition node expected")
+        };
+        let measurer = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let mut layout = build_node(root, &measurer, &InputLimits::default())
+            .expect("nested layer scene builds");
+        let frame = layout.plot_rect.expect("layer has a plot frame");
+        let guides = node_legend_items(root, &layout.items, &measurer);
+        assert!(guides.iter().any(|item| matches!(
+            item,
+            Prim::Text { content, .. } if content == "north"
+        )));
+
+        let mut before = Vec::new();
+        text_x(&layout.items, "north", &mut before);
+        assert_eq!(before.len(), 1);
+        let narrower = PlotRect {
+            right: frame.left + (frame.right - frame.left) * 0.5,
+            ..frame
+        };
+        transform_layer_scene_to_rect(
+            &mut layout.items,
+            frame,
+            narrower,
+            &guides,
+            None,
+            layout.width,
+            layout.height,
+        )
+        .expect("nested legend alignment succeeds");
+
+        let mut after = Vec::new();
+        text_x(&layout.items, "north", &mut after);
+        assert_eq!(after, before);
     }
 }
