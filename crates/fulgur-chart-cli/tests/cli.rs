@@ -561,6 +561,36 @@ fn auto_detect_unknown_spec_exits_1() {
 // --- 入力上限（guard モジュールが CLI 経由で正しく動作することを確認）---
 
 #[test]
+fn chartjs_title_font_amplification_is_rejected_before_svg_output() {
+    for plugin in ["title", "subtitle"] {
+        let spec = serde_json::json!({
+            "type": "bar",
+            "data": {"labels": ["a"], "datasets": [{"data": [1]}]},
+            "options": {"plugins": {(plugin): {
+                "display": true,
+                "text": vec!["x"; 1_024],
+                "font": {"family": "f".repeat(8_192)}
+            }}}
+        })
+        .to_string();
+        for strict in [false, true] {
+            let mut command = bin();
+            command.args(["render", "-", "-o", "-"]);
+            if strict {
+                command.arg("--strict");
+            }
+            let out = command.write_stdin(spec.clone()).assert().failure().code(1);
+            assert!(out.get_output().stdout.is_empty());
+            let stderr = String::from_utf8_lossy(&out.get_output().stderr);
+            assert!(
+                stderr.contains(&format!("Chart.js {plugin} font.family")),
+                "unexpected error: {stderr}"
+            );
+        }
+    }
+}
+
+#[test]
 fn oversized_width_exits_1() {
     // width が MAX_DIMENSION_PX (32768) を超えると exit 1。
     let spec = r#"{"type":"bar","data":{"labels":["a"],"datasets":[{"data":[1]}]}}"#;
