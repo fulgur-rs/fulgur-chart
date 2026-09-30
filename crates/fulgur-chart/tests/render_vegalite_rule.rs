@@ -5,8 +5,10 @@ use fulgur_chart::layout;
 use fulgur_chart::scene::{Prim, Scene};
 use fulgur_chart::text::TextMeasurer;
 
-fn lines(scene: &Scene) -> Vec<(f64, f64, f64, f64, Color, Vec<f64>)> {
-    fn collect(items: &[Prim], output: &mut Vec<(f64, f64, f64, f64, Color, Vec<f64>)>) {
+type RuleLine = (f64, f64, f64, f64, Color, Vec<f64>);
+
+fn lines(scene: &Scene) -> Vec<RuleLine> {
+    fn collect(items: &[Prim], output: &mut Vec<RuleLine>) {
         for item in items {
             match item {
                 Prim::Line {
