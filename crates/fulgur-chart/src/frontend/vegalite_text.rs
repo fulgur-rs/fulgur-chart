@@ -194,7 +194,6 @@ pub(super) fn parse_text_spec(
     let encoding_size_value = parse_channel_number_value(encoding.get("size"), "size")?;
     let encoding_opacity_value = parse_channel_number_value(encoding.get("opacity"), "opacity")?;
     let color_constant = color_value
-        .as_deref()
         .map(|value| {
             parse_color(value).ok_or_else(|| {
                 "text mark encoding.color.value must be a valid CSS color".to_string()
@@ -575,7 +574,7 @@ fn parse_positive_number(
     limits: &crate::guard::InputLimits,
 ) -> Result<f64, String> {
     let value = parse_finite_number(value, path)?;
-    if value > 0.0 && value <= limits.max_dimension_px as f64 {
+    if value > 0.0 && value <= limits.max_dimension_px {
         Ok(value)
     } else {
         Err(format!(
@@ -652,7 +651,7 @@ fn parse_chart_dimension(
         return Ok(default);
     };
     let value = parse_finite_number(value, name)?;
-    if value > 0.0 && value <= limits.max_dimension_px as f64 {
+    if value > 0.0 && value <= limits.max_dimension_px {
         Ok(value)
     } else {
         Err(format!(

@@ -333,6 +333,7 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                         cells.iter().flatten().filter(|cell| cell.is_some()).count()
                     }
                     ChartKind::GeoShape { data } => data.features.len(),
+                    ChartKind::VegaText(data) => data.marks.len(),
                     ChartKind::ErrorMark(data) => series_points.max(data.ranges.len()),
                     ChartKind::VegaBoxPlot(data) => {
                         data.groups.iter().fold(0usize, |count, group| {
@@ -367,6 +368,7 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                         cells.iter().flatten().filter(|cell| cell.is_some()).count()
                     }
                     ChartKind::VegaImage(_) => leaf_points,
+                    ChartKind::VegaText(data) => data.marks.len(),
                     ChartKind::GeoShape { data } => data.features.len(),
                     ChartKind::ErrorMark(data) => data.ranges.len().saturating_mul(3),
                     ChartKind::VegaBoxPlot(data) => vega_boxplot_primitive_count(data),
@@ -855,6 +857,60 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
     Ok(())
 }
 
+/// Validate Vega-Lite text marks before the Scene allocates one primitive per label.
+pub(crate) fn validate_vega_text(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
+    let ChartKind::VegaText(data) = &spec.kind else {
+        return Ok(());
+    };
+    let points = data.marks.len();
+    if points > limits.max_total_data_points {
+        return Err(format!(
+            "Vega-Lite text point count {points} exceeds max_total_data_points limit {}",
+            limits.max_total_data_points
+        ));
+    }
+    if points > limits.max_categorical_primitives {
+        return Err(format!(
+            "Vega-Lite text primitive count {points} exceeds max_categorical_primitives limit {}",
+            limits.max_categorical_primitives
+        ));
+    }
+    for (index, mark) in data.marks.iter().enumerate() {
+        if mark.text.len() > limits.max_label_bytes {
+            return Err(format!(
+                "Vega-Lite text label length {} bytes exceeds max_label_bytes limit {} at mark {index}",
+                mark.text.len(),
+                limits.max_label_bytes
+            ));
+        }
+        if !mark.point.x.is_finite() || !mark.point.y.is_finite() {
+            return Err(format!(
+                "Vega-Lite text mark {index} position must be finite"
+            ));
+        }
+        if !mark.size.is_finite() || mark.size <= 0.0 || mark.size > limits.max_dimension_px {
+            return Err(format!(
+                "Vega-Lite text mark {index} font size must be positive and at most {}",
+                limits.max_dimension_px
+            ));
+        }
+        if !mark.dx.is_finite()
+            || !mark.dy.is_finite()
+            || mark.angle.is_some_and(|value| !value.is_finite())
+        {
+            return Err(format!(
+                "Vega-Lite text mark {index} offsets and angle must be finite"
+            ));
+        }
+        if !mark.fill.a.is_finite() || !(0.0..=1.0).contains(&mark.fill.a) {
+            return Err(format!(
+                "Vega-Lite text mark {index} alpha must be within 0..=1"
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn vega_boxplot_primitive_count(data: &crate::ir::VegaBoxPlotData) -> usize {
     data.groups.iter().fold(0usize, |total, group| {
         total.saturating_add(vega_boxplot_group_primitive_count(data, group))
@@ -917,6 +973,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
 
     validate_error_mark(spec, limits.max_categorical_primitives)?;
     validate_vega_boxplot(spec, limits)?;
+    validate_vega_text(spec, limits)?;
     validate_vega_image(spec, limits)?;
 
     // --- 系列数 ---
@@ -2016,6 +2073,80 @@ mod tests {
 
     fn default_limits() -> InputLimits {
         InputLimits::default()
+    }
+
+    #[test]
+    fn vega_text_guard_enforces_point_label_and_primitive_limits() {
+        let standalone = vegalite::parse(
+            r#"{"mark":"text","data":{"values":[{"x":0,"y":1,"label":"A"},{"x":1,"y":2,"label":"B"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}}"#,
+            true,
+        )
+        .unwrap();
+        let point_limit = InputLimits {
+            max_total_data_points: 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&standalone, &point_limit).unwrap_err();
+        assert!(error.contains("text point count"), "{error}");
+
+        let primitive_limit = InputLimits {
+            max_categorical_primitives: 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&standalone, &primitive_limit).unwrap_err();
+        assert!(error.contains("text primitive count"), "{error}");
+        let measurer = crate::text::TextMeasurer::new(crate::font::TEST_FONT).unwrap();
+        let error = crate::layout::build_scene_checked_with_limits(
+            &standalone,
+            &measurer,
+            &primitive_limit,
+        )
+        .unwrap_err();
+        assert!(error.contains("text primitive count"), "{error}");
+
+        let unicode = vegalite::parse(
+            r#"{"mark":"text","data":{"values":[{"x":0,"y":1,"label":"あ"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}}"#,
+            true,
+        )
+        .unwrap();
+        let label_limit = InputLimits {
+            max_label_bytes: 2,
+            ..default_limits()
+        };
+        let error = validate_spec(&unicode, &label_limit).unwrap_err();
+        assert!(error.contains("text label length 3 bytes"), "{error}");
+
+        let composition = vegalite::parse(
+            r#"{"layer":[{"mark":"text","data":{"values":[{"x":0,"y":1,"label":"A"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}},{"mark":"text","data":{"values":[{"x":1,"y":2,"label":"B"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}}]}"#,
+            true,
+        )
+        .unwrap();
+        let composition_point_limit = InputLimits {
+            max_total_data_points: 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&composition, &composition_point_limit).unwrap_err();
+        assert!(error.contains("composition point count 2"), "{error}");
+
+        let composition_primitive_limit = InputLimits {
+            max_categorical_primitives: 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&composition, &composition_primitive_limit).unwrap_err();
+        assert!(error.contains("composition primitive count 2"), "{error}");
+
+        let composition_label = vegalite::parse(
+            r#"{"layer":[{"mark":"text","data":{"values":[{"x":0,"y":1,"label":"あ"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}}]}"#,
+            true,
+        )
+        .unwrap();
+        let composition_label_limit = InputLimits {
+            max_label_bytes: 2,
+            ..default_limits()
+        };
+        let error = validate_spec(&composition_label, &composition_label_limit).unwrap_err();
+        assert!(error.contains("layer[0]"), "{error}");
+        assert!(error.contains("text label length 3 bytes"), "{error}");
     }
 
     fn effective_dataset_radius_specs(point_radius: Option<f64>) -> Vec<ChartSpec> {

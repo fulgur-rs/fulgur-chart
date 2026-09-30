@@ -87,9 +87,9 @@
 - Modify: `README.md`
 - Test: `crates/fulgur-chart/tests/render_vegalite_text.rs`
 
-- [ ] Add failing test `vega_text_guard_enforces_point_label_and_primitive_limits` for row count, UTF-8 label byte size, and total primitive count in standalone and layer inputs.
-- [ ] Run `cargo test -p fulgur-chart vega_text_guard --lib --locked --offline` and confirm the new IR currently bypasses text-specific limits.
-- [ ] Count text rows/primitives and enforce the existing label byte cap before layout; add the documented example, fixed golden registration, README entry, and native/WASM integration cases.
-- [ ] Add WASM tests `vegalite_text_example_renders_deterministic_svg_and_png` and `vegalite_text_rejections_match_on_native_and_wasm`; run focused parser/render/guard tests, `cargo test -p fulgur-chart --locked --offline`, `cargo clippy -p fulgur-chart --all-targets --locked --offline -- -D warnings`, `cargo fmt --all -- --check`, and `cargo check -p fulgur-chart --target wasm32-unknown-unknown --locked --offline`.
-- [ ] Update the PNG golden and confirm the example output and native/WASM SVG and PNG are deterministic.
+- [x] Add failing test `vega_text_guard_enforces_point_label_and_primitive_limits` for row count, UTF-8 label byte size, and total primitive count in standalone and layer inputs.
+- [x] Run `cargo test -p fulgur-chart vega_text_guard --lib --locked --offline` and confirm the new IR currently bypasses text-specific limits.
+- [x] Count text rows/primitives and enforce the existing label byte cap before layout; add the documented example, fixed golden registration, README entry, and native/WASM integration cases.
+- [x] Add WASM tests `vegalite_text_example_renders_deterministic_svg_and_png` and `vegalite_text_rejections_match_on_native_and_wasm`; run focused parser/render/guard tests, `cargo test -p fulgur-chart --locked --offline`, `cargo clippy -p fulgur-chart --all-targets --locked --offline -- -D warnings`, `cargo fmt --all -- --check`, and `cargo check -p fulgur-chart --target wasm32-unknown-unknown --locked --offline`.
+- [x] Update the PNG golden and confirm the example output and native SVG and PNG are deterministic; WASM parity assertions are included, but executing the `wasm-pack` runner is blocked because `wasm-bindgen` CLI is absent and its install location is read-only.
 - [ ] Commit guards, example, docs, golden, and WASM coverage as `feat(vegalite): add text mark example and cross-runtime tests`.

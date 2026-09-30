@@ -36,6 +36,7 @@ const NAMES: &[&str] = &[
     "vegalite-errorband-raw",
     "vegalite-errorband-preaggregated",
     "vegalite-boxplot",
+    "vegalite_text",
     "vegalite-trail-categorical",
     "vegalite-trail-temporal",
     "vegalite-layer",

@@ -18,7 +18,7 @@ pub enum VegaLiteSpec {
     CategoricalLine(VlCategoricalLineSpec),
     TemporalArea(VlTemporalAreaSpec),
     CategoricalArea(VlCategoricalAreaSpec),
-    Text(VlTextSpec),
+    Text(Box<VlTextSpec>),
     Point(VlPointSpec),
     Circle(VlCircleSpec),
     Square(VlSquareSpec),
@@ -84,7 +84,7 @@ pub enum VlCompositionMark {
     ErrorBar(MarkErrorBar),
     ErrorBand(MarkErrorBand),
     BoxPlot(MarkBoxPlot),
-    Text(MarkText),
+    Text(Box<MarkText>),
 }
 
 /// Composition data accepts the Vega-Lite data forms so unsupported URL data can be reported by
@@ -523,7 +523,7 @@ pub struct MarkTextObject {
 #[serde(untagged)]
 pub enum MarkText {
     String(MarkTextName),
-    Object(MarkTextObject),
+    Object(Box<MarkTextObject>),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

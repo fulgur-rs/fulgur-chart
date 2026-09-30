@@ -210,7 +210,7 @@ fn axis_values(spec: &ChartSpec, select: impl Fn(&Point) -> f64) -> Vec<i64> {
         .series
         .iter()
         .flat_map(|series| &series.points)
-        .map(|point| select(point))
+        .map(&select)
         .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
         .map(|value| value.trunc() as i64)
         .collect();
