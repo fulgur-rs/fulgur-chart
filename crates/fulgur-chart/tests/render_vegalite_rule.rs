@@ -243,3 +243,26 @@ fn rule_schema_accepts_string_and_object_marks_and_rejects_unknown_styles() {
     );
     assert!(serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(&unknown_style).is_err());
 }
+
+#[test]
+fn rule_rejects_category_labels_that_collide_across_json_value_types() {
+    let specs = [
+        r##"{"mark":"rule","data":{"values":[{"x":1},{"x":"1"}]},"encoding":{"x":{"field":"x","type":"nominal"}}}"##,
+        r##"{"mark":"rule","data":{"values":[{"x":1,"end":"1","y":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"x2":{"field":"end"},"y":{"field":"y","type":"quantitative"}}}"##,
+        r##"{"mark":"rule","data":{"values":[{"x":1,"y":1,"end":"1"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"nominal"},"y2":{"field":"end"}}}"##,
+        r##"{"mark":"rule","data":{"values":[{"x":1,"group":1},{"x":2,"group":"1"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}"##,
+    ];
+
+    for json in specs {
+        for strict in [false, true] {
+            let result = vegalite::parse(json, strict);
+
+            assert!(
+                result
+                    .as_ref()
+                    .is_err_and(|error| error.contains("JSON value types")),
+                "strict={strict}: ambiguous category labels should be rejected, got {result:?}"
+            );
+        }
+    }
+}

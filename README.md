@@ -249,7 +249,9 @@ plot-spanning vertical or horizontal line. Provide both `x` and `y` to define a 
 `x2` and `y2` set its end coordinates. Positions can be categorical, quantitative, or temporal.
 `mark.color`, `mark.opacity`, `mark.strokeWidth`, `mark.strokeDash`, and `mark.clip`, plus a
 categorical `encoding.color`, are supported. Transformations and aggregation are rejected. Rule
-marks can appear in Cartesian layers and share the layer's scales. See the
+marks reject category values of different JSON types that stringify to the same label (for example,
+numeric `1` and string `"1"`), including shared composition scales where a rule participates. They
+can appear in Cartesian layers and share the layer's scales. See the
 [rule mark example](examples/specs/vegalite-rule.json).
 
 ### Error bars and bands
