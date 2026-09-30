@@ -777,7 +777,10 @@ fn collect_shared_category_values<'a>(
                             .iter()
                             .find(|(previous_type, _, previous_mark)| {
                                 previous_type != value_type
-                                    && (mark == "rule" || *previous_mark == "rule")
+                                    && (mark == "rule"
+                                        || *previous_mark == "rule"
+                                        || mark == "tick"
+                                        || *previous_mark == "tick")
                             })
                     {
                         return Err(format!(

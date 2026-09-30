@@ -5448,6 +5448,27 @@ fn vegalite_tick_shared_composition_domains_are_preflighted() {
         "expected a pre-allocation shared-domain limit error, got {error:?}"
     );
 
+    let colliding_categories = r#"{
+        "layer": [
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": 1}]},
+                "encoding": {"x": {"field": "x", "type": "nominal"}}
+            },
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": "1"}]},
+                "encoding": {"x": {"field": "x", "type": "nominal"}}
+            }
+        ]
+    }"#;
+    let error = vegalite::parse(colliding_categories, false)
+        .expect_err("JSON values with colliding labels must not share a tick position");
+    assert!(
+        error.contains("conflicting JSON value types"),
+        "expected a shared category type collision error, got {error:?}"
+    );
+
     let position_json = r#"{
         "layer": [
             {
