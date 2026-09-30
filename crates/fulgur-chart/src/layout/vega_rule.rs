@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn ranged_rule_without_orthogonal_channel_uses_the_plot_center() {
-        let measurer = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        let measurer = TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         for (json, axis) in [
             (
                 r##"{"mark":"rule","data":{"values":[{"x":10,"x2":30}]},"encoding":{"x":{"field":"x","type":"quantitative"},"x2":{"field":"x2"}}}"##,
