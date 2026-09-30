@@ -352,6 +352,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Matrix { .. } => "matrix",
         ChartKind::VegaRect { .. } => "vegaRect",
         ChartKind::VegaBoxPlot(_) => "vegaBoxPlot",
+        ChartKind::VegaComposition(_) => "vegaComposition",
         ChartKind::GeoShape { .. } => "geoshape",
         ChartKind::ErrorMark(data) => match data.kind {
             crate::ir::ErrorMarkKind::ErrorBar => "errorbar",

@@ -4876,15 +4876,11 @@ fn vegalite_boxplot_groups_category_color_and_detail_in_first_seen_order() {
 }
 
 #[test]
-fn vegalite_boxplot_rejects_transform_layer_and_summary_in_both_modes() {
+fn vegalite_boxplot_rejects_transform_and_summary_in_both_modes() {
     let inputs = [
         (
             r#"{"mark":"boxplot","transform":[{"filter":"datum.value > 0"}],"data":{"values":[{"value":1}]},"encoding":{"y":{"field":"value","type":"quantitative"}}}"#,
             "transform",
-        ),
-        (
-            r#"{"layer":[{"mark":"boxplot","data":{"values":[{"value":1}]},"encoding":{"y":{"field":"value","type":"quantitative"}}}]}"#,
-            "layer",
         ),
         (
             r#"{"mark":"boxplot","data":{"values":[{"group":"a","lower":1,"upper":4}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"lower","type":"quantitative"},"y2":{"field":"upper"}}}"#,

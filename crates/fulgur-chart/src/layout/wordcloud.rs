@@ -243,6 +243,7 @@ mod tests {
             legend: LegendPos::None,
             legend_options: crate::ir::LegendOptions::default(),
             legend_title: None,
+            vega_size_legend: None,
             title: None,
             chartjs_title: None,
             chartjs_subtitle: None,

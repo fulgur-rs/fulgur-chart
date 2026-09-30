@@ -1039,6 +1039,8 @@ pub enum ChartKind {
     ErrorMark(Box<ErrorMarkData>),
     /// Vega-Lite `boxplot` composite mark with dedicated statistics and layout.
     VegaBoxPlot(Box<VegaBoxPlotData>),
+    /// Recursive Vega-Lite `layer` / `hconcat` / `vconcat` composition root.
+    VegaComposition(Box<VegaCompositionNode>),
     /// QuickChart 互換の progress バー。軸なし水平バー。
     /// series[0].values=各バーの値、series.get(1).values=per-bar max(省略時100)。
     Progress,
@@ -1191,6 +1193,100 @@ impl Default for Decimation {
     }
 }
 
+/// Effective Vega-Lite scale resolution on one composition node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VegaResolutionMode {
+    Shared,
+    Independent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VegaCompositionResolve {
+    pub x_scale: VegaResolutionMode,
+    pub y_scale: VegaResolutionMode,
+    pub color_scale: VegaResolutionMode,
+    pub size_scale: VegaResolutionMode,
+    pub x_axis: VegaResolutionMode,
+    pub y_axis: VegaResolutionMode,
+    pub color_legend: VegaResolutionMode,
+    pub size_legend: VegaResolutionMode,
+}
+
+/// Resolved Vega-Lite scale domain. Category order is significant and remains first-seen.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VegaScaleDomain {
+    Categories(Vec<String>),
+    Numeric { min: f64, max: f64 },
+    Temporal { min_millis: i64, max_millis: i64 },
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VegaLeafScaleDomains {
+    pub x: Option<VegaScaleDomain>,
+    pub y: Option<VegaScaleDomain>,
+    pub color: Option<VegaScaleDomain>,
+    pub size: Option<VegaScaleDomain>,
+}
+
+/// Fully parsed unit chart plus the scale context inherited from its composition ancestors.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaCompositionLeaf {
+    pub path: String,
+    pub spec: Box<ChartSpec>,
+    pub scales: VegaLeafScaleDomains,
+}
+
+/// Quantitative Vega-Lite size legend entry after area scaling has been resolved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaSizeLegendEntry {
+    pub label: String,
+    /// Radius for point marks or half-side for square marks, in pixels.
+    pub radius: f64,
+}
+
+/// Legend guide for a quantitative Vega-Lite size encoding.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaSizeLegend {
+    pub title: Option<String>,
+    pub entries: Vec<VegaSizeLegendEntry>,
+    pub square: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaLayerNode {
+    pub path: String,
+    pub children: Vec<VegaCompositionNode>,
+    pub width: f64,
+    pub height: f64,
+    /// Shared Cartesian view rectangle before independent-guide gutters.
+    pub view_width: f64,
+    pub view_height: f64,
+    pub title: Option<String>,
+    pub background: Option<Color>,
+    pub resolve: VegaCompositionResolve,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaConcatNode {
+    pub path: String,
+    pub children: Vec<VegaCompositionNode>,
+    pub width: f64,
+    pub height: f64,
+    pub spacing: f64,
+    pub title: Option<String>,
+    pub background: Option<Color>,
+    pub resolve: VegaCompositionResolve,
+}
+
+/// Recursive Vega-Lite composition tree. Unit marks retain their existing chart IR.
+#[derive(Clone, Debug, PartialEq)]
+pub enum VegaCompositionNode {
+    Unit(Box<VegaCompositionLeaf>),
+    Layer(Box<VegaLayerNode>),
+    HConcat(Box<VegaConcatNode>),
+    VConcat(Box<VegaConcatNode>),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartSpec {
     pub kind: ChartKind,
@@ -1203,6 +1299,8 @@ pub struct ChartSpec {
     pub legend: LegendPos,
     pub legend_options: LegendOptions,
     pub legend_title: Option<String>,
+    /// Vega-Lite quantitative size guide, currently used by point/square marks.
+    pub vega_size_legend: Option<VegaSizeLegend>,
     /// Legacy shared title channel used by Vega-Lite and native `ChartSpec` callers.
     pub title: Option<String>,
     /// Independent Chart.js title plugin configuration.
@@ -1498,6 +1596,7 @@ mod radial_axis_tests {
             legend: LegendPos::None,
             legend_options: LegendOptions::default(),
             legend_title: None,
+            vega_size_legend: None,
             title: None,
             chartjs_title: None,
             chartjs_subtitle: None,

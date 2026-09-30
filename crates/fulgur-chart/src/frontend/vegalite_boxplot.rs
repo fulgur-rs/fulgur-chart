@@ -355,6 +355,7 @@ pub(super) fn parse_boxplot_spec(
         },
         legend_options: LegendOptions::default(),
         legend_title: color.field,
+        vega_size_legend: None,
         title,
         chartjs_title: None,
         chartjs_subtitle: None,

@@ -384,6 +384,14 @@ mod schema_fixture_tests {
                 "pre-aggregated errorband",
                 include_str!("../../../../examples/specs/vegalite-errorband-preaggregated.json"),
             ),
+            (
+                "layer composition",
+                include_str!("../../../../examples/specs/vegalite-layer.json"),
+            ),
+            (
+                "nested concat composition",
+                include_str!("../../../../examples/specs/vegalite-nested-concat.json"),
+            ),
         ] {
             serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(example)
                 .unwrap_or_else(|error| panic!("{name} example rejected by schema: {error}"));

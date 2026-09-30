@@ -2409,6 +2409,7 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         legend: legend_pos(&raw.options.plugins.legend),
         legend_options: legend_options(&raw.options.plugins.legend),
         legend_title: legend_title(&raw.options.plugins.legend),
+        vega_size_legend: None,
         title: None,
         chartjs_title: resolve_chartjs_title(raw.options.plugins.title.as_ref(), false, &theme)?,
         chartjs_subtitle: resolve_chartjs_title(
@@ -3564,6 +3565,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         legend: crate::ir::LegendPos::None,
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
+        vega_size_legend: None,
         title: None,
         chartjs_title: resolve_chartjs_title(raw.options.plugins.title.as_ref(), false, &theme)?,
         chartjs_subtitle: resolve_chartjs_title(
@@ -3953,6 +3955,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         legend: legend_pos(&raw.options.plugins.legend),
         legend_options: legend_options(&raw.options.plugins.legend),
         legend_title: legend_title(&raw.options.plugins.legend),
+        vega_size_legend: None,
         title: None,
         chartjs_title: resolve_chartjs_title(raw.options.plugins.title.as_ref(), false, &theme)?,
         chartjs_subtitle: resolve_chartjs_title(
@@ -4318,6 +4321,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         legend: crate::ir::LegendPos::None,
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
+        vega_size_legend: None,
         title: None,
         chartjs_title: resolve_chartjs_title(raw.options.plugins.title.as_ref(), false, &theme)?,
         chartjs_subtitle: resolve_chartjs_title(
@@ -4551,6 +4555,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         legend: LegendPos::None,
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
+        vega_size_legend: None,
         title: None,
         chartjs_title: resolve_chartjs_title(plugins.title.as_ref(), false, &theme)?,
         chartjs_subtitle: resolve_chartjs_title(plugins.subtitle.as_ref(), true, &theme)?,
@@ -4723,6 +4728,7 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         legend: LegendPos::None,
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: None,
+        vega_size_legend: None,
         title: None,
         chartjs_title: resolve_chartjs_title(plugins.title.as_ref(), false, &theme)?,
         chartjs_subtitle: resolve_chartjs_title(plugins.subtitle.as_ref(), true, &theme)?,

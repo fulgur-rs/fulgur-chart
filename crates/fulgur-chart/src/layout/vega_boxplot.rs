@@ -329,7 +329,34 @@ fn draw_axes(
     }
 }
 
-fn color_legend_groups(data: &VegaBoxPlotData) -> Vec<(&str, Color)> {
+fn color_legend_groups(
+    spec: &ChartSpec,
+    data: &VegaBoxPlotData,
+    shared_categories: Option<&[String]>,
+) -> Vec<(String, Color)> {
+    if let Some(categories) = shared_categories {
+        return categories
+            .iter()
+            .enumerate()
+            .map(|(index, label)| {
+                let color = data
+                    .groups
+                    .iter()
+                    .find(|group| group.color_label.as_deref() == Some(label.as_str()))
+                    .map(|group| group.color)
+                    .or_else(|| {
+                        let palette = &spec.theme.palette;
+                        (!palette.is_empty()).then(|| palette[index % palette.len()])
+                    })
+                    .unwrap_or(
+                        crate::palette::VEGALITE_PALETTE
+                            [index % crate::palette::VEGALITE_PALETTE.len()],
+                    );
+                (label.clone(), color)
+            })
+            .collect();
+    }
+
     let mut groups = Vec::<(&str, Color)>::new();
     for group in &data.groups {
         let Some(label) = group.color_label.as_deref() else {
@@ -340,6 +367,9 @@ fn color_legend_groups(data: &VegaBoxPlotData) -> Vec<(&str, Color)> {
         }
     }
     groups
+        .into_iter()
+        .map(|(label, color)| (label.to_owned(), color))
+        .collect()
 }
 
 fn draw_legend(
@@ -347,8 +377,9 @@ fn draw_legend(
     spec: &ChartSpec,
     data: &VegaBoxPlotData,
     m: &TextMeasurer<'_>,
+    shared_categories: Option<&[String]>,
 ) {
-    let groups = color_legend_groups(data);
+    let groups = color_legend_groups(spec, data, shared_categories);
     if groups.is_empty() {
         return;
     }
@@ -364,14 +395,14 @@ fn draw_legend(
             fill: color,
         });
         x += 13.0;
-        let width = m.width(label, font as f32) as f64;
+        let width = m.width(&label, font as f32) as f64;
         items.push(Prim::Text {
             x,
             y: y + font * 0.8,
             size: font,
             anchor: Anchor::Start,
             fill: spec.theme.text_color,
-            content: label.to_string(),
+            content: label,
             rotate_deg: None,
         });
         x += width + 18.0;
@@ -665,6 +696,15 @@ pub(crate) fn build_checked(
     m: &TextMeasurer<'_>,
     limits: &crate::guard::InputLimits,
 ) -> Result<Scene, String> {
+    build_checked_with_layer_parts(spec, m, limits, None).map(|(scene, _)| scene)
+}
+
+pub(crate) fn build_checked_with_layer_parts(
+    spec: &ChartSpec,
+    m: &TextMeasurer<'_>,
+    limits: &crate::guard::InputLimits,
+    shared_color_categories: Option<&[String]>,
+) -> Result<(Scene, usize), String> {
     crate::guard::validate_vega_boxplot(spec, limits)?;
     let data = data(spec);
     let frame = compute_frame(spec, m);
@@ -683,12 +723,12 @@ pub(crate) fn build_checked(
     }
     let mut items = Vec::new();
     draw_axes(&mut items, spec, data, &frame);
-    draw_legend(&mut items, spec, data, m);
+    draw_legend(&mut items, spec, data, m, shared_color_categories);
     let mut marks = Vec::new();
     for (index, group) in data.groups.iter().enumerate() {
         draw_group(&mut marks, data, &frame, group, index);
     }
-    if data.style.clip {
+    let mark_count = if data.style.clip {
         items.push(Prim::Group {
             translate_x: 0.0,
             translate_y: 0.0,
@@ -700,13 +740,19 @@ pub(crate) fn build_checked(
             })),
             children: marks,
         });
+        1
     } else {
+        let mark_count = marks.len();
         items.extend(marks);
-    }
+        mark_count
+    };
     ensure_finite_geometry(&items)?;
-    Ok(Scene {
-        width: spec.width,
-        height: spec.height,
-        items,
-    })
+    Ok((
+        Scene {
+            width: spec.width,
+            height: spec.height,
+            items,
+        },
+        mark_count,
+    ))
 }

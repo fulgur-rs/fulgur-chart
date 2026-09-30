@@ -1,0 +1,28 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "title": "Quarterly sales and target",
+  "width": 480,
+  "height": 280,
+  "data": {
+    "values": [
+      { "quarter": "Q1", "sales": 42, "target": 38, "region": "North" },
+      { "quarter": "Q2", "sales": 55, "target": 48, "region": "North" },
+      { "quarter": "Q3", "sales": 49, "target": 53, "region": "North" },
+      { "quarter": "Q4", "sales": 68, "target": 61, "region": "North" }
+    ]
+  },
+  "encoding": {
+    "x": { "field": "quarter", "type": "nominal" },
+    "color": { "field": "region", "type": "nominal" }
+  },
+  "layer": [
+    {
+      "mark": "bar",
+      "encoding": { "y": { "field": "sales", "type": "quantitative" } }
+    },
+    {
+      "mark": "line",
+      "encoding": { "y": { "field": "target", "type": "quantitative" } }
+    }
+  ]
+}

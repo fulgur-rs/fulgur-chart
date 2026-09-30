@@ -199,6 +199,25 @@ palette is applied automatically to categorical Vega-Lite encodings. Input is co
 shared intermediate representation, so output determinism and Fulgur integration are identical
 to chart.js input.
 
+### Layer and concat composition
+
+`layer`, `hconcat`, and `vconcat` can combine nested views while keeping the order of marks in
+the input. Layer nodes inherit inline `data.values` and `encoding` by channel; child data replaces
+the inherited rows, and a child channel replaces only that channel's inherited mapping. Concat
+nodes inherit data but cannot declare a shared encoding.
+
+Layers share positional and non-positional scales and guides by default. Concat views use
+independent `x` and `y` scales and axes by default, with shared color/size scales and legends.
+`resolve` can select supported shared or independent scale, axis, and legend behavior; incompatible
+shared domains and unsupported resolution combinations return path-qualified errors. URL data,
+`transform`, `facet`, `repeat`, and general `concat` are rejected. `arc` and `geoshape` can be used
+in concat views, but cannot share a Cartesian layer frame. Composition uses the same Scene renderer
+in native and WASM builds. SVG keeps image references; PNG and WebP report the existing image-mark
+unsupported error if any composed view contains an image.
+
+Examples: [bar and line layer](examples/specs/vegalite-layer.json) and
+[nested concat with an inner layer](examples/specs/vegalite-nested-concat.json).
+
 ### Image marks
 
 `image` requires a mark object with positive `width` and `height`, quantitative `encoding.x` and

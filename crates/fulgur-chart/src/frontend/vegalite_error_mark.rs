@@ -625,6 +625,7 @@ pub(super) fn parse_error_mark_spec(
         },
         legend_options: crate::ir::LegendOptions::default(),
         legend_title: color_field,
+        vega_size_legend: None,
         title,
         chartjs_title: None,
         chartjs_subtitle: None,

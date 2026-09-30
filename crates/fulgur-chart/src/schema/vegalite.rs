@@ -25,6 +25,249 @@ pub enum VegaLiteSpec {
     Rect(VlRectSpec),
     Image(VlImageSpec),
     GeoShape(Box<VlGeoShapeSpec>),
+    Layer(Box<VlLayerSpec>),
+    HConcat(Box<VlHConcatSpec>),
+    VConcat(Box<VlVConcatSpec>),
+}
+
+/// Recursive composition child. Unit fields are optional where a parent may provide inherited data
+/// or encoding; the frontend validates each resolved leaf against its existing mark-specific parser.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlCompositionChildSpec {
+    Layer(Box<VlLayerSpec>),
+    HConcat(Box<VlHConcatSpec>),
+    VConcat(Box<VlVConcatSpec>),
+    Unit(Box<VlCompositionUnitSpec>),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCompositionUnitSpec {
+    pub mark: VlCompositionMark,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<VlCompositionData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<VlCompositionEncoding>,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection: Option<VlProjection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<VlConfig>,
+}
+
+/// Mark union for a composition leaf. Detailed encoding validation is performed after inheritance.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum VlCompositionMark {
+    Bar(MarkBar),
+    Line(MarkLine),
+    Trail(MarkTrail),
+    Area(MarkArea),
+    Point(MarkPoint),
+    Circle(MarkCircle),
+    Square(MarkSquare),
+    Arc(MarkArc),
+    Rect(MarkRect),
+    Image(MarkImageObject),
+    GeoShape(MarkGeoShape),
+    ErrorBar(MarkErrorBar),
+    ErrorBand(MarkErrorBand),
+    BoxPlot(MarkBoxPlot),
+}
+
+/// Composition data accepts the Vega-Lite data forms so unsupported URL data can be reported by
+/// the frontend with a stable path instead of disappearing at schema validation.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCompositionData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<VlGeoDataFormat>,
+}
+
+/// Partial encoding accepted on a child and resolved before mark-specific parsing.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCompositionEncoding {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theta: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x2: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y2: Option<serde_json::Value>,
+    #[serde(rename = "xError", skip_serializing_if = "Option::is_none")]
+    pub x_error: Option<serde_json::Value>,
+    #[serde(rename = "xError2", skip_serializing_if = "Option::is_none")]
+    pub x_error2: Option<serde_json::Value>,
+    #[serde(rename = "yError", skip_serializing_if = "Option::is_none")]
+    pub y_error: Option<serde_json::Value>,
+    #[serde(rename = "yError2", skip_serializing_if = "Option::is_none")]
+    pub y_error2: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlLayerSpec {
+    #[serde(deserialize_with = "deserialize_nonempty_composition_children")]
+    #[schemars(length(min = 1))]
+    pub layer: Vec<VlCompositionChildSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<VlCompositionData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<VlCompositionEncoding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolve: Option<VlCompositionResolve>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlHConcatSpec {
+    #[serde(deserialize_with = "deserialize_nonempty_composition_children")]
+    #[schemars(length(min = 1))]
+    pub hconcat: Vec<VlCompositionChildSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<VlCompositionData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolve: Option<VlCompositionResolve>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spacing: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlVConcatSpec {
+    #[serde(deserialize_with = "deserialize_nonempty_composition_children")]
+    #[schemars(length(min = 1))]
+    pub vconcat: Vec<VlCompositionChildSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<VlCompositionData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolve: Option<VlCompositionResolve>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spacing: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlCompositionResolve {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<VlScaleResolution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub axis: Option<VlAxisResolution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legend: Option<VlLegendResolution>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlScaleResolution {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<VlResolveMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<VlResolveMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlResolveMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<VlResolveMode>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlAxisResolution {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<VlResolveMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<VlResolveMode>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlLegendResolution {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlResolveMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<VlResolveMode>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VlResolveMode {
+    Shared,
+    Independent,
+}
+
+fn deserialize_nonempty_composition_children<'de, D>(
+    deserializer: D,
+) -> Result<Vec<VlCompositionChildSpec>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let children = Vec::<VlCompositionChildSpec>::deserialize(deserializer)?;
+    if children.is_empty() {
+        return Err(serde::de::Error::custom(
+            "composition child array must contain at least one spec",
+        ));
+    }
+    Ok(children)
 }
 
 // ────────────────────────────────────────────────

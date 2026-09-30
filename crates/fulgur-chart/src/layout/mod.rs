@@ -22,6 +22,7 @@ pub mod scatter;
 pub mod sparkline;
 pub mod treemap;
 pub(crate) mod vega_boxplot;
+pub(crate) mod vega_composition;
 pub mod vega_rect;
 pub mod violin;
 pub mod wordcloud;
@@ -102,6 +103,47 @@ pub fn build_scene_checked_with_limits(
     Ok(scene)
 }
 
+/// Builds a Vega-Lite unit Scene and reports the trailing top-level mark item count for composite
+/// marks whose axes and data geometry use the same primitive types.
+pub(crate) fn build_scene_checked_with_layer_marks(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    limits: &crate::guard::InputLimits,
+    shared_color_categories: Option<&[String]>,
+) -> Result<(Scene, Option<usize>), String> {
+    crate::guard::validate_vega_image(spec, limits)?;
+    let parts = match &spec.kind {
+        ChartKind::ErrorMark(_) => Some(error_mark::build_checked_with_layer_parts(
+            spec,
+            m,
+            limits.max_categorical_primitives,
+        )?),
+        ChartKind::VegaBoxPlot(_) => Some(vega_boxplot::build_checked_with_layer_parts(
+            spec,
+            m,
+            limits,
+            shared_color_categories,
+        )?),
+        _ => None,
+    };
+    let Some((mut scene, mark_count)) = parts else {
+        return Ok((build_scene_checked_with_limits(spec, m, limits)?, None));
+    };
+    if let Some(fill) = spec.theme.background {
+        scene.items.insert(
+            0,
+            Prim::Rect {
+                x: 0.0,
+                y: 0.0,
+                w: scene.width,
+                h: scene.height,
+                fill,
+            },
+        );
+    }
+    Ok((scene, Some(mark_count)))
+}
+
 fn build_chart_scene(
     spec: &ChartSpec,
     m: &TextMeasurer,
@@ -127,6 +169,7 @@ fn build_chart_scene(
             error_mark::build_checked(spec, m, limits.max_categorical_primitives)?
         }
         ChartKind::VegaBoxPlot(_) => vega_boxplot::build_checked(spec, m, limits)?,
+        ChartKind::VegaComposition(_) => vega_composition::build_checked(spec, m, limits)?,
         ChartKind::Progress => progress::build(spec, m),
         ChartKind::BoxPlot => boxplot::build(spec, m),
         ChartKind::Violin { .. } => violin::build(spec, m),

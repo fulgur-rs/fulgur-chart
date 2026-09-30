@@ -38,6 +38,8 @@ const NAMES: &[&str] = &[
     "vegalite-boxplot",
     "vegalite-trail-categorical",
     "vegalite-trail-temporal",
+    "vegalite-layer",
+    "vegalite-nested-concat",
 ];
 
 /// 1 チャンネルあたりの絶対差がこの値を超えたら「差分ピクセル」と数える。
@@ -106,7 +108,11 @@ fn render_to_png(name: &str) -> Vec<u8> {
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("spec 読み込み失敗 {path}: {e}"));
     let value: serde_json::Value =
         serde_json::from_str(&json).unwrap_or_else(|e| panic!("spec JSON 失敗 {name}: {e}"));
-    let spec = if value.get("mark").is_some() {
+    let is_vegalite = value.get("mark").is_some()
+        || ["layer", "hconcat", "vconcat"]
+            .iter()
+            .any(|operator| value.get(operator).is_some());
+    let spec = if is_vegalite {
         vegalite::parse(&json, true).unwrap_or_else(|e| panic!("spec parse 失敗 {name}: {e}"))
     } else {
         chartjs::parse(&json, false).unwrap_or_else(|e| panic!("spec parse 失敗 {name}: {e}"))

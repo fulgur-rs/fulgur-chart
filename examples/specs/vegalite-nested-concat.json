@@ -1,0 +1,73 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "title": "Monthly performance overview",
+  "vconcat": [
+    {
+      "hconcat": [
+        {
+          "mark": "line",
+          "width": 320,
+          "height": 220,
+          "data": {
+            "values": [
+              { "month": "Jan", "sales": 32, "region": "North" },
+              { "month": "Feb", "sales": 41, "region": "North" },
+              { "month": "Mar", "sales": 37, "region": "North" },
+              { "month": "Apr", "sales": 53, "region": "North" }
+            ]
+          },
+          "encoding": {
+            "x": { "field": "month", "type": "nominal" },
+            "y": { "field": "sales", "type": "quantitative" }
+          }
+        },
+        {
+          "width": 320,
+          "height": 220,
+          "data": {
+            "values": [
+              { "month": "Jan", "actual": 28, "forecast": 35, "region": "North" },
+              { "month": "Feb", "actual": 45, "forecast": 42, "region": "North" },
+              { "month": "Mar", "actual": 39, "forecast": 47, "region": "North" },
+              { "month": "Apr", "actual": 57, "forecast": 52, "region": "North" }
+            ]
+          },
+          "encoding": {
+            "x": { "field": "month", "type": "nominal" }
+          },
+          "layer": [
+            { "mark": "bar", "encoding": { "y": { "field": "actual", "type": "quantitative" } } },
+            { "mark": "line", "encoding": { "y": { "field": "forecast", "type": "quantitative" } } }
+          ],
+          "resolve": {
+            "scale": { "x": "shared", "y": "shared" },
+            "axis": { "x": "shared", "y": "shared" }
+          }
+        }
+      ],
+      "spacing": 16,
+      "resolve": {
+        "scale": { "x": "independent", "y": "independent" },
+        "axis": { "x": "independent", "y": "independent" }
+      }
+    },
+    {
+      "mark": "point",
+      "width": 320,
+      "height": 220,
+      "data": {
+        "values": [
+          { "effort": 2, "impact": 31 },
+          { "effort": 4, "impact": 48 },
+          { "effort": 6, "impact": 44 },
+          { "effort": 8, "impact": 67 }
+        ]
+      },
+      "encoding": {
+        "x": { "field": "effort", "type": "quantitative" },
+        "y": { "field": "impact", "type": "quantitative" }
+      }
+    }
+  ],
+  "spacing": 18
+}
