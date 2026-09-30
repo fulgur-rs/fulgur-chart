@@ -175,6 +175,40 @@ fn vegalite_composition_accepts_boxplot_unit_marks_in_both_modes() {
 }
 
 #[test]
+fn vegalite_layer_accepts_text_leaf_with_inherited_data() {
+    let json = r##"{
+      "data":{"values":[
+        {"x":1,"y":3,"label":"North","group":"A","size":10},
+        {"x":9,"y":7,"label":"South","group":"B","size":20}
+      ]},
+      "encoding":{
+        "x":{"field":"x","type":"quantitative"},
+        "y":{"field":"y","type":"quantitative"}
+      },
+      "layer":[
+        {"mark":"point"},
+        {"mark":"text","encoding":{"text":{"field":"label"}}}
+      ]
+    }"##;
+    let spec = vegalite::parse(json, true).expect("text mark leaf should share inherited data");
+    let ChartKind::VegaComposition(root) = spec.kind else {
+        panic!("composition chart kind expected")
+    };
+    let VegaCompositionNode::Layer(layer) = *root else {
+        panic!("layer node expected")
+    };
+    let VegaCompositionNode::Unit(text) = &layer.children[1] else {
+        panic!("second child should be a text unit")
+    };
+    let ChartKind::VegaText(data) = &text.spec.kind else {
+        panic!("text child should keep its dedicated IR")
+    };
+    assert_eq!(data.marks.len(), 2);
+    assert_eq!(data.marks[0].text, "North");
+    assert_eq!(data.marks[1].text, "South");
+}
+
+#[test]
 fn shared_measurement_scales_infer_horizontal_boxplot_and_error_mark_types() {
     let horizontal_boxplot = r#"{
       "resolve":{"scale":{"x":"shared"}},

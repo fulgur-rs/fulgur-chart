@@ -60,7 +60,11 @@ fn plot_rect_for_spec(spec: &ChartSpec, measurer: &TextMeasurer<'_>) -> Option<P
                 frame.plot_bottom,
             )
         }
-        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square | ChartKind::VegaImage(_) => {
+        ChartKind::Scatter
+        | ChartKind::Bubble
+        | ChartKind::Square
+        | ChartKind::VegaImage(_)
+        | ChartKind::VegaText(_) => {
             let frame = crate::layout::scatter::compute_scatter_layout(spec, measurer);
             (
                 frame.plot_left,
@@ -1500,6 +1504,7 @@ fn is_mark_primitive(prim: &Prim, kind: &ChartKind) -> bool {
             )
         }
         ChartKind::VegaImage(_) => matches!(prim, Prim::Image { .. }),
+        ChartKind::VegaText(_) => matches!(prim, Prim::StyledText(_)),
         ChartKind::VegaRect { .. } => matches!(prim, Prim::Rect { .. }),
         ChartKind::ErrorMark(_) | ChartKind::VegaBoxPlot(_) => false,
         _ => false,

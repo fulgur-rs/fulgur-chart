@@ -453,7 +453,7 @@ fn raw_channel_kind(
         {
             Numeric
         }
-        "x" if mark == "point" || mark == "circle" || mark == "square" => Numeric,
+        "x" if matches!(mark, "point" | "circle" | "square" | "text") => Numeric,
         "x" if mark == "rect" => Categories,
         "x" => Categories,
         "y" if matches!(mark, "rect") => Categories,
@@ -1082,6 +1082,7 @@ fn validate_layer_children(
                         | crate::ir::ChartKind::Square
                         | crate::ir::ChartKind::VegaRect { .. }
                         | crate::ir::ChartKind::VegaImage(_)
+                        | crate::ir::ChartKind::VegaText(_)
                         | crate::ir::ChartKind::ErrorMark(_)
                         | crate::ir::ChartKind::VegaBoxPlot(_)
                 ) {
@@ -1287,6 +1288,10 @@ fn parsed_leaf_domains(spec: &crate::ir::ChartSpec) -> crate::ir::VegaLeafScaleD
                     .iter()
                     .flat_map(|series| series.points.iter().map(|point| point.y)),
             );
+        }
+        ChartKind::VegaText(data) => {
+            domains.x = numeric_domain(data.marks.iter().map(|mark| mark.point.x));
+            domains.y = numeric_domain(data.marks.iter().map(|mark| mark.point.y));
         }
         ChartKind::VegaBoxPlot(data) => {
             let values = data.groups.iter().flat_map(|group| {

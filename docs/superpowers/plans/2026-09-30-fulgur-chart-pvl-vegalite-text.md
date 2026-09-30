@@ -71,11 +71,11 @@
 - Modify: `crates/fulgur-chart/src/model.rs`
 - Test: `crates/fulgur-chart/tests/render_vegalite_composition.rs`
 
-- [ ] Add failing tests `vegalite_layer_accepts_text_leaf_with_inherited_data` and `vegalite_layer_shares_text_color_size_scales_and_plot_frame` for inherited fields, shared domains, and position alignment with a point mark.
-- [ ] Run `cargo test -p fulgur-chart --test frontend_vegalite_composition vegalite_text --locked --offline` and `cargo test -p fulgur-chart --test render_vegalite_composition vegalite_text --locked --offline`; confirm text leaves fail layer eligibility or do not share the scale/frame.
-- [ ] Include text marks in layer leaf validation, raw and parsed scale domains, color/size overrides, axis domains, plot-rectangle lookup, and mark primitive ownership.
-- [ ] Run the focused layer tests and existing Vega-Lite composition suite; verify shared-frame alignment and stable child order.
-- [ ] Commit the composition scale/layout integration and regression tests as `feat(vegalite): support text marks in layers`.
+- [x] Add failing tests `vegalite_layer_accepts_text_leaf_with_inherited_data` and `vegalite_layer_shares_text_color_size_scales_and_plot_frame` for inherited fields, shared domains, and position alignment with a point mark.
+- [x] Run `cargo test -p fulgur-chart --test frontend_vegalite_composition vegalite_layer --locked --offline` and `cargo test -p fulgur-chart --test render_vegalite_composition vegalite_layer --locked --offline`; confirm text leaves fail layer eligibility or do not share the scale/frame.
+- [x] Include text marks in layer leaf validation, raw and parsed scale domains, color/size overrides, axis domains, plot-rectangle lookup, and mark primitive ownership.
+- [x] Run the focused layer tests and existing Vega-Lite composition suite; verify shared-frame alignment and stable child order.
+- [x] Commit the composition scale/layout integration and regression tests as `feat(vegalite): support text marks in layers`.
 
 ### Task 4: Guards, example, golden, and cross-runtime coverage
 
