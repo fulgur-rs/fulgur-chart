@@ -1740,7 +1740,7 @@ fn expand_node(
                         .and_then(Value::as_object)
                         .and_then(|mark| mark.get("type"))?
                         .as_str()),
-                Some("boxplot" | "image")
+                Some("boxplot" | "image" | "rule")
             )
         {
             super::vegalite::check_unknown_value(&effective)
