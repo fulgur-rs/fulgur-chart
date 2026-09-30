@@ -240,6 +240,7 @@ fn title_group(
                 fill: title.color,
                 content: content.clone(),
                 rotate_deg,
+                baseline: crate::ir::TextBaseline::Alphabetic,
                 font_family: title.font_family.clone(),
                 font_weight: title.font_weight.clone(),
                 font_style: title.font_style.clone(),

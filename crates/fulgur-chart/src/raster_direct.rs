@@ -1413,6 +1413,7 @@ fn render_prim(
                 *fill,
                 content,
                 *rotate_deg,
+                crate::ir::TextBaseline::Alphabetic,
                 None,
                 None,
                 face,
@@ -1431,6 +1432,7 @@ fn render_prim(
                 text.fill,
                 &text.content,
                 text.rotate_deg,
+                text.baseline,
                 text.font_weight.as_deref(),
                 text.font_style.as_deref(),
                 face,
@@ -1562,6 +1564,7 @@ fn render_text(
     fill: Color,
     content: &str,
     rotate_deg: Option<f64>,
+    baseline: crate::ir::TextBaseline,
     font_weight: Option<&str>,
     font_style: Option<&str>,
     face: &ttf_parser::Face<'_>,
@@ -1590,7 +1593,15 @@ fn render_text(
         Anchor::End => x as f32 - total_width,
     };
 
-    let baseline_y = y as f32;
+    let ascender = face.ascender() as f32 * glyph_scale;
+    let descender = face.descender() as f32 * glyph_scale;
+    let baseline_offset = match baseline {
+        crate::ir::TextBaseline::Alphabetic => 0.0,
+        crate::ir::TextBaseline::Top => ascender,
+        crate::ir::TextBaseline::Middle => (ascender + descender) / 2.0,
+        crate::ir::TextBaseline::Bottom => descender,
+    };
+    let baseline_y = y as f32 + baseline_offset;
     let paint = solid_paint(fill);
     let bold = font_weight.is_some_and(|weight| {
         weight.eq_ignore_ascii_case("bold")
@@ -2064,6 +2075,33 @@ mod tests {
         scene_to_pixmap(&scene, scale, &face, &PNG_LIMITS).unwrap()
     }
 
+    fn styled_text_baseline_pixmap(baseline: crate::ir::TextBaseline) -> Pixmap {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let scene = Scene {
+            width: 180.0,
+            height: 140.0,
+            items: vec![Prim::StyledText(Box::new(crate::scene::StyledText {
+                x: 20.0,
+                y: 70.0,
+                size: 24.0,
+                anchor: Anchor::Start,
+                fill: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                content: "Hg".into(),
+                rotate_deg: None,
+                baseline,
+                font_family: None,
+                font_weight: None,
+                font_style: None,
+            }))],
+        };
+        scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap()
+    }
+
     #[test]
     fn text_rotation_uses_anchor_in_user_space_before_output_scale() {
         for anchor in [Anchor::Start, Anchor::Middle, Anchor::End] {
@@ -2094,6 +2132,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn styled_text_baseline_changes_native_pixel_placement() {
+        let alphabetic = non_transparent_bounds(&styled_text_baseline_pixmap(
+            crate::ir::TextBaseline::Alphabetic,
+        ));
+        let top =
+            non_transparent_bounds(&styled_text_baseline_pixmap(crate::ir::TextBaseline::Top));
+        let middle = non_transparent_bounds(&styled_text_baseline_pixmap(
+            crate::ir::TextBaseline::Middle,
+        ));
+        let bottom = non_transparent_bounds(&styled_text_baseline_pixmap(
+            crate::ir::TextBaseline::Bottom,
+        ));
+
+        assert!(
+            top.top > middle.top && middle.top > alphabetic.top && alphabetic.top > bottom.top,
+            "baseline alignment should move glyphs relative to their anchor: top={top:?}, middle={middle:?}, alphabetic={alphabetic:?}, bottom={bottom:?}"
+        );
     }
 
     #[test]
@@ -3739,6 +3797,7 @@ mod tests {
                 fill: BLUE,
                 content: "styled".into(),
                 rotate_deg: None,
+                baseline: crate::ir::TextBaseline::Alphabetic,
                 font_family: Some("Test Sans".into()),
                 font_weight: Some("bold".into()),
                 font_style: Some("italic".into()),
@@ -3830,6 +3889,7 @@ mod tests {
                 fill: BLUE,
                 content: "styled".into(),
                 rotate_deg: None,
+                baseline: crate::ir::TextBaseline::Alphabetic,
                 font_family: Some("Test Sans".into()),
                 font_weight: Some("bold".into()),
                 font_style: Some("italic".into()),

@@ -206,13 +206,24 @@ fn axis_ticks(
 }
 
 fn axis_values(spec: &ChartSpec, select: impl Fn(&Point) -> f64) -> Vec<i64> {
-    spec.series
+    let mut values: Vec<i64> = spec
+        .series
         .iter()
         .flat_map(|series| &series.points)
-        .map(select)
+        .map(|point| select(point))
         .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
         .map(|value| value.trunc() as i64)
-        .collect()
+        .collect();
+    if let ChartKind::VegaText(data) = &spec.kind {
+        values.extend(
+            data.marks
+                .iter()
+                .map(|mark| select(&mark.point))
+                .filter(|value| value.is_finite() && value.abs() <= 8.64e15)
+                .map(|value| value.trunc() as i64),
+        );
+    }
+    values
 }
 
 fn axis_scale(
@@ -241,7 +252,7 @@ fn axis_scale(
     }
 }
 
-fn map_scatter_line_axis(scale: &ValueScale, value: f64) -> Option<f64> {
+pub(crate) fn map_scatter_line_axis(scale: &ValueScale, value: f64) -> Option<f64> {
     let pixel = match scale {
         ValueScale::Linear(inner) => inner.map(value),
         ValueScale::Temporal(inner) => inner.map_value(value),
@@ -466,6 +477,20 @@ pub(crate) fn axis_domain(
                 }
             }
         }
+        if let ChartKind::VegaText(data) = &spec.kind {
+            for mark in &data.marks {
+                let value = select(&mark.point);
+                if !value.is_finite() {
+                    continue;
+                }
+                if value == 0.0 {
+                    has_zero = true;
+                } else if value > 0.0 {
+                    min_positive = min_positive.min(value);
+                    max_positive = max_positive.max(value);
+                }
+            }
+        }
         return super::common::log_axis_domain_from_extrema(
             axis_spec,
             min_positive,
@@ -489,6 +514,18 @@ pub(crate) fn axis_domain(
                 if v > hi {
                     hi = v;
                 }
+            }
+        }
+    }
+    if let ChartKind::VegaText(data) = &spec.kind {
+        for mark in &data.marks {
+            let v = select(&mark.point);
+            if v.is_finite()
+                && (!super::common::is_temporal_scale(axis_spec)
+                    || super::common::temporal_value_is_valid(v))
+            {
+                lo = lo.min(v);
+                hi = hi.max(v);
             }
         }
     }

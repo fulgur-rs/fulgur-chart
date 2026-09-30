@@ -24,6 +24,7 @@ pub mod treemap;
 pub(crate) mod vega_boxplot;
 pub(crate) mod vega_composition;
 pub mod vega_rect;
+pub(crate) mod vega_text;
 pub mod violin;
 pub mod wordcloud;
 
@@ -158,8 +159,7 @@ fn build_chart_scene(
         ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square | ChartKind::VegaImage(_) => {
             scatter::build(spec, m)
         }
-        // Task 2 replaces this parse-only fallback with dedicated text mark layout.
-        ChartKind::VegaText(_) => scatter::build(spec, m),
+        ChartKind::VegaText(_) => vega_text::build(spec, m),
         ChartKind::Radar => radar::build(spec, m),
         ChartKind::Mixed => mixed::build(spec, m),
         ChartKind::Matrix { .. } => matrix::build(spec, m),

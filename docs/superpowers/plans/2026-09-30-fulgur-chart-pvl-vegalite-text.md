@@ -57,11 +57,11 @@
 - Modify: `crates/fulgur-chart/src/raster_direct.rs`
 - Test: `crates/fulgur-chart/tests/render_vegalite_text.rs`
 
-- [ ] Add failing tests `vegalite_text_scene_maps_coordinates_and_styles_labels` and `vegalite_text_scene_applies_baseline_and_offsets` for shared linear coordinates, row count, styles, baseline, and offsets.
-- [ ] Run `cargo test -p fulgur-chart --test render_vegalite_text vegalite_text_scene --locked --offline` and confirm the new mark has no layout/Scene implementation.
-- [ ] Extend quantitative domain/model handling for `VegaText`; reuse scatter frame/tick placement and emit `StyledText` with color, font, alignment, baseline, angle, offsets, and resolved size/opacity. Add baseline positioning to `StyledText`, SVG `dominant-baseline`, and raster font-metric placement.
-- [ ] Assert out-of-bounds behavior, per-row field styles, native baseline placement, and SVG attributes; rerun `cargo test -p fulgur-chart --test render_vegalite_text --locked --offline`.
-- [ ] Commit the layout, Scene, renderer, and native regression tests as `feat(vegalite): render coordinate text marks`.
+- [x] Add failing tests `vegalite_text_scene_maps_coordinates_and_styles_labels` and `vegalite_text_scene_applies_baseline_and_offsets` for shared linear coordinates, row count, styles, baseline, and offsets.
+- [x] Run `cargo test -p fulgur-chart --test render_vegalite_text vegalite_text_scene --locked --offline` and confirm the new mark has no layout/Scene implementation.
+- [x] Extend quantitative domain/model handling for `VegaText`; reuse scatter frame/tick placement and emit `StyledText` with color, font, alignment, baseline, angle, offsets, and resolved size/opacity. Add baseline positioning to `StyledText`, SVG `dominant-baseline`, and raster font-metric placement.
+- [x] Assert out-of-bounds behavior, per-row field styles, native baseline placement, and SVG attributes; rerun `cargo test -p fulgur-chart --test render_vegalite_text --locked --offline`.
+- [x] Commit the layout, Scene, renderer, and native regression tests as `feat(vegalite): render coordinate text marks`.
 
 ### Task 3: Layer scale and frame integration
 

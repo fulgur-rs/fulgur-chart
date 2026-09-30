@@ -468,13 +468,23 @@ fn write_prim(
                 .as_deref()
                 .map(|style| format!(" font-style=\"{}\"", xml_escape_attr(style)))
                 .unwrap_or_default();
+            let dominant_baseline = match text.baseline {
+                crate::ir::TextBaseline::Alphabetic => String::new(),
+                crate::ir::TextBaseline::Top => {
+                    " dominant-baseline=\"text-before-edge\"".to_owned()
+                }
+                crate::ir::TextBaseline::Middle => " dominant-baseline=\"central\"".to_owned(),
+                crate::ir::TextBaseline::Bottom => {
+                    " dominant-baseline=\"text-after-edge\"".to_owned()
+                }
+            };
             let transform = text
                 .rotate_deg
                 .map(|d| format!(" transform=\"rotate({},{},{})\"", fmt_num(d), xv, yv))
                 .unwrap_or_default();
             write!(
                 s,
-                r#"<text x="{xv}" y="{yv}"{transform} font-family="{fam}" font-size="{size}"{weight}{style} text-anchor="{anchor}" fill="{hex}"{op}>{escaped}</text>"#
+                r#"<text x="{xv}" y="{yv}"{transform} font-family="{fam}" font-size="{size}"{weight}{style} text-anchor="{anchor}"{dominant_baseline} fill="{hex}"{op}>{escaped}</text>"#
             )
             .unwrap();
         }
@@ -1227,6 +1237,7 @@ mod tests {
                         fill: blue(),
                         content: "styled".into(),
                         rotate_deg: None,
+                        baseline: crate::ir::TextBaseline::Alphabetic,
                         font_family: Some("Test Sans".into()),
                         font_weight: Some("bold".into()),
                         font_style: Some("italic".into()),

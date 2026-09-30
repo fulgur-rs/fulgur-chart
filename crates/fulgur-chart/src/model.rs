@@ -267,6 +267,53 @@ fn compute_base_geometry(spec: &ChartSpec, m: &TextMeasurer) -> Option<Geometry>
                 elements,
             })
         }
+        ChartKind::VegaText(data) => {
+            let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
+            let pw = layout.plot_right - layout.plot_left;
+            let ph = layout.plot_bottom - layout.plot_top;
+            if pw <= 0.0 || ph <= 0.0 || spec.width <= 0.0 || spec.height <= 0.0 {
+                return None;
+            }
+            let plot_area = RectN {
+                x: layout.plot_left / spec.width,
+                y: layout.plot_top / spec.height,
+                w: pw / spec.width,
+                h: ph / spec.height,
+            };
+            let elements = data
+                .marks
+                .iter()
+                .enumerate()
+                .filter(|(_, mark)| {
+                    crate::layout::common::axis_value_in_bounds(mark.point.x, &layout.x_ticks)
+                        && crate::layout::common::axis_value_in_bounds(
+                            mark.point.y,
+                            &layout.y_ticks,
+                        )
+                })
+                .filter_map(|(index, mark)| {
+                    let x =
+                        crate::layout::scatter::map_scatter_line_axis(&layout.xs, mark.point.x)?
+                            + mark.dx;
+                    let y =
+                        crate::layout::scatter::map_scatter_line_axis(&layout.ys, mark.point.y)?
+                            + mark.dy;
+                    Some(ElemN {
+                        series: 0,
+                        index,
+                        kind: "text".to_string(),
+                        nx: (x - layout.plot_left) / pw,
+                        ny: (y - layout.plot_top) / ph,
+                        nw: 0.0,
+                        nh: 0.0,
+                    })
+                })
+                .collect();
+            Some(Geometry {
+                plot_area,
+                elements,
+            })
+        }
         ChartKind::Line { .. } | ChartKind::Trail => {
             let frame = crate::layout::common::compute(spec, m);
             let pw = frame.plot_right - frame.plot_left;
@@ -462,6 +509,10 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
         counts.legend_items = 0; // rect には legend なし
         counts.x_ticks = x_labels.len();
         counts.y_ticks = y_labels.len();
+    }
+    if matches!(spec.kind, ChartKind::VegaText(_)) {
+        counts.datasets = 1;
+        counts.legend_items = 0;
     }
     if let ChartKind::GeoShape { data } = &spec.kind {
         counts.datasets = data.features.len();
@@ -693,7 +744,11 @@ fn compute_axes(spec: &ChartSpec, m: &TextMeasurer) -> Option<(AxisModel, AxisMo
             Some((index_axis, value_model, t.ticks.len()))
         }
         // scatter/bubble/square: x・y とも数値軸。renderer と同じ layout/ticks を共有する。
-        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square | ChartKind::VegaImage(_) => {
+        ChartKind::Scatter
+        | ChartKind::Bubble
+        | ChartKind::Square
+        | ChartKind::VegaImage(_)
+        | ChartKind::VegaText(_) => {
             let layout = crate::layout::scatter::compute_scatter_layout(spec, m);
             let x = if matches!(
                 spec.x_axis.scale_kind,
