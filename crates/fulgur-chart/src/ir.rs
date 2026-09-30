@@ -817,6 +817,47 @@ pub struct VegaImageData {
     pub height: f64,
 }
 
+/// Horizontal alignment for Vega-Lite text marks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VegaTextAlign {
+    Left,
+    Center,
+    Right,
+}
+
+/// Vertical text baseline used by Scene and renderer backends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextBaseline {
+    Alphabetic,
+    Top,
+    #[default]
+    Middle,
+    Bottom,
+}
+
+/// One resolved Vega-Lite text label.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaTextMark {
+    pub point: Point,
+    pub text: String,
+    pub fill: Color,
+    pub size: f64,
+    pub align: VegaTextAlign,
+    pub baseline: TextBaseline,
+    pub angle: Option<f64>,
+    pub dx: f64,
+    pub dy: f64,
+    pub font_family: Option<String>,
+    pub font_weight: Option<String>,
+    pub font_style: Option<String>,
+}
+
+/// Resolved labels for a Vega-Lite `mark: "text"` unit.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VegaTextData {
+    pub marks: Vec<VegaTextMark>,
+}
+
 /// Whisker extent rule for a Vega-Lite boxplot.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VegaBoxPlotExtent {
@@ -1035,6 +1076,8 @@ pub enum ChartKind {
     },
     /// Vega-Lite `mark: "image"`; external resources remain SVG references.
     VegaImage(Box<VegaImageData>),
+    /// Vega-Lite `mark: "text"` positioned at quantitative x/y coordinates.
+    VegaText(Box<VegaTextData>),
     /// Vega-Lite `errorbar` / `errorband` normalized range mark.
     ErrorMark(Box<ErrorMarkData>),
     /// Vega-Lite `boxplot` composite mark with dedicated statistics and layout.

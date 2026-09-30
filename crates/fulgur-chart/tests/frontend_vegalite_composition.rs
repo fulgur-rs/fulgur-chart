@@ -359,3 +359,23 @@ fn size_legend_title_respects_label_limit() {
     let error = vegalite::parse_with_limits(json, false, &limits).unwrap_err();
     assert!(error.contains("size legend title"), "{error}");
 }
+
+#[test]
+fn vegalite_composition_schema_accepts_text_mark_layer_leaf() {
+    let json = r#"{
+      "data":{"values":[{"x":1,"y":2,"label":"A"}]},
+      "encoding":{
+        "x":{"field":"x","type":"quantitative"},
+        "y":{"field":"y","type":"quantitative"}
+      },
+      "layer":[
+        {"mark":"point"},
+        {"mark":"text","encoding":{"text":{"field":"label"}}}
+      ]
+    }"#;
+
+    assert!(
+        serde_json::from_str::<VegaLiteSpec>(json).is_ok(),
+        "typed schema should accept text as a composition mark"
+    );
+}

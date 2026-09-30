@@ -347,6 +347,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::Bubble => "bubble",
         ChartKind::Square => "square",
         ChartKind::VegaImage(_) => "image",
+        ChartKind::VegaText(_) => "text",
         ChartKind::Radar => "radar",
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",

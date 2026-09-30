@@ -158,6 +158,8 @@ fn build_chart_scene(
         ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square | ChartKind::VegaImage(_) => {
             scatter::build(spec, m)
         }
+        // Task 2 replaces this parse-only fallback with dedicated text mark layout.
+        ChartKind::VegaText(_) => scatter::build(spec, m),
         ChartKind::Radar => radar::build(spec, m),
         ChartKind::Mixed => mixed::build(spec, m),
         ChartKind::Matrix { .. } => matrix::build(spec, m),
