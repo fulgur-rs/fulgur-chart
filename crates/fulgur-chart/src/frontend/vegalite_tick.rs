@@ -441,36 +441,32 @@ fn preflight_category_limits(
         let Some(record) = value.as_object() else {
             continue;
         };
-        if let Some(field) = x_field {
-            if let Some(value) = record.get(field).filter(|value| !value.is_null()) {
-                if let Some(label) = category_label_for_preflight(value) {
-                    check_preflight_label_length(label.as_ref(), limits, "x")?;
-                    if x_categories.insert(label)
-                        && x_categories.len().saturating_add(y_categories.len())
-                            > limits.max_categories
-                    {
-                        return Err(format!(
-                            "tick mark category count exceeds max_categories limit {} (pre-allocation)",
-                            limits.max_categories
-                        ));
-                    }
-                }
+        if let Some(field) = x_field
+            && let Some(value) = record.get(field).filter(|value| !value.is_null())
+            && let Some(label) = category_label_for_preflight(value)
+        {
+            check_preflight_label_length(label.as_ref(), limits, "x")?;
+            if x_categories.insert(label)
+                && x_categories.len().saturating_add(y_categories.len()) > limits.max_categories
+            {
+                return Err(format!(
+                    "tick mark category count exceeds max_categories limit {} (pre-allocation)",
+                    limits.max_categories
+                ));
             }
         }
-        if let Some(field) = y_field {
-            if let Some(value) = record.get(field).filter(|value| !value.is_null()) {
-                if let Some(label) = category_label_for_preflight(value) {
-                    check_preflight_label_length(label.as_ref(), limits, "y")?;
-                    if y_categories.insert(label)
-                        && x_categories.len().saturating_add(y_categories.len())
-                            > limits.max_categories
-                    {
-                        return Err(format!(
-                            "tick mark category count exceeds max_categories limit {} (pre-allocation)",
-                            limits.max_categories
-                        ));
-                    }
-                }
+        if let Some(field) = y_field
+            && let Some(value) = record.get(field).filter(|value| !value.is_null())
+            && let Some(label) = category_label_for_preflight(value)
+        {
+            check_preflight_label_length(label.as_ref(), limits, "y")?;
+            if y_categories.insert(label)
+                && x_categories.len().saturating_add(y_categories.len()) > limits.max_categories
+            {
+                return Err(format!(
+                    "tick mark category count exceeds max_categories limit {} (pre-allocation)",
+                    limits.max_categories
+                ));
             }
         }
 
@@ -698,10 +694,10 @@ fn parse_style_source(
             "encoding.{channel} must specify exactly one of field or value"
         ));
     }
-    if let Some(field_type) = object.get("type").filter(|value| !value.is_null()) {
-        if !field_type.is_string() {
-            return Err(format!("encoding.{channel}.type must be a string"));
-        }
+    if let Some(field_type) = object.get("type").filter(|value| !value.is_null())
+        && !field_type.is_string()
+    {
+        return Err(format!("encoding.{channel}.type must be a string"));
     }
     Ok(field.map_or_else(
         || Some(ChannelSource::Value(object["value"].clone())),
