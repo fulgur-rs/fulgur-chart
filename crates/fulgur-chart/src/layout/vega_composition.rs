@@ -1101,7 +1101,7 @@ fn path_position(data: &str) -> (f64, f64) {
     if values.len() < 2 || values.len() % 2 != 0 {
         return (f64::NEG_INFINITY, f64::NEG_INFINITY);
     }
-    let points = values.chunks_exact(2).collect::<Vec<_>>();
+    let points = values.as_chunks::<2>().0;
     let min_x = points
         .iter()
         .map(|point| point[0])
