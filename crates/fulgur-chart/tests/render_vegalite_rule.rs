@@ -1,6 +1,6 @@
 use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::vegalite;
-use fulgur_chart::ir::Color;
+use fulgur_chart::ir::{ChartKind, Color};
 use fulgur_chart::layout;
 use fulgur_chart::scene::{Prim, Scene};
 use fulgur_chart::text::TextMeasurer;
@@ -195,6 +195,39 @@ fn rule_stroke_dash_accepts_zero_entries() {
 
     assert_eq!(rules.len(), 1);
     assert_eq!(rules[0].5, vec![0.0, 4.0]);
+}
+
+#[test]
+fn rule_rejects_oversized_stroke_dash_before_converting_entries() {
+    let dash = vec!["1"; 65].join(",");
+    let json = format!(
+        r##"{{"mark":{{"type":"rule","strokeDash":[{dash}]}},"data":{{"values":[{{"x":1}}]}},"encoding":{{"x":{{"field":"x","type":"quantitative"}}}}}}"##
+    );
+
+    for strict in [false, true] {
+        let error = vegalite::parse(&json, strict).unwrap_err();
+
+        assert!(error.contains("64"), "strict={strict}: {error}");
+    }
+}
+
+#[test]
+fn rule_rejects_excessive_total_dash_expansion_before_building_scene() {
+    let dash = vec!["1"; 64].join(",");
+    let json = format!(
+        r##"{{"mark":{{"type":"rule","strokeDash":[{dash}]}},"data":{{"values":[{{"x":1}}]}},"encoding":{{"x":{{"field":"x","type":"quantitative"}}}}}}"##
+    );
+    let mut spec = vegalite::parse(&json, true).expect("bounded rule should parse");
+    let ChartKind::VegaRule(data) = &mut spec.kind else {
+        panic!("expected Vega-Lite rule data");
+    };
+    let segment = data.segments[0].clone();
+    data.segments = vec![segment; 15_626];
+
+    let error = layout::build_scene_checked(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap())
+        .expect_err("the expanded dash payload must be bounded before layout");
+
+    assert!(error.contains("strokeDash expansion"), "{error}");
 }
 
 #[test]

@@ -842,7 +842,7 @@ pub struct MarkRuleObject {
     #[schemars(range(min = 0.0))]
     pub stroke_width: Option<f64>,
     #[serde(rename = "strokeDash", skip_serializing_if = "Option::is_none")]
-    #[schemars(inner(range(min = 0.0)))]
+    #[schemars(inner(range(min = 0.0)), length(max = crate::guard::MAX_BORDER_DASH_ELEMENTS))]
     pub stroke_dash: Option<Vec<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clip: Option<bool>,

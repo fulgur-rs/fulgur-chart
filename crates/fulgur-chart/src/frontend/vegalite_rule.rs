@@ -40,6 +40,7 @@ pub(super) fn parse_rule_spec(
     scale_overrides: &super::super::vegalite_composition::VegaUnitScaleOverrides,
 ) -> Result<ChartSpec, String> {
     check_unknown_keys(top)?;
+    preflight_stroke_dash_length(top.get("mark"))?;
     let values = top
         .get("data")
         .and_then(Value::as_object)
@@ -573,6 +574,12 @@ fn parse_stroke_dash(mark: Option<&Map<String, Value>>) -> Result<Vec<f64>, Stri
     let pattern = value
         .as_array()
         .ok_or_else(|| "mark.strokeDash must be an array of non-negative numbers".to_string())?;
+    if pattern.len() > crate::guard::MAX_BORDER_DASH_ELEMENTS {
+        return Err(format!(
+            "mark.strokeDash must contain at most {} entries",
+            crate::guard::MAX_BORDER_DASH_ELEMENTS
+        ));
+    }
     pattern
         .iter()
         .map(|value| {
@@ -584,6 +591,24 @@ fn parse_stroke_dash(mark: Option<&Map<String, Value>>) -> Result<Vec<f64>, Stri
                 })
         })
         .collect()
+}
+
+fn preflight_stroke_dash_length(mark: Option<&Value>) -> Result<(), String> {
+    let Some(pattern) = mark
+        .and_then(Value::as_object)
+        .and_then(|mark| mark.get("strokeDash"))
+        .filter(|value| !value.is_null())
+        .and_then(Value::as_array)
+    else {
+        return Ok(());
+    };
+    if pattern.len() > crate::guard::MAX_BORDER_DASH_ELEMENTS {
+        return Err(format!(
+            "mark.strokeDash must contain at most {} entries",
+            crate::guard::MAX_BORDER_DASH_ELEMENTS
+        ));
+    }
+    Ok(())
 }
 
 fn palette_color(index: usize) -> Color {

@@ -367,6 +367,14 @@ mod schema_fixture_tests {
     fn embedded_vegalite_schema_covers_rule_and_error_marks_and_rejects_unknown_keys() {
         use serde_json::Value;
 
+        let embedded_schema: Value = serde_json::from_str(include_str!("vegalite-schema.json"))
+            .expect("embedded Vega-Lite schema is valid JSON");
+        assert_eq!(
+            embedded_schema["$defs"]["MarkRuleObject"]["properties"]["strokeDash"]["maxItems"],
+            serde_json::json!(fulgur_chart::guard::MAX_BORDER_DASH_ELEMENTS),
+            "rule strokeDash schema must expose its bounded length"
+        );
+
         for (name, example) in [
             (
                 "raw errorbar",

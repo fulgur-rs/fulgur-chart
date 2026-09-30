@@ -99,6 +99,9 @@ pub const MAX_MARKER_RADIUS_PX: f64 = DEFAULT_MAX_DIMENSION_PX;
 /// Dataset `borderDash` の要素数上限。
 /// gap ごとの線分に dash を複製する際のメモリ・出力サイズ増幅を定数倍に制限する。
 pub const MAX_BORDER_DASH_ELEMENTS: usize = 64;
+/// Upper bound for rule dash values copied into all Scene line primitives.
+/// This limits allocation amplification when many rules share one dash pattern.
+pub const MAX_RULE_DASH_EXPANSION_ELEMENTS: usize = 1_000_000;
 
 /// spec の width/height 下限(px)。
 /// ゼロ・負値はレイアウトで除算異常を起こし得るため拒否する。
@@ -903,6 +906,12 @@ pub(crate) fn validate_vega_rule(spec: &ChartSpec, limits: &InputLimits) -> Resu
     {
         return Err(format!(
             "Vega-Lite rule strokeDash must contain at most {MAX_BORDER_DASH_ELEMENTS} finite non-negative numbers"
+        ));
+    }
+    let dash_expansion_elements = data.stroke_dash.len().saturating_mul(data.segments.len());
+    if dash_expansion_elements > MAX_RULE_DASH_EXPANSION_ELEMENTS {
+        return Err(format!(
+            "Vega-Lite rule strokeDash expansion {dash_expansion_elements} exceeds limit {MAX_RULE_DASH_EXPANSION_ELEMENTS}"
         ));
     }
     for (axis_name, categories) in [
