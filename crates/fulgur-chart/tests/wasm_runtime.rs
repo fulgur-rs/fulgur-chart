@@ -426,6 +426,38 @@ fn vegalite_boxplot_example_renders_deterministic_svg_and_png() {
     );
 }
 
+/// Boxplot grid opacity and dashed outliers pass through the shared native/WASM render path.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vegalite_boxplot_applies_grid_opacity_and_outlier_dash() {
+    let json = r##"{"width":320,"height":220,"config":{"axis":{"gridOpacity":0.25}},"mark":{"type":"boxplot","outliers":{"stroke":"red","strokeDash":[2,1]}},"data":{"values":[{"value":1},{"value":2},{"value":3},{"value":4},{"value":100}]},"encoding":{"y":{"field":"value","type":"quantitative"}}}"##;
+    let spec = vegalite::parse(json, true).expect("styled boxplot spec parses");
+    let svg = render_chart(&spec);
+    assert!(
+        svg.contains(r#"stroke-dasharray="2 1""#),
+        "WASM/native SVG must retain outlier strokeDash: {svg}"
+    );
+    assert!(
+        svg.contains(r#"stroke-opacity="0.25""#),
+        "WASM/native SVG must apply config.axis.gridOpacity: {svg}"
+    );
+
+    let png = render_chart_to_png_default(&spec, 1.0).expect("styled boxplot PNG renders");
+    assert_eq!(
+        &png[..8],
+        PNG_SIGNATURE,
+        "styled boxplot PNG signature is invalid"
+    );
+    let alternate_json = json.replace("[2,1]", "[1,2]");
+    let alternate_spec = vegalite::parse(&alternate_json, true).expect("alternate dash parses");
+    let alternate_png =
+        render_chart_to_png_default(&alternate_spec, 1.0).expect("alternate boxplot PNG renders");
+    assert_ne!(
+        png, alternate_png,
+        "changing the outlier dash pattern must change native/WASM raster output"
+    );
+}
+
 /// PNG: wasm32 と linux-x86_64 native で、linux-x86_64 の期待 byte と一致することを検証する。
 /// CI の wasm ジョブは ubuntu で走るため、ubuntu native と同一ビットになる。
 /// tiny-skia の浮動小数差は OS 跨ぎで出るため、この exact 比較は上記対象に限定する。

@@ -866,6 +866,10 @@ fn vega_boxplot_group_primitive_count(
     group: &crate::ir::VegaBoxPlotGroup,
 ) -> usize {
     let has_whiskers = group.summary.whisker_low.is_some();
+    let outlier_primitives_per_point = 1usize.saturating_add(usize::from(
+        !data.style.outliers_part.stroke_dash.is_empty()
+            && data.style.outliers_part.stroke_width.unwrap_or(1.0) > 0.0,
+    ));
     usize::from(data.style.box_part.visible)
         .saturating_add(usize::from(data.style.median_part.visible))
         .saturating_add(
@@ -880,7 +884,11 @@ fn vega_boxplot_group_primitive_count(
             0
         })
         .saturating_add(if data.style.outliers_part.visible {
-            group.summary.outliers.len()
+            group
+                .summary
+                .outliers
+                .len()
+                .saturating_mul(outlier_primitives_per_point)
         } else {
             0
         })

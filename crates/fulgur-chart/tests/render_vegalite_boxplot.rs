@@ -52,6 +52,36 @@ fn line_strokes(scene: &Scene) -> Vec<(Color, f64, f64, f64, f64, f64)> {
         .collect()
 }
 
+fn value_axis_grid_strokes(
+    scene: &Scene,
+    vertical_value_axis: bool,
+    grid_color: Color,
+) -> Vec<Color> {
+    scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::Line {
+                x1,
+                y1,
+                x2,
+                y2,
+                stroke,
+                ..
+            } if if vertical_value_axis {
+                (x2 - x1).abs() > scene.width * 0.5 && (y2 - y1).abs() < 1e-6
+            } else {
+                (y2 - y1).abs() > scene.height * 0.5 && (x2 - x1).abs() < 1e-6
+            } && (stroke.r, stroke.g, stroke.b)
+                == (grid_color.r, grid_color.g, grid_color.b) =>
+            {
+                Some(*stroke)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn finite_scene(scene: &Scene) -> bool {
     let mut finite = true;
     fn visit(items: &[Prim], finite: &mut bool) {
@@ -117,6 +147,57 @@ fn boxplot_vertical_horizontal_and_1d_geometry() {
     );
     let one_d_center = one_dimensional_box.0 + one_dimensional_box.2 / 2.0;
     assert!((one_dimensional.width * 0.3..=one_dimensional.width * 0.7).contains(&one_d_center));
+}
+
+#[test]
+fn boxplot_config_axis_grid_disables_value_grid_in_both_orientations() {
+    let vertical_json = r##"{"width":320,"height":220,"config":{"axis":{"grid":false}},"mark":"boxplot","data":{"values":[{"group":"A","value":1},{"group":"A","value":2},{"group":"A","value":3} ]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}"##;
+    let vertical_spec = parse(vertical_json);
+    let vertical = layout::build_scene_checked(&vertical_spec, &measurer()).unwrap();
+    let horizontal_json = r##"{"width":320,"height":220,"config":{"axis":{"grid":false}},"mark":"boxplot","data":{"values":[{"group":"A","value":1},{"group":"A","value":2},{"group":"A","value":3} ]},"encoding":{"x":{"field":"value","type":"quantitative"},"y":{"field":"group","type":"nominal"}}}"##;
+    let horizontal_spec = parse(horizontal_json);
+    let horizontal = layout::build_scene_checked(&horizontal_spec, &measurer()).unwrap();
+
+    assert!(
+        value_axis_grid_strokes(&vertical, true, vertical_spec.theme.grid_color).is_empty(),
+        "config.axis.grid=false must suppress the vertical boxplot's horizontal value grid"
+    );
+    assert!(
+        value_axis_grid_strokes(&horizontal, false, horizontal_spec.theme.grid_color).is_empty(),
+        "config.axis.grid=false must suppress the horizontal boxplot's vertical value grid"
+    );
+}
+
+#[test]
+fn boxplot_config_axis_grid_opacity_applies_to_value_grid() {
+    let cases = [
+        (
+            r##"{"width":320,"height":220,"config":{"axis":{"gridOpacity":0.25}},"mark":"boxplot","data":{"values":[{"group":"A","value":1},{"group":"A","value":2},{"group":"A","value":3}]},"encoding":{"x":{"field":"group","type":"nominal"},"y":{"field":"value","type":"quantitative"}}}"##,
+            true,
+        ),
+        (
+            r##"{"width":320,"height":220,"config":{"axis":{"gridOpacity":0.25}},"mark":"boxplot","data":{"values":[{"group":"A","value":1},{"group":"A","value":2},{"group":"A","value":3}]},"encoding":{"x":{"field":"value","type":"quantitative"},"y":{"field":"group","type":"nominal"}}}"##,
+            false,
+        ),
+    ];
+    for (json, vertical_value_axis) in cases {
+        let spec = parse(json);
+        let rendered = layout::build_scene_checked(&spec, &measurer()).unwrap();
+        let grid_strokes =
+            value_axis_grid_strokes(&rendered, vertical_value_axis, spec.theme.grid_color);
+        let expected_alpha = spec.theme.grid_color.a * 0.25;
+
+        assert!(
+            !grid_strokes.is_empty(),
+            "value-axis grid should remain enabled by default"
+        );
+        assert!(
+            grid_strokes
+                .iter()
+                .all(|stroke| (stroke.a - expected_alpha).abs() < 1e-6),
+            "config.axis.gridOpacity must multiply value grid alpha by 0.25; expected {expected_alpha}, got {grid_strokes:?}"
+        );
+    }
 }
 
 #[test]
@@ -300,6 +381,61 @@ fn boxplot_outlier_size_uses_point_area_semantics() {
     assert!((area - 18.0).abs() < 0.01);
     assert_eq!(fill.a, 0.0, "color alone keeps default points hollow");
     assert_eq!((stroke.r, stroke.g, stroke.b), (255, 0, 0));
+}
+
+#[test]
+fn boxplot_outlier_stroke_dash_reaches_scene_path() {
+    let rendered = scene(
+        r##"{"mark":{"type":"boxplot","outliers":{"stroke":"red","strokeDash":[2,1]}},"data":{"values":[{"value":1},{"value":2},{"value":3},{"value":4},{"value":100}]},"encoding":{"y":{"field":"value","type":"quantitative"}}}"##,
+    );
+    let dashed_outlines = rendered
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::StyledPath {
+                stroke,
+                stroke_width,
+                dash,
+                ..
+            } => Some((*stroke, *stroke_width, dash)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        dashed_outlines.len(),
+        1,
+        "one outlier needs one dashed outline"
+    );
+    assert_eq!(dashed_outlines[0].1, 1.0);
+    assert_eq!(dashed_outlines[0].2, &[2.0, 1.0]);
+    assert_eq!(
+        (
+            dashed_outlines[0].0.r,
+            dashed_outlines[0].0.g,
+            dashed_outlines[0].0.b
+        ),
+        (255, 0, 0)
+    );
+}
+
+#[test]
+fn dashed_boxplot_outliers_count_fill_and_outline_against_primitive_limits() {
+    let json = r##"{"mark":{"type":"boxplot","box":false,"median":false,"rule":false,"ticks":false,"outliers":{"strokeDash":[2,1]}},"data":{"values":[{"value":1},{"value":2},{"value":3},{"value":4},{"value":100}]},"encoding":{"y":{"field":"value","type":"quantitative"}}}"##;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_categorical_primitives: 1,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+
+    assert!(
+        vegalite::parse_with_limits(json, true, &limits).is_err(),
+        "parse-time primitive estimate must count the dashed outline in addition to its fill"
+    );
+    let spec = parse(json);
+    assert!(
+        fulgur_chart::guard::validate_spec(&spec, &limits).is_err(),
+        "spec guard must count the dashed outline in addition to its fill"
+    );
 }
 
 #[test]

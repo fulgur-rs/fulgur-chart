@@ -214,7 +214,8 @@ fn draw_axes(
     frame: &VegaBoxPlotFrame,
 ) {
     let ink = spec.theme.text_color;
-    let grid = spec.theme.grid_color;
+    let value_axis = value_axis(spec, data);
+    let grid = value_axis.grid.color.unwrap_or(spec.theme.grid_color);
     let font = spec.theme.font_size;
     let scale = value_scale(frame, data.orient);
     for &tick in &frame.value_ticks.ticks {
@@ -222,7 +223,7 @@ fn draw_axes(
         match data.orient {
             VegaBoxPlotOrient::Vertical => {
                 let y = scale.map(tick);
-                if spec.y_axis.grid.display {
+                if value_axis.grid.display {
                     add_line(
                         items,
                         (frame.plot_left, y),
@@ -244,7 +245,7 @@ fn draw_axes(
             }
             VegaBoxPlotOrient::Horizontal => {
                 let x = scale.map(tick);
-                if spec.x_axis.grid.display {
+                if value_axis.grid.display {
                     add_line(
                         items,
                         (x, frame.plot_top),
@@ -615,22 +616,77 @@ fn draw_group(
         );
         let size = style.outliers_part.size.unwrap_or(30.0);
         let radius = (size / std::f64::consts::PI).sqrt();
+        let stroke_width = style.outliers_part.stroke_width.unwrap_or(1.0);
         for &outlier in &group.summary.outliers {
             let value = mapped_value(frame, data, outlier);
             let (cx, cy) = match data.orient {
                 VegaBoxPlotOrient::Vertical => (center, value),
                 VegaBoxPlotOrient::Horizontal => (value, center),
             };
-            items.push(Prim::Circle {
-                cx,
-                cy,
-                r: radius,
-                fill,
-                stroke,
-                stroke_width: style.outliers_part.stroke_width.unwrap_or(1.0),
-            });
+            if style.outliers_part.stroke_dash.is_empty() {
+                items.push(Prim::Circle {
+                    cx,
+                    cy,
+                    r: radius,
+                    fill,
+                    stroke,
+                    stroke_width,
+                });
+            } else {
+                items.push(Prim::Circle {
+                    cx,
+                    cy,
+                    r: radius,
+                    fill,
+                    stroke: transparent,
+                    stroke_width: 0.0,
+                });
+                if stroke_width > 0.0 {
+                    items.push(Prim::StyledPath {
+                        d: circle_outline_path(cx, cy, radius),
+                        stroke,
+                        stroke_width,
+                        dash: style.outliers_part.stroke_dash.clone(),
+                        dash_offset: 0.0,
+                    });
+                }
+            }
         }
     }
+}
+
+fn circle_outline_path(cx: f64, cy: f64, radius: f64) -> String {
+    let control = radius * 0.552_284_749_830_793_6;
+    let num = crate::num::fmt_num;
+    format!(
+        "M {} {} C {} {} {} {} {} {} C {} {} {} {} {} {} C {} {} {} {} {} {} C {} {} {} {} {} {} Z",
+        num(cx + radius),
+        num(cy),
+        num(cx + radius),
+        num(cy + control),
+        num(cx + control),
+        num(cy + radius),
+        num(cx),
+        num(cy + radius),
+        num(cx - control),
+        num(cy + radius),
+        num(cx - radius),
+        num(cy + control),
+        num(cx - radius),
+        num(cy),
+        num(cx - radius),
+        num(cy - control),
+        num(cx - control),
+        num(cy - radius),
+        num(cx),
+        num(cy - radius),
+        num(cx + control),
+        num(cy - radius),
+        num(cx + radius),
+        num(cy - control),
+        num(cx + radius),
+        num(cy),
+    )
 }
 
 fn ensure_finite_geometry(items: &[Prim]) -> Result<(), String> {
