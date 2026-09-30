@@ -153,8 +153,8 @@ fn vegalite_composition_svg_is_deterministic() {
             "{name} SVG should be deterministic"
         );
         let expected = match name {
-            "vegalite-layer" => (3_832, 0x22ce_9846_86c0_0ba6),
-            "vegalite-nested-concat" => (10_215, 0xe170_1d14_afb8_d0b7),
+            "vegalite-layer" => (3_863, 0xedd1_3312_bdc6_573f),
+            "vegalite-nested-concat" => (10_233, 0xce15_09f8_b918_aed8),
             _ => unreachable!("composition fixture list is fixed"),
         };
         assert_eq!(

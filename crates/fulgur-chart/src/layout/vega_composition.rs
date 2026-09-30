@@ -7,11 +7,117 @@ use crate::text::TextMeasurer;
 
 const COMPOSITION_TITLE_BAND: f64 = crate::layout::common::TITLE_BAND;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PlotRect {
+    left: f64,
+    top: f64,
+    right: f64,
+    bottom: f64,
+}
+
+impl PlotRect {
+    fn intersection(self, other: Self) -> Option<Self> {
+        let rect = Self {
+            left: self.left.max(other.left),
+            top: self.top.max(other.top),
+            right: self.right.min(other.right),
+            bottom: self.bottom.min(other.bottom),
+        };
+        (rect.right > rect.left && rect.bottom > rect.top).then_some(rect)
+    }
+
+    fn is_close_to(self, other: Self) -> bool {
+        [
+            self.left - other.left,
+            self.top - other.top,
+            self.right - other.right,
+            self.bottom - other.bottom,
+        ]
+        .into_iter()
+        .all(|difference| difference.abs() <= 1e-6)
+    }
+}
+
+fn plot_rect_for_spec(spec: &ChartSpec, measurer: &TextMeasurer<'_>) -> Option<PlotRect> {
+    let (left, top, right, bottom) = match &spec.kind {
+        ChartKind::Bar {
+            horizontal: true, ..
+        } => {
+            let frame = crate::layout::bar::horizontal_bar_layout(spec, measurer);
+            (
+                frame.plot_left,
+                frame.plot_top,
+                frame.plot_right,
+                frame.plot_bottom,
+            )
+        }
+        ChartKind::Bar { .. } | ChartKind::Line { .. } | ChartKind::Trail | ChartKind::Mixed => {
+            let frame = crate::layout::common::compute(spec, measurer);
+            (
+                frame.plot_left,
+                frame.plot_top,
+                frame.plot_right,
+                frame.plot_bottom,
+            )
+        }
+        ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square | ChartKind::VegaImage(_) => {
+            let frame = crate::layout::scatter::compute_scatter_layout(spec, measurer);
+            (
+                frame.plot_left,
+                frame.plot_top,
+                frame.plot_right,
+                frame.plot_bottom,
+            )
+        }
+        ChartKind::VegaRect { .. } => crate::layout::vega_rect::plot_rect(spec, measurer),
+        ChartKind::ErrorMark(_) => {
+            let frame = crate::layout::error_mark::compute_frame(spec, measurer);
+            (
+                frame.plot_left,
+                frame.plot_top,
+                frame.plot_right,
+                frame.plot_bottom,
+            )
+        }
+        ChartKind::VegaBoxPlot(_) => {
+            let frame = crate::layout::vega_boxplot::compute_frame(spec, measurer);
+            (
+                frame.plot_left,
+                frame.plot_top,
+                frame.plot_right,
+                frame.plot_bottom,
+            )
+        }
+        _ => return None,
+    };
+    [left, top, right, bottom]
+        .into_iter()
+        .all(f64::is_finite)
+        .then_some(PlotRect {
+            left,
+            top,
+            right,
+            bottom,
+        })
+}
+
+fn common_plot_rect(spec: &ChartSpec, measurer: &TextMeasurer<'_>) -> PlotRect {
+    let frame = crate::layout::common::compute(spec, measurer);
+    PlotRect {
+        left: frame.plot_left,
+        top: frame.plot_top,
+        right: frame.plot_right,
+        bottom: frame.plot_bottom,
+    }
+}
+
 #[derive(Clone, Debug)]
 struct VegaNodeLayout {
     width: f64,
     height: f64,
     items: Vec<Prim>,
+    plot_rect: Option<PlotRect>,
+    layer_mark_count: Option<usize>,
 }
 
 pub(crate) fn build_checked(
@@ -44,13 +150,26 @@ fn build_node(
             // same explicit cell dimensions before sharing their plot frame.
             leaf_spec.size_mode = crate::ir::SizeMode::Canvas;
             apply_leaf_domains(&mut leaf_spec, &leaf.scales);
-            let scene =
-                crate::layout::build_scene_checked_with_limits(&leaf_spec, measurer, limits)
-                    .map_err(|error| format!("{}: {error}", leaf.path))?;
+            let plot_rect = plot_rect_for_spec(&leaf_spec, measurer);
+            let shared_color_categories = match leaf.scales.color.as_ref() {
+                Some(crate::ir::VegaScaleDomain::Categories(categories)) => {
+                    Some(categories.as_slice())
+                }
+                _ => None,
+            };
+            let (scene, layer_mark_count) = crate::layout::build_scene_checked_with_layer_marks(
+                &leaf_spec,
+                measurer,
+                limits,
+                shared_color_categories,
+            )
+            .map_err(|error| format!("{}: {error}", leaf.path))?;
             Ok(VegaNodeLayout {
                 width: scene.width,
                 height: scene.height,
                 items: scene.items,
+                plot_rect,
+                layer_mark_count,
             })
         }
         VegaCompositionNode::Layer(layer) => {
@@ -76,6 +195,25 @@ fn build_node(
                     ));
                 }
             }
+            let mut common_plot_rect: Option<PlotRect> = None;
+            for (index, child) in children.iter().enumerate() {
+                let child_rect = child.plot_rect.ok_or_else(|| {
+                    format!(
+                        "{}layer child {index} has no Cartesian plot rectangle",
+                        path_prefix(&layer.path)
+                    )
+                })?;
+                common_plot_rect = Some(match common_plot_rect {
+                    Some(parent) => parent.intersection(child_rect).ok_or_else(|| {
+                        format!(
+                            "{}layer child plot rectangles do not overlap at child {index}",
+                            path_prefix(&layer.path)
+                        )
+                    })?,
+                    None => child_rect,
+                });
+            }
+            let common_plot_rect = common_plot_rect.expect("layer has at least one child");
             let mut items = Vec::with_capacity(children.len() + 2);
             if let Some(background) = layer.background {
                 items.push(background_rect(width, height, background));
@@ -95,41 +233,50 @@ fn build_node(
             let mut independent_size_guides = Vec::new();
             let mut retained_shared_color_legend = false;
             let mut retained_shared_size_legend = false;
-            for (index, (child_node, child)) in layer.children.iter().zip(children).enumerate() {
+            for (index, (child_node, mut child)) in layer.children.iter().zip(children).enumerate()
+            {
                 if let VegaCompositionNode::Unit(leaf) = child_node {
                     let mut frame_spec = (*leaf.spec).clone();
                     frame_spec.size_mode = crate::ir::SizeMode::Canvas;
                     apply_leaf_domains(&mut frame_spec, &leaf.scales);
-                    let frame = crate::layout::common::compute(&frame_spec, measurer);
-                    let (marks, y_guides, x_guides, title_items) = split_layer_scene_items(
-                        &child.items,
-                        &leaf.spec.kind,
-                        leaf.spec.title.as_deref(),
-                        frame.plot_left,
-                        frame.plot_bottom,
-                    );
-                    let color_guides = leaf_color_legend_items(
-                        &child.items,
-                        &frame_spec,
-                        frame.plot_left,
-                        frame.plot_right,
-                        frame.plot_top,
-                        frame.plot_bottom,
-                    );
+                    let frame = child.plot_rect.expect("layer unit has a plot rectangle");
+                    let color_guides = leaf_color_legend_items(&child.items, leaf, frame);
                     let size_guides = leaf
                         .spec
                         .vega_size_legend
                         .as_ref()
                         .map(|guide| leaf_size_legend_items(&child.items, guide))
                         .unwrap_or_default();
+                    let mut protected_guides = color_guides.clone();
+                    protected_guides.extend(size_guides.iter().cloned());
+                    transform_layer_scene_to_rect(
+                        &mut child.items,
+                        frame,
+                        common_plot_rect,
+                        &protected_guides,
+                        leaf.spec.title.as_deref(),
+                        child.width,
+                        child.height,
+                    )
+                    .map_err(|error| format!("{}{error}", path_prefix(&layer.path)))?;
+                    let (marks, y_guides, x_guides, title_items) = split_layer_scene_items(
+                        &child.items,
+                        &leaf.spec.kind,
+                        child.layer_mark_count,
+                        &protected_guides,
+                        leaf.spec.title.as_deref(),
+                        common_plot_rect.left,
+                        common_plot_rect.bottom,
+                    );
                     if index == 0 {
                         // Keep the first child's frame and guides, but defer its marks so all
                         // layer marks follow source order after the guides.
-                        let guides = child
-                            .items
-                            .into_iter()
-                            .filter(|item| !is_mark_primitive(item, &leaf.spec.kind))
-                            .collect();
+                        let guides = layer_guides(
+                            child.items,
+                            &leaf.spec.kind,
+                            child.layer_mark_count,
+                            &protected_guides,
+                        );
                         items.push(Prim::Group {
                             translate_x: 0.0,
                             translate_y: content_y,
@@ -158,15 +305,7 @@ fn build_node(
                                 independent_color_guides.push(color_guides.clone());
                             }
                         } else if !retained_shared_color_legend && !color_guides.is_empty() {
-                            // The legend marker is also a mark primitive and remains with this
-                            // child's mark group. Preserve its labels here, then keep the first
-                            // eligible child's guide as the shared legend source.
-                            let labels = color_guides
-                                .iter()
-                                .filter(|item| !is_mark_primitive(item, &leaf.spec.kind))
-                                .cloned()
-                                .collect::<Vec<_>>();
-                            if !labels.is_empty() {
+                            if !color_guides.is_empty() {
                                 items.push(Prim::Group {
                                     translate_x: 0.0,
                                     translate_y: content_y,
@@ -176,7 +315,7 @@ fn build_node(
                                         w: view_width,
                                         h: view_height,
                                     })),
-                                    children: labels,
+                                    children: color_guides.clone(),
                                 });
                             }
                             retained_shared_color_legend = true;
@@ -232,6 +371,18 @@ fn build_node(
                     });
                 } else {
                     let mut child_items = child.items;
+                    if let Some(frame) = child.plot_rect {
+                        transform_layer_scene_to_rect(
+                            &mut child_items,
+                            frame,
+                            common_plot_rect,
+                            &[],
+                            None,
+                            child.width,
+                            child.height,
+                        )
+                        .map_err(|error| format!("{}{error}", path_prefix(&layer.path)))?;
+                    }
                     let child_has_color_legend = layer.resolve.color_legend
                         == crate::ir::VegaResolutionMode::Shared
                         && node_has_color_legend(child_node);
@@ -338,6 +489,13 @@ fn build_node(
                 width,
                 height,
                 items,
+                plot_rect: Some(PlotRect {
+                    left: common_plot_rect.left,
+                    top: common_plot_rect.top + content_y,
+                    right: common_plot_rect.right,
+                    bottom: common_plot_rect.bottom + content_y,
+                }),
+                layer_mark_count: None,
             })
         }
         VegaCompositionNode::HConcat(concat) => build_concat_node(
@@ -514,6 +672,8 @@ fn build_concat_node(
         width,
         height,
         items,
+        plot_rect: None,
+        layer_mark_count: None,
     })
 }
 
@@ -592,14 +752,16 @@ fn strip_unit_legend_color(
     let mut spec = (*leaf.spec).clone();
     spec.size_mode = crate::ir::SizeMode::Canvas;
     apply_leaf_domains(&mut spec, &leaf.scales);
-    let frame = crate::layout::common::compute(&spec, measurer);
+    let frame =
+        plot_rect_for_spec(&spec, measurer).unwrap_or_else(|| common_plot_rect(&spec, measurer));
     strip_leaf_color_legend(
         items,
         &spec,
-        frame.plot_left,
-        frame.plot_right,
-        frame.plot_top,
-        frame.plot_bottom,
+        &leaf_color_legend_labels(leaf),
+        frame.left,
+        frame.right,
+        frame.top,
+        frame.bottom,
     );
 }
 
@@ -613,6 +775,7 @@ fn group_children_mut(prim: &mut Prim) -> Option<&mut Vec<Prim>> {
 fn strip_leaf_color_legend(
     items: &mut Vec<Prim>,
     spec: &ChartSpec,
+    labels: &[String],
     plot_left: f64,
     plot_right: f64,
     plot_top: f64,
@@ -621,13 +784,6 @@ fn strip_leaf_color_legend(
     if spec.legend == crate::ir::LegendPos::None {
         return;
     }
-    let labels = spec
-        .series
-        .iter()
-        .filter(|series| !series.name.is_empty())
-        .map(|series| series.name.as_str())
-        .chain(crate::layout::common::legend_title(spec))
-        .collect::<Vec<_>>();
     items.retain_mut(|item| {
         if spec
             .vega_size_legend
@@ -637,7 +793,15 @@ fn strip_leaf_color_legend(
             return true;
         }
         if let Prim::Group { children, .. } = item {
-            strip_leaf_color_legend(children, spec, plot_left, plot_right, plot_top, plot_bottom);
+            strip_leaf_color_legend(
+                children,
+                spec,
+                labels,
+                plot_left,
+                plot_right,
+                plot_top,
+                plot_bottom,
+            );
             return !children.is_empty();
         }
         let (x, y) = prim_position(item);
@@ -652,8 +816,8 @@ fn strip_leaf_color_legend(
             return true;
         }
         let is_label = match item {
-            Prim::Text { content, .. } => labels.contains(&content.as_str()),
-            Prim::StyledText(text) => labels.contains(&text.content.as_str()),
+            Prim::Text { content, .. } => labels.iter().any(|label| label == content),
+            Prim::StyledText(text) => labels.iter().any(|label| label == &text.content),
             _ => false,
         };
         !is_label
@@ -723,53 +887,73 @@ fn collect_prim_text<'a>(items: &'a [Prim], output: &mut Vec<&'a str>) {
 
 fn leaf_color_legend_items(
     items: &[Prim],
-    spec: &ChartSpec,
-    plot_left: f64,
-    plot_right: f64,
-    plot_top: f64,
-    plot_bottom: f64,
+    leaf: &crate::ir::VegaCompositionLeaf,
+    plot_rect: PlotRect,
 ) -> Vec<Prim> {
+    let spec = &leaf.spec;
     if spec.legend == crate::ir::LegendPos::None {
         return Vec::new();
     }
-    let labels = spec
-        .series
-        .iter()
-        .filter(|series| !series.name.is_empty())
-        .map(|series| series.name.as_str())
-        .chain(crate::layout::common::legend_title(spec))
-        .collect::<Vec<_>>();
+    let labels = leaf_color_legend_labels(leaf);
     items
         .iter()
         .filter(|item| {
             let (x, y) = prim_position(item);
             let in_band = match spec.legend {
-                crate::ir::LegendPos::Right => x >= plot_right + 2.0,
-                crate::ir::LegendPos::Left => x <= plot_left - 2.0,
-                crate::ir::LegendPos::Top => y <= plot_top - 2.0,
-                crate::ir::LegendPos::Bottom => y >= plot_bottom + 2.0,
+                crate::ir::LegendPos::Right => x >= plot_rect.right + 2.0,
+                crate::ir::LegendPos::Left => x <= plot_rect.left - 2.0,
+                crate::ir::LegendPos::Top => y <= plot_rect.top - 2.0,
+                crate::ir::LegendPos::Bottom => y >= plot_rect.bottom + 2.0,
                 crate::ir::LegendPos::None => false,
             };
             if !in_band {
                 return false;
             }
             let is_label = match item {
-                Prim::Text { content, .. } => labels.contains(&content.as_str()),
-                Prim::StyledText(text) => labels.contains(&text.content.as_str()),
+                Prim::Text { content, .. } => labels.iter().any(|label| label == content),
+                Prim::StyledText(text) => labels.iter().any(|label| label == &text.content),
                 _ => false,
             };
             is_label
                 || is_legend_marker(
                     item,
                     spec.legend,
-                    plot_left,
-                    plot_right,
-                    plot_top,
-                    plot_bottom,
+                    plot_rect.left,
+                    plot_rect.right,
+                    plot_rect.top,
+                    plot_rect.bottom,
                 )
         })
         .cloned()
         .collect()
+}
+
+fn leaf_color_legend_labels(leaf: &crate::ir::VegaCompositionLeaf) -> Vec<String> {
+    let mut labels = leaf
+        .spec
+        .series
+        .iter()
+        .filter(|series| !series.name.is_empty())
+        .map(|series| series.name.clone())
+        .collect::<Vec<_>>();
+    if let Some(crate::ir::VegaScaleDomain::Categories(categories)) = &leaf.scales.color {
+        labels.extend(categories.iter().cloned());
+    }
+    if let ChartKind::VegaBoxPlot(data) = &leaf.spec.kind {
+        labels.extend(
+            data.groups
+                .iter()
+                .filter_map(|group| group.color_label.clone()),
+        );
+    }
+    labels.extend(crate::layout::common::legend_title(&leaf.spec).map(str::to_owned));
+    let mut unique = Vec::with_capacity(labels.len());
+    for label in labels {
+        if !unique.contains(&label) {
+            unique.push(label);
+        }
+    }
+    unique
 }
 
 fn prim_position(prim: &Prim) -> (f64, f64) {
@@ -816,9 +1000,264 @@ fn is_legend_marker(
     }
 }
 
+fn transform_layer_scene_to_rect(
+    items: &mut [Prim],
+    from: PlotRect,
+    to: PlotRect,
+    protected_guides: &[Prim],
+    title: Option<&str>,
+    scene_width: f64,
+    scene_height: f64,
+) -> Result<(), String> {
+    let from_width = from.right - from.left;
+    let from_height = from.bottom - from.top;
+    let to_width = to.right - to.left;
+    let to_height = to.bottom - to.top;
+    if ![from_width, from_height, to_width, to_height]
+        .into_iter()
+        .all(|value| value.is_finite() && value > 0.0)
+    {
+        return Err("layer plot rectangle must have positive finite dimensions".into());
+    }
+    let scale_x = to_width / from_width;
+    let scale_y = to_height / from_height;
+    let offset_x = to.left - scale_x * from.left;
+    let offset_y = to.top - scale_y * from.top;
+    if from.is_close_to(to) {
+        return Ok(());
+    }
+    for item in items {
+        if protected_guides.contains(item)
+            || is_title_primitive(item, title)
+            || is_full_background(item, scene_width, scene_height)
+        {
+            continue;
+        }
+        transform_primitive(item, scale_x, scale_y, offset_x, offset_y, true)?;
+    }
+    Ok(())
+}
+
+fn is_full_background(item: &Prim, width: f64, height: f64) -> bool {
+    matches!(item,
+        Prim::Rect { x, y, w, h, .. }
+            if x.abs() <= f64::EPSILON
+                && y.abs() <= f64::EPSILON
+                && (*w - width).abs() <= f64::EPSILON
+                && (*h - height).abs() <= f64::EPSILON
+    )
+}
+
+fn transform_primitive(
+    prim: &mut Prim,
+    scale_x: f64,
+    scale_y: f64,
+    offset_x: f64,
+    offset_y: f64,
+    apply_offset: bool,
+) -> Result<(), String> {
+    let x = |value: f64| value * scale_x + if apply_offset { offset_x } else { 0.0 };
+    let y = |value: f64| value * scale_y + if apply_offset { offset_y } else { 0.0 };
+    let clip = |clip: &mut ClipRect, add_offset: bool| {
+        clip.x = clip.x * scale_x + if add_offset { offset_x } else { 0.0 };
+        clip.y = clip.y * scale_y + if add_offset { offset_y } else { 0.0 };
+        clip.w *= scale_x;
+        clip.h *= scale_y;
+    };
+    match prim {
+        Prim::Rect {
+            x: left,
+            y: top,
+            w,
+            h,
+            ..
+        } => {
+            *left = x(*left);
+            *top = y(*top);
+            *w *= scale_x;
+            *h *= scale_y;
+        }
+        Prim::Image {
+            x: left,
+            y: top,
+            width,
+            height,
+            ..
+        } => {
+            *left = x(*left);
+            *top = y(*top);
+            *width *= scale_x;
+            *height *= scale_y;
+        }
+        Prim::Line { x1, y1, x2, y2, .. } => {
+            *x1 = x(*x1);
+            *y1 = y(*y1);
+            *x2 = x(*x2);
+            *y2 = y(*y2);
+        }
+        Prim::Polyline { points, .. } | Prim::StyledPolyline { points, .. } => {
+            for (point_x, point_y) in points {
+                *point_x = x(*point_x);
+                *point_y = y(*point_y);
+            }
+        }
+        Prim::Path { d, .. } | Prim::StyledPath { d, .. } => {
+            *d = transform_path_data(d, scale_x, scale_y, offset_x, offset_y, apply_offset)?;
+        }
+        Prim::ClippedPath {
+            d, clip: clip_rect, ..
+        } => {
+            *d = transform_path_data(d, scale_x, scale_y, offset_x, offset_y, apply_offset)?;
+            clip(clip_rect, apply_offset);
+        }
+        Prim::GradientPath { d, x0, x1, .. } => {
+            *d = transform_path_data(d, scale_x, scale_y, offset_x, offset_y, apply_offset)?;
+            *x0 = x(*x0);
+            *x1 = x(*x1);
+        }
+        Prim::Circle { cx, cy, .. } => {
+            *cx = x(*cx);
+            *cy = y(*cy);
+        }
+        Prim::ClippedCircle {
+            cx,
+            cy,
+            clip: clip_rect,
+            ..
+        } => {
+            *cx = x(*cx);
+            *cy = y(*cy);
+            clip(clip_rect, apply_offset);
+        }
+        Prim::Text {
+            x: text_x,
+            y: text_y,
+            ..
+        } => {
+            *text_x = x(*text_x);
+            *text_y = y(*text_y);
+        }
+        Prim::StyledText(text) => {
+            text.x = x(text.x);
+            text.y = y(text.y);
+        }
+        Prim::Group {
+            translate_x,
+            translate_y,
+            clip: clip_rect,
+            children,
+        } => {
+            *translate_x = x(*translate_x);
+            *translate_y = y(*translate_y);
+            if let Some(clip_rect) = clip_rect {
+                clip(clip_rect, false);
+            }
+            for child in children {
+                transform_primitive(child, scale_x, scale_y, 0.0, 0.0, false)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn transform_path_data(
+    data: &str,
+    scale_x: f64,
+    scale_y: f64,
+    offset_x: f64,
+    offset_y: f64,
+    apply_offset: bool,
+) -> Result<String, String> {
+    let tokens = data.split_ascii_whitespace().collect::<Vec<_>>();
+    let mut output = Vec::with_capacity(tokens.len());
+    let mut command = None;
+    let mut index = 0;
+    while index < tokens.len() {
+        if tokens[index].len() == 1
+            && tokens[index]
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphabetic)
+        {
+            let next = tokens[index].as_bytes()[0] as char;
+            if !matches!(
+                next,
+                'M' | 'L' | 'H' | 'V' | 'C' | 'S' | 'Q' | 'T' | 'A' | 'Z'
+            ) {
+                return Err(format!(
+                    "layer cannot align unsupported path command {next}"
+                ));
+            }
+            output.push(next.to_string());
+            command = Some(next);
+            index += 1;
+            if next == 'Z' {
+                command = None;
+            }
+            continue;
+        }
+        let Some(active) = command else {
+            return Err("layer cannot align malformed path data".into());
+        };
+        let count = match active {
+            'M' | 'L' | 'T' => 2,
+            'H' | 'V' => 1,
+            'C' => 6,
+            'S' | 'Q' => 4,
+            'A' => 7,
+            _ => return Err("layer cannot align malformed path data".into()),
+        };
+        let mut values = Vec::with_capacity(count);
+        for token in tokens.iter().skip(index).take(count) {
+            let value = token
+                .parse::<f64>()
+                .map_err(|_| "layer cannot align malformed path coordinates".to_string())?;
+            values.push(value);
+        }
+        if values.len() != count {
+            return Err("layer cannot align malformed path data".into());
+        }
+        match active {
+            'M' | 'L' | 'T' => {
+                values[0] = values[0] * scale_x + if apply_offset { offset_x } else { 0.0 };
+                values[1] = values[1] * scale_y + if apply_offset { offset_y } else { 0.0 };
+            }
+            'H' => values[0] = values[0] * scale_x + if apply_offset { offset_x } else { 0.0 },
+            'V' => values[0] = values[0] * scale_y + if apply_offset { offset_y } else { 0.0 },
+            'C' => {
+                for pair in values.chunks_exact_mut(2) {
+                    pair[0] = pair[0] * scale_x + if apply_offset { offset_x } else { 0.0 };
+                    pair[1] = pair[1] * scale_y + if apply_offset { offset_y } else { 0.0 };
+                }
+            }
+            'S' | 'Q' => {
+                for pair in values.chunks_exact_mut(2) {
+                    pair[0] = pair[0] * scale_x + if apply_offset { offset_x } else { 0.0 };
+                    pair[1] = pair[1] * scale_y + if apply_offset { offset_y } else { 0.0 };
+                }
+            }
+            'A' => {
+                values[0] *= scale_x.abs();
+                values[1] *= scale_y.abs();
+                values[5] = values[5] * scale_x + if apply_offset { offset_x } else { 0.0 };
+                values[6] = values[6] * scale_y + if apply_offset { offset_y } else { 0.0 };
+            }
+            _ => unreachable!(),
+        }
+        output.extend(values.into_iter().map(crate::num::fmt_num));
+        index += count;
+        if active == 'M' {
+            command = Some('L');
+        }
+    }
+    Ok(output.join(" "))
+}
+
 fn split_layer_scene_items(
     items: &[Prim],
     kind: &ChartKind,
+    explicit_mark_count: Option<usize>,
+    protected_guides: &[Prim],
     title: Option<&str>,
     plot_left: f64,
     plot_bottom: f64,
@@ -827,8 +1266,13 @@ fn split_layer_scene_items(
     let mut y_guides = Vec::new();
     let mut x_guides = Vec::new();
     let mut titles = Vec::new();
-    for item in items {
-        if is_mark_primitive(item, kind) {
+    let explicit_mark_start = explicit_mark_count.map(|count| items.len().saturating_sub(count));
+    for (index, item) in items.iter().enumerate() {
+        let is_mark = explicit_mark_start.map_or_else(
+            || !protected_guides.contains(item) && is_mark_primitive(item, kind),
+            |mark_start| index >= mark_start,
+        );
+        if is_mark {
             marks.push(item.clone());
         } else if is_title_primitive(item, title) {
             titles.push(item.clone());
@@ -844,6 +1288,26 @@ fn split_layer_scene_items(
         }
     }
     (marks, y_guides, x_guides, titles)
+}
+
+fn layer_guides(
+    items: Vec<Prim>,
+    kind: &ChartKind,
+    explicit_mark_count: Option<usize>,
+    protected_guides: &[Prim],
+) -> Vec<Prim> {
+    let explicit_mark_start = explicit_mark_count.map(|count| items.len().saturating_sub(count));
+    items
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let is_mark = explicit_mark_start.map_or_else(
+                || !protected_guides.contains(&item) && is_mark_primitive(&item, kind),
+                |mark_start| index >= mark_start,
+            );
+            (!is_mark).then_some(item)
+        })
+        .collect()
 }
 
 fn is_title_primitive(prim: &Prim, title: Option<&str>) -> bool {
@@ -878,32 +1342,7 @@ fn is_mark_primitive(prim: &Prim, kind: &ChartKind) -> bool {
         }
         ChartKind::VegaImage(_) => matches!(prim, Prim::Image { .. }),
         ChartKind::VegaRect { .. } => matches!(prim, Prim::Rect { .. }),
-        ChartKind::ErrorMark(_) => match prim {
-            Prim::Line { .. }
-            | Prim::Path { .. }
-            | Prim::StyledPath { .. }
-            | Prim::ClippedPath { .. }
-            | Prim::Polyline { .. }
-            | Prim::StyledPolyline { .. }
-            | Prim::Circle { .. }
-            | Prim::ClippedCircle { .. } => true,
-            Prim::Group { children, .. } => {
-                children.iter().any(|child| is_mark_primitive(child, kind))
-            }
-            _ => false,
-        },
-        ChartKind::VegaBoxPlot(_) => match prim {
-            Prim::Rect { .. }
-            | Prim::Line { .. }
-            | Prim::Path { .. }
-            | Prim::ClippedPath { .. }
-            | Prim::Circle { .. }
-            | Prim::ClippedCircle { .. } => true,
-            Prim::Group { children, .. } => {
-                children.iter().any(|child| is_mark_primitive(child, kind))
-            }
-            _ => false,
-        },
+        ChartKind::ErrorMark(_) | ChartKind::VegaBoxPlot(_) => false,
         _ => false,
     }
 }
@@ -1033,14 +1472,39 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
         .iter()
         .map(|category| domain.iter().position(|candidate| candidate == category))
         .collect::<Vec<_>>();
-    for series in &mut spec.series {
-        let mut values = vec![f64::NAN; domain.len()];
-        for (old_index, new_index) in positions.iter().enumerate() {
-            if let (Some(new_index), Some(value)) = (new_index, series.values.get(old_index)) {
-                values[*new_index] = *value;
+    let per_category_values = !matches!(
+        &spec.kind,
+        ChartKind::ErrorMark(_) | ChartKind::VegaBoxPlot(_) | ChartKind::VegaRect { .. }
+    );
+    if per_category_values {
+        for series in &mut spec.series {
+            let mut values = vec![f64::NAN; domain.len()];
+            let mut trail_widths = series
+                .trail_widths
+                .as_ref()
+                .map(|_| vec![1.0; domain.len()]);
+            for (old_index, new_index) in positions.iter().enumerate() {
+                let Some(new_index) = new_index else {
+                    continue;
+                };
+                if let Some(value) = series.values.get(old_index) {
+                    values[*new_index] = *value;
+                }
+                if let (Some(widths), Some(width)) = (
+                    trail_widths.as_mut(),
+                    series
+                        .trail_widths
+                        .as_ref()
+                        .and_then(|widths| widths.get(old_index)),
+                ) {
+                    widths[*new_index] = *width;
+                }
+            }
+            series.values = values;
+            if let Some(widths) = trail_widths {
+                series.trail_widths = Some(Box::new(widths));
             }
         }
-        series.values = values;
     }
     match &mut spec.kind {
         ChartKind::VegaRect {
@@ -1147,5 +1611,50 @@ fn path_prefix(path: &str) -> String {
         "root: ".to_owned()
     } else {
         format!("{path}: ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::vegalite;
+
+    #[test]
+    fn category_remap_keeps_error_range_centers_aligned() {
+        let mut spec = vegalite::parse(
+            r#"{"mark":"errorbar","data":{"values":[{"x":"A","lo":2,"hi":8}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"lo","type":"quantitative"},"y2":{"field":"hi"}}}"#,
+            true,
+        )
+        .expect("errorbar parses");
+        let centers = spec.series[0].values.clone();
+
+        remap_categories(&mut spec, "x", &["B".into(), "A".into()]);
+
+        assert_eq!(spec.series[0].values, centers);
+        let ChartKind::ErrorMark(data) = &spec.kind else {
+            panic!("errorbar kind is preserved")
+        };
+        assert_eq!(
+            data.ranges[0].position,
+            crate::ir::ErrorPosition::Category(1)
+        );
+    }
+
+    #[test]
+    fn category_remap_keeps_trail_widths_aligned_with_values() {
+        let mut spec = vegalite::parse(
+            r#"{"mark":"trail","data":{"values":[{"x":"B","y":10,"size":20},{"x":"A","y":5,"size":90}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"},"size":{"field":"size","type":"quantitative"}}}"#,
+            true,
+        )
+        .expect("trail parses");
+        assert_eq!(spec.categories, ["B", "A"]);
+        assert_eq!(spec.series[0].values, [10.0, 5.0]);
+        assert_eq!(spec.series[0].trail_widths_slice(), [1.0, 4.0]);
+
+        remap_categories(&mut spec, "x", &["A".into(), "B".into(), "C".into()]);
+
+        assert_eq!(spec.series[0].values[0..2], [5.0, 10.0]);
+        assert!(spec.series[0].values[2].is_nan());
+        assert_eq!(spec.series[0].trail_widths_slice(), [4.0, 1.0, 1.0]);
     }
 }

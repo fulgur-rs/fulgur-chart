@@ -60,6 +60,16 @@ fn count_lines_with_stroke(items: &[Prim], stroke: fulgur_chart::ir::Color) -> u
         .sum()
 }
 
+fn collect_line_strokes(items: &[Prim], output: &mut Vec<fulgur_chart::ir::Color>) {
+    for item in items {
+        match item {
+            Prim::Line { stroke, .. } => output.push(*stroke),
+            Prim::Group { children, .. } => collect_line_strokes(children, output),
+            _ => {}
+        }
+    }
+}
+
 fn count_circles(items: &[Prim]) -> usize {
     items
         .iter()
@@ -69,6 +79,18 @@ fn count_circles(items: &[Prim]) -> usize {
             _ => 0,
         })
         .sum()
+}
+
+fn collect_circle_centers(items: &[Prim], output: &mut Vec<(f64, f64)>) {
+    for item in items {
+        match item {
+            Prim::Circle { cx, cy, .. } | Prim::ClippedCircle { cx, cy, .. } => {
+                output.push((*cx, *cy));
+            }
+            Prim::Group { children, .. } => collect_circle_centers(children, output),
+            _ => {}
+        }
+    }
 }
 
 fn size_legend_groups<'a>(items: &'a [Prim], title: &str) -> Vec<&'a [Prim]> {
@@ -529,6 +551,156 @@ fn layer_keeps_boxplot_marks_from_later_units() {
         count_filled_rects(&scene.items, red),
         count_filled_rects(&boxplot_scene.items, red),
         "the later boxplot box must remain in the composed scene"
+    );
+}
+
+#[test]
+fn layer_aligns_marks_when_children_have_different_legend_gutters() {
+    let spec = parsed(
+        r#"{
+          "layer":[
+            {"mark":"point","data":{"values":[{"x":1,"y":1},{"x":2,"y":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}},
+            {"mark":"point","data":{"values":[{"x":1,"y":1,"group":"north"},{"x":2,"y":2,"group":"north"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}
+          ]
+        }"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("different legend gutters share a common plot frame");
+
+    let mut centers = Vec::new();
+    collect_circle_centers(&scene.items, &mut centers);
+    centers.sort_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.total_cmp(&right.1))
+    });
+    assert_eq!(centers.len(), 4);
+    for pair in centers.chunks_exact(2) {
+        assert!((pair[0].0 - pair[1].0).abs() < 1e-6);
+        assert!((pair[0].1 - pair[1].1).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn shared_boxplot_color_legend_uses_the_union_once_in_concat_and_layer() {
+    let north = r#"{"mark":"boxplot","data":{"values":[{"x":"A","y":1,"group":"north"},{"x":"A","y":2,"group":"north"},{"x":"A","y":3,"group":"north"},{"x":"A","y":4,"group":"north"},{"x":"A","y":5,"group":"north"}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}"#;
+    let south = r#"{"mark":"boxplot","data":{"values":[{"x":"A","y":1,"group":"south"},{"x":"A","y":2,"group":"south"},{"x":"A","y":3,"group":"south"},{"x":"A","y":4,"group":"south"},{"x":"A","y":5,"group":"south"}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}"#;
+    let hconcat = parsed(&format!(r#"{{"hconcat":[{north},{south},{north}]}}"#));
+    let concat_scene = fulgur_chart::layout::build_scene_checked(
+        &hconcat,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("concat scene builds");
+    assert_eq!(count_text(&concat_scene.items, "north"), 1);
+    assert_eq!(count_text(&concat_scene.items, "south"), 1);
+    assert_eq!(
+        count_filled_rects(
+            &concat_scene.items,
+            fulgur_chart::palette::VEGALITE_PALETTE[0]
+        ),
+        3,
+        "two north box bodies and one union legend swatch remain"
+    );
+    assert_eq!(
+        count_filled_rects(
+            &concat_scene.items,
+            fulgur_chart::palette::VEGALITE_PALETTE[1]
+        ),
+        2,
+        "one south box body and one union legend swatch remain"
+    );
+
+    let layer = parsed(&format!(r#"{{"layer":[{north},{south}]}}"#));
+    let layer_scene = fulgur_chart::layout::build_scene_checked(
+        &layer,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("layer scene builds");
+    assert_eq!(count_text(&layer_scene.items, "north"), 1);
+    assert_eq!(count_text(&layer_scene.items, "south"), 1);
+    assert_eq!(
+        count_filled_rects(
+            &layer_scene.items,
+            fulgur_chart::palette::VEGALITE_PALETTE[0]
+        ),
+        2,
+        "north box body and union legend swatch remain"
+    );
+    assert_eq!(
+        count_filled_rects(
+            &layer_scene.items,
+            fulgur_chart::palette::VEGALITE_PALETTE[1]
+        ),
+        2,
+        "south box body and union legend swatch remain"
+    );
+    let clipped_groups = layer_scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::Group {
+                clip: Some(_),
+                children,
+                ..
+            } => Some(children.as_slice()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(clipped_groups.len(), 3);
+    assert_eq!(
+        count_filled_rects(
+            clipped_groups[1],
+            fulgur_chart::palette::VEGALITE_PALETTE[0]
+        ),
+        1,
+        "the first box body's swatch stays with guides, not with marks"
+    );
+    assert_eq!(
+        count_filled_rects(
+            clipped_groups[2],
+            fulgur_chart::palette::VEGALITE_PALETTE[1]
+        ),
+        1,
+        "the later box body does not carry a duplicated swatch"
+    );
+}
+
+#[test]
+fn layer_later_errorbar_mark_group_excludes_axis_lines() {
+    let spec = parsed(
+        r#"{"layer":[
+          {"mark":"bar","data":{"values":[{"x":"A","y":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}},
+          {"mark":{"type":"errorbar","color":"red"},"data":{"values":[{"x":"A","lo":2,"hi":8}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"lo","type":"quantitative"},"y2":{"field":"hi"}}}
+        ]}"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("layer scene builds");
+    let clipped_groups = scene
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Prim::Group {
+                clip: Some(_),
+                children,
+                ..
+            } => Some(children.as_slice()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(clipped_groups.len(), 3);
+    let mut strokes = Vec::new();
+    collect_line_strokes(clipped_groups[2], &mut strokes);
+    let red = fulgur_chart::color::parse_color("red").unwrap();
+    assert!(!strokes.is_empty(), "errorbar data rules are retained");
+    assert!(
+        strokes.iter().all(|stroke| *stroke == red),
+        "axis/grid strokes must remain in the guide group: {strokes:?}"
     );
 }
 

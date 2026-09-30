@@ -9,6 +9,28 @@ use crate::ir::{ChartKind, ChartSpec};
 use crate::scene::{Anchor, Prim, Scene};
 use crate::text::TextMeasurer;
 
+pub(crate) fn plot_rect(spec: &ChartSpec, m: &TextMeasurer) -> (f64, f64, f64, f64) {
+    let y_labels = match &spec.kind {
+        ChartKind::VegaRect { y_labels, .. } => y_labels,
+        _ => unreachable!("vega_rect::plot_rect called on non-VegaRect kind"),
+    };
+    let max_y_w = y_labels
+        .iter()
+        .map(|label| m.width(label, spec.theme.font_size as f32))
+        .fold(0.0_f32, f32::max);
+    let title_band = if spec.title.is_some() {
+        TITLE_BAND
+    } else {
+        0.0
+    };
+    (
+        OUTER_PAD + max_y_w as f64 + 10.0,
+        OUTER_PAD + title_band,
+        spec.width - OUTER_PAD,
+        spec.height - OUTER_PAD - X_LABEL_BAND,
+    )
+}
+
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let (x_labels, y_labels, cells) = match &spec.kind {
         ChartKind::VegaRect {
@@ -37,26 +59,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
     let n_rows = y_labels.len();
     let n_cols = x_labels.len();
 
-    // y-axis label width
-    let mut max_y_w = 0.0_f32;
-    for l in y_labels {
-        let w = m.width(l, label_font as f32);
-        if w > max_y_w {
-            max_y_w = w;
-        }
-    }
-    let y_axis_w = max_y_w as f64 + 10.0;
-
-    let title_band = if spec.title.is_some() {
-        TITLE_BAND
-    } else {
-        0.0
-    };
-
-    let plot_left = OUTER_PAD + y_axis_w;
-    let plot_right = spec.width - OUTER_PAD;
-    let plot_top = OUTER_PAD + title_band;
-    let plot_bottom = spec.height - OUTER_PAD - X_LABEL_BAND;
+    let (plot_left, plot_top, plot_right, plot_bottom) = plot_rect(spec, m);
 
     // Guard against negative dimensions when y-label width exceeds available space.
     let plot_w = (plot_right - plot_left).max(0.0);

@@ -932,7 +932,7 @@ fn parse_resolved_node(
                 if child_width != view_width || child_height != view_height {
                     return Err(format!(
                         "{}layer children must resolve to equal dimensions (expected {view_width}×{view_height}, got {child_width}×{child_height})",
-                        path_or_root(&container.path)
+                        node_path(&container.path)
                     ));
                 }
             }
@@ -1141,7 +1141,7 @@ fn node_resolution(
     scales.node_resolve.get(path).copied().ok_or_else(|| {
         format!(
             "{}resolved composition settings are missing",
-            path_or_root(path)
+            node_path(path)
         )
     })
 }

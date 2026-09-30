@@ -77,6 +77,23 @@ fn vegalite_composition_schema_rejects_empty_arrays_and_unknown_composition_keys
 }
 
 #[test]
+fn vegalite_composition_layer_dimension_errors_have_a_separated_root_path() {
+    let error = vegalite::parse(
+        r#"{"layer":[
+          {"mark":"point","width":100,"data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}},
+          {"mark":"point","width":120,"data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}}
+        ]}"#,
+        true,
+    )
+    .expect_err("unequal layer dimensions are rejected");
+
+    assert!(
+        error.starts_with("root: layer children must resolve to equal dimensions"),
+        "root path separator is present: {error}"
+    );
+}
+
+#[test]
 fn vegalite_composition_generated_schema_is_recursive_and_requires_children() {
     let schema =
         serde_json::to_value(schemars::schema_for!(VegaLiteSpec)).expect("schema serializes");

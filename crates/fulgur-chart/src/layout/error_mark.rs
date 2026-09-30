@@ -1799,24 +1799,36 @@ fn draw_errorbands(
     Ok(())
 }
 
+fn build_with_bands_parts(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    frame: ErrorMarkFrame,
+    bands: Vec<MappedErrorBand>,
+) -> Result<(Scene, usize), String> {
+    let mut items = Vec::new();
+    draw_chart_title(&mut items, spec, &frame);
+    draw_axis(&mut items, spec, &frame, ErrorAxis::X);
+    draw_axis(&mut items, spec, &frame, ErrorAxis::Y);
+    draw_legend(&mut items, spec, &frame, m);
+    let mark_start = items.len();
+    draw_errorbars(&mut items, spec, &frame)?;
+    draw_errorbands(&mut items, spec, &frame, &bands)?;
+    let mark_count = items.len() - mark_start;
+    let scene = Scene {
+        width: frame.width,
+        height: frame.height,
+        items,
+    };
+    Ok((scene, mark_count))
+}
+
 fn build_with_bands(
     spec: &ChartSpec,
     m: &TextMeasurer,
     frame: ErrorMarkFrame,
     bands: Vec<MappedErrorBand>,
 ) -> Result<Scene, String> {
-    let mut items = Vec::new();
-    draw_chart_title(&mut items, spec, &frame);
-    draw_axis(&mut items, spec, &frame, ErrorAxis::X);
-    draw_axis(&mut items, spec, &frame, ErrorAxis::Y);
-    draw_legend(&mut items, spec, &frame, m);
-    draw_errorbars(&mut items, spec, &frame)?;
-    draw_errorbands(&mut items, spec, &frame, &bands)?;
-    Ok(Scene {
-        width: frame.width,
-        height: frame.height,
-        items,
-    })
+    build_with_bands_parts(spec, m, frame, bands).map(|(scene, _)| scene)
 }
 
 /// Builds one error-mark Scene without applying the shared outer theme background pass.
@@ -1836,6 +1848,17 @@ pub(crate) fn build_checked(
     let frame = compute_frame(spec, m);
     let bands = mapped_errorbands(spec, &frame)?;
     build_with_bands(spec, m, frame, bands)
+}
+
+pub(crate) fn build_checked_with_layer_parts(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    primitive_limit: usize,
+) -> Result<(Scene, usize), String> {
+    crate::guard::validate_error_mark(spec, primitive_limit)?;
+    let frame = compute_frame(spec, m);
+    let bands = mapped_errorbands(spec, &frame)?;
+    build_with_bands_parts(spec, m, frame, bands)
 }
 
 #[cfg(test)]
