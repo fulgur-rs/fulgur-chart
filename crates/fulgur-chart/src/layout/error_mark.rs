@@ -140,6 +140,7 @@ impl ErrorMarkFrame {
                 ErrorAxis::X => self.plot_left,
                 ErrorAxis::Y => self.plot_top,
             }),
+            VegaRulePosition::FullAxisCenter => self.map_position(axis, ErrorPosition::FullAxis),
             VegaRulePosition::FullAxisEnd => Ok(match axis {
                 ErrorAxis::X => self.plot_right,
                 ErrorAxis::Y => self.plot_bottom,

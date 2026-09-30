@@ -244,9 +244,11 @@ format error for image marks. See the [image fixture](examples/specs/vegalite-im
 
 ### Rule marks
 
-`rule` accepts inline `data.values` and one-dimensional `encoding.x` or `encoding.y` for a
-plot-spanning vertical or horizontal line. Provide both `x` and `y` to define a segment; optional
-`x2` and `y2` set its end coordinates. Positions can be categorical, quantitative, or temporal.
+`rule` accepts inline `data.values`. A lone `encoding.x` or `encoding.y`, without its matching
+secondary channel, draws a plot-spanning vertical or horizontal line. A ranged rule can use `x` / `x2`
+without `y`, or `y` / `y2` without `x`; its missing orthogonal position is placed at the plot center.
+When both `x` and `y` are supplied, omitted `x2` or `y2` endpoints collapse to their primary
+position. Positions can be categorical, quantitative, or temporal.
 `mark.color`, `mark.opacity`, `mark.strokeWidth`, `mark.strokeDash`, and `mark.clip`, plus a
 categorical `encoding.color`, are supported. Transformations and aggregation are rejected. Rule
 marks reject category values of different JSON types that stringify to the same label (for example,

@@ -24,9 +24,9 @@ fn axis_positions(data: &VegaRuleData, x_axis: bool) -> Vec<ErrorPosition> {
             }
         })
         .map(|position| match position {
-            VegaRulePosition::FullAxisStart | VegaRulePosition::FullAxisEnd => {
-                ErrorPosition::FullAxis
-            }
+            VegaRulePosition::FullAxisStart
+            | VegaRulePosition::FullAxisCenter
+            | VegaRulePosition::FullAxisEnd => ErrorPosition::FullAxis,
             VegaRulePosition::Category(index) => ErrorPosition::Category(index),
             VegaRulePosition::Quantitative(value) => ErrorPosition::Quantitative(value),
             VegaRulePosition::Temporal(millis) => ErrorPosition::Temporal(millis),
@@ -124,4 +124,44 @@ pub(crate) fn build_checked(
     limits: &InputLimits,
 ) -> Result<Scene, String> {
     build_checked_with_layer_parts(spec, measurer, limits).map(|(scene, _)| scene)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ranged_rule_without_orthogonal_channel_uses_the_plot_center() {
+        let measurer = TextMeasurer::new(crate::font::DEFAULT_FONT).unwrap();
+        for (json, axis) in [
+            (
+                r##"{"mark":"rule","data":{"values":[{"x":10,"x2":30}]},"encoding":{"x":{"field":"x","type":"quantitative"},"x2":{"field":"x2"}}}"##,
+                ErrorAxis::Y,
+            ),
+            (
+                r##"{"mark":"rule","data":{"values":[{"y":10,"y2":30}]},"encoding":{"y":{"field":"y","type":"quantitative"},"y2":{"field":"y2"}}}"##,
+                ErrorAxis::X,
+            ),
+        ] {
+            let spec = crate::frontend::vegalite::parse(json, true)
+                .expect("one-axis ranged rules should parse");
+            let frame = compute_frame(&spec, &measurer);
+            let data = rule_data(&spec);
+            let segment = &data.segments[0];
+            let position = if axis == ErrorAxis::X {
+                segment.x1
+            } else {
+                segment.y1
+            };
+            let mapped = frame
+                .map_rule_position(axis, position)
+                .expect("default orthogonal position should map");
+            let expected = match axis {
+                ErrorAxis::X => (frame.plot_left + frame.plot_right) / 2.0,
+                ErrorAxis::Y => (frame.plot_top + frame.plot_bottom) / 2.0,
+            };
+
+            assert!((mapped - expected).abs() < 1e-8);
+        }
+    }
 }
