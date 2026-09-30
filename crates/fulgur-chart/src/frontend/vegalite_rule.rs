@@ -93,9 +93,6 @@ pub(super) fn parse_rule_spec(
     if has_x != has_y && (has_x2 || has_y2) {
         return Err("ranged rule marks require both encoding.x and encoding.y".into());
     }
-    if has_x && has_y && !has_x2 && !has_y2 {
-        return Err("rule mark with both x and y requires encoding.x2 or encoding.y2".into());
-    }
 
     let x_kind = x_field
         .as_deref()
@@ -212,6 +209,20 @@ pub(super) fn parse_rule_spec(
         .color_categories
         .as_deref()
         .unwrap_or(&color_categories);
+    if color_field.is_some() && color_domain.len() > limits.max_series {
+        return Err(format!(
+            "rule mark series count {} exceeds max_series limit {}",
+            color_domain.len(),
+            limits.max_series
+        ));
+    }
+    let mut color_indexes = HashMap::new();
+    if color_field.is_some() {
+        color_indexes.reserve(color_domain.len());
+        for (index, category) in color_domain.iter().enumerate() {
+            color_indexes.entry(category.as_str()).or_insert(index);
+        }
+    }
     let mark_color = mark
         .and_then(|mark| mark.get("color"))
         .filter(|value| !value.is_null())
@@ -268,10 +279,7 @@ pub(super) fn parse_rule_spec(
             constant
         } else if let Some(field) = color_field.as_deref() {
             let label = super::field_category(&records[index], Some(field));
-            let color_index = color_domain
-                .iter()
-                .position(|category| category == &label)
-                .unwrap_or(0);
+            let color_index = color_indexes.get(label.as_str()).copied().unwrap_or(0);
             palette_color(color_index)
         } else {
             mark_color
@@ -310,14 +318,6 @@ pub(super) fn parse_rule_spec(
             ));
         }
     }
-    if color_categories.len() > limits.max_series {
-        return Err(format!(
-            "rule mark series count {} exceeds max_series limit {}",
-            color_categories.len(),
-            limits.max_series
-        ));
-    }
-
     let theme = make_theme(top)?;
     let grid = super::temporal_axis_grid(top, theme.grid_color, theme.text_color)?;
     let x_axis = make_axis(x_field.as_deref(), x_kind, grid.clone());
@@ -572,15 +572,15 @@ fn parse_stroke_dash(mark: Option<&Map<String, Value>>) -> Result<Vec<f64>, Stri
     };
     let pattern = value
         .as_array()
-        .ok_or_else(|| "mark.strokeDash must be an array of positive numbers".to_string())?;
+        .ok_or_else(|| "mark.strokeDash must be an array of non-negative numbers".to_string())?;
     pattern
         .iter()
         .map(|value| {
             value
                 .as_f64()
-                .filter(|dash| dash.is_finite() && *dash > 0.0)
+                .filter(|dash| dash.is_finite() && *dash >= 0.0)
                 .ok_or_else(|| {
-                    String::from("mark.strokeDash entries must be finite positive numbers")
+                    String::from("mark.strokeDash entries must be finite non-negative numbers")
                 })
         })
         .collect()
@@ -699,4 +699,38 @@ fn x_positions(
     unix_millis.sort_unstable();
     unix_millis.dedup();
     XPositions::Temporal { unix_millis }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_color_domain_is_limited_before_series_are_built() {
+        let mut top = serde_json::json!({
+            "mark": "rule",
+            "data": {"values": [{"x": 1, "site": "local"}]},
+            "encoding": {
+                "x": {"field": "x", "type": "quantitative"},
+                "color": {"field": "site", "type": "nominal"}
+            }
+        });
+        let limits = crate::guard::InputLimits {
+            max_series: 1,
+            ..crate::guard::InputLimits::default()
+        };
+        let overrides = crate::frontend::vegalite_composition::VegaUnitScaleOverrides {
+            color_categories: Some(vec!["one".into(), "two".into()]),
+            ..Default::default()
+        };
+
+        let error = parse_rule_spec(
+            top.as_object_mut().expect("spec object"),
+            &limits,
+            &overrides,
+        )
+        .expect_err("the full shared color domain must honor max_series");
+
+        assert!(error.contains("series count 2"), "{error}");
+    }
 }

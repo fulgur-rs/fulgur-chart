@@ -899,10 +899,10 @@ pub(crate) fn validate_vega_rule(spec: &ChartSpec, limits: &InputLimits) -> Resu
         || data
             .stroke_dash
             .iter()
-            .any(|dash| !dash.is_finite() || *dash <= 0.0)
+            .any(|dash| !dash.is_finite() || *dash < 0.0)
     {
         return Err(format!(
-            "Vega-Lite rule strokeDash must contain at most {MAX_BORDER_DASH_ELEMENTS} finite positive numbers"
+            "Vega-Lite rule strokeDash must contain at most {MAX_BORDER_DASH_ELEMENTS} finite non-negative numbers"
         ));
     }
     for (axis_name, categories) in [

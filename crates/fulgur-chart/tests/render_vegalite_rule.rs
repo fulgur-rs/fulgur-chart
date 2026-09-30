@@ -156,7 +156,7 @@ fn rule_is_supported_as_a_layer_leaf_and_shared_category_scale() {
 }
 
 #[test]
-fn rule_rejects_unsupported_and_ambiguous_encodings() {
+fn rule_rejects_unsupported_encodings_and_accepts_optional_endpoints() {
     let unsupported = r##"{"mark":"rule","data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"size":{"value":2}}}"##;
     let error = vegalite::parse(unsupported, false).unwrap_err();
     assert!(
@@ -164,9 +164,35 @@ fn rule_rejects_unsupported_and_ambiguous_encodings() {
         "{error}"
     );
 
-    let missing_endpoint = r##"{"mark":"rule","data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}}"##;
-    let error = vegalite::parse(missing_endpoint, true).unwrap_err();
-    assert!(error.contains("x2 or encoding.y2"), "{error}");
+    let missing_endpoint = r##"{"mark":{"type":"rule","color":"red"},"data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}}"##;
+    let spec = vegalite::parse(missing_endpoint, true)
+        .expect("x and y define a rule point when secondary endpoints are omitted");
+    let scene = layout::build_scene_checked(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap())
+        .expect("a rule with omitted secondary endpoints should render");
+    let rules = lines(&scene)
+        .into_iter()
+        .filter(|line| is_red(line.4))
+        .collect::<Vec<_>>();
+    assert_eq!(rules.len(), 1);
+    assert_eq!((rules[0].0, rules[0].1), (rules[0].2, rules[0].3));
+}
+
+#[test]
+fn rule_stroke_dash_accepts_zero_entries() {
+    let spec = vegalite::parse(
+        r##"{"mark":{"type":"rule","color":"red","strokeDash":[0,4]},"data":{"values":[{"x":1}]},"encoding":{"x":{"field":"x","type":"quantitative"}}}"##,
+        true,
+    )
+    .expect("Vega-Lite strokeDash permits non-negative entries");
+    let scene = layout::build_scene_checked(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap())
+        .expect("a zero-containing strokeDash should render");
+    let rules = lines(&scene)
+        .into_iter()
+        .filter(|line| is_red(line.4))
+        .collect::<Vec<_>>();
+
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].5, vec![0.0, 4.0]);
 }
 
 #[test]
