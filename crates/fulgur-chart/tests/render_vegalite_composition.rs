@@ -578,7 +578,7 @@ fn layer_aligns_marks_when_children_have_different_legend_gutters() {
             .then_with(|| left.1.total_cmp(&right.1))
     });
     assert_eq!(centers.len(), 4);
-    for pair in centers.chunks_exact(2) {
+    for pair in centers.as_chunks::<2>().0 {
         assert!((pair[0].0 - pair[1].0).abs() < 1e-6);
         assert!((pair[0].1 - pair[1].1).abs() < 1e-6);
     }
