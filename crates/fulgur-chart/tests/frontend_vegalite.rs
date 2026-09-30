@@ -5262,3 +5262,290 @@ fn vegalite_text_rejects_ambiguous_style_channel_sources() {
         );
     }
 }
+
+#[test]
+fn vegalite_tick_schema_accepts_string_and_object_marks_with_config() {
+    let string_mark = serde_json::json!({
+        "mark": "tick",
+        "data": {"values": [{"x": 2, "group": "A"}]},
+        "encoding": {
+            "x": {"field": "x", "type": "quantitative", "title": "Measurement"},
+            "y": {"field": "group", "type": "nominal"}
+        },
+        "config": {"tick": {"bandSize": 14, "thickness": 2}}
+    });
+    let object_mark = serde_json::json!({
+        "mark": {"type": "tick", "orient": "vertical", "size": 9},
+        "data": {"values": [{"x": "A", "y": 3}]},
+        "encoding": {
+            "x": {"field": "x", "type": "ordinal"},
+            "y": {"field": "y", "type": "quantitative"}
+        }
+    });
+
+    for value in [string_mark, object_mark] {
+        serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(value.clone())
+            .expect("tick string and object forms should be in the public schema");
+        let json = serde_json::to_string(&value).unwrap();
+        vegalite::parse(&json, true).expect("strict tick spec should parse");
+    }
+
+    let unknown_tick_config = serde_json::json!({
+        "mark": "tick",
+        "data": {"values": [{"x": 1}]},
+        "encoding": {"x": {"field": "x", "type": "quantitative"}},
+        "config": {"tick": {"unknown": 1}}
+    });
+    assert!(
+        serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(unknown_tick_config).is_err()
+    );
+}
+
+#[test]
+fn vegalite_tick_requires_inline_data_and_supported_position_channels() {
+    let invalid_specs = [
+        (
+            serde_json::json!({
+                "mark": "tick",
+                "data": {"url": "points.json"},
+                "encoding": {"x": {"field": "x", "type": "quantitative"}}
+            }),
+            "URL data",
+        ),
+        (
+            serde_json::json!({
+                "mark": "tick",
+                "data": {"values": [{"x": 1}]},
+                "transform": [{"filter": "datum.x > 0"}],
+                "encoding": {"x": {"field": "x", "type": "quantitative"}}
+            }),
+            "transform",
+        ),
+        (
+            serde_json::json!({
+                "mark": "tick",
+                "data": {"values": [{"x": 1}]},
+                "encoding": {"x": {"field": "x", "type": "geojson"}}
+            }),
+            "encoding.x.type",
+        ),
+        (
+            serde_json::json!({
+                "mark": "tick",
+                "data": {"values": [{"x": 1}]},
+                "encoding": {"color": {"value": "red"}}
+            }),
+            "encoding.x or encoding.y",
+        ),
+    ];
+
+    for (value, expected_error) in invalid_specs {
+        let json = serde_json::to_string(&value).unwrap();
+        let error = vegalite::parse(&json, false).expect_err("unsupported tick input must fail");
+        assert!(
+            error.contains(expected_error),
+            "expected error containing {expected_error:?}, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn vegalite_tick_guard_counts_each_record_and_rejects_invalid_style_values() {
+    let json = r#"{
+        "mark": {"type": "tick", "size": 6},
+        "data": {"values": [{"x": 1}, {"x": 2}]},
+        "encoding": {"x": {"field": "x", "type": "quantitative"}}
+    }"#;
+    let spec =
+        vegalite::parse(json, false).expect("tick data should parse before custom-limit checks");
+
+    let point_limit = fulgur_chart::guard::InputLimits {
+        max_total_data_points: 1,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = fulgur_chart::guard::validate_spec(&spec, &point_limit)
+        .expect_err("tick records count toward max_total_data_points");
+    assert!(error.contains("max_total_data_points"), "{error}");
+
+    let primitive_limit = fulgur_chart::guard::InputLimits {
+        max_categorical_primitives: 1,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = fulgur_chart::guard::validate_spec(&spec, &primitive_limit)
+        .expect_err("one tick rectangle per record counts toward primitive limits");
+    assert!(error.contains("max_categorical_primitives"), "{error}");
+}
+
+#[test]
+fn vegalite_tick_category_and_label_limits_are_preflighted() {
+    let cases = [
+        (
+            r#"{"mark":"tick","data":{"values":[{"x":"a","y":"b"}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"nominal"}}}"#,
+            fulgur_chart::guard::InputLimits {
+                max_categories: 1,
+                ..fulgur_chart::guard::InputLimits::default()
+            },
+            "max_categories",
+        ),
+        (
+            r#"{"mark":"tick","data":{"values":[{"x":1,"group":"a"},{"x":2,"group":"b"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}"#,
+            fulgur_chart::guard::InputLimits {
+                max_series: 1,
+                ..fulgur_chart::guard::InputLimits::default()
+            },
+            "max_series",
+        ),
+        (
+            r#"{"mark":"tick","data":{"values":[{"x":"long-label"}]},"encoding":{"x":{"field":"x","type":"nominal"}}}"#,
+            fulgur_chart::guard::InputLimits {
+                max_label_bytes: 4,
+                ..fulgur_chart::guard::InputLimits::default()
+            },
+            "max_label_bytes",
+        ),
+    ];
+
+    for (json, limits, limit_name) in cases {
+        let error = vegalite::parse_with_limits(json, false, &limits)
+            .expect_err("tick category limits must be rejected during preflight");
+        assert!(
+            error.contains(limit_name) && error.contains("pre-allocation"),
+            "expected a pre-allocation {limit_name} error, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn vegalite_tick_shared_composition_domains_are_preflighted() {
+    let json = r#"{
+        "layer": [
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": 1, "group": "a"}]},
+                "encoding": {
+                    "x": {"field": "x", "type": "quantitative"},
+                    "color": {"field": "group", "type": "nominal"}
+                }
+            },
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": 2, "group": "b"}]},
+                "encoding": {
+                    "x": {"field": "x", "type": "quantitative"},
+                    "color": {"field": "group", "type": "nominal"}
+                }
+            }
+        ]
+    }"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_series: 1,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = vegalite::parse_with_limits(json, false, &limits)
+        .expect_err("shared tick color domains must obey max_series before allocation");
+    assert!(
+        error.contains("max_series") && error.contains("pre-allocation"),
+        "expected a pre-allocation shared-domain limit error, got {error:?}"
+    );
+
+    let colliding_categories = r#"{
+        "layer": [
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": 1}]},
+                "encoding": {"x": {"field": "x", "type": "nominal"}}
+            },
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": "1"}]},
+                "encoding": {"x": {"field": "x", "type": "nominal"}}
+            }
+        ]
+    }"#;
+    let error = vegalite::parse(colliding_categories, false)
+        .expect_err("JSON values with colliding labels must not share a tick position");
+    assert!(
+        error.contains("conflicting JSON value types"),
+        "expected a shared category type collision error, got {error:?}"
+    );
+
+    let position_json = r#"{
+        "layer": [
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": "a", "y": "u"}]},
+                "encoding": {
+                    "x": {"field": "x", "type": "nominal"},
+                    "y": {"field": "y", "type": "nominal"}
+                }
+            },
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": "b", "y": "v"}]},
+                "encoding": {
+                    "x": {"field": "x", "type": "nominal"},
+                    "y": {"field": "y", "type": "nominal"}
+                }
+            }
+        ]
+    }"#;
+    let position_limits = fulgur_chart::guard::InputLimits {
+        max_categories: 2,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = vegalite::parse_with_limits(position_json, false, &position_limits)
+        .expect_err("shared x/y category unions must obey max_categories");
+    assert!(
+        error.contains("max_categories") && error.contains("pre-allocation"),
+        "expected a pre-allocation shared position-domain error, got {error:?}"
+    );
+}
+
+#[test]
+fn vegalite_tick_composition_preflights_leaf_limits_before_resolving_scales() {
+    let json = r#"{
+        "layer": [
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": "long-label"}]},
+                "encoding": {"x": {"field": "x", "type": "nominal"}}
+            },
+            {
+                "mark": "bar",
+                "data": {"values": [{"x": 1, "y": 2}]},
+                "encoding": {
+                    "x": {"field": "x", "type": "quantitative"},
+                    "y": {"field": "y", "type": "quantitative"}
+                }
+            }
+        ]
+    }"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_label_bytes: 4,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = vegalite::parse_with_limits(json, false, &limits)
+        .expect_err("tick leaf limits must be checked before shared scale resolution");
+    assert!(
+        error.contains("max_label_bytes") && error.contains("pre-allocation"),
+        "expected the tick preflight error before a shared scale type error, got {error:?}"
+    );
+}
+
+#[test]
+fn vegalite_tick_rejects_unimplemented_scale_range_overrides() {
+    for (json, expected) in [
+        (
+            r##"{"mark":"tick","config":{"scale":{"minBandSize":4}},"data":{"values":[{"x":1,"size":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"size":{"field":"size","type":"quantitative"}}}"##,
+            "config.scale",
+        ),
+        (
+            r##"{"mark":"tick","config":{"scale":{"maxOpacity":0.9}},"data":{"values":[{"x":1,"opacity":0.5}]},"encoding":{"x":{"field":"x","type":"quantitative"},"opacity":{"field":"opacity","type":"quantitative"}}}"##,
+            "config.scale",
+        ),
+    ] {
+        let error =
+            vegalite::parse(json, true).expect_err("unimplemented overrides must be explicit");
+        assert!(error.contains(expected), "{error}");
+    }
+}

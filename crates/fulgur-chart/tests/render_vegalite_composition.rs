@@ -49,6 +49,41 @@ fn count_filled_rects(items: &[Prim], fill: fulgur_chart::ir::Color) -> usize {
         .sum()
 }
 
+fn rect_centers(
+    items: &[Prim],
+    fill: fulgur_chart::ir::Color,
+    parent_x: f64,
+    parent_y: f64,
+    output: &mut Vec<(f64, f64)>,
+) {
+    for item in items {
+        match item {
+            Prim::Rect {
+                x,
+                y,
+                w,
+                h,
+                fill: item_fill,
+            } if *item_fill == fill => {
+                output.push((parent_x + x + w / 2.0, parent_y + y + h / 2.0))
+            }
+            Prim::Group {
+                translate_x,
+                translate_y,
+                children,
+                ..
+            } => rect_centers(
+                children,
+                fill,
+                parent_x + translate_x,
+                parent_y + translate_y,
+                output,
+            ),
+            _ => {}
+        }
+    }
+}
+
 fn count_lines_with_stroke(items: &[Prim], stroke: fulgur_chart::ir::Color) -> usize {
     items
         .iter()
@@ -694,6 +729,38 @@ fn layer_renders_x_range_rule_without_y_encoding() {
     let red = fulgur_chart::color::parse_color("red").unwrap();
 
     assert_eq!(count_lines_with_stroke(&scene.items, red), 1);
+}
+
+#[test]
+fn layer_keeps_tick_marks_and_merges_their_categorical_domain() {
+    let spec = vegalite::parse(
+        r##"{
+          "layer":[
+            {"mark":{"type":"tick","color":"red","size":8},"data":{"values":[{"x":1,"group":"A"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"group","type":"nominal"}}},
+            {"mark":{"type":"tick","color":"blue","size":8},"data":{"values":[{"x":9,"group":"B"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"group","type":"nominal"}}}
+          ]
+        }"##,
+        true,
+    )
+    .expect("tick layer should parse");
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("tick layer should share the Cartesian frame");
+    let red = fulgur_chart::color::parse_color("red").unwrap();
+    let blue = fulgur_chart::color::parse_color("blue").unwrap();
+
+    assert_eq!(count_filled_rects(&scene.items, red), 1);
+    assert_eq!(count_filled_rects(&scene.items, blue), 1);
+    let mut red_centers = Vec::new();
+    let mut blue_centers = Vec::new();
+    rect_centers(&scene.items, red, 0.0, 0.0, &mut red_centers);
+    rect_centers(&scene.items, blue, 0.0, 0.0, &mut blue_centers);
+    assert_ne!(
+        red_centers[0].1, blue_centers[0].1,
+        "shared y categories should remap to distinct positions"
+    );
 }
 
 #[test]

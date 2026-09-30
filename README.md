@@ -187,7 +187,7 @@ fulgur-chart render chart.vl.json -o chart.svg
 ```
 
 Supported subset: `mark` (`bar` / `line` / `area` / `trail` / `point` → scatter / `circle` → scatter /
-`square` → square scatter / `arc` → pie / `rect` → heatmap / `text` / `image` / `geoshape` / `rule` / `errorbar` / `errorband`),
+`square` → square scatter / `arc` → pie / `rect` → heatmap / `text` / `tick` / `image` / `geoshape` / `rule` / `errorbar` / `errorband`),
 inline `data.values`, and `encoding` fields `x` / `y` / `color` / `theta` / `shape` / `size` / `opacity` / `url` / `text`;
 `point` and `square` support quantitative `size` mapped to marker area, while `trail` uses quantitative `size`
 for a variable line width (1–4 px by default, or a uniform 1 px when omitted). `area` stacks by default when `color` is present
@@ -233,6 +233,17 @@ return an error instead of being silently ignored. SVG output retains the reques
 Categorical or temporal positions, custom text formats, conditions, multiline labels, truncation,
 URL data, and transforms are rejected. Native and WASM use the same Scene for SVG and PNG output.
 See the [text mark example](examples/specs/vegalite_text.json).
+
+### Tick marks
+
+`tick` accepts inline `data.values` and draws one short rectangle per record. Use `orient: "horizontal"`
+or `"vertical"`, and encode at least one of `x` or `y` as quantitative, temporal, nominal, or ordinal;
+an omitted position is centered in the plot. Mark and encoding color, size, and opacity are supported.
+Quantitative size fields map to the tick size range, and opacity fields map to 0.3–0.8 by default.
+`config.tick.bandSize` sets the default length (otherwise 3/4 of the oriented discrete step), and
+`config.tick.thickness` defaults to 1 px. Inline values are required; URL data, transforms, aggregation,
+binning, and unsupported channels are rejected. Tick marks use the shared Scene in native and WASM
+rendering. See the [tick mark example](examples/specs/vegalite-tick.json).
 
 ### Image marks
 

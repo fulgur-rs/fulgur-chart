@@ -1,0 +1,30 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 480,
+  "height": 280,
+  "config": {
+    "tick": {
+      "bandSize": 12,
+      "thickness": 2
+    }
+  },
+  "mark": {
+    "type": "tick",
+    "orient": "horizontal",
+    "color": "#4c78a8"
+  },
+  "data": {
+    "values": [
+      { "value": 18, "group": "A" },
+      { "value": 20, "group": "A" },
+      { "value": 27, "group": "A" },
+      { "value": 35, "group": "B" },
+      { "value": 38, "group": "B" },
+      { "value": 44, "group": "C" }
+    ]
+  },
+  "encoding": {
+    "x": { "field": "value", "type": "quantitative" },
+    "y": { "field": "group", "type": "nominal" }
+  }
+}

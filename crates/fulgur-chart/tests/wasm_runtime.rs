@@ -90,6 +90,14 @@ fn sample_text_spec() -> fulgur_chart::ir::ChartSpec {
     .expect("text fixture parses")
 }
 
+fn sample_tick_spec() -> fulgur_chart::ir::ChartSpec {
+    vegalite::parse(
+        include_str!("../../../examples/specs/vegalite-tick.json"),
+        true,
+    )
+    .expect("tick fixture parses")
+}
+
 fn composition_examples() -> [(&'static str, &'static str); 2] {
     [
         (
@@ -426,6 +434,29 @@ fn vegalite_rule_example_renders_deterministic_svg_and_png() {
     assert_eq!(png, render_chart_to_png_default(&spec, 1.0).unwrap());
     assert_eq!(&png[..8], PNG_SIGNATURE);
     let image = tiny_skia::Pixmap::decode_png(&png).expect("rule PNG should decode");
+    assert_eq!((image.width(), image.height()), (480, 280));
+}
+
+/// Tick marks use the same deterministic Scene renderer on native and WASM.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vegalite_tick_example_renders_deterministic_svg_and_png() {
+    let spec = sample_tick_spec();
+    let svg = render_chart(&spec);
+    assert_eq!(svg, render_chart(&spec), "tick SVG should be deterministic");
+    assert!(
+        svg.contains("<rect"),
+        "tick SVG should contain rectangle marks"
+    );
+    assert!(
+        svg.contains(r##"fill="#4c78a8""##),
+        "tick color missing: {svg}"
+    );
+
+    let png = render_chart_to_png_default(&spec, 1.0).expect("tick PNG should render");
+    assert_eq!(png, render_chart_to_png_default(&spec, 1.0).unwrap());
+    assert_eq!(&png[..8], PNG_SIGNATURE);
+    let image = tiny_skia::Pixmap::decode_png(&png).expect("tick PNG should decode");
     assert_eq!((image.width(), image.height()), (480, 280));
 }
 

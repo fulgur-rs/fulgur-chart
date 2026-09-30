@@ -396,6 +396,7 @@ fn chart_type_name(kind: &ChartKind) -> &'static str {
         ChartKind::VegaImage(_) => "image",
         ChartKind::VegaText(_) => "text",
         ChartKind::VegaRule(_) => "rule",
+        ChartKind::VegaTick(_) => "tick",
         ChartKind::Radar => "radar",
         ChartKind::Mixed => "mixed",
         ChartKind::Matrix { .. } => "matrix",
@@ -511,14 +512,19 @@ pub fn build_model_core(spec: &ChartSpec) -> ChartModel {
         counts.x_ticks = x_labels.len();
         counts.y_ticks = y_labels.len();
     }
-    if matches!(spec.kind, ChartKind::VegaText(_) | ChartKind::VegaRule(_)) {
+    if matches!(
+        spec.kind,
+        ChartKind::VegaText(_) | ChartKind::VegaRule(_) | ChartKind::VegaTick(_)
+    ) {
         counts.datasets = 1;
-        counts.legend_items = usize::from(matches!(spec.kind, ChartKind::VegaRule(_)))
-            * spec
-                .series
-                .iter()
-                .filter(|series| !series.name.is_empty())
-                .count();
+        counts.legend_items = usize::from(matches!(
+            spec.kind,
+            ChartKind::VegaRule(_) | ChartKind::VegaTick(_)
+        )) * spec
+            .series
+            .iter()
+            .filter(|series| !series.name.is_empty())
+            .count();
     }
     if let ChartKind::GeoShape { data } = &spec.kind {
         counts.datasets = data.features.len();
