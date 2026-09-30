@@ -937,6 +937,7 @@ pub(crate) fn validate_vega_rule(spec: &ChartSpec, limits: &InputLimits) -> Resu
         ] {
             let valid = match position {
                 crate::ir::VegaRulePosition::FullAxisStart
+                | crate::ir::VegaRulePosition::FullAxisCenter
                 | crate::ir::VegaRulePosition::FullAxisEnd => true,
                 crate::ir::VegaRulePosition::Category(category) => category < categories.len(),
                 crate::ir::VegaRulePosition::Quantitative(value) => value.is_finite(),

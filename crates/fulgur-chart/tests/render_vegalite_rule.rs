@@ -142,6 +142,72 @@ fn rule_range_with_y2_maps_vertical_segment_and_temporal_x() {
 }
 
 #[test]
+fn rule_range_with_x_and_x2_without_y_uses_the_y_axis_center() {
+    let json = r##"{"width":320,"height":220,"mark":{"type":"rule","color":"red"},
+    "data":{"values":[{"x0":10,"x1":30}]},
+    "encoding":{"x":{"field":"x0","type":"quantitative"},"x2":{"field":"x1"}}}"##;
+
+    for strict in [false, true] {
+        let spec = vegalite::parse(json, strict)
+            .expect("x/x2 ranged rules should not require an orthogonal y encoding");
+        let ChartKind::VegaRule(data) = &spec.kind else {
+            panic!("VegaRule expected, got {:?}", spec.kind);
+        };
+        assert!(matches!(
+            (data.segments[0].x1, data.segments[0].x2),
+            (
+                fulgur_chart::ir::VegaRulePosition::Quantitative(10.0),
+                fulgur_chart::ir::VegaRulePosition::Quantitative(30.0)
+            )
+        ));
+        assert_eq!(data.segments[0].y1, data.segments[0].y2);
+
+        let scene = layout::build_scene_checked(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap())
+            .expect("x/x2 ranged rule should render without y");
+        let rules = lines(&scene)
+            .into_iter()
+            .filter(|line| is_red(line.4))
+            .collect::<Vec<_>>();
+        assert_eq!(rules.len(), 1);
+        assert_ne!(rules[0].0, rules[0].2);
+        assert_eq!(rules[0].1, rules[0].3);
+    }
+}
+
+#[test]
+fn rule_range_with_y_and_y2_without_x_uses_the_x_axis_center() {
+    let json = r##"{"width":320,"height":220,"mark":{"type":"rule","color":"red"},
+    "data":{"values":[{"y0":10,"y1":30}]},
+    "encoding":{"y":{"field":"y0","type":"quantitative"},"y2":{"field":"y1"}}}"##;
+
+    for strict in [false, true] {
+        let spec = vegalite::parse(json, strict)
+            .expect("y/y2 ranged rules should not require an orthogonal x encoding");
+        let ChartKind::VegaRule(data) = &spec.kind else {
+            panic!("VegaRule expected, got {:?}", spec.kind);
+        };
+        assert!(matches!(
+            (data.segments[0].y1, data.segments[0].y2),
+            (
+                fulgur_chart::ir::VegaRulePosition::Quantitative(10.0),
+                fulgur_chart::ir::VegaRulePosition::Quantitative(30.0)
+            )
+        ));
+        assert_eq!(data.segments[0].x1, data.segments[0].x2);
+
+        let scene = layout::build_scene_checked(&spec, &TextMeasurer::new(DEFAULT_FONT).unwrap())
+            .expect("y/y2 ranged rule should render without x");
+        let rules = lines(&scene)
+            .into_iter()
+            .filter(|line| is_red(line.4))
+            .collect::<Vec<_>>();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].0, rules[0].2);
+        assert_ne!(rules[0].1, rules[0].3);
+    }
+}
+
+#[test]
 fn rule_is_supported_as_a_layer_leaf_and_shared_category_scale() {
     let spec = vegalite::parse(
         r##"{"width":320,"height":220,"layer":[
@@ -177,6 +243,23 @@ fn rule_rejects_unsupported_encodings_and_accepts_optional_endpoints() {
         .collect::<Vec<_>>();
     assert_eq!(rules.len(), 1);
     assert_eq!((rules[0].0, rules[0].1), (rules[0].2, rules[0].3));
+}
+
+#[test]
+fn rule_secondary_endpoints_still_require_their_primary_channels() {
+    let specs = [
+        r##"{"mark":"rule","data":{"values":[{"x2":2,"y":1}]},"encoding":{"x2":{"field":"x2","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}}"##,
+        r##"{"mark":"rule","data":{"values":[{"x":1,"y2":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y2":{"field":"y2","type":"quantitative"}}}"##,
+    ];
+
+    for json in specs {
+        for strict in [false, true] {
+            assert!(
+                vegalite::parse(json, strict).is_err(),
+                "secondary endpoints require their primary channels: {json}"
+            );
+        }
+    }
 }
 
 #[test]

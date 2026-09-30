@@ -12,7 +12,7 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { chromium } from 'playwright'
-import { BAR, PNG_MAGIC } from './fixtures.mjs'
+import { BAR, PNG_MAGIC, VEGALITE_RULE_RANGE } from './fixtures.mjs'
 
 const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -60,20 +60,23 @@ test('browser (chromium): fetch()-based init() + render() smoke', async () => {
     try {
       const page = await browser.newPage()
       await page.goto(`http://127.0.0.1:${port}/`)
-      const result = await page.evaluate(async (spec) => {
+      const result = await page.evaluate(async ({ spec, ruleSpec }) => {
         const mod = await import('/index.js')
         await mod.default() // init(): no args -> browser fetch() path
         const svg = mod.build(spec).render('svg')
+        const ruleSvg = mod.build(ruleSpec).render('svg')
         const png = mod.render(spec, 'png')
         return {
           version: mod.version(),
           svgPrefix: svg.slice(0, 5),
+          ruleSvg,
           pngMagic: Array.from(png.subarray(0, 4)),
         }
-      }, BAR)
+      }, { spec: BAR, ruleSpec: VEGALITE_RULE_RANGE })
 
       assert.match(result.version, /^\d+\.\d+\.\d+/)
       assert.equal(result.svgPrefix, '<svg ')
+      assert.match(result.ruleSvg, /<line[^>]*stroke="#ff0000"/)
       assert.deepEqual(result.pngMagic, Array.from(PNG_MAGIC))
     } finally {
       await browser.close()

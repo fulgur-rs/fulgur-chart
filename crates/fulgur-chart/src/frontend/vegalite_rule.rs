@@ -121,10 +121,6 @@ pub(super) fn parse_rule_spec(
     if has_y2 && !has_y {
         return Err("encoding.y2 requires encoding.y".into());
     }
-    if has_x != has_y && (has_x2 || has_y2) {
-        return Err("ranged rule marks require both encoding.x and encoding.y".into());
-    }
-
     let x_kind = x_field
         .as_deref()
         .map(|field| position_kind(&records, encoding, "x", field))
@@ -154,12 +150,25 @@ pub(super) fn parse_rule_spec(
                     index,
                     "x",
                 )?;
-                (
-                    x,
-                    VegaRulePosition::FullAxisStart,
-                    x,
-                    VegaRulePosition::FullAxisEnd,
-                )
+                if let Some(field) = x2_field.as_deref() {
+                    let x2 = position(
+                        record,
+                        field,
+                        x_kind.expect("x field has a kind"),
+                        &mut x_categories,
+                        index,
+                        "x2",
+                    )?;
+                    let center = VegaRulePosition::FullAxisCenter;
+                    (x, center, x2, center)
+                } else {
+                    (
+                        x,
+                        VegaRulePosition::FullAxisStart,
+                        x,
+                        VegaRulePosition::FullAxisEnd,
+                    )
+                }
             }
             (None, Some(y_field)) => {
                 let y = position(
@@ -170,12 +179,25 @@ pub(super) fn parse_rule_spec(
                     index,
                     "y",
                 )?;
-                (
-                    VegaRulePosition::FullAxisStart,
-                    y,
-                    VegaRulePosition::FullAxisEnd,
-                    y,
-                )
+                if let Some(field) = y2_field.as_deref() {
+                    let y2 = position(
+                        record,
+                        field,
+                        y_kind.expect("y field has a kind"),
+                        &mut y_categories,
+                        index,
+                        "y2",
+                    )?;
+                    let center = VegaRulePosition::FullAxisCenter;
+                    (center, y, center, y2)
+                } else {
+                    (
+                        VegaRulePosition::FullAxisStart,
+                        y,
+                        VegaRulePosition::FullAxisEnd,
+                        y,
+                    )
+                }
             }
             (Some(x_field), Some(y_field)) => {
                 let x1 = position(

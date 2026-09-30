@@ -678,6 +678,25 @@ fn layer_keeps_errorbar_marks_from_later_units() {
 }
 
 #[test]
+fn layer_renders_x_range_rule_without_y_encoding() {
+    let json = r##"{
+      "layer":[
+        {"mark":"bar","data":{"values":[{"x":"A","y":2},{"x":"B","y":3}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}},
+        {"mark":{"type":"rule","color":"red"},"data":{"values":[{"start":"A","end":"B"}]},"encoding":{"x":{"field":"start","type":"nominal"},"x2":{"field":"end"}}}
+      ]
+    }"##;
+    let spec = vegalite::parse(json, true).expect("ranged rule layer parses strictly");
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("ranged rule composes with shared categorical x scale");
+    let red = fulgur_chart::color::parse_color("red").unwrap();
+
+    assert_eq!(count_lines_with_stroke(&scene.items, red), 1);
+}
+
+#[test]
 fn layer_keeps_boxplot_marks_from_later_units() {
     let boxplot = parsed(
         r#"{"mark":{"type":"boxplot","color":"red"},"data":{"values":[{"x":"A","y":1},{"x":"A","y":3},{"x":"A","y":5},{"x":"A","y":7},{"x":"A","y":9}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"#,

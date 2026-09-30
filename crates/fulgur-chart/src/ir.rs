@@ -995,6 +995,8 @@ pub struct ErrorMarkStyle {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VegaRulePosition {
     FullAxisStart,
+    /// The center of the plot area on an axis without an explicit position channel.
+    FullAxisCenter,
     FullAxisEnd,
     Category(usize),
     Quantitative(f64),
