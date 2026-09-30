@@ -24,6 +24,7 @@ pub mod treemap;
 pub(crate) mod vega_boxplot;
 pub(crate) mod vega_composition;
 pub mod vega_rect;
+pub(crate) mod vega_rule;
 pub(crate) mod vega_text;
 pub mod violin;
 pub mod wordcloud;
@@ -126,6 +127,7 @@ pub(crate) fn build_scene_checked_with_layer_marks(
             limits,
             shared_color_categories,
         )?),
+        ChartKind::VegaRule(_) => Some(vega_rule::build_checked_with_layer_parts(spec, m, limits)?),
         _ => None,
     };
     let Some((mut scene, mark_count)) = parts else {
@@ -161,6 +163,7 @@ fn build_chart_scene(
             scatter::build(spec, m)
         }
         ChartKind::VegaText(_) => vega_text::build(spec, m),
+        ChartKind::VegaRule(_) => vega_rule::build_checked(spec, m, limits)?,
         ChartKind::Radar => radar::build(spec, m),
         ChartKind::Mixed => mixed::build(spec, m),
         ChartKind::Matrix { .. } => matrix::build(spec, m),

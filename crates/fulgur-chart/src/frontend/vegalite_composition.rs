@@ -441,7 +441,8 @@ fn raw_channel_kind(
     if let Some(hinted) = hinted {
         return Ok(hinted);
     }
-    if matches!(channel, "x" | "y") && matches!(mark, "boxplot" | "errorbar" | "errorband") {
+    if matches!(channel, "x" | "y") && matches!(mark, "boxplot" | "errorbar" | "errorband" | "rule")
+    {
         return Ok(
             if records
                 .iter()
@@ -1116,6 +1117,7 @@ fn validate_layer_children(
                         | crate::ir::ChartKind::VegaImage(_)
                         | crate::ir::ChartKind::VegaText(_)
                         | crate::ir::ChartKind::ErrorMark(_)
+                        | crate::ir::ChartKind::VegaRule(_)
                         | crate::ir::ChartKind::VegaBoxPlot(_)
                 ) {
                     Ok(())
@@ -1325,6 +1327,18 @@ fn parsed_leaf_domains(spec: &crate::ir::ChartSpec) -> crate::ir::VegaLeafScaleD
             domains.x = numeric_domain(data.marks.iter().map(|mark| mark.point.x));
             domains.y = numeric_domain(data.marks.iter().map(|mark| mark.point.y));
         }
+        ChartKind::VegaRule(data) => {
+            let x_values = data
+                .segments
+                .iter()
+                .flat_map(|segment| [segment.x1, segment.x2]);
+            let y_values = data
+                .segments
+                .iter()
+                .flat_map(|segment| [segment.y1, segment.y2]);
+            domains.x = rule_position_domain(x_values, &data.x_categories);
+            domains.y = rule_position_domain(y_values, &data.y_categories);
+        }
         ChartKind::VegaBoxPlot(data) => {
             let values = data.groups.iter().flat_map(|group| {
                 std::iter::once(group.summary.data_min)
@@ -1402,6 +1416,41 @@ fn temporal_domain(values: impl IntoIterator<Item = i64>) -> Option<crate::ir::V
         min_millis,
         max_millis,
     })
+}
+
+fn rule_position_domain(
+    positions: impl IntoIterator<Item = crate::ir::VegaRulePosition>,
+    categories: &[String],
+) -> Option<crate::ir::VegaScaleDomain> {
+    use crate::ir::VegaRulePosition;
+    let positions = positions.into_iter().collect::<Vec<_>>();
+    if positions
+        .iter()
+        .any(|position| matches!(position, VegaRulePosition::Temporal(_)))
+    {
+        return temporal_domain(positions.iter().filter_map(|position| match position {
+            VegaRulePosition::Temporal(value) => Some(*value),
+            _ => None,
+        }));
+    }
+    if positions
+        .iter()
+        .any(|position| matches!(position, VegaRulePosition::Quantitative(_)))
+    {
+        return numeric_domain(positions.iter().filter_map(|position| match position {
+            VegaRulePosition::Quantitative(value) => Some(*value),
+            _ => None,
+        }));
+    }
+    let category_count = positions
+        .iter()
+        .filter_map(|position| match position {
+            VegaRulePosition::Category(index) => Some(*index),
+            _ => None,
+        })
+        .max()
+        .map_or(0, |index| index + 1);
+    category_domain(categories.iter().take(category_count).cloned().collect())
 }
 
 fn error_position_domain(
@@ -1691,7 +1740,7 @@ fn expand_node(
                         .and_then(Value::as_object)
                         .and_then(|mark| mark.get("type"))?
                         .as_str()),
-                Some("boxplot" | "image")
+                Some("boxplot" | "image" | "rule")
             )
         {
             super::vegalite::check_unknown_value(&effective)

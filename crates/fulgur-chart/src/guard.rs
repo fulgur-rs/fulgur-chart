@@ -99,6 +99,9 @@ pub const MAX_MARKER_RADIUS_PX: f64 = DEFAULT_MAX_DIMENSION_PX;
 /// Dataset `borderDash` の要素数上限。
 /// gap ごとの線分に dash を複製する際のメモリ・出力サイズ増幅を定数倍に制限する。
 pub const MAX_BORDER_DASH_ELEMENTS: usize = 64;
+/// Upper bound for rule dash values copied into all Scene line primitives.
+/// This limits allocation amplification when many rules share one dash pattern.
+pub const MAX_RULE_DASH_EXPANSION_ELEMENTS: usize = 1_000_000;
 
 /// spec の width/height 下限(px)。
 /// ゼロ・負値はレイアウトで除算異常を起こし得るため拒否する。
@@ -359,6 +362,7 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                     }
                     ChartKind::GeoShape { data } => data.features.len(),
                     ChartKind::VegaText(data) => data.marks.len(),
+                    ChartKind::VegaRule(data) => data.segments.len(),
                     ChartKind::ErrorMark(data) => series_points.max(data.ranges.len()),
                     ChartKind::VegaBoxPlot(data) => {
                         data.groups.iter().fold(0usize, |count, group| {
@@ -394,6 +398,7 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                     }
                     ChartKind::VegaImage(_) => leaf_points,
                     ChartKind::VegaText(data) => data.marks.len(),
+                    ChartKind::VegaRule(data) => data.segments.len(),
                     ChartKind::GeoShape { data } => data.features.len(),
                     ChartKind::ErrorMark(data) => data.ranges.len().saturating_mul(3),
                     ChartKind::VegaBoxPlot(data) => vega_boxplot_primitive_count(data),
@@ -855,6 +860,105 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
     Ok(())
 }
 
+/// Validate Vega-Lite rule coordinates and bound per-input Scene allocation.
+pub(crate) fn validate_vega_rule(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
+    let ChartKind::VegaRule(data) = &spec.kind else {
+        return Ok(());
+    };
+    if data.segments.len() > limits.max_total_data_points {
+        return Err(format!(
+            "Vega-Lite rule point count {} exceeds max_total_data_points limit {}",
+            data.segments.len(),
+            limits.max_total_data_points
+        ));
+    }
+    if data.segments.len() > limits.max_categorical_primitives {
+        return Err(format!(
+            "Vega-Lite rule primitive count {} exceeds max_categorical_primitives limit {}",
+            data.segments.len(),
+            limits.max_categorical_primitives
+        ));
+    }
+    let category_count = data
+        .x_categories
+        .len()
+        .saturating_add(data.y_categories.len());
+    if category_count > limits.max_categories {
+        return Err(format!(
+            "Vega-Lite rule category count {category_count} exceeds max_categories limit {}",
+            limits.max_categories
+        ));
+    }
+    if !data.stroke_width.is_finite()
+        || data.stroke_width < 0.0
+        || data.stroke_width > limits.max_dimension_px
+    {
+        return Err(format!(
+            "Vega-Lite rule stroke width must be finite and within [0, {}]",
+            limits.max_dimension_px
+        ));
+    }
+    if data.stroke_dash.len() > MAX_BORDER_DASH_ELEMENTS
+        || data
+            .stroke_dash
+            .iter()
+            .any(|dash| !dash.is_finite() || *dash < 0.0)
+    {
+        return Err(format!(
+            "Vega-Lite rule strokeDash must contain at most {MAX_BORDER_DASH_ELEMENTS} finite non-negative numbers"
+        ));
+    }
+    let dash_expansion_elements = data.stroke_dash.len().saturating_mul(data.segments.len());
+    if dash_expansion_elements > MAX_RULE_DASH_EXPANSION_ELEMENTS {
+        return Err(format!(
+            "Vega-Lite rule strokeDash expansion {dash_expansion_elements} exceeds limit {MAX_RULE_DASH_EXPANSION_ELEMENTS}"
+        ));
+    }
+    for (axis_name, categories) in [
+        ("x", data.x_categories.as_slice()),
+        ("y", data.y_categories.as_slice()),
+    ] {
+        for (index, label) in categories.iter().enumerate() {
+            if label.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "Vega-Lite rule {axis_name} category label length {} exceeds max_label_bytes limit {} at index {index}",
+                    label.len(),
+                    limits.max_label_bytes
+                ));
+            }
+        }
+    }
+    for (index, segment) in data.segments.iter().enumerate() {
+        for (axis_name, position, categories) in [
+            ("x1", segment.x1, data.x_categories.as_slice()),
+            ("y1", segment.y1, data.y_categories.as_slice()),
+            ("x2", segment.x2, data.x_categories.as_slice()),
+            ("y2", segment.y2, data.y_categories.as_slice()),
+        ] {
+            let valid = match position {
+                crate::ir::VegaRulePosition::FullAxisStart
+                | crate::ir::VegaRulePosition::FullAxisEnd => true,
+                crate::ir::VegaRulePosition::Category(category) => category < categories.len(),
+                crate::ir::VegaRulePosition::Quantitative(value) => value.is_finite(),
+                crate::ir::VegaRulePosition::Temporal(value) => {
+                    (-8_640_000_000_000_000..=8_640_000_000_000_000).contains(&value)
+                }
+            };
+            if !valid {
+                return Err(format!(
+                    "Vega-Lite rule segment {index} {axis_name} position is invalid"
+                ));
+            }
+        }
+        if !segment.color.a.is_finite() || !(0.0..=1.0).contains(&segment.color.a) {
+            return Err(format!(
+                "Vega-Lite rule segment {index} color alpha is invalid"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Validate Vega-Lite text marks before the Scene allocates one primitive per label.
 pub(crate) fn validate_vega_text(spec: &ChartSpec, limits: &InputLimits) -> Result<(), String> {
     let ChartKind::VegaText(data) = &spec.kind else {
@@ -980,6 +1084,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
     validate_error_mark(spec, limits.max_categorical_primitives)?;
     validate_vega_boxplot(spec, limits)?;
     validate_vega_text(spec, limits)?;
+    validate_vega_rule(spec, limits)?;
     validate_vega_image(spec, limits)?;
 
     // --- 系列数 ---
@@ -1106,14 +1211,16 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
     }
 
     if let XPositions::Temporal { unix_millis } = &spec.x_positions {
-        if unix_millis.len() != spec.categories.len() {
+        if !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
+            && unix_millis.len() != spec.categories.len()
+        {
             return Err(format!(
                 "temporal x position count {} does not match category count {}",
                 unix_millis.len(),
                 spec.categories.len()
             ));
         }
-        if !matches!(spec.kind, ChartKind::ErrorMark(_))
+        if !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
             && spec
                 .series
                 .iter()
@@ -1121,7 +1228,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         {
             return Err("temporal x position count does not match every line series".to_string());
         }
-        if !matches!(spec.kind, ChartKind::ErrorMark(_))
+        if !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
             && !x_is_temporal_scale
             && unix_millis.windows(2).any(|pair| pair[0] >= pair[1])
         {
@@ -1130,13 +1237,15 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         let allowed = matches!(
             spec.kind,
             ChartKind::Line { .. } | ChartKind::Trail | ChartKind::Mixed
-        ) || matches!(
-            spec.kind,
-            ChartKind::Bar {
-                horizontal: false,
-                ..
-            }
-        ) || matches!(spec.kind, ChartKind::ErrorMark(_));
+        ) || matches!(spec.kind, ChartKind::VegaRule(_))
+            || matches!(
+                spec.kind,
+                ChartKind::Bar {
+                    horizontal: false,
+                    ..
+                }
+            )
+            || matches!(spec.kind, ChartKind::ErrorMark(_));
         if !allowed {
             return Err(
                 "temporal x positions are only supported on Cartesian index axes".to_string(),
@@ -1144,14 +1253,16 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
         }
     }
     if let XPositions::Temporal { unix_millis } = &spec.y_positions {
-        if unix_millis.len() != spec.categories.len() {
+        if !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
+            && unix_millis.len() != spec.categories.len()
+        {
             return Err(format!(
                 "temporal y position count {} does not match category count {}",
                 unix_millis.len(),
                 spec.categories.len()
             ));
         }
-        if !matches!(spec.kind, ChartKind::ErrorMark(_))
+        if !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
             && spec
                 .series
                 .iter()
@@ -1167,7 +1278,7 @@ fn validate_spec_base(spec: &ChartSpec, limits: &InputLimits) -> Result<(), Stri
                     ..
                 }
             ))
-            && !matches!(spec.kind, ChartKind::ErrorMark(_))
+            && !matches!(spec.kind, ChartKind::ErrorMark(_) | ChartKind::VegaRule(_))
         {
             return Err(
                 "temporal y positions are only supported on horizontal bar index axes".to_string(),

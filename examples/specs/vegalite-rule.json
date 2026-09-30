@@ -1,0 +1,26 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v6.json",
+  "width": 480,
+  "height": 280,
+  "title": "Horizontal Ranges by Group",
+  "mark": {
+    "type": "rule",
+    "strokeWidth": 2,
+    "strokeDash": [5, 2],
+    "opacity": 0.9,
+    "clip": true
+  },
+  "data": {
+    "values": [
+      {"group": "Alpha", "start": 8, "end": 20},
+      {"group": "Beta", "start": 15, "end": 32},
+      {"group": "Gamma", "start": 24, "end": 41}
+    ]
+  },
+  "encoding": {
+    "x": {"field": "start", "type": "quantitative"},
+    "x2": {"field": "end"},
+    "y": {"field": "group", "type": "nominal"},
+    "color": {"field": "group", "type": "nominal"}
+  }
+}

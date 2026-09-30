@@ -1081,6 +1081,24 @@ fn composition_titles_and_background_render_once() {
 }
 
 #[test]
+fn strict_composition_rule_accepts_background_and_config() {
+    let json = r##"{
+      "layer":[
+        {
+          "mark":{"type":"rule","color":"red"},
+          "data":{"values":[{"x":1}]},
+          "encoding":{"x":{"field":"x","type":"quantitative"}},
+          "background":"#fafafa",
+          "config":{"view":{"stroke":null}}
+        }
+      ]
+    }"##;
+
+    vegalite::parse(json, true)
+        .expect("strict composition should validate rule keys with the rule parser");
+}
+
+#[test]
 fn composition_with_image_keeps_svg_reference_and_rejects_raster() {
     let spec = parsed(
         r#"{

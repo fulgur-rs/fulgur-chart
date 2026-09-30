@@ -75,6 +75,7 @@ fn plot_rect_for_spec(spec: &ChartSpec, measurer: &TextMeasurer<'_>) -> Option<P
             )
         }
         ChartKind::VegaRect { .. } => crate::layout::vega_rect::plot_rect(spec, measurer),
+        ChartKind::VegaRule(_) => crate::layout::vega_rule::plot_rect(spec, measurer),
         ChartKind::ErrorMark(_) => {
             let frame = crate::layout::error_mark::compute_frame(spec, measurer);
             (
@@ -1604,6 +1605,13 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
         | ChartKind::Mixed => channel == "x",
         ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square => false,
         ChartKind::VegaRect { .. } => true,
+        ChartKind::VegaRule(data) => {
+            if channel == "x" {
+                !data.x_categories.is_empty()
+            } else {
+                !data.y_categories.is_empty()
+            }
+        }
         ChartKind::ErrorMark(data) => {
             if data.orient == crate::ir::ErrorMarkOrient::Vertical {
                 channel == "x"
@@ -1627,6 +1635,8 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
         (ChartKind::VegaRect { x_labels, .. }, "x") => x_labels.clone(),
         (ChartKind::VegaRect { y_labels, .. }, "y") => y_labels.clone(),
         (ChartKind::VegaBoxPlot(data), "x" | "y") => data.categories.clone(),
+        (ChartKind::VegaRule(data), "x") => data.x_categories.clone(),
+        (ChartKind::VegaRule(data), "y") => data.y_categories.clone(),
         _ => spec.categories.clone(),
     };
     if previous == domain {
@@ -1644,7 +1654,10 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
         .collect::<Vec<_>>();
     let per_category_values = !matches!(
         &spec.kind,
-        ChartKind::ErrorMark(_) | ChartKind::VegaBoxPlot(_) | ChartKind::VegaRect { .. }
+        ChartKind::ErrorMark(_)
+            | ChartKind::VegaBoxPlot(_)
+            | ChartKind::VegaRect { .. }
+            | ChartKind::VegaRule(_)
     );
     if per_category_values {
         for series in &mut spec.series {
@@ -1735,6 +1748,29 @@ fn remap_categories(spec: &mut ChartSpec, channel: &str, domain: &[String]) {
                     }
                 }
             }
+        }
+        ChartKind::VegaRule(data) => {
+            let category_channel = if channel == "x" {
+                &mut data.x_categories
+            } else {
+                &mut data.y_categories
+            };
+            for segment in &mut data.segments {
+                let endpoints = if channel == "x" {
+                    [&mut segment.x1, &mut segment.x2]
+                } else {
+                    [&mut segment.y1, &mut segment.y2]
+                };
+                for endpoint in endpoints {
+                    if let crate::ir::VegaRulePosition::Category(index) = endpoint {
+                        *index = positions
+                            .get(*index)
+                            .and_then(|position| *position)
+                            .unwrap_or(*index);
+                    }
+                }
+            }
+            *category_channel = domain.to_vec();
         }
         _ => {}
     }

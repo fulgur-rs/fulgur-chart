@@ -23,6 +23,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 mod error_mark;
 #[path = "vegalite_image.rs"]
 mod image;
+#[path = "vegalite_rule.rs"]
+mod rule;
 #[path = "vegalite_text.rs"]
 mod text;
 
@@ -91,6 +93,9 @@ pub(super) fn parse_unit_value_with_overrides(
         .as_object()
         .ok_or_else(|| "トップレベルは object でなければなりません".to_string())?;
 
+    if read_mark_name(object) == Some("rule") {
+        return rule::parse_rule_spec(object, limits, scale_overrides);
+    }
     if read_mark_name(object) == Some("boxplot") {
         let top = value.as_object_mut().expect("object checked above");
         let mut spec = super::vegalite_boxplot::parse_boxplot_spec(top, limits)?;

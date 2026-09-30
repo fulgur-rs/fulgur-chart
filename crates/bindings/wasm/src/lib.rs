@@ -364,8 +364,16 @@ mod schema_fixture_tests {
     }
 
     #[test]
-    fn embedded_vegalite_schema_covers_error_marks_and_rejects_unknown_keys() {
+    fn embedded_vegalite_schema_covers_rule_and_error_marks_and_rejects_unknown_keys() {
         use serde_json::Value;
+
+        let embedded_schema: Value = serde_json::from_str(include_str!("vegalite-schema.json"))
+            .expect("embedded Vega-Lite schema is valid JSON");
+        assert_eq!(
+            embedded_schema["$defs"]["MarkRuleObject"]["properties"]["strokeDash"]["maxItems"],
+            serde_json::json!(fulgur_chart::guard::MAX_BORDER_DASH_ELEMENTS),
+            "rule strokeDash schema must expose its bounded length"
+        );
 
         for (name, example) in [
             (
@@ -383,6 +391,10 @@ mod schema_fixture_tests {
             (
                 "pre-aggregated errorband",
                 include_str!("../../../../examples/specs/vegalite-errorband-preaggregated.json"),
+            ),
+            (
+                "rule mark",
+                include_str!("../../../../examples/specs/vegalite-rule.json"),
             ),
             (
                 "layer composition",
@@ -417,6 +429,17 @@ mod schema_fixture_tests {
             serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(unsupported_channel)
                 .is_err(),
             "unsupported error mark encoding channels must be rejected"
+        );
+
+        let mut unsupported_rule_style: Value = serde_json::from_str(include_str!(
+            "../../../../examples/specs/vegalite-rule.json"
+        ))
+        .unwrap();
+        unsupported_rule_style["mark"]["futureOption"] = Value::Bool(true);
+        assert!(
+            serde_json::from_value::<fulgur_chart::schema::VegaLiteSpec>(unsupported_rule_style)
+                .is_err(),
+            "unsupported rule mark styles must be rejected"
         );
     }
 
