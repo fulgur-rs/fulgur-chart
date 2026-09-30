@@ -17,7 +17,7 @@ fn vegalite_composition_schema_accepts_each_operator_and_recursive_children() {
         "y":{"field":"sales","type":"quantitative"}
       },
       "resolve":{
-        "scale":{"x":"shared","color":"independent"},
+        "scale":{"x":"shared","color":"independent","opacity":"shared"},
         "axis":{"x":"shared"},
         "legend":{"color":"independent"}
       }
@@ -172,6 +172,52 @@ fn vegalite_composition_accepts_boxplot_unit_marks_in_both_modes() {
         };
         assert!(matches!(leaf.spec.kind, ChartKind::VegaBoxPlot(_)));
     }
+}
+
+#[test]
+fn vegalite_layer_accepts_text_leaf_with_inherited_data() {
+    let json = r##"{
+      "data":{"values":[
+        {"x":1,"y":3,"label":"North","group":"A","size":10},
+        {"x":9,"y":7,"label":"South","group":"B","size":20}
+      ]},
+      "encoding":{
+        "x":{"field":"x","type":"quantitative"},
+        "y":{"field":"y","type":"quantitative"}
+      },
+      "layer":[
+        {"mark":"point"},
+        {"mark":"text","encoding":{"text":{"field":"label"}}}
+      ]
+    }"##;
+    let spec = vegalite::parse(json, true).expect("text mark leaf should share inherited data");
+    let ChartKind::VegaComposition(root) = spec.kind else {
+        panic!("composition chart kind expected")
+    };
+    let VegaCompositionNode::Layer(layer) = *root else {
+        panic!("layer node expected")
+    };
+    let VegaCompositionNode::Unit(text) = &layer.children[1] else {
+        panic!("second child should be a text unit")
+    };
+    let ChartKind::VegaText(data) = &text.spec.kind else {
+        panic!("text child should keep its dedicated IR")
+    };
+    assert_eq!(data.marks.len(), 2);
+    assert_eq!(data.marks[0].text, "North");
+    assert_eq!(data.marks[1].text, "South");
+}
+
+#[test]
+fn composition_preflight_counts_expanded_text_label_bytes_across_leaves() {
+    let json = r#"{"data":{"values":[{"x":0,"y":0,"label":"AB"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}},"layer":[{"mark":"text"},{"mark":"text"}]}"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: 3,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("expanded labels across layer leaves exceed the shared budget");
+    assert!(error.contains("text label bytes 4"), "{error}");
 }
 
 #[test]
@@ -358,4 +404,24 @@ fn size_legend_title_respects_label_limit() {
 
     let error = vegalite::parse_with_limits(json, false, &limits).unwrap_err();
     assert!(error.contains("size legend title"), "{error}");
+}
+
+#[test]
+fn vegalite_composition_schema_accepts_text_mark_layer_leaf() {
+    let json = r#"{
+      "data":{"values":[{"x":1,"y":2,"label":"A"}]},
+      "encoding":{
+        "x":{"field":"x","type":"quantitative"},
+        "y":{"field":"y","type":"quantitative"}
+      },
+      "layer":[
+        {"mark":"point"},
+        {"mark":"text","encoding":{"text":{"field":"label"}}}
+      ]
+    }"#;
+
+    assert!(
+        serde_json::from_str::<VegaLiteSpec>(json).is_ok(),
+        "typed schema should accept text as a composition mark"
+    );
 }

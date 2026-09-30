@@ -1993,6 +1993,7 @@ fn legend_text_prim(
             fill,
             content,
             rotate_deg: None,
+            baseline: crate::ir::TextBaseline::Alphabetic,
             font_family,
             font_weight,
             font_style,

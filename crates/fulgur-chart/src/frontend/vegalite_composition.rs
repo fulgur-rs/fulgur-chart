@@ -30,6 +30,7 @@ struct ExpandedUnitSpec {
 struct CompositionBudget {
     views: usize,
     rows: usize,
+    text_bytes: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -52,6 +53,7 @@ pub(super) struct VegaUnitScaleOverrides {
     pub(super) color_categories: Option<Vec<String>>,
     pub(super) color_numeric_domain: Option<(f64, f64)>,
     pub(super) size_numeric_domain: Option<(f64, f64)>,
+    pub(super) opacity_numeric_domain: Option<(f64, f64)>,
 }
 
 impl VegaUnitScaleOverrides {
@@ -70,6 +72,9 @@ impl VegaUnitScaleOverrides {
         if let Some(VegaScaleDomain::Numeric { min, max }) = &domains.size {
             overrides.size_numeric_domain = Some((*min, *max));
         }
+        if let Some(VegaScaleDomain::Numeric { min, max }) = &domains.opacity {
+            overrides.opacity_numeric_domain = Some((*min, *max));
+        }
         overrides
     }
 }
@@ -80,6 +85,7 @@ struct ResolveOverrides {
     y_scale: Option<crate::ir::VegaResolutionMode>,
     color_scale: Option<crate::ir::VegaResolutionMode>,
     size_scale: Option<crate::ir::VegaResolutionMode>,
+    opacity_scale: Option<crate::ir::VegaResolutionMode>,
     x_axis: Option<crate::ir::VegaResolutionMode>,
     y_axis: Option<crate::ir::VegaResolutionMode>,
     color_legend: Option<crate::ir::VegaResolutionMode>,
@@ -131,10 +137,12 @@ fn resolve_raw_color_size_scales(
 
     let mut color_inherited = None;
     let mut size_inherited = None;
+    let mut opacity_inherited = None;
     assign_leaf_domains(
         &tree,
         &mut color_inherited,
         &mut size_inherited,
+        &mut opacity_inherited,
         &mut output.leaf_scales,
     )?;
     Ok(output)
@@ -229,6 +237,7 @@ fn parse_resolve_overrides(
                 "y" => &mut result.y_scale,
                 "color" => &mut result.color_scale,
                 "size" => &mut result.size_scale,
+                "opacity" => &mut result.opacity_scale,
                 _ => return Err(format!("{resolve_path}.scale.{channel} is not supported")),
             };
             *target = Some(parse_resolve_mode(
@@ -295,6 +304,7 @@ fn resolved_modes(
         .unwrap_or(if is_layer { Shared } else { Independent });
     let color_scale = overrides.color_scale.unwrap_or(Shared);
     let size_scale = overrides.size_scale.unwrap_or(Shared);
+    let opacity_scale = overrides.opacity_scale.unwrap_or(Shared);
     let x_axis = overrides.x_axis.unwrap_or(if x_scale == Independent {
         Independent
     } else if is_layer {
@@ -352,6 +362,7 @@ fn resolved_modes(
         y_scale,
         color_scale,
         size_scale,
+        opacity_scale,
         x_axis,
         y_axis,
         color_legend,
@@ -382,7 +393,7 @@ fn raw_unit_scales(spec: &Value, path: &str) -> Result<RawUnitScales, String> {
     let records = raw_scale_records(object, mark);
     let mut domains = crate::ir::VegaLeafScaleDomains::default();
     let mut kinds = BTreeMap::new();
-    for channel in ["x", "y", "color", "size"] {
+    for channel in ["x", "y", "color", "size", "opacity"] {
         let Some(binding) = encoding.get(channel).and_then(Value::as_object) else {
             continue;
         };
@@ -398,6 +409,7 @@ fn raw_unit_scales(spec: &Value, path: &str) -> Result<RawUnitScales, String> {
             "y" => domains.y = domain,
             "color" => domains.color = domain,
             "size" => domains.size = domain,
+            "opacity" => domains.opacity = domain,
             _ => unreachable!(),
         }
     }
@@ -444,7 +456,7 @@ fn raw_channel_kind(
         );
     }
     Ok(match channel {
-        "size" => Numeric,
+        "size" | "opacity" => Numeric,
         "color"
             if matches!(mark, "rect" | "geoshape")
                 && records
@@ -453,7 +465,7 @@ fn raw_channel_kind(
         {
             Numeric
         }
-        "x" if mark == "point" || mark == "circle" || mark == "square" => Numeric,
+        "x" if matches!(mark, "point" | "circle" | "square" | "text") => Numeric,
         "x" if mark == "rect" => Categories,
         "x" => Categories,
         "y" if matches!(mark, "rect") => Categories,
@@ -569,7 +581,7 @@ fn numeric_field_domain(
 }
 
 fn validate_shared_channel_types(node: &ResolvedRawNode) -> Result<(), String> {
-    for channel in ["x", "y", "color", "size"] {
+    for channel in ["x", "y", "color", "size", "opacity"] {
         let Some(resolve) = raw_node_resolve(node) else {
             continue;
         };
@@ -659,6 +671,7 @@ fn scale_mode(
         "y" => resolve.y_scale,
         "color" => resolve.color_scale,
         "size" => resolve.size_scale,
+        "opacity" => resolve.opacity_scale,
         _ => unreachable!("scale channel is fixed"),
     }
 }
@@ -673,6 +686,7 @@ fn raw_node_domains(
             "y" => scales.domains.y.clone(),
             "color" => scales.domains.color.clone(),
             "size" => scales.domains.size.clone(),
+            "opacity" => scales.domains.opacity.clone(),
             _ => unreachable!("scale channel is fixed"),
         });
     }
@@ -762,6 +776,7 @@ fn assign_leaf_domains(
     node: &ResolvedRawNode,
     inherited_color: &mut Option<crate::ir::VegaScaleDomain>,
     inherited_size: &mut Option<crate::ir::VegaScaleDomain>,
+    inherited_opacity: &mut Option<crate::ir::VegaScaleDomain>,
     output: &mut BTreeMap<String, crate::ir::VegaLeafScaleDomains>,
 ) -> Result<(), String> {
     match node {
@@ -775,6 +790,9 @@ fn assign_leaf_domains(
                     size: inherited_size
                         .clone()
                         .or_else(|| scales.domains.size.clone()),
+                    opacity: inherited_opacity
+                        .clone()
+                        .or_else(|| scales.domains.opacity.clone()),
                     ..crate::ir::VegaLeafScaleDomains::default()
                 },
             );
@@ -790,6 +808,7 @@ fn assign_leaf_domains(
         } => {
             let old_color = inherited_color.clone();
             let old_size = inherited_size.clone();
+            let old_opacity = inherited_opacity.clone();
             if resolve.color_scale == crate::ir::VegaResolutionMode::Shared {
                 *inherited_color = old_color.clone().or(raw_node_domains(node, "color")?);
             } else {
@@ -800,11 +819,23 @@ fn assign_leaf_domains(
             } else {
                 *inherited_size = None;
             }
+            if resolve.opacity_scale == crate::ir::VegaResolutionMode::Shared {
+                *inherited_opacity = old_opacity.clone().or(raw_node_domains(node, "opacity")?);
+            } else {
+                *inherited_opacity = None;
+            }
             for child in children {
-                assign_leaf_domains(child, inherited_color, inherited_size, output)?;
+                assign_leaf_domains(
+                    child,
+                    inherited_color,
+                    inherited_size,
+                    inherited_opacity,
+                    output,
+                )?;
             }
             *inherited_color = old_color;
             *inherited_size = old_size;
+            *inherited_opacity = old_opacity;
         }
     }
     Ok(())
@@ -900,6 +931,7 @@ fn parse_resolved_node(
             let mut resolved_scales = parsed_leaf_domains(&spec);
             resolved_scales.color = leaf_scales.color;
             resolved_scales.size = leaf_scales.size;
+            resolved_scales.opacity = leaf_scales.opacity;
             Ok(VegaCompositionNode::Unit(Box::new(
                 crate::ir::VegaCompositionLeaf {
                     path: unit.path,
@@ -1082,6 +1114,7 @@ fn validate_layer_children(
                         | crate::ir::ChartKind::Square
                         | crate::ir::ChartKind::VegaRect { .. }
                         | crate::ir::ChartKind::VegaImage(_)
+                        | crate::ir::ChartKind::VegaText(_)
                         | crate::ir::ChartKind::ErrorMark(_)
                         | crate::ir::ChartKind::VegaBoxPlot(_)
                 ) {
@@ -1287,6 +1320,10 @@ fn parsed_leaf_domains(spec: &crate::ir::ChartSpec) -> crate::ir::VegaLeafScaleD
                     .iter()
                     .flat_map(|series| series.points.iter().map(|point| point.y)),
             );
+        }
+        ChartKind::VegaText(data) => {
+            domains.x = numeric_domain(data.marks.iter().map(|mark| mark.point.x));
+            domains.y = numeric_domain(data.marks.iter().map(|mark| mark.point.y));
         }
         ChartKind::VegaBoxPlot(data) => {
             let values = data.groups.iter().flat_map(|group| {
@@ -1916,6 +1953,32 @@ fn preflight_node(
         if let Some(data) = effective_data {
             validate_inline_data(data, &format!("{}.data", path_or_root(path)))?;
         }
+        let mark = object.get("mark");
+        let mark_type = mark.and_then(Value::as_str).or_else(|| {
+            mark.and_then(Value::as_object)
+                .and_then(|mark| mark.get("type"))
+                .and_then(Value::as_str)
+        });
+        if mark_type == Some("text") {
+            let encoding =
+                merge_encoding(inherited.encoding.as_ref(), object.get("encoding"), path)?;
+            let label_bytes = super::vegalite::preflight_text_label_bytes(
+                effective_data,
+                encoding.as_ref(),
+                mark,
+                limits,
+            )
+            .map_err(|error| prefix_path(path, error))?;
+            budget.text_bytes = budget.text_bytes.saturating_add(label_bytes);
+            if budget.text_bytes > limits.max_total_text_bytes {
+                return Err(format!(
+                    "{}composition text label bytes {} exceeds max_total_text_bytes ({})",
+                    node_path(path),
+                    budget.text_bytes,
+                    limits.max_total_text_bytes
+                ));
+            }
+        }
         let rows = inline_row_count(effective_data);
         budget.views = budget.views.saturating_add(1);
         budget.rows = budget.rows.saturating_add(rows);
@@ -2272,7 +2335,7 @@ mod tests {
         let value = json!({
             "resolve": {"scale": {"color": "independent"}},
             "layer": [
-                {"layer": [{"mark": "line"}], "resolve": {"scale": {"size": "independent"}}},
+                {"layer": [{"mark": "line"}], "resolve": {"scale": {"size": "independent", "opacity": "independent"}}},
                 {"mark": "line"}
             ]
         });
@@ -2288,6 +2351,10 @@ mod tests {
         );
         assert_eq!(
             nested.size_scale,
+            crate::ir::VegaResolutionMode::Independent
+        );
+        assert_eq!(
+            nested.opacity_scale,
             crate::ir::VegaResolutionMode::Independent
         );
         assert_eq!(nested.x_scale, crate::ir::VegaResolutionMode::Shared);
@@ -2348,6 +2415,7 @@ mod tests {
             color_categories: Some(vec!["red".into(), "blue".into()]),
             color_numeric_domain: None,
             size_numeric_domain: Some((0.0, 10.0)),
+            opacity_numeric_domain: None,
         };
         let parsed = crate::frontend::vegalite::parse_unit_value_with_overrides(
             &mut value,
@@ -2381,6 +2449,7 @@ mod tests {
             color_categories: None,
             color_numeric_domain: Some((0.0, 20.0)),
             size_numeric_domain: None,
+            opacity_numeric_domain: None,
         };
         let parsed = crate::frontend::vegalite::parse_unit_value_with_overrides(
             &mut value,

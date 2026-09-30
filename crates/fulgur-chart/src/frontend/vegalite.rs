@@ -23,6 +23,17 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 mod error_mark;
 #[path = "vegalite_image.rs"]
 mod image;
+#[path = "vegalite_text.rs"]
+mod text;
+
+pub(super) fn preflight_text_label_bytes(
+    data: Option<&Value>,
+    encoding: Option<&Value>,
+    mark: Option<&Value>,
+    limits: &crate::guard::InputLimits,
+) -> Result<usize, String> {
+    text::preflight_label_bytes(data, encoding, mark, limits)
+}
 
 pub(crate) fn validate_vega_image_url(url: &str, max_bytes: usize) -> Result<(), String> {
     image::validate_image_url(url, max_bytes)
@@ -91,6 +102,10 @@ pub(super) fn parse_unit_value_with_overrides(
     if read_mark_name(object) == Some("image") {
         let top = value.as_object_mut().expect("object checked above");
         return image::parse_image_spec(top, strict, limits);
+    }
+    if read_mark_name(object) == Some("text") {
+        let top = value.as_object().expect("object checked above");
+        return text::parse_text_spec(top, strict, limits, scale_overrides);
     }
     if object
         .get("layer")

@@ -5011,3 +5011,211 @@ fn vegalite_boxplot_treats_schema_null_options_as_omitted_in_both_modes() {
         }
     }
 }
+
+#[test]
+fn vegalite_text_parses_field_value_and_literal_sources() {
+    let specs = [
+        r#"{"mark":"text","data":{"values":[{"x":1,"y":2,"label":"North"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}}"#,
+        r#"{"mark":{"type":"text","font":"sans-serif","fontSize":14,"align":"left"},"data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"value":"fixed"}}}"#,
+        r#"{"mark":{"type":"text","text":"literal"},"data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"}}}"#,
+    ];
+
+    for json in specs {
+        assert!(
+            serde_json::from_str::<fulgur_chart::schema::VegaLiteSpec>(json).is_ok(),
+            "typed schema should accept text mark: {json}"
+        );
+        let parsed = vegalite::parse(json, true);
+        assert!(parsed.is_ok(), "text mark should parse: {json}: {parsed:?}");
+    }
+}
+
+#[test]
+fn vegalite_text_rejects_multiple_text_sources() {
+    let json = r#"{"mark":{"type":"text","text":"literal"},"data":{"values":[{"x":1,"y":2,"label":"field"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}}}"#;
+
+    for strict in [false, true] {
+        let error = vegalite::parse(json, strict).expect_err("ambiguous text source is rejected");
+        assert!(
+            error.contains("text source"),
+            "expected a text-source error in strict={strict}: {error}"
+        );
+    }
+}
+
+#[test]
+fn vegalite_text_rejects_expanded_label_bytes_over_limit() {
+    let json = r#"{"mark":"text","data":{"values":[{"x":1,"y":2},{"x":2,"y":3}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"value":"abc"}}}"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: 5,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("expanded literal labels exceed the total byte budget");
+    assert!(error.contains("label bytes 6"), "{error}");
+}
+
+#[test]
+fn vegalite_text_rejects_unsupported_inputs() {
+    let base = serde_json::json!({
+        "mark":"text",
+        "data":{"values":[{"x":1,"y":2,"label":"A"}]},
+        "encoding":{
+            "x":{"field":"x","type":"quantitative"},
+            "y":{"field":"y","type":"quantitative"},
+            "text":{"field":"label"}
+        }
+    });
+    let mut cases = Vec::new();
+
+    let mut categorical = base.clone();
+    categorical["encoding"]["x"]["type"] = serde_json::json!("nominal");
+    cases.push(("categorical x", categorical));
+
+    let mut temporal = base.clone();
+    temporal["encoding"]["y"]["type"] = serde_json::json!("temporal");
+    cases.push(("temporal y", temporal));
+
+    let mut polar = base.clone();
+    polar["encoding"]["theta"] = serde_json::json!({"field":"x"});
+    cases.push(("polar position", polar));
+
+    let mut geographic = base.clone();
+    geographic["projection"] = serde_json::json!({"type":"mercator"});
+    cases.push(("geographic position", geographic));
+
+    let mut custom_format = base.clone();
+    custom_format["encoding"]["text"]["format"] = serde_json::json!(".2f");
+    cases.push(("custom format", custom_format));
+
+    let mut condition = base.clone();
+    condition["encoding"]["text"]["condition"] =
+        serde_json::json!({"test":"datum.x > 0","value":"positive"});
+    cases.push(("conditional text", condition));
+
+    let mut multiline = base.clone();
+    multiline["data"]["values"][0]["label"] = serde_json::json!("line one\nline two");
+    cases.push(("multiline text", multiline));
+
+    let mut truncate = base;
+    truncate["mark"] = serde_json::json!({"type":"text","limit":20});
+    cases.push(("truncation", truncate));
+
+    for (description, value) in cases {
+        let json = serde_json::to_string(&value).unwrap();
+        for strict in [false, true] {
+            let error = vegalite::parse(&json, strict)
+                .expect_err("unsupported text feature should fail during parsing");
+            assert!(
+                error.contains("text mark"),
+                "{description} must have a text-specific error in strict={strict}: {error}"
+            );
+        }
+    }
+}
+
+#[test]
+fn vegalite_text_resolves_color_size_opacity_and_font_properties() {
+    let json = r##"{
+      "mark":{
+        "type":"text","font":"serif","fontSize":12,"fontWeight":"bold",
+        "fontStyle":"italic","align":"right","baseline":"top",
+        "angle":30,"dx":2,"dy":-3
+      },
+      "data":{"values":[
+        {"x":0,"y":0,"label":"A","group":"first","size":10,"opacity":0},
+        {"x":10,"y":5,"label":"B","group":"second","size":20,"opacity":1}
+      ]},
+      "encoding":{
+        "x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"},
+        "color":{"field":"group","type":"nominal"},
+        "size":{"field":"size","type":"quantitative"},
+        "opacity":{"field":"opacity","type":"quantitative"}
+      }
+    }"##;
+
+    let parsed = vegalite::parse(json, true).expect("text style channels parse");
+    let ChartKind::VegaText(data) = parsed.kind else {
+        panic!("VegaText expected")
+    };
+    assert_eq!(data.marks.len(), 2);
+    assert_eq!(data.marks[0].text, "A");
+    assert_eq!(data.marks[0].size, 8.0);
+    assert_eq!(data.marks[1].size, 40.0);
+    assert_eq!(
+        (
+            data.marks[0].fill.r,
+            data.marks[0].fill.g,
+            data.marks[0].fill.b
+        ),
+        (
+            VEGALITE_PALETTE[0].r,
+            VEGALITE_PALETTE[0].g,
+            VEGALITE_PALETTE[0].b
+        )
+    );
+    assert_eq!(
+        (
+            data.marks[1].fill.r,
+            data.marks[1].fill.g,
+            data.marks[1].fill.b
+        ),
+        (
+            VEGALITE_PALETTE[1].r,
+            VEGALITE_PALETTE[1].g,
+            VEGALITE_PALETTE[1].b
+        )
+    );
+    assert!((data.marks[0].fill.a - 0.3).abs() < 1e-6);
+    assert!((data.marks[1].fill.a - 0.8).abs() < 1e-6);
+    assert_eq!(data.marks[0].font_family.as_deref(), Some("serif"));
+    assert_eq!(data.marks[0].font_weight.as_deref(), Some("bold"));
+    assert_eq!(data.marks[0].font_style.as_deref(), Some("italic"));
+    assert_eq!(data.marks[0].align, fulgur_chart::ir::VegaTextAlign::Right);
+    assert_eq!(data.marks[0].baseline, fulgur_chart::ir::TextBaseline::Top);
+    assert_eq!(data.marks[0].angle, Some(30.0));
+    assert_eq!(data.marks[0].dx, 2.0);
+    assert_eq!(data.marks[0].dy, -3.0);
+
+    let constants = r##"{
+      "mark":"text","data":{"values":[{"x":1,"y":2}]},
+      "encoding":{
+        "x":{"field":"x"},"y":{"field":"y"},"text":{"value":"fixed"},
+        "color":{"value":"#ff0000"},"size":{"value":18},"opacity":{"value":0.25}
+      }
+    }"##;
+    let parsed = vegalite::parse(constants, true).expect("constant channels parse");
+    let ChartKind::VegaText(data) = parsed.kind else {
+        panic!("VegaText expected")
+    };
+    assert_eq!(data.marks[0].size, 18.0);
+    assert_eq!(data.marks[0].fill.r, 255);
+    assert_eq!(data.marks[0].fill.g, 0);
+    assert_eq!(data.marks[0].fill.b, 0);
+    assert!((data.marks[0].fill.a - 0.25).abs() < 1e-6);
+}
+
+#[test]
+fn vegalite_text_rejects_ambiguous_style_channel_sources() {
+    let base = serde_json::json!({
+        "mark":"text",
+        "data":{"values":[{"x":1,"y":2,"label":"A","group":"G","size":4,"alpha":0.5}]},
+        "encoding":{
+            "x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}
+        }
+    });
+    for (name, field, value) in [
+        ("color", "group", serde_json::json!("#ff0000")),
+        ("size", "size", serde_json::json!(16)),
+        ("opacity", "alpha", serde_json::json!(0.5)),
+    ] {
+        let mut spec = base.clone();
+        spec["encoding"][name] = serde_json::json!({"field":field,"value":value});
+        let json = serde_json::to_string(&spec).unwrap();
+        let error = vegalite::parse(&json, false).expect_err("field and value are ambiguous");
+        assert!(
+            error.contains("field or value, not both"),
+            "unexpected {name} error: {error}"
+        );
+    }
+}

@@ -18,6 +18,7 @@ pub enum VegaLiteSpec {
     CategoricalLine(VlCategoricalLineSpec),
     TemporalArea(VlTemporalAreaSpec),
     CategoricalArea(VlCategoricalAreaSpec),
+    Text(Box<VlTextSpec>),
     Point(VlPointSpec),
     Circle(VlCircleSpec),
     Square(VlSquareSpec),
@@ -83,6 +84,7 @@ pub enum VlCompositionMark {
     ErrorBar(MarkErrorBar),
     ErrorBand(MarkErrorBand),
     BoxPlot(MarkBoxPlot),
+    Text(Box<MarkText>),
 }
 
 /// Composition data accepts the Vega-Lite data forms so unsupported URL data can be reported by
@@ -111,6 +113,10 @@ pub struct VlCompositionEncoding {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub theta: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shape: Option<serde_json::Value>,
@@ -130,8 +136,6 @@ pub struct VlCompositionEncoding {
     pub y_error2: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub opacity: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -228,6 +232,8 @@ pub struct VlScaleResolution {
     pub color: Option<VlResolveMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<VlResolveMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<VlResolveMode>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -475,6 +481,51 @@ pub struct MarkSquareObject {
 pub enum MarkSquare {
     String(MarkSquareName),
     Object(MarkSquareObject),
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkTextName {
+    Text,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarkTextObject {
+    #[serde(rename = "type")]
+    pub mark_type: MarkTextName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0.0, max = 1.0))]
+    pub opacity: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font: Option<String>,
+    #[serde(rename = "fontSize", skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<f64>,
+    #[serde(rename = "fontWeight", skip_serializing_if = "Option::is_none")]
+    pub font_weight: Option<serde_json::Value>,
+    #[serde(rename = "fontStyle", skip_serializing_if = "Option::is_none")]
+    pub font_style: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub align: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub angle: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dx: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dy: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum MarkText {
+    String(MarkTextName),
+    Object(Box<MarkTextObject>),
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -1499,6 +1550,54 @@ pub struct VlPointSpec {
     pub height: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<VlTitle>,
+}
+
+// ────────────────────────────────────────────────
+// Text mark (quantitative coordinate labels)
+// ────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTextSpec {
+    pub mark: MarkText,
+    pub data: VlData,
+    pub encoding: VlTextEncoding,
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<VlTitle>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTextEncoding {
+    pub x: VlChannel,
+    pub y: VlChannel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<VlTextValueChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<VlTextValueChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<VlTextValueChannel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<VlTextValueChannel>,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTextValueChannel {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

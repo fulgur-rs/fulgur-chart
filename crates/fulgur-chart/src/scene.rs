@@ -153,6 +153,7 @@ pub struct StyledText {
     pub fill: Color,
     pub content: String,
     pub rotate_deg: Option<f64>,
+    pub baseline: crate::ir::TextBaseline,
     pub font_family: Option<String>,
     pub font_weight: Option<String>,
     pub font_style: Option<String>,

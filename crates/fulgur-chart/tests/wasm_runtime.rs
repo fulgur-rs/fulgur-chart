@@ -82,6 +82,14 @@ fn sample_image_spec() -> fulgur_chart::ir::ChartSpec {
     .expect("image fixture parses")
 }
 
+fn sample_text_spec() -> fulgur_chart::ir::ChartSpec {
+    vegalite::parse(
+        include_str!("../../../examples/specs/vegalite_text.json"),
+        true,
+    )
+    .expect("text fixture parses")
+}
+
 fn composition_examples() -> [(&'static str, &'static str); 2] {
     [
         (
@@ -456,6 +464,52 @@ fn vegalite_boxplot_applies_grid_opacity_and_outlier_dash() {
         png, alternate_png,
         "changing the outlier dash pattern must change native/WASM raster output"
     );
+}
+
+/// Text labels use the same layout and deterministic native/WASM SVG and PNG paths.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vegalite_text_example_renders_deterministic_svg_and_png() {
+    let spec = sample_text_spec();
+    let svg = render_chart(&spec);
+    let svg_again = render_chart(&spec);
+    assert_eq!(svg, svg_again, "text SVG should be deterministic");
+    assert!(
+        svg.contains(">North</text>"),
+        "text label is missing: {svg}"
+    );
+    assert!(svg.contains("dominant-baseline=\"central\""));
+    assert!(
+        !svg.contains("NaN") && !svg.contains("inf"),
+        "SVG contains a non-finite number: {svg}"
+    );
+
+    let png = render_chart_to_png_default(&spec, 1.0).expect("text PNG renders");
+    let png_again = render_chart_to_png_default(&spec, 1.0).expect("text PNG rerenders");
+    assert_eq!(png, png_again, "text PNG should be deterministic");
+    assert_eq!(&png[..8], PNG_SIGNATURE, "text PNG signature is invalid");
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("text PNG decodes");
+    assert_eq!((pixmap.width(), pixmap.height()), (480, 280));
+}
+
+/// Unsupported text inputs and resource limits return the same parser/guard errors on native and WASM.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vegalite_text_rejections_match_on_native_and_wasm() {
+    let unsupported = r#"{"mark":"text","data":{"values":[{"x":"A","y":1,"label":"North"}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}}"#;
+    let non_strict_error = vegalite::parse(unsupported, false).unwrap_err();
+    let strict_error = vegalite::parse(unsupported, true).unwrap_err();
+    assert_eq!(non_strict_error, strict_error);
+    assert!(non_strict_error.contains("text mark"), "{non_strict_error}");
+
+    let spec = sample_text_spec();
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_data_points: 3,
+        ..Default::default()
+    };
+    let error = fulgur_chart::render::render_chart_with_limits(&spec, &limits)
+        .expect_err("text mark point limit should be enforced before layout");
+    assert!(error.contains("text point count 4"), "{error}");
 }
 
 /// PNG: wasm32 と linux-x86_64 native で、linux-x86_64 の期待 byte と一致することを検証する。

@@ -81,6 +81,42 @@ fn count_circles(items: &[Prim]) -> usize {
         .sum()
 }
 
+fn collect_text_and_point_marks(
+    items: &[Prim],
+    parent_x: f64,
+    parent_y: f64,
+    texts: &mut Vec<(String, f64, f64, fulgur_chart::ir::Color, f64)>,
+    points: &mut Vec<(f64, f64, fulgur_chart::ir::Color)>,
+) {
+    for item in items {
+        match item {
+            Prim::Group {
+                translate_x,
+                translate_y,
+                children,
+                ..
+            } => collect_text_and_point_marks(
+                children,
+                parent_x + translate_x,
+                parent_y + translate_y,
+                texts,
+                points,
+            ),
+            Prim::StyledText(text) => texts.push((
+                text.content.clone(),
+                parent_x + text.x,
+                parent_y + text.y,
+                text.fill,
+                text.size,
+            )),
+            Prim::Circle { cx, cy, fill, .. } | Prim::ClippedCircle { cx, cy, fill, .. } => {
+                points.push((parent_x + cx, parent_y + cy, *fill));
+            }
+            _ => {}
+        }
+    }
+}
+
 fn collect_circle_centers(items: &[Prim], output: &mut Vec<(f64, f64)>) {
     for item in items {
         match item {
@@ -229,6 +265,129 @@ fn layer_bar_line_keeps_paint_order_and_shared_frame() {
     assert!(
         bar < line,
         "earlier layer mark must paint before later line mark"
+    );
+}
+
+#[test]
+fn vegalite_layer_shares_text_color_size_scales_and_plot_frame() {
+    let spec = parsed(
+        r##"{
+          "data":{"values":[
+            {"x":0,"y":0,"label":"Low","group":"A","size":10},
+            {"x":10,"y":10,"label":"Middle","group":"B","size":30}
+          ]},
+          "encoding":{
+            "x":{"field":"x","type":"quantitative"},
+            "y":{"field":"y","type":"quantitative"},
+            "color":{"field":"group","type":"nominal"},
+            "size":{"field":"size","type":"quantitative"}
+          },
+          "resolve":{"scale":{"x":"shared","y":"shared","color":"shared","size":"shared"}},
+          "layer":[
+            {"mark":"point"},
+            {"mark":"text","data":{"values":[
+              {"x":0,"y":0,"label":"Low","group":"A","size":10},
+              {"x":20,"y":20,"label":"Extra","group":"C","size":50}
+            ]},"encoding":{"text":{"field":"label"}}}
+          ]
+        }"##,
+    );
+    let ChartKind::VegaComposition(root) = &spec.kind else {
+        panic!("composition chart kind expected");
+    };
+    let VegaCompositionNode::Layer(layer) = root.as_ref() else {
+        panic!("layer node expected");
+    };
+    let VegaCompositionNode::Unit(point) = &layer.children[0] else {
+        panic!("first child should be a point unit");
+    };
+    let VegaCompositionNode::Unit(text) = &layer.children[1] else {
+        panic!("second child should be a text unit");
+    };
+    let expected_color = Some(fulgur_chart::ir::VegaScaleDomain::Categories(vec![
+        "A".into(),
+        "B".into(),
+        "C".into(),
+    ]));
+    let expected_x = Some(fulgur_chart::ir::VegaScaleDomain::Numeric {
+        min: 0.0,
+        max: 20.0,
+    });
+    let expected_y = expected_x.clone();
+    let expected_size = Some(fulgur_chart::ir::VegaScaleDomain::Numeric {
+        min: 10.0,
+        max: 50.0,
+    });
+    for leaf in [point, text] {
+        assert_eq!(leaf.scales.x, expected_x);
+        assert_eq!(leaf.scales.y, expected_y);
+        assert_eq!(leaf.scales.color, expected_color);
+        assert_eq!(leaf.scales.size, expected_size);
+    }
+    let ChartKind::VegaText(data) = &text.spec.kind else {
+        panic!("text leaf should retain text marks")
+    };
+    assert_eq!(data.marks[0].size, 8.0);
+    assert_eq!(data.marks[1].size, 40.0);
+
+    let measurer = fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let scene = fulgur_chart::layout::build_scene_checked(&spec, &measurer)
+        .expect("text and point marks share the layer frame");
+    let mut texts = Vec::new();
+    let mut points = Vec::new();
+    collect_text_and_point_marks(&scene.items, 0.0, 0.0, &mut texts, &mut points);
+    let low = texts.iter().find(|(content, ..)| content == "Low").unwrap();
+    let matching_point = points
+        .iter()
+        .min_by(|left, right| {
+            (left.0 - low.1)
+                .hypot(left.1 - low.2)
+                .total_cmp(&(right.0 - low.1).hypot(right.1 - low.2))
+        })
+        .expect("point mark should render");
+    assert!((low.1 - matching_point.0).abs() < 1e-6);
+    assert!((low.2 - matching_point.1).abs() < 1e-6);
+    assert_eq!(
+        low.3, matching_point.2,
+        "shared color category uses one palette slot"
+    );
+}
+
+#[test]
+fn vegalite_layer_shares_text_opacity_domain() {
+    let spec = parsed(
+        r#"{
+          "layer":[
+            {"mark":"text","data":{"values":[{"x":0,"y":0,"label":"first","opacity":10},{"x":1,"y":1,"label":"low","opacity":0}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"},"opacity":{"field":"opacity","type":"quantitative"}}},
+            {"mark":"text","data":{"values":[{"x":0,"y":0,"label":"second","opacity":10},{"x":1,"y":1,"label":"high","opacity":100}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"},"opacity":{"field":"opacity","type":"quantitative"}}}
+          ]
+        }"#,
+    );
+    let ChartKind::VegaComposition(root) = &spec.kind else {
+        panic!("composition chart kind expected");
+    };
+    let VegaCompositionNode::Layer(layer) = root.as_ref() else {
+        panic!("layer node expected");
+    };
+    let alpha_for = |node: &VegaCompositionNode, content: &str| {
+        let VegaCompositionNode::Unit(leaf) = node else {
+            panic!("unit text leaf expected");
+        };
+        let ChartKind::VegaText(data) = &leaf.spec.kind else {
+            panic!("text mark expected");
+        };
+        data.marks
+            .iter()
+            .find(|mark| mark.text == content)
+            .expect("text label exists")
+            .fill
+            .a
+    };
+    let first = alpha_for(&layer.children[0], "first");
+    let second = alpha_for(&layer.children[1], "second");
+    assert!(
+        (first - second).abs() < 1e-6,
+        "shared opacity value mapped to {first} and {second}"
     );
 }
 

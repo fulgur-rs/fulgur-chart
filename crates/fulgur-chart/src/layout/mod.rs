@@ -24,6 +24,7 @@ pub mod treemap;
 pub(crate) mod vega_boxplot;
 pub(crate) mod vega_composition;
 pub mod vega_rect;
+pub(crate) mod vega_text;
 pub mod violin;
 pub mod wordcloud;
 
@@ -46,6 +47,7 @@ pub fn build_scene_checked_with_limits(
     m: &TextMeasurer,
     limits: &crate::guard::InputLimits,
 ) -> Result<Scene, String> {
+    crate::guard::validate_vega_text(spec, limits)?;
     crate::guard::validate_vega_image(spec, limits)?;
     let mut scene = if !chartjs_title::has_visible_chartjs_titles(spec) {
         build_chart_scene(spec, m, limits)?
@@ -158,6 +160,7 @@ fn build_chart_scene(
         ChartKind::Scatter | ChartKind::Bubble | ChartKind::Square | ChartKind::VegaImage(_) => {
             scatter::build(spec, m)
         }
+        ChartKind::VegaText(_) => vega_text::build(spec, m),
         ChartKind::Radar => radar::build(spec, m),
         ChartKind::Mixed => mixed::build(spec, m),
         ChartKind::Matrix { .. } => matrix::build(spec, m),

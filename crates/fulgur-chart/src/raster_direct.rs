@@ -199,6 +199,8 @@ fn render_chart_to_png_with_options(
     validate_raster_chart_kind(spec)?;
     let face =
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
+    let selected_font_family = crate::font::family_name(font_bytes);
+    validate_vega_text_font_families(spec, selected_font_family.as_deref())?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
     crate::guard::validate_marker_radii(spec)?;
@@ -247,6 +249,8 @@ pub fn render_chart_to_webp_with_limits(
     validate_raster_chart_kind(spec)?;
     let face =
         ttf_parser::Face::parse(font_bytes, 0).map_err(|e| format!("font parse failed: {e}"))?;
+    let selected_font_family = crate::font::family_name(font_bytes);
+    validate_vega_text_font_families(spec, selected_font_family.as_deref())?;
     let measurer = crate::text::TextMeasurer::new(font_bytes)
         .map_err(|e| format!("text measurer init failed: {e}"))?;
     crate::guard::validate_marker_radii(spec)?;
@@ -263,6 +267,63 @@ pub fn render_chart_to_webp_with_limits(
     }
 
     encode_pixmap_webp(&pixmap)
+}
+
+/// Raster text uses the supplied font face directly, so an explicit Vega-Lite font family must
+/// identify that face. The bundled Noto Sans JP face also serves the conventional sans-serif alias.
+fn validate_vega_text_font_families(
+    spec: &crate::ir::ChartSpec,
+    selected_family: Option<&str>,
+) -> Result<(), String> {
+    use crate::ir::{ChartKind, VegaCompositionNode, VegaTextData};
+
+    fn validate_family(requested: Option<&str>, selected: Option<&str>) -> Result<(), String> {
+        let Some(requested) = requested else {
+            return Ok(());
+        };
+        let requested = requested.trim();
+        let matches_face = selected.is_some_and(|selected| {
+            requested.eq_ignore_ascii_case(selected)
+                || (requested.eq_ignore_ascii_case("sans-serif")
+                    && selected.eq_ignore_ascii_case(crate::font::DEFAULT_FAMILY))
+        });
+        if matches_face {
+            Ok(())
+        } else {
+            Err(format!(
+                "raster Vega-Lite text font family {requested:?} does not match supplied font family {:?}",
+                selected.unwrap_or("unknown")
+            ))
+        }
+    }
+
+    fn validate_marks(data: &VegaTextData, selected: Option<&str>) -> Result<(), String> {
+        for mark in &data.marks {
+            validate_family(mark.font_family.as_deref(), selected)?;
+        }
+        Ok(())
+    }
+
+    let mut specs = vec![spec];
+    let mut nodes = Vec::new();
+    while let Some(spec) = specs.pop() {
+        match &spec.kind {
+            ChartKind::VegaText(data) => validate_marks(data, selected_family)?,
+            ChartKind::VegaComposition(root) => {
+                nodes.push(root.as_ref());
+                while let Some(node) = nodes.pop() {
+                    match node {
+                        VegaCompositionNode::Unit(leaf) => specs.push(&leaf.spec),
+                        VegaCompositionNode::Layer(layer) => nodes.extend(&layer.children),
+                        VegaCompositionNode::HConcat(concat)
+                        | VegaCompositionNode::VConcat(concat) => nodes.extend(&concat.children),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// straight RGBA8 の Pixmap をロスレス WebP バイト列へエンコードする。
@@ -1413,6 +1474,7 @@ fn render_prim(
                 *fill,
                 content,
                 *rotate_deg,
+                crate::ir::TextBaseline::Alphabetic,
                 None,
                 None,
                 face,
@@ -1431,6 +1493,7 @@ fn render_prim(
                 text.fill,
                 &text.content,
                 text.rotate_deg,
+                text.baseline,
                 text.font_weight.as_deref(),
                 text.font_style.as_deref(),
                 face,
@@ -1562,6 +1625,7 @@ fn render_text(
     fill: Color,
     content: &str,
     rotate_deg: Option<f64>,
+    baseline: crate::ir::TextBaseline,
     font_weight: Option<&str>,
     font_style: Option<&str>,
     face: &ttf_parser::Face<'_>,
@@ -1590,7 +1654,15 @@ fn render_text(
         Anchor::End => x as f32 - total_width,
     };
 
-    let baseline_y = y as f32;
+    let ascender = face.ascender() as f32 * glyph_scale;
+    let descender = face.descender() as f32 * glyph_scale;
+    let baseline_offset = match baseline {
+        crate::ir::TextBaseline::Alphabetic => 0.0,
+        crate::ir::TextBaseline::Top => ascender,
+        crate::ir::TextBaseline::Middle => (ascender + descender) / 2.0,
+        crate::ir::TextBaseline::Bottom => descender,
+    };
+    let baseline_y = y as f32 + baseline_offset;
     let paint = solid_paint(fill);
     let bold = font_weight.is_some_and(|weight| {
         weight.eq_ignore_ascii_case("bold")
@@ -1606,11 +1678,7 @@ fn render_text(
         .map(|angle| angle % 360.0)
         .filter(|angle| *angle != 0.0)
         .map_or(transform, |angle| {
-            transform.pre_concat(Transform::from_rotate_at(
-                angle as f32,
-                x as f32,
-                baseline_y,
-            ))
+            transform.pre_concat(Transform::from_rotate_at(angle as f32, x as f32, y as f32))
         });
 
     for ch in content.chars() {
@@ -2041,6 +2109,63 @@ mod tests {
         bounds.expect("text must paint at least one pixel")
     }
 
+    fn alpha_centroid(pixmap: &Pixmap) -> (f64, f64) {
+        let mut alpha_sum = 0.0;
+        let mut x_sum = 0.0;
+        let mut y_sum = 0.0;
+        for (index, pixel) in pixmap.data().as_chunks::<4>().0.iter().enumerate() {
+            let alpha = pixel[3] as f64;
+            if alpha == 0.0 {
+                continue;
+            }
+            alpha_sum += alpha;
+            x_sum += (index as u32 % pixmap.width()) as f64 * alpha;
+            y_sum += (index as u32 / pixmap.width()) as f64 * alpha;
+        }
+        (x_sum / alpha_sum, y_sum / alpha_sum)
+    }
+
+    #[test]
+    fn baseline_rotation_uses_the_svg_text_anchor() {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let draw = |rotate_deg| {
+            let mut pixmap = Pixmap::new(128, 128).unwrap();
+            render_text(
+                &mut pixmap,
+                64.0,
+                64.0,
+                24.0,
+                Anchor::Middle,
+                Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                "A",
+                rotate_deg,
+                crate::ir::TextBaseline::Top,
+                None,
+                None,
+                &face,
+                Transform::identity(),
+                None,
+                &mut HashMap::new(),
+            );
+            pixmap
+        };
+        let unrotated = draw(None);
+        let rotated = draw(Some(90.0));
+        let (x, y) = (64.0, 64.0);
+        let (center_x, center_y) = alpha_centroid(&unrotated);
+        let expected = (x - (center_y - y), y + (center_x - x));
+        let actual = alpha_centroid(&rotated);
+        assert!(
+            (actual.0 - expected.0).abs() < 1.0 && (actual.1 - expected.1).abs() < 1.0,
+            "rotated text centroid {actual:?} should match anchor rotation {expected:?}"
+        );
+    }
+
     fn text_pixmap(anchor: Anchor, rotate_deg: Option<f64>, scale: f32) -> Pixmap {
         let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
         let scene = Scene {
@@ -2062,6 +2187,33 @@ mod tests {
             }],
         };
         scene_to_pixmap(&scene, scale, &face, &PNG_LIMITS).unwrap()
+    }
+
+    fn styled_text_baseline_pixmap(baseline: crate::ir::TextBaseline) -> Pixmap {
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let scene = Scene {
+            width: 180.0,
+            height: 140.0,
+            items: vec![Prim::StyledText(Box::new(crate::scene::StyledText {
+                x: 20.0,
+                y: 70.0,
+                size: 24.0,
+                anchor: Anchor::Start,
+                fill: Color {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                },
+                content: "Hg".into(),
+                rotate_deg: None,
+                baseline,
+                font_family: None,
+                font_weight: None,
+                font_style: None,
+            }))],
+        };
+        scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap()
     }
 
     #[test]
@@ -2094,6 +2246,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn styled_text_baseline_changes_native_pixel_placement() {
+        let alphabetic = non_transparent_bounds(&styled_text_baseline_pixmap(
+            crate::ir::TextBaseline::Alphabetic,
+        ));
+        let top =
+            non_transparent_bounds(&styled_text_baseline_pixmap(crate::ir::TextBaseline::Top));
+        let middle = non_transparent_bounds(&styled_text_baseline_pixmap(
+            crate::ir::TextBaseline::Middle,
+        ));
+        let bottom = non_transparent_bounds(&styled_text_baseline_pixmap(
+            crate::ir::TextBaseline::Bottom,
+        ));
+
+        assert!(
+            top.top > middle.top && middle.top > alphabetic.top && alphabetic.top > bottom.top,
+            "baseline alignment should move glyphs relative to their anchor: top={top:?}, middle={middle:?}, alphabetic={alphabetic:?}, bottom={bottom:?}"
+        );
     }
 
     #[test]
@@ -3739,6 +3911,7 @@ mod tests {
                 fill: BLUE,
                 content: "styled".into(),
                 rotate_deg: None,
+                baseline: crate::ir::TextBaseline::Alphabetic,
                 font_family: Some("Test Sans".into()),
                 font_weight: Some("bold".into()),
                 font_style: Some("italic".into()),
@@ -3830,6 +4003,7 @@ mod tests {
                 fill: BLUE,
                 content: "styled".into(),
                 rotate_deg: None,
+                baseline: crate::ir::TextBaseline::Alphabetic,
                 font_family: Some("Test Sans".into()),
                 font_weight: Some("bold".into()),
                 font_style: Some("italic".into()),

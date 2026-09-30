@@ -187,8 +187,8 @@ fulgur-chart render chart.vl.json -o chart.svg
 ```
 
 Supported subset: `mark` (`bar` / `line` / `area` / `trail` / `point` → scatter / `circle` → scatter /
-`square` → square scatter / `arc` → pie / `rect` → heatmap / `image` / `geoshape` / `errorbar` / `errorband`),
-inline `data.values`, and `encoding` fields `x` / `y` / `color` / `theta` / `shape` / `size` / `url`;
+`square` → square scatter / `arc` → pie / `rect` → heatmap / `text` / `image` / `geoshape` / `errorbar` / `errorband`),
+inline `data.values`, and `encoding` fields `x` / `y` / `color` / `theta` / `shape` / `size` / `opacity` / `url` / `text`;
 `point` and `square` support quantitative `size` mapped to marker area, while `trail` uses quantitative `size`
 for a variable line width (1–4 px by default, or a uniform 1 px when omitted). `area` stacks by default when `color` is present
 (`encoding.y.stack: null` to disable), matching Vega-Lite. Geoshape accepts Feature arrays and
@@ -217,6 +217,22 @@ unsupported error if any composed view contains an image.
 
 Examples: [bar and line layer](examples/specs/vegalite-layer.json) and
 [nested concat with an inner layer](examples/specs/vegalite-nested-concat.json).
+
+### Text marks
+
+Text marks accept inline `data.values` with quantitative `x` and `y`, either `encoding.text.field`,
+`encoding.text.value`, or a constant `mark.text`. They render as standalone charts and as leaves in
+Cartesian `layer` views. `encoding.color` accepts a nominal field or constant value; `encoding.size`
+and `encoding.opacity` accept quantitative fields or constant values. Quantitative size fields map
+font size to 8–40 px and opacity fields map to 0.3–0.8. Mark properties include `font`, `fontSize`,
+`fontWeight`, `fontStyle`, `align`, `baseline`, `angle`, `dx`, and `dy`.
+Raster output uses the supplied font face for text marks. An explicit `mark.font` must match that
+font's family; the bundled Noto Sans JP font also accepts `sans-serif`. Incompatible families
+return an error instead of being silently ignored. SVG output retains the requested CSS family.
+
+Categorical or temporal positions, custom text formats, conditions, multiline labels, truncation,
+URL data, and transforms are rejected. Native and WASM use the same Scene for SVG and PNG output.
+See the [text mark example](examples/specs/vegalite_text.json).
 
 ### Image marks
 
