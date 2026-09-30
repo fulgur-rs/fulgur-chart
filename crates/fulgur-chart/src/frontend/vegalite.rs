@@ -85,6 +85,19 @@ pub(super) fn parse_unit_value(
     )
 }
 
+pub(super) fn preflight_composition_unit(
+    value: &Value,
+    limits: &crate::guard::InputLimits,
+) -> Result<(), String> {
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    if read_mark_name(object) == Some("tick") {
+        tick::preflight_tick_limits(object, limits)?;
+    }
+    Ok(())
+}
+
 pub(super) fn parse_unit_value_with_overrides(
     value: &mut Value,
     strict: bool,

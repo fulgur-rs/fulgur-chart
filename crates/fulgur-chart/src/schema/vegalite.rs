@@ -957,9 +957,9 @@ pub struct VlTickSpec {
 #[serde(deny_unknown_fields)]
 pub struct VlTickEncoding {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub x: Option<VlErrorAxisChannel>,
+    pub x: Option<VlTickPositionChannel>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub y: Option<VlErrorAxisChannel>,
+    pub y: Option<VlTickPositionChannel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color: Option<VlTickStyleChannel>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -975,6 +975,16 @@ pub enum VlTickChannelType {
     Nominal,
     Ordinal,
     Temporal,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VlTickPositionChannel {
+    pub field: String,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub field_type: Option<VlTickChannelType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -1003,8 +1013,6 @@ pub struct VlErrorAxisChannel {
     pub field: String,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub field_type: Option<VlErrorAxisType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

@@ -5416,6 +5416,102 @@ fn vegalite_tick_category_and_label_limits_are_preflighted() {
 }
 
 #[test]
+fn vegalite_tick_shared_composition_domains_are_preflighted() {
+    let json = r#"{
+        "layer": [
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": 1, "group": "a"}]},
+                "encoding": {
+                    "x": {"field": "x", "type": "quantitative"},
+                    "color": {"field": "group", "type": "nominal"}
+                }
+            },
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": 2, "group": "b"}]},
+                "encoding": {
+                    "x": {"field": "x", "type": "quantitative"},
+                    "color": {"field": "group", "type": "nominal"}
+                }
+            }
+        ]
+    }"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_series: 1,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = vegalite::parse_with_limits(json, false, &limits)
+        .expect_err("shared tick color domains must obey max_series before allocation");
+    assert!(
+        error.contains("max_series") && error.contains("pre-allocation"),
+        "expected a pre-allocation shared-domain limit error, got {error:?}"
+    );
+
+    let position_json = r#"{
+        "layer": [
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": "a", "y": "u"}]},
+                "encoding": {
+                    "x": {"field": "x", "type": "nominal"},
+                    "y": {"field": "y", "type": "nominal"}
+                }
+            },
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": "b", "y": "v"}]},
+                "encoding": {
+                    "x": {"field": "x", "type": "nominal"},
+                    "y": {"field": "y", "type": "nominal"}
+                }
+            }
+        ]
+    }"#;
+    let position_limits = fulgur_chart::guard::InputLimits {
+        max_categories: 2,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = vegalite::parse_with_limits(position_json, false, &position_limits)
+        .expect_err("shared x/y category unions must obey max_categories");
+    assert!(
+        error.contains("max_categories") && error.contains("pre-allocation"),
+        "expected a pre-allocation shared position-domain error, got {error:?}"
+    );
+}
+
+#[test]
+fn vegalite_tick_composition_preflights_leaf_limits_before_resolving_scales() {
+    let json = r#"{
+        "layer": [
+            {
+                "mark": "tick",
+                "data": {"values": [{"x": "long-label"}]},
+                "encoding": {"x": {"field": "x", "type": "nominal"}}
+            },
+            {
+                "mark": "bar",
+                "data": {"values": [{"x": 1, "y": 2}]},
+                "encoding": {
+                    "x": {"field": "x", "type": "quantitative"},
+                    "y": {"field": "y", "type": "quantitative"}
+                }
+            }
+        ]
+    }"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_label_bytes: 4,
+        ..fulgur_chart::guard::InputLimits::default()
+    };
+    let error = vegalite::parse_with_limits(json, false, &limits)
+        .expect_err("tick leaf limits must be checked before shared scale resolution");
+    assert!(
+        error.contains("max_label_bytes") && error.contains("pre-allocation"),
+        "expected the tick preflight error before a shared scale type error, got {error:?}"
+    );
+}
+
+#[test]
 fn vegalite_tick_rejects_unimplemented_scale_range_overrides() {
     for (json, expected) in [
         (

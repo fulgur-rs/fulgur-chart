@@ -84,8 +84,7 @@ pub(super) fn parse_tick_spec(
     scale_overrides: &super::super::vegalite_composition::VegaUnitScaleOverrides,
 ) -> Result<ChartSpec, String> {
     check_unknown_keys(top)?;
-    preflight_rows(top, limits)?;
-    preflight_category_limits(top, limits)?;
+    preflight_tick_limits(top, limits)?;
     validate_view_config(top)?;
 
     let mark = top.get("mark").and_then(Value::as_object);
@@ -592,6 +591,14 @@ fn position_channel(
         kind,
         title,
     }))
+}
+
+pub(super) fn preflight_tick_limits(
+    top: &Map<String, Value>,
+    limits: &crate::guard::InputLimits,
+) -> Result<(), String> {
+    preflight_rows(top, limits)?;
+    preflight_category_limits(top, limits)
 }
 
 fn position_kind(

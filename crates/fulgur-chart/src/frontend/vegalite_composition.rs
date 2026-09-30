@@ -137,12 +137,20 @@ enum ResolvedRawNode {
     },
 }
 
+#[cfg(test)]
 fn resolve_raw_color_size_scales(
     node: &ExpandedCompositionNode,
 ) -> Result<ResolvedScaleInput, String> {
+    resolve_raw_color_size_scales_with_limits(node, &crate::guard::InputLimits::default())
+}
+
+fn resolve_raw_color_size_scales_with_limits(
+    node: &ExpandedCompositionNode,
+    limits: &crate::guard::InputLimits,
+) -> Result<ResolvedScaleInput, String> {
     let mut output = ResolvedScaleInput::default();
     let tree = resolve_raw_node(node, ResolveOverrides::default(), &mut output)?;
-    validate_shared_channel_types(&tree)?;
+    validate_shared_channel_types(&tree, limits)?;
 
     let mut color_inherited = None;
     let mut size_inherited = None;
@@ -665,7 +673,11 @@ fn numeric_field_domain(
     }))
 }
 
-fn validate_shared_channel_types(node: &ResolvedRawNode) -> Result<(), String> {
+fn validate_shared_channel_types(
+    node: &ResolvedRawNode,
+    limits: &crate::guard::InputLimits,
+) -> Result<(), String> {
+    let mut position_categories_remaining = limits.max_categories;
     for channel in ["x", "y", "color", "size", "opacity"] {
         let Some(resolve) = raw_node_resolve(node) else {
             continue;
@@ -686,7 +698,17 @@ fn validate_shared_channel_types(node: &ResolvedRawNode) -> Result<(), String> {
                 path_or_root(path)
             ));
         }
-        validate_shared_category_value_types(node, channel)?;
+        let category_budget = match channel {
+            "x" | "y" => position_categories_remaining,
+            "color" => limits.max_series,
+            _ => usize::MAX,
+        };
+        let category_count =
+            validate_shared_category_value_types(node, channel, category_budget, limits)?;
+        if matches!(channel, "x" | "y") {
+            position_categories_remaining =
+                position_categories_remaining.saturating_sub(category_count);
+        }
     }
     match node {
         ResolvedRawNode::Unit { .. } => Ok(()),
@@ -694,7 +716,7 @@ fn validate_shared_channel_types(node: &ResolvedRawNode) -> Result<(), String> {
         | ResolvedRawNode::HConcat { children, .. }
         | ResolvedRawNode::VConcat { children, .. } => {
             for child in children {
-                validate_shared_channel_types(child)?;
+                validate_shared_channel_types(child, limits)?;
             }
             Ok(())
         }
@@ -704,15 +726,20 @@ fn validate_shared_channel_types(node: &ResolvedRawNode) -> Result<(), String> {
 fn validate_shared_category_value_types(
     node: &ResolvedRawNode,
     channel: &str,
-) -> Result<(), String> {
+    category_budget: usize,
+    limits: &crate::guard::InputLimits,
+) -> Result<usize, String> {
     let mut seen = HashMap::new();
-    collect_shared_category_values(node, channel, &mut seen)
+    collect_shared_category_values(node, channel, &mut seen, category_budget, limits)?;
+    Ok(seen.len())
 }
 
 fn collect_shared_category_values<'a>(
     node: &'a ResolvedRawNode,
     channel: &str,
     seen: &mut HashMap<&'a str, Vec<(RawCategoryValueType, &'a str, &'a str)>>,
+    category_budget: usize,
+    limits: &crate::guard::InputLimits,
 ) -> Result<(), String> {
     match node {
         ResolvedRawNode::Unit { path, scales } => {
@@ -720,6 +747,30 @@ fn collect_shared_category_values<'a>(
                 let mark = scales.mark.as_str();
                 for (label, value_type) in scales.category_values.get(channel).into_iter().flatten()
                 {
+                    if label.len() > limits.max_label_bytes {
+                        return Err(format!(
+                            "{}.resolve.scale.{channel} category label length {} exceeds max_label_bytes limit {} (pre-allocation)",
+                            path_or_root(raw_node_path(node)),
+                            label.len(),
+                            limits.max_label_bytes
+                        ));
+                    }
+                    if !seen.contains_key(label.as_str()) && seen.len() >= category_budget {
+                        let limit_name = if channel == "color" {
+                            "max_series"
+                        } else {
+                            "max_categories"
+                        };
+                        let limit = if channel == "color" {
+                            limits.max_series
+                        } else {
+                            limits.max_categories
+                        };
+                        return Err(format!(
+                            "{}.resolve.scale.{channel} category count exceeds {limit_name} limit {limit} (pre-allocation)",
+                            path_or_root(raw_node_path(node))
+                        ));
+                    }
                     let occurrences = seen.entry(label.as_str()).or_default();
                     if let Some((previous_type, previous_path, _)) =
                         occurrences
@@ -754,7 +805,7 @@ fn collect_shared_category_values<'a>(
         } => {
             if scale_mode(resolve, channel) == crate::ir::VegaResolutionMode::Shared {
                 for child in children {
-                    collect_shared_category_values(child, channel, seen)?;
+                    collect_shared_category_values(child, channel, seen, category_budget, limits)?;
                 }
             }
             Ok(())
@@ -1006,7 +1057,8 @@ pub(super) fn parse_composition_value(
 ) -> Result<crate::ir::ChartSpec, String> {
     preflight_composition(value, limits)?;
     let expanded = expand_composition(value, strict)?;
-    let resolved_scales = resolve_raw_color_size_scales(&expanded)?;
+    preflight_composition_tick_units(&expanded, limits)?;
+    let resolved_scales = resolve_raw_color_size_scales_with_limits(&expanded, limits)?;
     let node = parse_resolved_composition(expanded, &resolved_scales, strict, limits)?;
     let (width, height) = composition_node_dimensions(&node);
     let first_leaf = first_unit_leaf(&node)
@@ -1023,6 +1075,25 @@ pub(super) fn parse_composition_value(
     root.theme.background = None;
     crate::guard::validate_vega_composition(&root, limits)?;
     Ok(root)
+}
+
+fn preflight_composition_tick_units(
+    node: &ExpandedCompositionNode,
+    limits: &crate::guard::InputLimits,
+) -> Result<(), String> {
+    match node {
+        ExpandedCompositionNode::Unit(unit) => {
+            super::vegalite::preflight_composition_unit(&unit.effective_spec, limits)
+        }
+        ExpandedCompositionNode::Layer(container)
+        | ExpandedCompositionNode::HConcat(container)
+        | ExpandedCompositionNode::VConcat(container) => {
+            for child in &container.children {
+                preflight_composition_tick_units(child, limits)?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn first_unit_leaf(
