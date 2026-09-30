@@ -49,6 +49,17 @@ fn count_filled_rects(items: &[Prim], fill: fulgur_chart::ir::Color) -> usize {
         .sum()
 }
 
+fn count_lines_with_stroke(items: &[Prim], stroke: fulgur_chart::ir::Color) -> usize {
+    items
+        .iter()
+        .map(|item| match item {
+            Prim::Line { stroke: color, .. } if *color == stroke => 1,
+            Prim::Group { children, .. } => count_lines_with_stroke(children, stroke),
+            _ => 0,
+        })
+        .sum()
+}
+
 fn count_circles(items: &[Prim]) -> usize {
     items
         .iter()
@@ -419,6 +430,105 @@ fn concat_shared_legends_render_once() {
         count_text(&nested_scene.items, "North"),
         1,
         "a nested layer's shared legend is merged into its parent concat"
+    );
+}
+
+#[test]
+fn concat_shared_legends_keep_the_first_child_that_has_each_guide() {
+    let spec = parsed(
+        r#"{
+          "hconcat":[
+            {"mark":"point","data":{"values":[{"x":1,"y":2}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}},
+            {"mark":"point","data":{"values":[{"x":3,"y":4,"group":"north","amount":12}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"},"size":{"field":"amount","type":"quantitative"}}}
+          ]
+        }"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("concat scene builds");
+
+    assert_eq!(count_text(&scene.items, "north"), 1);
+    assert_eq!(size_legend_groups(&scene.items, "amount").len(), 1);
+}
+
+#[test]
+fn layer_shared_legends_keep_the_first_child_that_has_each_guide() {
+    let spec = parsed(
+        r#"{
+          "data":{"values":[{"x":1,"y":2,"group":"north","amount":12}]},
+          "layer":[
+            {"mark":"point","encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"}}},
+            {"mark":"point","encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"},"size":{"field":"amount","type":"quantitative"}}}
+          ]
+        }"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("layer scene builds");
+
+    assert_eq!(count_text(&scene.items, "north"), 1);
+    assert_eq!(size_legend_groups(&scene.items, "amount").len(), 1);
+}
+
+#[test]
+fn layer_keeps_errorbar_marks_from_later_units() {
+    let spec = parsed(
+        r#"{
+          "layer":[
+            {"mark":"bar","data":{"values":[{"x":"A","y":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}},
+            {"mark":{"type":"errorbar","color":"red"},"data":{"values":[{"x":"A","lo":2,"hi":8}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"lo","type":"quantitative"},"y2":{"field":"hi"}}}
+          ]
+        }"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("layer scene builds");
+    let red = fulgur_chart::color::parse_color("red").unwrap();
+    assert!(
+        count_lines_with_stroke(&scene.items, red) > 0,
+        "the later errorbar rule must remain in the composed scene"
+    );
+}
+
+#[test]
+fn layer_keeps_boxplot_marks_from_later_units() {
+    let boxplot = parsed(
+        r#"{"mark":{"type":"boxplot","color":"red"},"data":{"values":[{"x":"A","y":1},{"x":"A","y":3},{"x":"A","y":5},{"x":"A","y":7},{"x":"A","y":9}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}"#,
+    );
+    let spec = parsed(
+        r#"{
+          "layer":[
+            {"mark":"bar","data":{"values":[{"x":"A","y":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}},
+            {"mark":{"type":"boxplot","color":"red"},"data":{"values":[{"x":"A","y":1},{"x":"A","y":3},{"x":"A","y":5},{"x":"A","y":7},{"x":"A","y":9}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}
+          ]
+        }"#,
+    );
+    let scene = fulgur_chart::layout::build_scene_checked(
+        &spec,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("layer scene builds");
+    let boxplot_scene = fulgur_chart::layout::build_scene_checked(
+        &boxplot,
+        &fulgur_chart::text::TextMeasurer::new(DEFAULT_FONT).unwrap(),
+    )
+    .expect("standalone boxplot scene builds");
+    let red = fulgur_chart::color::parse_color("red").unwrap();
+
+    assert!(
+        count_filled_rects(&boxplot_scene.items, red) > 0,
+        "standalone boxplot produces a red box"
+    );
+    assert_eq!(
+        count_filled_rects(&scene.items, red),
+        count_filled_rects(&boxplot_scene.items, red),
+        "the later boxplot box must remain in the composed scene"
     );
 }
 
