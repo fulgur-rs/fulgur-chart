@@ -249,6 +249,7 @@ fn rule_rejects_category_labels_that_collide_across_json_value_types() {
     let specs = [
         r##"{"mark":"rule","data":{"values":[{"x":1},{"x":"1"}]},"encoding":{"x":{"field":"x","type":"nominal"}}}"##,
         r##"{"mark":"rule","data":{"values":[{"x":1,"end":"1","y":2}]},"encoding":{"x":{"field":"x","type":"nominal"},"x2":{"field":"end"},"y":{"field":"y","type":"quantitative"}}}"##,
+        r##"{"mark":"rule","data":{"values":[{"x":1,"y":1,"end":"1"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"nominal"},"y2":{"field":"end"}}}"##,
         r##"{"mark":"rule","data":{"values":[{"x":1,"group":1},{"x":2,"group":"1"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}"##,
     ];
 

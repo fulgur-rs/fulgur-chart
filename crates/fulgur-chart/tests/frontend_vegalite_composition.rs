@@ -442,6 +442,14 @@ fn rule_rejects_stringified_category_collisions_on_shared_composition_scales() {
           {"mark":"point","data":{"values":[{"x":2,"y":2,"group":"1"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"color":{"field":"group","type":"nominal"}}},
           {"mark":"rule","data":{"values":[{"x":3,"group":1}]},"encoding":{"x":{"field":"x","type":"quantitative"},"color":{"field":"group","type":"nominal"}}}
         ]}"##,
+        r##"{"layer":[
+          {"mark":"rule","data":{"values":[{"start":2,"end":1,"y":1}]},"encoding":{"x":{"field":"start","type":"nominal"},"x2":{"field":"end"},"y":{"field":"y","type":"quantitative"}}},
+          {"mark":"bar","data":{"values":[{"x":"1","y":1}]},"encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}}
+        ]}"##,
+        r##"{"layer":[
+          {"mark":"rule","data":{"values":[{"x":3,"start":2,"end":1}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"start","type":"nominal"},"y2":{"field":"end"}}},
+          {"mark":"bar","data":{"values":[{"x":1,"y":"1"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"nominal"}}}
+        ]}"##,
     ];
 
     for json in specs {

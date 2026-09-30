@@ -414,7 +414,22 @@ fn raw_unit_scales(spec: &Value, path: &str) -> Result<RawUnitScales, String> {
             .map_err(|error| format!("{}.encoding.{channel}: {error}", path_or_root(path)))?;
         kinds.insert(channel, kind);
         if kind == RawScaleType::Categories {
-            let values = raw_category_value_types(&records, field);
+            let mut values = raw_category_value_types(&records, field);
+            if mark == "rule" {
+                let endpoint_channel = match channel {
+                    "x" => Some("x2"),
+                    "y" => Some("y2"),
+                    _ => None,
+                };
+                if let Some(endpoint_field) = endpoint_channel
+                    .and_then(|endpoint| encoding.get(endpoint))
+                    .and_then(Value::as_object)
+                    .and_then(|binding| binding.get("field"))
+                    .and_then(Value::as_str)
+                {
+                    values.extend(raw_category_value_types(&records, endpoint_field));
+                }
+            }
             category_values.insert(channel, values);
         }
         let domain = raw_channel_domain(kind, &records, field);
