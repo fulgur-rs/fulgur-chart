@@ -225,6 +225,7 @@ const MARKER_R: f64 = 3.0;
 
 /// Chart.js 4.5.1 LineElement.fastPathSegment の描画専用の省略処理。
 /// https://github.com/chartjs/Chart.js/blob/v4.5.1/src/elements/element.line.js
+/// Adapted under the MIT license; see LICENSE-Chart.js in this crate.
 /// 元データ・マーカー・ラベルは変更しない。同じ整数 x 列に収まる線を
 /// 平均 x の maxY → minY → lastY で描く(極値の元インデックス順ではない)。
 /// Chart.js と同じく平均から列の最初の点を除き、負の x はゼロ方向へ切り捨てる。
