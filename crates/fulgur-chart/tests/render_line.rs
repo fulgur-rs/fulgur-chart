@@ -601,7 +601,7 @@ fn polyline_pts(json: &str) -> usize {
 }
 
 #[test]
-fn large_line_is_decimated_vs_disabled() {
+fn large_line_drawing_fast_path_is_independent_of_decimation_plugin() {
     let n = 8000;
     let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
     let data: Vec<String> = (0..n).map(|i| format!("{}", (i * 37) % 101)).collect();
@@ -616,10 +616,13 @@ fn large_line_is_decimated_vs_disabled() {
     );
     let on_pts = polyline_pts(&on);
     let off_pts = polyline_pts(&off);
-    assert_eq!(off_pts, n, "disabled must keep all points (single segment)");
+    assert_eq!(
+        on_pts, off_pts,
+        "plugin options must not change category line data"
+    );
     assert!(
-        on_pts > 0 && on_pts < off_pts,
-        "default must decimate: {on_pts} vs {off_pts}"
+        on_pts > 0 && on_pts < n,
+        "drawing fast path should simplify the line: {on_pts} vs {n}"
     );
 }
 
@@ -645,7 +648,7 @@ fn circle_count(json: &str) -> usize {
 }
 
 #[test]
-fn large_line_suppresses_markers_by_default() {
+fn large_line_preserves_all_markers_by_default() {
     let n = 5000;
     let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
     let data: Vec<String> = (0..n).map(|i| format!("{}", i % 50)).collect();
@@ -656,8 +659,8 @@ fn large_line_suppresses_markers_by_default() {
     );
     assert_eq!(
         circle_count(&json),
-        0,
-        "large line should suppress markers by default"
+        n,
+        "large line must retain Chart.js default markers"
     );
 }
 
@@ -767,12 +770,12 @@ fn polylines(spec: &fulgur_chart::ir::ChartSpec) -> Vec<Vec<(f64, f64)>> {
 }
 
 #[test]
-fn gapped_large_line_keeps_segments_and_decimates() {
-    // segment-first 設計の回帰テスト: gap のある巨大系列が、間引き後も
+fn gapped_large_line_keeps_segments_and_simplifies_only_drawing() {
+    // 描画省略の回帰テスト: gap のある巨大系列が、線の fast path 適用後も
     //   (a) セグメント融合せず ≥2 本の Polyline を保ち、
-    //   (b) 間引きが効いて総点数が大幅に減り、
+    //   (b) 線の描画点数が大幅に減り、
     //   (c) どのセグメントも崩壊・消失しない
-    // ことを保証する。素朴な「間引き後に cat で再分割」実装ではここで全点が gap 扱いになり
+    // ことを保証する。素朴な「描画点の省略後に cat で再分割」実装ではここで全点が gap 扱いになり
     // 各点が長さ1セグメントへ割れて Polyline が 0 本になる（(a) が FAIL する）。
     //
     // JSON の data は untagged `Nums(Vec<f64>)` で非有限値を表現できないため（null も 1e400 も
@@ -803,11 +806,11 @@ fn gapped_large_line_keeps_segments_and_decimates() {
         counts.iter().all(|&c| c >= 2),
         "every polyline must have >=2 points: {counts:?}"
     );
-    // (b) 間引きが効いて総点数が大幅に減る（gap で 1 点落ちた n-1 ではなく、明確に半分未満）。
+    // (b) 描画点が大幅に減る（gap で 1 点落ちた n-1 ではなく、明確に半分未満）。
     let total: usize = counts.iter().sum();
     assert!(
         total < n / 2,
-        "decimation must substantially reduce total points: {total} vs n={n}"
+        "drawing fast path must substantially reduce emitted vertices: {total} vs n={n}"
     );
     // 念のため: y スケールが NaN 汚染されておらず、出力座標がすべて有限。
     assert!(
@@ -835,6 +838,8 @@ fn gapped_large_line_lttb_prorates_segment_budget() {
         data.join(",")
     );
     let mut spec = chartjs::parse(&json, false).unwrap();
+    // Test the internal decimation extension, not Chart.js category eligibility.
+    spec.decimation.enabled = true;
     // 3 箇所に孤立 NaN を注入 → 3 gap → 4 セグメント。
     for p in [n / 4, n / 2, 3 * n / 4] {
         spec.series[0].values[p] = f64::NAN;
@@ -894,6 +899,8 @@ fn all_singleton_gaps_keep_markers_when_decimated() {
         data.join(",")
     );
     let mut spec = chartjs::parse(&json, false).unwrap();
+    // Keep exercising the internal extension even though Chart.js category data is ineligible.
+    spec.decimation.enabled = true;
     // 奇数 index を NaN 化 → 偶数 index の有限点はすべて cat 不連続の単点セグメント。
     for i in (1..n).step_by(2) {
         spec.series[0].values[i] = f64::NAN;
@@ -910,10 +917,8 @@ fn all_singleton_gaps_keep_markers_when_decimated() {
 // --- 決定性・no-op サニティ・SVG↔PNG 一致（Task 9）---
 
 #[test]
-fn disabled_decimation_keeps_all_points_sanity() {
-    // サニティ: enabled:false の巨大 line は単一セグメント全点を保持し、間引きされない。
-    // （pre-feature バイト不変の真の保証は threshold 未満で緑のままの既存小 golden。
-    //   これは passthrough = 非間引きと同形であることの確認のみ。）
+fn disabled_decimation_keeps_all_data_and_markers_sanity() {
+    // データ decimation が off でも Chart.js の線描画 fast path は適用される。
     let n = 3000;
     let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
     let data: Vec<String> = (0..n).map(|i| format!("{}", (i * 13) % 50)).collect();
@@ -922,11 +927,12 @@ fn disabled_decimation_keeps_all_points_sanity() {
         labels.join(","),
         data.join(",")
     );
-    assert_eq!(polyline_pts(&off), n);
+    assert_eq!(circle_count(&off), n);
+    assert!(polyline_pts(&off) < n);
 }
 
-/// 5000 点（threshold 超過確実）の自動間引き line spec を組み立てる。
-fn big_decimated_line_json() -> String {
+/// 5000 点の、線描画の fast path を通る Chart.js line spec を組み立てる。
+fn big_line_fast_path_json() -> String {
     let n = 5000;
     let labels: Vec<String> = (0..n).map(|i| format!("\"{i}\"")).collect();
     let data: Vec<String> = (0..n).map(|i| format!("{}", (i * 29) % 83)).collect();
@@ -938,9 +944,9 @@ fn big_decimated_line_json() -> String {
 }
 
 #[test]
-fn decimated_line_is_deterministic() {
-    // 同一入力 → 同一バイト列（SVG・PNG 双方）。間引き経路の決定性を担保。
-    let json = big_decimated_line_json();
+fn line_drawing_fast_path_is_deterministic() {
+    // 同一入力 → 同一バイト列（SVG・PNG 双方）。描画省略経路の決定性を担保。
+    let json = big_line_fast_path_json();
     assert_eq!(render(&json), render(&json), "SVG must be byte-identical");
     assert_eq!(
         render_png(&json),
@@ -950,10 +956,10 @@ fn decimated_line_is_deterministic() {
 }
 
 #[test]
-fn decimated_line_renders_svg_and_png_consistently() {
-    // SVG/PNG は build() の同一 Scene を消費するため、間引き-on の line が
+fn line_drawing_fast_path_renders_svg_and_png_consistently() {
+    // SVG/PNG は build() の同一 Scene を消費するため、描画省略する line が
     // 両出力でエラー無く・決定的にレンダされることを確認（geometry 共有の担保）。
-    let json = big_decimated_line_json();
+    let json = big_line_fast_path_json();
     let svg = render(&json);
     assert!(svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"));
     assert!(!svg.contains("NaN") && !svg.contains("inf"));

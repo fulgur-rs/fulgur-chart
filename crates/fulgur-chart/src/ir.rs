@@ -1299,7 +1299,8 @@ pub enum DecimationAlgorithm {
 }
 
 /// options.plugins.decimation の解決済み設定。
-/// 既定は自動オン（enabled=true）。Chart.js（false）からの意図的乖離。
+/// 内部拡張の既定は自動オン。Chart.js frontend は line の適用条件を確認し、
+/// 現行の parsed 入力では enabled=false へ解決する。sparkline/他 DSL は従来どおり。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Decimation {
     pub enabled: bool,

@@ -1878,17 +1878,27 @@ fn rendered_svg_reflects_top_level_width_height() {
 // ── decimation (options.plugins.decimation) ──
 
 #[test]
-fn decimation_defaults_to_enabled_minmax_when_absent() {
+fn decimation_defaults_to_disabled_minmax_for_chartjs_line() {
     let spec = chartjs::parse(
         r#"{"type":"line","data":{"labels":["a","b"],"datasets":[{"data":[1,2]}]}}"#,
         false,
     )
     .unwrap();
-    assert!(spec.decimation.enabled);
+    assert!(!spec.decimation.enabled);
     assert_eq!(
         spec.decimation.algorithm,
         fulgur_chart::ir::DecimationAlgorithm::MinMax
     );
+}
+
+#[test]
+fn sparkline_retains_automatic_decimation_extension() {
+    let spec = chartjs::parse(
+        r#"{"type":"sparkline","data":{"datasets":[{"data":[1,2]}]}}"#,
+        true,
+    )
+    .unwrap();
+    assert!(spec.decimation.enabled);
 }
 
 #[test]

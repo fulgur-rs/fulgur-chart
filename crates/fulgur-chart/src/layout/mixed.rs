@@ -201,6 +201,7 @@ fn draw_line_dataset(
                 series_index,
                 &segments,
                 None,
+                decimated,
             ));
         } else {
             let baseline_y = frame
@@ -280,6 +281,11 @@ fn draw_line_dataset(
         }
         match ser.interpolation {
             crate::ir::LineInterpolation::Linear => {
+                let xy = if super::line::chartjs_fast_path_enabled(ser, decimated) {
+                    super::line::chartjs_fast_path(&xy, false)
+                } else {
+                    xy
+                };
                 items.push(Prim::Polyline {
                     points: xy,
                     stroke: ser.stroke_at(0),
@@ -310,8 +316,8 @@ fn draw_line_dataset(
     let marker_radii: Vec<Option<f64>> = segments
         .iter()
         .map(|seg| match (decimated, ser.point_radius) {
-            (true, Some(radius)) if radius > 0.0 => Some(radius),
-            (true, Some(_)) => None,
+            (_, Some(radius)) if radius > 0.0 => Some(radius),
+            (_, Some(_)) => None,
             (false, _) => Some(MARKER_R),
             (true, None) if !show_line || seg.len() < 2 => Some(MARKER_R),
             (true, None) => None,
@@ -708,7 +714,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_line_decimation_is_segment_first_and_preserves_bar_geometry() {
+    fn mixed_category_decimation_is_noop_and_preserves_bar_geometry() {
         let n = 4000;
         let labels = (0..n)
             .map(|i| format!("\"c{i}\""))
@@ -772,11 +778,49 @@ mod tests {
             .filter(|item| matches!(item, Prim::Circle { fill, .. } if *fill == line_stroke))
             .count();
 
-        assert_eq!(line_segments.len(), 2, "decimation must preserve the gap");
-        assert!(line_points < n - 1, "line points should be decimated");
+        assert_eq!(
+            line_segments.len(),
+            2,
+            "plugin options must preserve the gap"
+        );
+        assert!(
+            line_points < n - 1,
+            "only the drawing path should be simplified"
+        );
         assert_eq!(area_paths, 2, "area fill must preserve the gap");
         assert_eq!(bar_rects, 1, "bar geometry should stay unchanged");
-        assert_eq!(line_markers, 0, "decimated lines suppress default markers");
+        assert_eq!(line_markers, n - 1, "all valid points retain their markers");
+
+        // Public IR users can still request actual data decimation. Keep its
+        // gap boundaries and LTTB budget separate from Chart.js drawing paths.
+        let mut internal_spec = spec.clone();
+        internal_spec.decimation.enabled = true;
+        let internal_scene = build(&internal_spec, &m);
+        let internal_segments: Vec<_> = internal_scene
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Prim::Polyline { points, stroke, .. } if *stroke == line_stroke => Some(points),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(internal_segments.len(), 2);
+        assert!(
+            internal_segments
+                .iter()
+                .map(|points| points.len())
+                .sum::<usize>()
+                <= 106
+        );
+        assert_eq!(
+            internal_scene
+                .items
+                .iter()
+                .filter(|item| matches!(item, Prim::Circle { fill, .. } if *fill == line_stroke))
+                .count(),
+            0,
+            "internal data decimation retains its historical marker policy"
+        );
 
         let text_count = |scene: &Scene| {
             scene
@@ -788,9 +832,10 @@ mod tests {
         let mut undecimated_spec = spec.clone();
         undecimated_spec.decimation.enabled = false;
         let undecimated_scene = build(&undecimated_spec, &m);
-        assert!(
-            text_count(&scene) < text_count(&undecimated_scene),
-            "data labels should use the decimated line points"
+        assert_eq!(
+            text_count(&scene),
+            text_count(&undecimated_scene),
+            "plugin options must not reduce category data labels"
         );
 
         let mut explicit_radius_spec = spec.clone();
@@ -807,7 +852,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(explicit_markers.len(), line_points);
+        assert_eq!(explicit_markers.len(), n - 1);
         assert!(
             explicit_markers
                 .iter()
@@ -842,7 +887,7 @@ mod tests {
                 .items
                 .iter()
                 .all(|item| { !matches!(item, Prim::Circle { fill, .. } if *fill == line_stroke) }),
-            "an explicit zero radius should hide decimated markers"
+            "an explicit zero radius should hide line markers"
         );
 
         let mut points_only_spec = spec.clone();
@@ -861,8 +906,8 @@ mod tests {
                 .iter()
                 .filter(|item| matches!(item, Prim::Circle { fill, .. } if *fill == line_stroke))
                 .count(),
-            line_points,
-            "point-only series should keep its decimated markers"
+            n - 1,
+            "point-only series should keep all valid markers"
         );
 
         let mut isolated_spec = spec.clone();
