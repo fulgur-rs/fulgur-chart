@@ -16,28 +16,28 @@
     "alloc_blocks": 516
   },
   "line_large": {
-    "alloc_bytes": 14596236,
-    "alloc_blocks": 90986
+    "alloc_bytes": 13923792,
+    "alloc_blocks": 77103
   },
-  "line_large_decimated": {
-    "alloc_bytes": 9062265,
-    "alloc_blocks": 26641
+  "line_large_plugin_noop": {
+    "alloc_bytes": 13923792,
+    "alloc_blocks": 77103
   },
-  "line_large_decimated_png": {
-    "alloc_bytes": 13914123,
-    "alloc_blocks": 21529
+  "line_large_plugin_noop_png": {
+    "alloc_bytes": 18885385,
+    "alloc_blocks": 22486
   },
   "line_large_png": {
-    "alloc_bytes": 24705334,
-    "alloc_blocks": 22174
+    "alloc_bytes": 18885385,
+    "alloc_blocks": 22486
   },
   "line_small": {
-    "alloc_bytes": 37658,
-    "alloc_blocks": 598
+    "alloc_bytes": 44562,
+    "alloc_blocks": 700
   },
   "line_small_png": {
-    "alloc_bytes": 2055215,
-    "alloc_blocks": 611
+    "alloc_bytes": 2073653,
+    "alloc_blocks": 719
   },
   "pie_small": {
     "alloc_bytes": 18566,

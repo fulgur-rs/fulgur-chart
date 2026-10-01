@@ -26,14 +26,13 @@ pub fn all() -> Vec<Case> {
             json: line(12),
         },
         Case {
-            // Off-path baseline: decimation explicitly disabled so this measures
-            // the full 10k-point render (no auto-decimation).
+            // 10k PointElements and markers; Chart.js fast path simplifies only the line.
             name: "line_large",
             json: line_with_decimation(10_000, false),
         },
         Case {
-            // On-path: default auto-decimation fires (10k > plot_width*4).
-            name: "line_large_decimated",
+            // Category data is ineligible even with enabled:true. Keep the parity case.
+            name: "line_large_plugin_noop",
             json: line_with_decimation(10_000, true),
         },
         Case {
@@ -94,7 +93,7 @@ fn line(n: usize) -> String {
 }
 
 /// `line(n)` with an explicit `options.plugins.decimation.enabled` so benches can
-/// pin the off-path (false) baseline and the on-path (true) decimated variant.
+/// compare disabled/enabled category plugin options, both of which are no-ops.
 fn line_with_decimation(n: usize, enabled: bool) -> String {
     format!(
         r#"{{"type":"line","data":{{"labels":[{}],"datasets":[{{"label":"d","data":[{}]}}]}},"options":{{"plugins":{{"decimation":{{"enabled":{}}}}}}}}}"#,

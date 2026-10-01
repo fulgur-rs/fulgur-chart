@@ -1748,24 +1748,31 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
         (None, _) => false,
     };
 
-    // decimation: options.plugins.decimation を IR へ解決する。未指定は既定(自動オン)。
+    // Chart.js の decimation は既定 off、かつ category 軸や parsing が必要な
+    // データには適用しない。現行 line DSL は labels + values の parsed 形式のみで、
+    // parsing:false の内部点形式を受理しないため、enabled:true でも no-op。
+    // sparkline は Chart.js コア外の拡張であり、従来の自動間引きを維持する。
+    let automatic_decimation = matches!(kind, ChartKind::Sparkline);
     let decimation = match &raw.options.plugins.decimation {
         Some(d) => {
             let algorithm = match d.algorithm.as_deref() {
                 None | Some("min-max") => DecimationAlgorithm::MinMax,
                 Some("lttb") => DecimationAlgorithm::Lttb,
                 Some(other) => {
-                    return Err(format!("未対応の decimation algorithm: {other}"));
+                    return Err(format!("unsupported decimation algorithm: {other}"));
                 }
             };
             Decimation {
-                enabled: d.enabled.unwrap_or(true),
+                enabled: automatic_decimation && d.enabled.unwrap_or(true),
                 algorithm,
                 samples: d.samples,
                 threshold: d.threshold,
             }
         }
-        None => Decimation::default(),
+        None => Decimation {
+            enabled: automatic_decimation,
+            ..Decimation::default()
+        },
     };
 
     // テーマ解決(配色に使うため色解決より先に行う)。

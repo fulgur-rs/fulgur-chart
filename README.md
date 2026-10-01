@@ -154,6 +154,8 @@ Supports a data-only, static subset:
 - `options.indexAxis`
 - `options.plugins.title` / `options.plugins.legend` (`position`: top/bottom/left/right; `legend` does not apply to `gauge` / `radialGauge`)
 - `options.plugins.datalabels` (`display` — renders a value label at each data point)
+- Line charts retain every valid point and the default markers (`pointRadius: 3`), including dense datasets. As in Chart.js 4.5.1, straight, solid lines simplify their drawing paths without changing the point data; dashed, stepped, and curved lines keep their full paths. `inspect` reports point geometry even with `pointRadius: 0`.
+- `options.plugins.decimation` is accepted but has no effect on the supported line input: Chart.js requires a linear/time x axis and `parsing: false`, while this subset accepts parsed labels/value arrays, not the internal `{x,y}` line format. The `sparkline` extension retains automatic data decimation.
 - `options.scales` (`stacked` — read from the index axis, matching chart.js; `suggestedMin` / `suggestedMax` and a subset of other options). Cartesian line, bar, mixed, scatter, and bubble charts accept `type: "time"` or `"timeseries"` independently on x/y. Temporal axes use UTC; `time.unit`, `minUnit`, `parser` (a bounded strftime subset), `round`, and per-unit `displayFormats` are supported.
 - `options.theme` (extension; see below)
 

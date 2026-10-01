@@ -197,11 +197,20 @@ struct ColoredAreaRun {
 }
 
 #[derive(Clone, Copy)]
+enum AreaLinePath {
+    Full,
+    FastForward,
+    FastReverse,
+}
+
+#[derive(Clone, Copy)]
 struct AreaFillStyle {
     source_interpolation: LineInterpolation,
     target_interpolation: LineInterpolation,
     source_step: Option<StepMode>,
     target_step: Option<StepMode>,
+    source_path: AreaLinePath,
+    target_path: AreaLinePath,
     above: crate::ir::Color,
     below: crate::ir::Color,
     preserve_singleton: bool,
@@ -213,6 +222,69 @@ const AREA_CURVE_SAMPLES: usize = 16;
 
 /// マーカー（点）の半径。
 const MARKER_R: f64 = 3.0;
+
+/// Chart.js 4.5.1 LineElement.fastPathSegment の描画専用の省略処理。
+/// https://github.com/chartjs/Chart.js/blob/v4.5.1/src/elements/element.line.js
+/// Adapted under the MIT license; see LICENSE-Chart.js in this crate.
+/// 元データ・マーカー・ラベルは変更しない。同じ整数 x 列に収まる線を
+/// 平均 x の maxY → minY → lastY で描く(極値の元インデックス順ではない)。
+/// Chart.js と同じく平均から列の最初の点を除き、負の x はゼロ方向へ切り捨てる。
+pub(super) fn chartjs_fast_path(points: &[(f64, f64)], reverse: bool) -> Vec<(f64, f64)> {
+    let mut ordered = (0..points.len()).map(|index| {
+        points[if reverse {
+            points.len() - 1 - index
+        } else {
+            index
+        }]
+    });
+    let Some((first_x, first_y)) = ordered.next() else {
+        return Vec::new();
+    };
+    let mut output = vec![(first_x, first_y)];
+    let (mut column, mut average_x, mut count) = (first_x.trunc(), 0.0, 0.0);
+    let (mut min_y, mut max_y, mut last_y) = (first_y, first_y, first_y);
+    let push = |output: &mut Vec<(f64, f64)>, point| {
+        // 同じ座標への lineTo は描画に影響しないので省く。
+        if output.last() != Some(&point) {
+            output.push(point);
+        }
+    };
+    let flush = |output: &mut Vec<(f64, f64)>, x, min_y, max_y, last_y| {
+        if min_y != max_y {
+            push(output, (x, max_y));
+            push(output, (x, min_y));
+            push(output, (x, last_y));
+        }
+    };
+    for (x, y) in ordered {
+        if x.trunc() == column {
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+            average_x = (count * average_x + x) / (count + 1.0);
+            count += 1.0;
+        } else {
+            flush(&mut output, average_x, min_y, max_y, last_y);
+            push(&mut output, (x, y));
+            column = x.trunc();
+            count = 0.0;
+            min_y = y;
+            max_y = y;
+        }
+        last_y = y;
+    }
+    flush(&mut output, average_x, min_y, max_y, last_y);
+    output
+}
+
+pub(super) fn chartjs_fast_path_enabled(series: &crate::ir::Series, decimated: bool) -> bool {
+    !decimated
+        && matches!(series.interpolation, LineInterpolation::Linear)
+        && series.step_mode.is_none()
+        && series
+            .line_style
+            .as_ref()
+            .is_some_and(|style| style.border_dash.is_empty())
+}
 
 /// 欠損を除いた点列を、元カテゴリの不連続箇所で線分へ分割する。
 /// `span_gaps` 時は不連続をまたいで 1 本の線分として扱う。
@@ -424,7 +496,9 @@ pub fn line_points(
     let offsets = stacked.then(|| stack_offsets(spec));
     let mut pts = Vec::new();
     for (sidx, ser) in spec.series.iter().enumerate() {
-        if ser.point_radius.is_some_and(|radius| radius <= 0.0) {
+        // Chart.js keeps PointElements even when pointRadius hides their markers.
+        // Other frontends retain their historical visible-marker geometry.
+        if ser.line_style.is_none() && ser.point_radius.is_some_and(|radius| radius <= 0.0) {
             continue;
         }
         for i in 0..spec.categories.len() {
@@ -507,6 +581,7 @@ pub(crate) fn chartjs_area_fill_primitives(
     source_index: usize,
     source_segments: &[Vec<(f64, f64, usize)>],
     offsets: Option<&[Vec<(f64, f64)>]>,
+    source_decimated: bool,
 ) -> Vec<Prim> {
     let Some(source) = spec.series.get(source_index) else {
         return Vec::new();
@@ -522,7 +597,7 @@ pub(crate) fn chartjs_area_fill_primitives(
     // Dataset target は source の欠損/間引きに依存せず、target 自身の描画点列を使う。
     let dataset_target_segments = match area_fill.target {
         AreaFillTarget::Dataset(target_index) => {
-            Some(rendered_line_segments(spec, frame, target_index, offsets).0)
+            Some(rendered_line_segments(spec, frame, target_index, offsets))
         }
         _ => None,
     };
@@ -556,13 +631,30 @@ pub(crate) fn chartjs_area_fill_primitives(
         target_interpolation: area_fill_interpolation(target_interpolation, mixed),
         source_step: if mixed { None } else { source.step_mode },
         target_step: if mixed { None } else { target_step_mode },
+        source_path: if chartjs_fast_path_enabled(source, source_decimated) {
+            AreaLinePath::FastForward
+        } else {
+            AreaLinePath::Full
+        },
+        target_path: match area_fill.target {
+            AreaFillTarget::Dataset(index)
+                if spec.series.get(index).is_some_and(|target| {
+                    dataset_target_segments
+                        .as_ref()
+                        .is_some_and(|(_, decimated)| chartjs_fast_path_enabled(target, *decimated))
+                }) =>
+            {
+                AreaLinePath::FastReverse
+            }
+            _ => AreaLinePath::Full,
+        },
         above,
         below,
         preserve_singleton,
         plot_top: frame.plot_top,
         plot_bottom: frame.plot_bottom,
     };
-    let dataset_target_shapes = dataset_target_segments.map(|segments| {
+    let dataset_target_shapes = dataset_target_segments.map(|(segments, _)| {
         segments
             .into_iter()
             .filter_map(|segment| {
@@ -576,6 +668,7 @@ pub(crate) fn chartjs_area_fill_primitives(
                     style.target_step,
                     style.plot_top,
                     style.plot_bottom,
+                    style.target_path,
                 )))
             })
             .collect::<Vec<_>>()
@@ -600,6 +693,7 @@ pub(crate) fn chartjs_area_fill_primitives(
                 style.source_step,
                 style.plot_top,
                 style.plot_bottom,
+                style.source_path,
             ));
             if let Some((min_x, max_x)) = source_shape.bounds {
                 for target_index in target_index.overlapping_indices(min_x, max_x) {
@@ -867,6 +961,7 @@ fn emit_area_run(
         style.source_step,
         style.plot_top,
         style.plot_bottom,
+        style.source_path,
     );
     let target_shape = area_line_points(
         target_points,
@@ -874,6 +969,7 @@ fn emit_area_run(
         style.target_step,
         style.plot_top,
         style.plot_bottom,
+        style.target_path,
     );
     if style.above == style.below {
         if let Some(d) = area_path_between(&source_shape, &target_shape) {
@@ -904,12 +1000,23 @@ fn area_line_points(
     step_mode: Option<StepMode>,
     plot_top: f64,
     plot_bottom: f64,
+    path: AreaLinePath,
 ) -> Vec<AreaPoint> {
     if let Some(mode) = step_mode {
         return step_points(points.iter().copied(), mode);
     }
     match interpolation {
-        LineInterpolation::Linear => points.to_vec(),
+        LineInterpolation::Linear => match path {
+            AreaLinePath::Full => points.to_vec(),
+            AreaLinePath::FastForward => chartjs_fast_path(points, false),
+            AreaLinePath::FastReverse => {
+                // Filler walks the target backwards; reversing a forward fast path
+                // would use different column averages and extrema ordering.
+                let mut shape = chartjs_fast_path(points, true);
+                shape.reverse();
+                shape
+            }
+        },
         LineInterpolation::CatmullRom { tension } => {
             catmull_rom_samples(points, tension, plot_top, plot_bottom)
         }
@@ -1498,6 +1605,7 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     si,
                     &segments,
                     offsets.as_deref(),
+                    decimated,
                 ));
             } else {
                 let baseline_y = frame
@@ -1640,6 +1748,13 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
             }
             match ser.interpolation {
                 crate::ir::LineInterpolation::Linear => {
+                    // Chart.js の高速パスはデータ decimation と独立している。
+                    // stepped/dash/曲線は上の専用経路へ進み、他 DSL は従来どおり。
+                    let xy = if chartjs_fast_path_enabled(ser, decimated) {
+                        chartjs_fast_path(&xy, false)
+                    } else {
+                        xy
+                    };
                     items.push(Prim::Polyline {
                         points: xy,
                         stroke: ser.stroke_at(0),
@@ -1804,6 +1919,39 @@ mod tests {
     use crate::frontend::chartjs;
     use crate::layout::common;
     use crate::text::TextMeasurer;
+
+    #[test]
+    fn fast_path_matches_chartjs_451_recorded_coordinates() {
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            cases: Vec<Case>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            points: Vec<(f64, f64)>,
+            path: Vec<(f64, f64)>,
+            #[serde(default)]
+            reverse: bool,
+        }
+        let fixture: Fixture = serde_json::from_str(include_str!(
+            "../../../../tools/chartjs-compat/line-path-fixture.json"
+        ))
+        .unwrap();
+        for case in fixture.cases {
+            let actual = chartjs_fast_path(&case.points, case.reverse);
+            assert_eq!(actual.len(), case.path.len(), "{}", case.name);
+            // serde_json's decimal parser can round a recorded JS average by one ulp.
+            // This tolerance is far below SVG's 0.01px coordinate precision.
+            for (actual, expected) in actual.iter().zip(&case.path) {
+                assert!(
+                    (actual.0 - expected.0).abs() < 1e-12 && (actual.1 - expected.1).abs() < 1e-12,
+                    "{}: {actual:?} != {expected:?}",
+                    case.name
+                );
+            }
+        }
+    }
 
     fn pts_for(json: &str) -> Vec<crate::layout::scatter::PointBox> {
         let spec = chartjs::parse(json, false).unwrap();

@@ -4,6 +4,13 @@
 - 日付: 2026-07-01
 - ステータス: 設計合意済み（実装前）
 
+> 2026-10-01 更新 (fulgur-chart-2nt): Chart.js 4.5.1 への忠実な再現を優先し、
+> Chart.js line/area の自動データ間引きと既定マーカー抑制は廃止した。
+> 現行の parsed labels/value 入力はプラグインの適用条件を満たさず、
+> `enabled:true` でもデータ間引きは no-op。線の fastPathSegment のみを描画段で
+> 再現し、inspect とマーカーは元の有効点を保持する。以下は当時の設計記録であり、
+> Chart.js line の現行仕様ではない。sparkline と他 DSL の内部間引きは維持する。
+
 ## 目的
 
 巨大な line / area チャートを間引き（decimation）して SVG・PNG 両方を高速化し、
