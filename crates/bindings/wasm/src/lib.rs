@@ -122,8 +122,6 @@ fn detect_dsl(json: &str) -> Result<&'static str, String> {
     Err("cannot auto-detect DSL: specify dsl: 'chartjs' or 'vegalite'".to_string())
 }
 
-/// Parse a spec JSON string to IR using the specified DSL.
-
 enum Output {
     Svg(String),
     Png(Vec<u8>),
