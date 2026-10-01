@@ -8,6 +8,10 @@ Two bench targets measure rendering performance for representative chart cases
 criterion times the E2E pipeline (JSON → SVG, JSON → PNG). It never gates CI:
 wall-clock on shared runners is too noisy. CI archives `target/criterion`.
 
+The `frontend` group measures JSON-to-IR parsing separately for normal and
+strict inputs, using the same error classification as language bindings. Run it
+with `cargo bench -p fulgur-chart --bench render -- frontend`.
+
 ```bash
 cargo bench -p fulgur-chart --bench render            # full run
 cargo bench -p fulgur-chart --bench render -- --test  # quick smoke (each case once)

@@ -220,3 +220,9 @@ test('public surface is exactly the documented exports', async () => {
     ].sort(),
   )
 })
+
+test('strict invalid data remains ParseError even with an unknown key', () => {
+  const spec = JSON.stringify({ type: 'bar', data: false, unknownKey: true })
+  assert.throws(() => build(spec).strict().render('svg'),
+    error => error.constructor === FulgurParseError)
+})

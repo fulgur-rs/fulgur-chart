@@ -59,14 +59,6 @@ fn detect_dsl(json: &str) -> Result<&'static str, String> {
     Err("cannot auto-detect DSL: specify dsl: 'chartjs' or 'vegalite'".to_string())
 }
 
-/// Parse a spec JSON string to IR using the specified DSL (chartjs or vegalite).
-fn parse_spec(json: &str, dsl: &str, strict: bool) -> Result<fulgur_chart::ir::ChartSpec, String> {
-    match dsl {
-        "vegalite" => fulgur_chart::frontend::vegalite::parse(json, strict),
-        _ => fulgur_chart::frontend::chartjs::parse(json, strict), // "chartjs"
-    }
-}
-
 // --- RenderOptions ---
 
 #[derive(Default)]
@@ -142,15 +134,12 @@ fn build_ir(
         None => detect_dsl(spec_json).map_err(|e| parse_err(ruby, e))?,
     };
 
-    // 2. Parse NON-strict → IR (render from this).
-    // Contract §3: propagate the core's error String verbatim. The exception class — not a
-    // message prefix — conveys parse/strict/render, so no CLI-style "error: ..." decoration.
-    let mut ir = parse_spec(spec_json, dsl, false).map_err(|e| parse_err(ruby, e))?;
-
-    // 3. If strict, re-parse with strict=true (discard IR; unknown key → StrictError).
-    if opts.strict {
-        parse_spec(spec_json, dsl, true).map_err(|e| strict_err(ruby, e))?;
-    }
+    // Preserve the core's message and ParseError priority without building valid IR twice.
+    let mut ir = fulgur_chart::frontend::parse_with_error_kind(spec_json, dsl, opts.strict)
+        .map_err(|error| match error {
+            fulgur_chart::frontend::ParseError::Parse(message) => parse_err(ruby, message),
+            fulgur_chart::frontend::ParseError::Strict(message) => strict_err(ruby, message),
+        })?;
 
     // 4. Apply width/height overrides BEFORE guard.
     if let Some(w) = opts.width {

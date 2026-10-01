@@ -91,8 +91,8 @@ pub(crate) async fn render_from_query(
         )
             .into_response();
     };
-    let json = apply_overrides(&c, q.w, q.h, q.bkg.as_deref());
-    handle_render(json, q.f, "chartjs".to_string(), headers, state).await
+    let (json, value) = apply_overrides(&c, q.w, q.h, q.bkg.as_deref());
+    handle_render(json, value, q.f, "chartjs".to_string(), headers, state).await
 }
 
 #[utoipa::path(
@@ -113,18 +113,24 @@ pub async fn post_chart(
     headers: HeaderMap,
     Json(req): Json<ChartRequest>,
 ) -> Response {
-    let json = apply_overrides_value(
+    let value = apply_overrides_value(
         req.chart,
         req.width,
         req.height,
         req.background_color.as_deref(),
-    )
-    .to_string();
-    handle_render(json, req.format, req.dsl, headers, state).await
+    );
+    let json = value.to_string(); // Retain canonical JSON and the existing ETag.
+    handle_render(json, Some(value), req.format, req.dsl, headers, state).await
+}
+
+enum RenderInput {
+    Json(String),
+    Decoded(Value),
 }
 
 async fn handle_render(
     json: String,
+    value: Option<Value>,
     format: OutputFormat,
     dsl: String,
     headers: HeaderMap,
@@ -178,12 +184,22 @@ async fn handle_render(
     let compression = state.png_compression;
     let webp = state.webp;
 
+    // Drop canonical JSON once its ETag is computed when decoded data is available.
+    let input = value.map_or_else(|| RenderInput::Json(json), RenderInput::Decoded);
+
     // タイムアウト付きレンダリング
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(state.render_timeout_ms),
         tokio::task::spawn_blocking(move || {
             let _permit = permit; // クロージャ完了まで permit を保持して Semaphore を正しく解放
-            let spec = render::parse_and_validate_for_render(&json, &dsl, false)?;
+            let spec = match input {
+                RenderInput::Decoded(value) => {
+                    render::parse_and_validate_value_for_render(value, &dsl, false)?
+                }
+                RenderInput::Json(json) => {
+                    render::parse_and_validate_for_render(&json, &dsl, false)?
+                }
+            };
             render::render(&spec, format, 1.0, compression, webp)
         }),
     )
@@ -248,11 +264,18 @@ pub(crate) fn apply_overrides_value(
     v
 }
 
-fn apply_overrides(json: &str, w: Option<u32>, h: Option<u32>, bkg: Option<&str>) -> String {
+fn apply_overrides(
+    json: &str,
+    w: Option<u32>,
+    h: Option<u32>,
+    bkg: Option<&str>,
+) -> (String, Option<Value>) {
     let Ok(v) = serde_json::from_str::<Value>(json) else {
-        return json.to_string();
+        // Preserve malformed JSON until the worker runs, including 304/busy precedence.
+        return (json.to_string(), None);
     };
-    apply_overrides_value(v, w, h, bkg).to_string()
+    let value = apply_overrides_value(v, w, h, bkg);
+    (value.to_string(), Some(value))
 }
 
 #[cfg(test)]

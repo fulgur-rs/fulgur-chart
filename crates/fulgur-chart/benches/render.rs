@@ -41,5 +41,31 @@ fn bench_e2e(c: &mut Criterion) {
     png.finish();
 }
 
-criterion_group!(benches, bench_e2e);
+fn bench_frontend(c: &mut Criterion) {
+    let cases = cases::all();
+    let mut group = c.benchmark_group("frontend");
+    group
+        .sample_size(20)
+        .measurement_time(Duration::from_secs(3));
+    for case in &cases {
+        for strict in [false, true] {
+            let name = format!("{}/{}", case.name, if strict { "strict" } else { "normal" });
+            group.bench_function(name, |b| {
+                b.iter(|| {
+                    black_box(
+                        fulgur_chart::frontend::parse_with_error_kind(
+                            black_box(&case.json),
+                            "chartjs",
+                            strict,
+                        )
+                        .unwrap(),
+                    );
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_e2e, bench_frontend);
 criterion_main!(benches);

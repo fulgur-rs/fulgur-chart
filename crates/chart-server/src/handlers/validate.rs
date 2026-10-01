@@ -49,13 +49,13 @@ pub async fn post_validate(
         }
     };
 
-    let json = req.chart.to_string();
-    let dsl = req.dsl.clone();
+    let value = req.chart;
+    let dsl = req.dsl;
     let result = tokio::time::timeout(
         std::time::Duration::from_millis(state.render_timeout_ms),
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            render::parse_and_validate(&json, &dsl, false)
+            render::parse_and_validate_value(value, &dsl, false)
         }),
     )
     .await;
