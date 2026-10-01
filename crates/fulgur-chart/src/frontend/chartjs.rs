@@ -1492,70 +1492,114 @@ fn decode_fill_index(
     (target < dataset_count && target != source_index).then_some(AreaFillTarget::Dataset(target))
 }
 
+/// Parse a chart.js spec from JSON text.
 pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
-    // matrix は専用パスで処理する（data 形式が {x,y,v} で他と異なるため）。
-    // check_unknown_keys より先に捕捉することで、matrix の "v" キーを未知キーと
-    // 誤判定するのを防ぐ。
-    {
-        let chart_type = serde_json::from_str::<serde_json::Value>(json)
-            .ok()
-            .and_then(|v| {
-                v.get("type")
-                    .and_then(|t| t.as_str())
-                    .map(|s| s.to_string())
-            });
-        if chart_type.as_deref() == Some("matrix") {
-            if strict {
-                check_unknown_keys_matrix(json)?;
+    parse_input(ChartJsInput::Json(json), strict)
+}
+
+/// Parse an already decoded chart.js spec, consuming its JSON data without serializing it again.
+pub fn parse_value(value: serde_json::Value, strict: bool) -> Result<ChartSpec, String> {
+    parse_input(ChartJsInput::Value(value), strict)
+}
+
+enum ChartJsInput<'a> {
+    Json(&'a str),
+    Value(serde_json::Value),
+}
+
+impl ChartJsInput<'_> {
+    fn chart_type(&self) -> Option<String> {
+        match self {
+            Self::Value(value) => value
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
+            Self::Json(json) => {
+                // Ignore data/options without materializing their arrays. Like Value, keep
+                // the last type key: special wrappers historically accept duplicate types.
+                struct TypeVisitor;
+                impl<'de> Visitor<'de> for TypeVisitor {
+                    type Value = Option<String>;
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        formatter.write_str("a chart object")
+                    }
+                    fn visit_map<M: de::MapAccess<'de>>(
+                        self,
+                        mut map: M,
+                    ) -> Result<Self::Value, M::Error> {
+                        let mut kind = None;
+                        while let Some(key) = map.next_key::<String>()? {
+                            if key == "type" {
+                                kind = map
+                                    .next_value::<serde_json::Value>()?
+                                    .as_str()
+                                    .map(str::to_owned);
+                            } else {
+                                map.next_value::<super::ValidatedIgnored>()?;
+                            }
+                        }
+                        Ok(kind)
+                    }
+                }
+                let mut deserializer = serde_json::Deserializer::from_str(json);
+                deserializer.deserialize_map(TypeVisitor).ok().flatten()
             }
-            return parse_matrix(json);
-        }
-        if chart_type.as_deref() == Some("treemap") {
-            if strict {
-                check_unknown_keys_treemap(json)?;
-            }
-            return parse_treemap(json);
-        }
-        if matches!(chart_type.as_deref(), Some("wordCloud") | Some("word")) {
-            if strict {
-                check_unknown_keys_wordcloud(json)?;
-            }
-            return parse_wordcloud(json);
-        }
-        if chart_type.as_deref() == Some("sankey") {
-            if strict {
-                check_unknown_keys_sankey(json)?;
-            }
-            return parse_sankey(json);
-        }
-        if matches!(chart_type.as_deref(), Some("gauge") | Some("radialGauge")) {
-            let radial = chart_type.as_deref() == Some("radialGauge");
-            if strict {
-                check_unknown_keys_gauge(json)?;
-            }
-            return parse_gauge(json, radial);
-        }
-        if matches!(
-            chart_type.as_deref(),
-            Some("progress") | Some("progressBar")
-        ) {
-            if strict {
-                check_unknown_keys_progress(json)?;
-            }
-            // progress は専用チェック済み、汎用 check_unknown_keys はスキップ
-        } else if strict {
-            let allow_outlabels = matches!(
-                chart_type.as_deref(),
-                Some("outlabeledPie") | Some("outlabeledDoughnut")
-            );
-            let allow_radial_scale =
-                matches!(chart_type.as_deref(), Some("radar") | Some("polarArea"));
-            let allow_pie = matches!(chart_type.as_deref(), Some("pie") | Some("doughnut"));
-            check_unknown_keys(json, allow_outlabels, allow_radial_scale, allow_pie)?;
         }
     }
 
-    let raw: RawSpec = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    fn deserialize<T: de::DeserializeOwned>(self) -> Result<T, String> {
+        match self {
+            Self::Json(json) => serde_json::from_str(json),
+            Self::Value(value) => serde_json::from_value(value),
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    fn check_unknown_keys(&self, kind: Option<&str>) -> Result<(), String> {
+        let decoded;
+        let value = match self {
+            Self::Value(value) => value,
+            Self::Json(json) => {
+                decoded = match serde_json::from_str(json) {
+                    Ok(value) => value,
+                    Err(_) => return Ok(()), // Let the typed parser report invalid JSON.
+                };
+                &decoded
+            }
+        };
+        match kind {
+            Some("matrix") => check_unknown_keys_matrix(value),
+            Some("treemap") => check_unknown_keys_treemap(value),
+            Some("wordCloud" | "word") => check_unknown_keys_wordcloud(value),
+            Some("sankey") => check_unknown_keys_sankey(value),
+            Some("gauge" | "radialGauge") => check_unknown_keys_gauge(value),
+            Some("progress" | "progressBar") => check_unknown_keys_progress(value),
+            _ => check_unknown_keys(
+                value,
+                matches!(kind, Some("outlabeledPie" | "outlabeledDoughnut")),
+                matches!(kind, Some("radar" | "polarArea")),
+                matches!(kind, Some("pie" | "doughnut")),
+            ),
+        }
+    }
+}
+
+fn parse_input(input: ChartJsInput<'_>, strict: bool) -> Result<ChartSpec, String> {
+    let chart_type = input.chart_type();
+    if strict {
+        input.check_unknown_keys(chart_type.as_deref())?;
+    }
+    match chart_type.as_deref() {
+        Some("matrix") => return parse_matrix(input),
+        Some("treemap") => return parse_treemap(input),
+        Some("wordCloud" | "word") => return parse_wordcloud(input),
+        Some("sankey") => return parse_sankey(input),
+        Some("gauge" | "radialGauge") => {
+            return parse_gauge(input, chart_type.as_deref() == Some("radialGauge"));
+        }
+        _ => {}
+    }
+    let raw: RawSpec = input.deserialize()?;
 
     // 積み上げ判定: chart.js は配置(dodge/同スロット)と値累積を独立した軸で制御する。
     // index 軸の stacked → placement_stacked(棒の配置)
@@ -2709,15 +2753,11 @@ fn legend_title_padding(value: &serde_json::Value) -> LegendTitlePadding {
 // （strict が弾くのは未知キーであり、認識済み・未完成キーではない）:
 //   datalabels=Task16(最小データラベル) / scales=Task9 / pointRadius=Task13。
 fn check_unknown_keys(
-    json: &str,
+    value: &serde_json::Value,
     allow_outlabels: bool,
     allow_radial_scale: bool,
     allow_pie: bool,
 ) -> Result<(), String> {
-    let value: serde_json::Value = match serde_json::from_str(json) {
-        Ok(v) => v,
-        Err(_) => return Ok(()), // 不正 JSON は後段パースに委ねる
-    };
     let Some(top) = value.as_object() else {
         return Ok(()); // object でなければ後段パースに委ねる
     };
@@ -3060,11 +3100,7 @@ fn check_unknown_keys(
     Ok(())
 }
 
-fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
-    let value: serde_json::Value = match serde_json::from_str(json) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
+fn check_unknown_keys_matrix(value: &serde_json::Value) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
@@ -3138,11 +3174,7 @@ fn check_unknown_keys_matrix(json: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
-    let value: serde_json::Value = match serde_json::from_str(json) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
+fn check_unknown_keys_sankey(value: &serde_json::Value) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
@@ -3268,11 +3300,7 @@ fn check_unknown_keys_sankey(json: &str) -> Result<(), String> {
 /// 厳密。ランタイムの strict 検証は真に未知のキー（タイポ）だけを安全側で弾く目的で
 /// あり、スキーマ妥当な入力は必ずパースできる（緩いのは安全な方向のみ）。
 /// このため gauge / radialGauge を区別する必要はなく、引数を取らない。
-fn check_unknown_keys_gauge(json: &str) -> Result<(), String> {
-    let value: serde_json::Value = match serde_json::from_str(json) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
+fn check_unknown_keys_gauge(value: &serde_json::Value) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
@@ -3368,11 +3396,7 @@ fn check_unknown_keys_gauge(json: &str) -> Result<(), String> {
 /// progress / progressBar の許可キーに対して検証する。
 /// stroke を描かないため borderColor/borderWidth は受け付けない。
 /// legend は描画しないため受け付けない（datalabels は % 表示制御に使用するため許可）。
-fn check_unknown_keys_progress(json: &str) -> Result<(), String> {
-    let value: serde_json::Value = match serde_json::from_str(json) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
+fn check_unknown_keys_progress(value: &serde_json::Value) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
@@ -3423,7 +3447,7 @@ fn check_unknown_keys_progress(json: &str) -> Result<(), String> {
 
 /// treemap 専用パース。`tree`(数値配列 or オブジェクト配列) + `key` + `groups` を
 /// 挿入順でグルーピング・合算して TreeNode forest を構築する。
-fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
+fn parse_treemap(input: ChartJsInput<'_>) -> Result<ChartSpec, String> {
     use crate::ir::TreeNode;
 
     #[derive(Deserialize)]
@@ -3459,7 +3483,7 @@ fn parse_treemap(json: &str) -> Result<ChartSpec, String> {
         Objs(Vec<serde_json::Map<String, serde_json::Value>>),
     }
 
-    let raw: TreemapWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let raw: TreemapWrapper = input.deserialize()?;
     if raw.data.datasets.len() != 1 {
         return Err("treemap チャートには dataset が 1 つ必要です".to_string());
     }
@@ -3671,11 +3695,7 @@ fn count_nodes(nodes: &[crate::ir::TreeNode]) -> usize {
 }
 
 /// treemap の許可キーを検証する (strict モード)。
-fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
-    let value: serde_json::Value = match serde_json::from_str(json) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
+fn check_unknown_keys_treemap(value: &serde_json::Value) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
@@ -3721,11 +3741,7 @@ fn check_unknown_keys_treemap(json: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn check_unknown_keys_wordcloud(json: &str) -> Result<(), String> {
-    let value: serde_json::Value = match serde_json::from_str(json) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
+fn check_unknown_keys_wordcloud(value: &serde_json::Value) -> Result<(), String> {
     let Some(top) = value.as_object() else {
         return Ok(());
     };
@@ -3778,7 +3794,7 @@ fn check_unknown_keys_wordcloud(json: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
+fn parse_matrix(input: ChartJsInput<'_>) -> Result<ChartSpec, String> {
     #[derive(Deserialize)]
     struct MatrixWrapper {
         data: MatrixRawData,
@@ -3816,7 +3832,7 @@ fn parse_matrix(json: &str) -> Result<ChartSpec, String> {
         v: f64,
     }
 
-    let raw: MatrixWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let raw: MatrixWrapper = input.deserialize()?;
 
     if raw.data.datasets.len() > 1 {
         return Err("matrix チャートは dataset が 1 つのみサポートされます".to_string());
@@ -4009,7 +4025,7 @@ fn resolve_sankey_parsing(
     }
 }
 
-fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
+fn parse_sankey(input: ChartJsInput<'_>) -> Result<ChartSpec, String> {
     use crate::ir::{ChartKind, SankeyColorMode, SankeyLink, SankeyModeX, SankeySize};
     use std::collections::HashMap;
 
@@ -4069,7 +4085,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
         parsing: Option<SchemaSankeyParsingSpec>,
     }
 
-    let raw: W = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let raw: W = input.deserialize()?;
     if raw.data.datasets.len() != 1 {
         return Err("sankey requires exactly one dataset".to_string());
     }
@@ -4346,7 +4362,7 @@ fn parse_sankey(json: &str) -> Result<ChartSpec, String> {
     })
 }
 
-fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
+fn parse_gauge(input: ChartJsInput<'_>, radial: bool) -> Result<ChartSpec, String> {
     use crate::ir::ChartKind;
 
     #[derive(Deserialize)]
@@ -4375,7 +4391,7 @@ fn parse_gauge(json: &str, radial: bool) -> Result<ChartSpec, String> {
         background_color: Option<ScalarOrArray<String>>,
     }
 
-    let raw: GaugeWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let raw: GaugeWrapper = input.deserialize()?;
     // gauge/radialGauge は 1 dataset = 1 ゲージ。余剰 dataset を無言で捨てない(matrix と同様)。
     if raw.data.datasets.len() != 1 {
         return Err("gauge/radialGauge チャートには dataset が 1 つ必要です".to_string());
@@ -4602,7 +4618,7 @@ fn zero_axis() -> AxisSpec {
 }
 
 /// wordCloud 専用パース。labels + datasets[0].data を WordEntry に変換する。
-fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
+fn parse_wordcloud(input: ChartJsInput<'_>) -> Result<ChartSpec, String> {
     #[derive(serde::Deserialize)]
     struct WcWrapper {
         data: WcData,
@@ -4651,7 +4667,7 @@ fn parse_wordcloud(json: &str) -> Result<ChartSpec, String> {
         padding: Option<f64>,
     }
 
-    let raw: WcWrapper = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let raw: WcWrapper = input.deserialize()?;
     if raw.data.datasets.len() != 1 {
         return Err(format!(
             "wordCloud チャートは dataset が 1 つのみサポートされます ({}件指定)",

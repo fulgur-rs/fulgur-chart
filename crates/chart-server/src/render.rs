@@ -164,8 +164,25 @@ pub fn parse_and_validate(json: &str, dsl: &str, strict: bool) -> Result<ChartSp
     }
     .map_err(RenderError::Parse)?;
 
-    guard::validate_spec(&spec, &InputLimits::default()).map_err(RenderError::Validate)?;
+    validate_parsed_spec(spec)
+}
 
+/// Parse and validate JSON already decoded by an HTTP extractor.
+pub fn parse_and_validate_value(
+    value: serde_json::Value,
+    dsl: &str,
+    strict: bool,
+) -> Result<ChartSpec, RenderError> {
+    let spec = match dsl {
+        "vegalite" => frontend::vegalite::parse_value(value, strict),
+        _ => frontend::chartjs::parse_value(value, strict),
+    }
+    .map_err(RenderError::Parse)?;
+    validate_parsed_spec(spec)
+}
+
+fn validate_parsed_spec(spec: ChartSpec) -> Result<ChartSpec, RenderError> {
+    guard::validate_spec(&spec, &InputLimits::default()).map_err(RenderError::Validate)?;
     Ok(spec)
 }
 
@@ -179,6 +196,19 @@ pub fn parse_and_validate_for_render(
     strict: bool,
 ) -> Result<ChartSpec, RenderError> {
     let mut spec = parse_and_validate(json, dsl, strict)?;
+    if dsl != "vegalite" {
+        apply_chartjs_render_budget(&mut spec);
+    }
+    Ok(spec)
+}
+
+/// Apply the same render-time budgets to an already decoded request.
+pub fn parse_and_validate_value_for_render(
+    value: serde_json::Value,
+    dsl: &str,
+    strict: bool,
+) -> Result<ChartSpec, RenderError> {
+    let mut spec = parse_and_validate_value(value, dsl, strict)?;
     if dsl != "vegalite" {
         apply_chartjs_render_budget(&mut spec);
     }
@@ -275,6 +305,41 @@ fn webp_output_area(spec: &ChartSpec, scale: f32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoded_specs_apply_render_budgets_and_input_limits() {
+        let value = serde_json::json!({"type":"bar", "width":640,
+            "data":{"datasets":[{"data":[1,2]}]},
+            "options":{"scales":{"x":{"ticks":{"count":1000}}}}});
+        let spec = parse_and_validate_value_for_render(value, "chartjs", false).unwrap();
+        assert_eq!(spec.width, 640.0);
+        assert_eq!(spec.x_axis.ticks.count, Some(MAX_RENDER_AXIS_TICKS));
+        assert!(matches!(
+            parse_and_validate_value(
+                serde_json::json!({"type":"bar","data":false}),
+                "chartjs",
+                false
+            ),
+            Err(RenderError::Parse(_))
+        ));
+        assert!(matches!(
+            parse_and_validate_value(
+                serde_json::json!({"type":"bar","width":0,"data":{"datasets":[{"data":[1]}]}}),
+                "chartjs",
+                false
+            ),
+            Err(RenderError::Validate(_))
+        ));
+    }
+
+    #[test]
+    fn decoded_vegalite_specs_use_the_requested_frontend() {
+        let value = serde_json::json!({"mark":"bar", "data":{"values":[{"x":"a","y":2}]},
+            "encoding":{"x":{"field":"x","type":"nominal"},"y":{"field":"y","type":"quantitative"}}});
+        let spec = parse_and_validate_value_for_render(value, "vegalite", false).unwrap();
+        assert_eq!(spec.series[0].values, [2.0]);
+        assert_eq!(spec.x_axis.ticks.max_ticks_limit, None);
+    }
 
     fn bar_spec() -> ChartSpec {
         parse_and_validate(

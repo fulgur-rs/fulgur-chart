@@ -3,6 +3,13 @@
 require_relative "test_helper"
 
 class TestBuilder < Minitest::Test
+  def test_strict_invalid_data_keeps_parse_error_priority
+    error = assert_raises(FulgurChart::ParseError) do
+      FulgurChart.build('{"type":"bar","data":false,"unknownKey":true}').strict.render(:svg)
+    end
+    assert_instance_of FulgurChart::ParseError, error
+  end
+
   # --- rendering ---
 
   def test_render_svg_returns_svg_string

@@ -148,3 +148,132 @@ async fn resolve_returns_no_store_cache_control_when_backend_unavailable() {
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(resp.headers().get("cache-control").unwrap(), "no-store");
 }
+
+#[tokio::test]
+async fn decoded_get_and_post_preserve_svg_etag_and_conditional_requests() {
+    let cfg = default_config();
+    let router = build_router(&cfg, Arc::new(NoopBackend));
+    let chart = r#"{"type":"bar","data":{"labels":["A"],"datasets":[{"data":[2]}]}}"#;
+    let uri = format!("/chart?c={}&f=svg&w=640&h=360", urlencoding::encode(chart));
+    let get = router
+        .clone()
+        .oneshot(Request::builder().uri(&uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(get.status(), StatusCode::OK);
+    let etag = get.headers()["etag"].clone();
+    let svg = to_bytes(get.into_body(), usize::MAX).await.unwrap();
+    assert!(std::str::from_utf8(&svg).unwrap().contains("640"));
+    let body = serde_json::json!({"chart":serde_json::from_str::<serde_json::Value>(chart).unwrap(),"format":"svg","width":640,"height":360}).to_string();
+    let post = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/chart")
+                .header("content-type", "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(post.status(), StatusCode::OK);
+    assert_eq!(post.headers()["etag"], etag);
+    assert_eq!(to_bytes(post.into_body(), usize::MAX).await.unwrap(), svg);
+    let cached = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/chart")
+                .header("content-type", "application/json")
+                .header("if-none-match", etag)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+    assert!(
+        to_bytes(cached.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn malformed_get_preserves_304_before_parse_errors() {
+    let cfg = default_config();
+    let router = build_router(&cfg, Arc::new(NoopBackend));
+    let uri = "/chart?c=%7B&f=svg";
+    let cached = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("if-none-match", "*")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cached.status(), StatusCode::NOT_MODIFIED);
+    let router = build_router(&default_config(), Arc::new(NoopBackend));
+    let invalid = router
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert!(status_and_body(invalid).await.1.contains("PARSE_ERROR"));
+}
+
+#[tokio::test]
+async fn decoded_validate_handles_both_frontends_and_parse_errors() {
+    let router = build_router(&default_config(), Arc::new(NoopBackend));
+    for (dsl, chart, valid) in [
+        (
+            "chartjs",
+            serde_json::json!({"type":"bar","data":{"datasets":[{"data":[1]}]}}),
+            true,
+        ),
+        (
+            "vegalite",
+            serde_json::json!({"mark":"bar","data":{"values":[{"x":"A","y":2}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"}}}),
+            true,
+        ),
+        (
+            "chartjs",
+            serde_json::json!({"type":"bar","data":false}),
+            false,
+        ),
+    ] {
+        let body = serde_json::json!({"chart":chart,"dsl":dsl}).to_string();
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/chart/validate")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, body) = status_and_body(response).await;
+        assert_eq!(
+            status,
+            if valid {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_REQUEST
+            }
+        );
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["valid"], valid);
+        if !valid {
+            assert_eq!(body["code"], "PARSE_ERROR");
+        }
+    }
+}

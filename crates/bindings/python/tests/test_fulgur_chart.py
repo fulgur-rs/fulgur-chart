@@ -152,3 +152,12 @@ def test_render_image_unknown_format_raises_parse_error():
 
 def test_render_error_is_subclass_of_runtime_error():
     assert issubclass(fulgur_chart.FulgurRenderError, RuntimeError)
+
+
+def test_strict_invalid_data_keeps_parse_error_priority():
+    spec = '{"type":"bar","data":false,"unknownKey":true}'
+    try:
+        fulgur_chart.render_svg(spec, strict=True)
+        assert False, "expected ParseError"
+    except fulgur_chart.FulgurParseError as error:
+        assert type(error) is fulgur_chart.FulgurParseError

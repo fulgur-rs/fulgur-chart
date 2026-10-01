@@ -275,7 +275,7 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         }
     };
 
-    let json_str = super::chart::apply_overrides_value(chart_spec, width, height, None).to_string();
+    let value = super::chart::apply_overrides_value(chart_spec, width, height, None);
 
     let permit = state
         .semaphore
@@ -288,7 +288,7 @@ async fn handle_tools_call(params: Option<Value>, state: AppState) -> Result<Val
         std::time::Duration::from_millis(state.render_timeout_ms),
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            let spec = render::parse_and_validate_for_render(&json_str, "chartjs", false)?;
+            let spec = render::parse_and_validate_value_for_render(value, "chartjs", false)?;
             // 圧縮・WebP ポリシーはサーバ起動時設定を用いる（MCP も per-request 指定なし）。
             render::render(&spec, format, 1.0, compression, webp)
         }),

@@ -61,7 +61,21 @@ pub fn parse_with_limits(
     strict: bool,
     limits: &crate::guard::InputLimits,
 ) -> Result<ChartSpec, String> {
-    let mut value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    parse_value_with_limits(value, strict, limits)
+}
+
+/// Parse an already decoded Vega-Lite spec without serializing and parsing it again.
+pub fn parse_value(value: Value, strict: bool) -> Result<ChartSpec, String> {
+    parse_value_with_limits(value, strict, &crate::guard::InputLimits::default())
+}
+
+/// Parse a decoded Vega-Lite spec with caller-supplied allocation limits.
+pub fn parse_value_with_limits(
+    mut value: Value,
+    strict: bool,
+    limits: &crate::guard::InputLimits,
+) -> Result<ChartSpec, String> {
     if value.as_object().is_some_and(|object| {
         ["layer", "hconcat", "vconcat", "concat", "facet", "repeat"]
             .iter()

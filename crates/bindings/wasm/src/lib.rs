@@ -123,12 +123,6 @@ fn detect_dsl(json: &str) -> Result<&'static str, String> {
 }
 
 /// Parse a spec JSON string to IR using the specified DSL.
-fn parse_spec(json: &str, dsl: &str, strict: bool) -> Result<fulgur_chart::ir::ChartSpec, String> {
-    match dsl {
-        "vegalite" => fulgur_chart::frontend::vegalite::parse(json, strict),
-        _ => fulgur_chart::frontend::chartjs::parse(json, strict), // "chartjs"
-    }
-}
 
 enum Output {
     Svg(String),
@@ -165,13 +159,13 @@ fn render_inner(
             .to_string(),
     };
 
-    // 2. Parse NON-strict -> IR (render from this).
-    let mut ir = parse_spec(spec_json, &dsl, false).map_err(|e| (PARSE_ERROR, e))?;
-
-    // 3. If strict, re-parse with strict=true (unknown key -> StrictError).
-    if strict {
-        parse_spec(spec_json, &dsl, true).map_err(|e| (STRICT_ERROR, e))?;
-    }
+    // Parse successful strict input once; retain ParseError priority on invalid data.
+    let mut ir = fulgur_chart::frontend::parse_with_error_kind(spec_json, &dsl, strict).map_err(
+        |error| match error {
+            fulgur_chart::frontend::ParseError::Parse(message) => (PARSE_ERROR, message),
+            fulgur_chart::frontend::ParseError::Strict(message) => (STRICT_ERROR, message),
+        },
+    )?;
 
     // 4. Apply width/height overrides BEFORE guard.
     if let Some(w) = width {
