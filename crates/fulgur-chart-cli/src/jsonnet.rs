@@ -624,7 +624,13 @@ fn worker_command(executable: &Path) -> io::Result<Command> {
     {
         let current_executable = std::env::current_exe()?;
         let runner = linux_target_runner();
-        command_for_worker(&current_executable, executable, runner.as_deref())
+        let qemu_environment = std::env::var_os("QEMU_LD_PREFIX").is_some();
+        command_for_worker(
+            &current_executable,
+            executable,
+            runner.as_deref(),
+            qemu_environment,
+        )
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -637,12 +643,20 @@ fn command_for_worker(
     current_executable: &Path,
     executable: &Path,
     runner: Option<&std::ffi::OsStr>,
+    qemu_environment: bool,
 ) -> io::Result<Command> {
-    if current_executable == executable {
+    if current_executable == executable && !qemu_environment {
         return Ok(Command::new(executable));
     }
     if runner.is_some() {
         return command_with_runner(executable, runner);
+    }
+
+    if current_executable == executable {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "QEMU is active but no target runner is configured",
+        ));
     }
 
     // Without a Cargo runner, current_exe is the QEMU user-mode emulator.
@@ -1123,6 +1137,7 @@ mod worker_executable_tests {
             current_executable,
             executable,
             Some(OsStr::new("/qemu-runner aarch64")),
+            true,
         )
         .unwrap();
 
@@ -1143,6 +1158,7 @@ mod worker_executable_tests {
             executable,
             executable,
             Some(OsStr::new("/unavailable-runner")),
+            false,
         )
         .unwrap();
 
@@ -1154,12 +1170,33 @@ mod worker_executable_tests {
     fn uses_the_current_qemu_emulator_when_no_runner_variable_is_available() {
         let emulator = Path::new("/usr/bin/qemu-aarch64");
         let executable = Path::new("/target/aarch64-unknown-linux-musl/debug/fulgur-chart");
-        let command = command_for_worker(emulator, executable, None).unwrap();
+        let command = command_for_worker(emulator, executable, None, true).unwrap();
 
         assert_eq!(command.get_program(), emulator.as_os_str());
         assert_eq!(
             command.get_args().collect::<Vec<_>>(),
             [executable.as_os_str()]
+        );
+    }
+
+    #[test]
+    fn uses_configured_runner_when_qemu_reports_the_guest_as_current_exe() {
+        let executable = Path::new("/target/aarch64-unknown-linux-musl/debug/fulgur-chart");
+        let command = command_for_worker(
+            executable,
+            executable,
+            Some(OsStr::new("/qemu-runner aarch64")),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(command.get_program(), OsStr::new("/qemu-runner"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                OsStr::new("aarch64"),
+                OsStr::new("/target/aarch64-unknown-linux-musl/debug/fulgur-chart"),
+            ]
         );
     }
 }
