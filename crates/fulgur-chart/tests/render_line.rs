@@ -402,6 +402,112 @@ fn fill_to_dataset_does_not_bridge_a_target_gap() {
 }
 
 #[test]
+fn fill_to_dataset_rejects_excessive_overlapping_gap_segments() {
+    let mut labels = Vec::new();
+    let mut source = Vec::new();
+    let mut target = Vec::new();
+    for _ in 0..10 {
+        labels.extend(["1970-01-01", "1970-01-02", "1970-01-01"]);
+        source.extend([
+            serde_json::json!(1),
+            serde_json::json!(2),
+            serde_json::Value::Null,
+        ]);
+        target.extend([
+            serde_json::json!(2),
+            serde_json::json!(1),
+            serde_json::Value::Null,
+        ]);
+    }
+    let json = serde_json::json!({
+        "type": "line",
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {"data": source, "fill": 1},
+                {"data": target, "fill": false}
+            ]
+        },
+        "options": {"scales": {"x": {"type": "time"}}}
+    });
+    let spec = chartjs::parse(&json.to_string(), false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let limits = fulgur_chart::guard::InputLimits {
+        max_categorical_primitives: 100,
+        ..Default::default()
+    };
+
+    let error = fulgur_chart::layout::build_scene_checked_with_limits(&spec, &measurer, &limits)
+        .expect_err("overlapping fill work should stay within the configured primitive budget");
+    assert!(error.contains("area fill"), "{error}");
+    assert!(error.contains("max_categorical_primitives"), "{error}");
+}
+
+#[test]
+fn fill_to_dataset_accepts_work_at_configured_limit() {
+    let json = r##"{"type":"line","data":{"labels":["1970-01-01","1970-01-02"],"datasets":[
+      {"data":[1,3],"fill":1},
+      {"data":[2,2],"fill":false}
+    ]},"options":{"scales":{"x":{"type":"time"}}}}"##;
+    let spec = chartjs::parse(json, false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let limits = fulgur_chart::guard::InputLimits {
+        max_categorical_primitives: 4,
+        ..Default::default()
+    };
+
+    let scene = fulgur_chart::layout::build_scene_checked_with_limits(&spec, &measurer, &limits)
+        .expect("one pair of two-point shapes costs exactly four work units");
+    assert_eq!(area_paths(&scene).len(), 1);
+}
+
+#[test]
+fn fill_to_dataset_allows_many_non_overlapping_gap_segments() {
+    let mut labels = Vec::new();
+    let mut source = Vec::new();
+    let mut target = Vec::new();
+    for segment in 0..10 {
+        let first_day = segment * 3 + 1;
+        labels.extend([
+            format!("1970-01-{first_day:02}"),
+            format!("1970-01-{:02}", first_day + 1),
+            format!("1970-01-{:02}", first_day + 2),
+        ]);
+        source.extend([
+            serde_json::json!(1),
+            serde_json::json!(2),
+            serde_json::Value::Null,
+        ]);
+        target.extend([
+            serde_json::json!(2),
+            serde_json::json!(1),
+            serde_json::Value::Null,
+        ]);
+    }
+    let json = serde_json::json!({
+        "type": "line",
+        "data": {
+            "labels": labels,
+            "datasets": [
+                {"data": source, "fill": 1},
+                {"data": target, "fill": false}
+            ]
+        },
+        "options": {"scales": {"x": {"type": "time"}}}
+    });
+    let spec = chartjs::parse(&json.to_string(), false).unwrap();
+    let measurer = TextMeasurer::new(DEFAULT_FONT).unwrap();
+    let limits = fulgur_chart::guard::InputLimits {
+        max_categorical_primitives: 100,
+        ..Default::default()
+    };
+
+    let scene = fulgur_chart::layout::build_scene_checked_with_limits(&spec, &measurer, &limits)
+        .expect("only overlapping segment pairs should consume fill work");
+    assert_eq!(area_paths(&scene).len(), 10);
+}
+
+#[test]
 fn chartjs_stacked_fill_to_dataset_preserves_target_gaps() {
     let json = r##"{"type":"line","data":{"labels":["A","B","C","D"],"datasets":[
       {"data":[1,null,3,4],"borderColor":"#0000ff","fill":false},

@@ -84,39 +84,60 @@ impl AreaXIntervalIndex {
     }
 
     fn overlapping_indices(&self, min_x: f64, max_x: f64) -> Vec<usize> {
+        self.overlapping_indices_limited(min_x, max_x, usize::MAX)
+            .expect("unbounded overlap result limit")
+    }
+
+    fn overlapping_indices_limited(
+        &self,
+        min_x: f64,
+        max_x: f64,
+        max_results: usize,
+    ) -> Result<Vec<usize>, ()> {
         if min_x >= max_x || self.ranges.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let mut indices = Vec::new();
-        self.collect_overlapping(1, 0, self.leaf_count, min_x, max_x, &mut indices);
+        self.collect_overlapping_limited(
+            1,
+            0,
+            self.leaf_count,
+            (min_x, max_x),
+            max_results,
+            &mut indices,
+        )?;
         indices.sort_unstable();
-        indices
+        Ok(indices)
     }
 
-    fn collect_overlapping(
+    fn collect_overlapping_limited(
         &self,
         node: usize,
         start: usize,
         end: usize,
-        min_x: f64,
-        max_x: f64,
+        query: (f64, f64),
+        max_results: usize,
         indices: &mut Vec<usize>,
-    ) {
+    ) -> Result<(), ()> {
+        let (min_x, max_x) = query;
         if start >= self.ranges.len()
             || self.ranges[start].min_x >= max_x
             || self.max_x_tree[node] <= min_x
         {
-            return;
+            return Ok(());
         }
         if end - start == 1 {
+            if indices.len() >= max_results {
+                return Err(());
+            }
             indices.push(self.ranges[start].index);
-            return;
+            return Ok(());
         }
 
         let middle = start + (end - start) / 2;
-        self.collect_overlapping(node * 2, start, middle, min_x, max_x, indices);
-        self.collect_overlapping(node * 2 + 1, middle, end, min_x, max_x, indices);
+        self.collect_overlapping_limited(node * 2, start, middle, query, max_results, indices)?;
+        self.collect_overlapping_limited(node * 2 + 1, middle, end, query, max_results, indices)
     }
 }
 
@@ -582,17 +603,18 @@ pub(crate) fn chartjs_area_fill_primitives(
     source_segments: &[Vec<(f64, f64, usize)>],
     offsets: Option<&[Vec<(f64, f64)>]>,
     source_decimated: bool,
-) -> Vec<Prim> {
+    work_limit: usize,
+) -> Result<Vec<Prim>, String> {
     let Some(source) = spec.series.get(source_index) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let Some(area_fill) = source.area_fill.as_ref() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     if matches!(area_fill.target, AreaFillTarget::Dataset(_))
         && !source_segments_have_area_edge(source_segments)
     {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     // Dataset target は source の欠損/間引きに依存せず、target 自身の描画点列を使う。
     let dataset_target_segments = match area_fill.target {
@@ -681,6 +703,7 @@ pub(crate) fn chartjs_area_fill_primitives(
         AreaXIntervalIndex::new(&bounds)
     });
     let mut output = Vec::new();
+    let mut fill_work = 0usize;
 
     for segment in source_segments {
         if let (Some(target_shapes), Some(target_index)) =
@@ -696,8 +719,29 @@ pub(crate) fn chartjs_area_fill_primitives(
                 style.source_path,
             ));
             if let Some((min_x, max_x)) = source_shape.bounds {
-                for target_index in target_index.overlapping_indices(min_x, max_x) {
+                let minimum_pair_work = source_shape.points.len().saturating_add(2);
+                let remaining_work = work_limit.saturating_sub(fill_work);
+                let max_overlaps = remaining_work / minimum_pair_work;
+                let overlapping_targets = target_index
+                    .overlapping_indices_limited(min_x, max_x, max_overlaps)
+                    .map_err(|()| {
+                        format!(
+                            "Chart.js area fill work exceeds max_categorical_primitives limit {work_limit}"
+                        )
+                    })?;
+                for target_index in overlapping_targets {
                     if let Some(target_shape) = target_shapes.get(target_index) {
+                        fill_work = fill_work.saturating_add(
+                            source_shape
+                                .points
+                                .len()
+                                .saturating_add(target_shape.points.len()),
+                        );
+                        if fill_work > work_limit {
+                            return Err(format!(
+                                "Chart.js area fill work {fill_work} exceeds max_categorical_primitives limit {work_limit}"
+                            ));
+                        }
                         emit_dataset_area_shapes(&mut output, &source_shape, target_shape, style);
                     }
                 }
@@ -727,7 +771,7 @@ pub(crate) fn chartjs_area_fill_primitives(
         emit_area_run(&mut output, &source_run, &target_run, style);
     }
 
-    output
+    Ok(output)
 }
 
 fn area_fill_interpolation(interpolation: LineInterpolation, mixed: bool) -> LineInterpolation {
@@ -1518,6 +1562,15 @@ fn trail_outline_path(segment: &[(f64, f64, usize)], widths: &[f64]) -> Option<S
 }
 
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
+    build_checked_with_limits(spec, m, &crate::guard::InputLimits::default())
+        .expect("line chart layout failed")
+}
+
+pub(crate) fn build_checked_with_limits(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    limits: &crate::guard::InputLimits,
+) -> Result<Scene, String> {
     let frame = common::compute(spec, m);
     let is_log = spec.y_axis.scale_kind == crate::ir::ScaleKind::Logarithmic;
     let stacked = matches!(spec.kind, ChartKind::Line { stacked: true, .. });
@@ -1606,7 +1659,8 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     &segments,
                     offsets.as_deref(),
                     decimated,
-                ));
+                    limits.max_categorical_primitives,
+                )?);
             } else {
                 let baseline_y = frame
                     .ys
@@ -1871,11 +1925,11 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
         }
     }
 
-    Scene {
+    Ok(Scene {
         width: frame.scene_width,
         height: frame.scene_height,
         items,
-    }
+    })
 }
 
 /// Catmull-Rom スプラインを 3 次ベジエの SVG path data へ変換する。
