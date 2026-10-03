@@ -619,6 +619,49 @@ fn worker_executable() -> io::Result<PathBuf> {
     Ok(executable)
 }
 
+fn worker_command(executable: &Path) -> io::Result<Command> {
+    #[cfg(target_os = "linux")]
+    {
+        let runner = linux_target_runner();
+        command_with_runner(executable, runner.as_deref())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(Command::new(executable))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_target_runner() -> Option<std::ffi::OsString> {
+    let target_env = if cfg!(target_env = "gnu") {
+        "GNU"
+    } else if cfg!(target_env = "musl") {
+        "MUSL"
+    } else {
+        return None;
+    };
+    let variable = format!(
+        "CARGO_TARGET_{}_UNKNOWN_LINUX_{target_env}_RUNNER",
+        std::env::consts::ARCH.to_ascii_uppercase()
+    );
+    std::env::var_os(variable)
+}
+
+#[cfg(target_os = "linux")]
+fn command_with_runner(executable: &Path, runner: Option<&std::ffi::OsStr>) -> io::Result<Command> {
+    let Some(runner) = runner else {
+        return Ok(Command::new(executable));
+    };
+    let runner = runner.to_string_lossy();
+    let mut parts = runner.split_whitespace();
+    let program = parts
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "target runner is empty"))?;
+    let mut command = Command::new(program);
+    command.args(parts).arg(executable);
+    Ok(command)
+}
+
 #[cfg(target_os = "linux")]
 fn select_linux_worker_executable(
     current_exe: &Path,
@@ -711,7 +754,8 @@ fn linux_target_elf_machine() -> Option<u16> {
 
 fn run_worker_process(input: WorkerInput<'_>) -> Result<String, String> {
     let executable = worker_executable().map_err(|e| format!("failed to locate CLI: {e}"))?;
-    let mut command = Command::new(executable);
+    let mut command = worker_command(&executable)
+        .map_err(|e| format!("failed to configure worker command: {e}"))?;
     command
         .arg("__jsonnet-worker")
         .stdin(Stdio::piped())
@@ -970,12 +1014,13 @@ mod resolver_tests {
 #[cfg(all(test, target_os = "linux"))]
 mod worker_executable_tests {
     use std::{
+        ffi::OsStr,
         fs,
         path::{Path, PathBuf},
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::select_linux_worker_executable;
+    use super::{command_with_runner, select_linux_worker_executable};
 
     fn write_elf(path: &Path, machine: u16) {
         let mut header = [0u8; 20];
@@ -1009,6 +1054,22 @@ mod worker_executable_tests {
         fs::remove_dir_all(directory).unwrap();
 
         assert_eq!(selected, expected);
+    }
+
+    #[test]
+    fn runs_worker_through_the_configured_cross_runner() {
+        let executable = Path::new("/target/aarch64-unknown-linux-musl/debug/fulgur-chart");
+        let command =
+            command_with_runner(executable, Some(OsStr::new("/qemu-runner aarch64"))).unwrap();
+
+        assert_eq!(command.get_program(), OsStr::new("/qemu-runner"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                OsStr::new("aarch64"),
+                OsStr::new("/target/aarch64-unknown-linux-musl/debug/fulgur-chart"),
+            ]
+        );
     }
 }
 
