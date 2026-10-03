@@ -996,10 +996,13 @@ dependencies = [
  "fulgur-chart",
  "jrsonnet-evaluator",
  "jrsonnet-gcmodule",
+ "jrsonnet-ir",
  "jrsonnet-stdlib",
+ "libc",
  "schemars",
  "serde",
  "serde_json",
+ "windows-sys",
 ]
 
 [[package]]
