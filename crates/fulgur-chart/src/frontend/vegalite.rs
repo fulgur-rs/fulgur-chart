@@ -54,8 +54,8 @@ pub fn parse(json: &str, strict: bool) -> Result<ChartSpec, String> {
     parse_with_limits(json, strict, &crate::guard::InputLimits::default())
 }
 
-/// caller-supplied limits を使う variant。rect、temporal line、categorical stacked area は
-/// allocation-heavy なデータ構造を構築する前に caller の限度値を検査する。
+/// caller-supplied limits を使う variant。rect、カテゴリ bar/line、temporal line、
+/// categorical stacked area は allocation-heavy なデータ構造を構築する前に限度値を検査する。
 pub fn parse_with_limits(
     json: &str,
     strict: bool,
@@ -102,14 +102,14 @@ pub(super) fn parse_unit_value(
 pub(super) fn preflight_composition_unit(
     value: &Value,
     limits: &crate::guard::InputLimits,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let Some(object) = value.as_object() else {
-        return Ok(());
+        return Ok(0);
     };
     if read_mark_name(object) == Some("tick") {
         tick::preflight_tick_limits(object, limits)?;
     }
-    Ok(())
+    preflight_categorical_bar_value(value, limits)
 }
 
 pub(super) fn parse_unit_value_with_overrides(
@@ -1358,6 +1358,101 @@ fn preflight_categorical_line_shape(
     Ok(())
 }
 
+fn preflight_categorical_bar_shape(
+    category_count: usize,
+    series_count: usize,
+    limits: &crate::guard::InputLimits,
+) -> Result<usize, String> {
+    if category_count > limits.max_categories {
+        return Err(format!(
+            "categorical bar category count {category_count} exceeds max_categories limit {}",
+            limits.max_categories
+        ));
+    }
+    if series_count > limits.max_series {
+        return Err(format!(
+            "categorical bar series count {series_count} exceeds max_series limit {}",
+            limits.max_series
+        ));
+    }
+    let product = category_count.saturating_mul(series_count);
+    if product > limits.max_categorical_primitives {
+        return Err(format!(
+            "categorical bar series × categories product {product} exceeds max_categorical_primitives limit {}",
+            limits.max_categorical_primitives
+        ));
+    }
+    if product > limits.max_total_data_points {
+        return Err(format!(
+            "categorical bar series × categories product {product} exceeds max_total_data_points limit {}",
+            limits.max_total_data_points
+        ));
+    }
+    Ok(product)
+}
+
+fn preflight_categorical_bar_value(
+    value: &Value,
+    limits: &crate::guard::InputLimits,
+) -> Result<usize, String> {
+    let Some(object) = value.as_object() else {
+        return Ok(0);
+    };
+    if read_mark_name(object) != Some("bar") {
+        return Ok(0);
+    }
+    let Some(encoding) = object.get("encoding").and_then(Value::as_object) else {
+        return Ok(0);
+    };
+    let Some(x_field) = channel_field(encoding, "x") else {
+        return Ok(0);
+    };
+    let Some(y_field) = channel_field(encoding, "y") else {
+        return Ok(0);
+    };
+    let Some(data) = object.get("data").and_then(Value::as_object) else {
+        return Ok(0);
+    };
+    if data.contains_key("url") {
+        return Ok(0);
+    }
+    let Some(values) = data.get("values").and_then(Value::as_array) else {
+        return Ok(0);
+    };
+    let color_field = channel_field(encoding, "color");
+    let mut categories = HashSet::new();
+    let mut groups = HashSet::new();
+    for value in values {
+        let Some(record) = value.as_object() else {
+            return Ok(0);
+        };
+        let Some(category) = record
+            .get(&x_field)
+            .filter(|value| matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_)))
+        else {
+            return Ok(0);
+        };
+        if !record.get(&y_field).is_some_and(Value::is_number) {
+            return Ok(0);
+        }
+        categories.insert(category_value(category));
+        if let Some(color_field) = color_field.as_deref() {
+            let Some(group) = record.get(color_field).filter(|value| {
+                matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_))
+            }) else {
+                return Ok(0);
+            };
+            groups.insert(category_value(group));
+        }
+    }
+    let series_count = if color_field.is_some() {
+        groups.len()
+    } else {
+        1
+    };
+    preflight_categorical_bar_shape(categories.len(), series_count, limits)
+}
+
 fn preflight_stacked_area_shape(
     category_count: usize,
     series_count: usize,
@@ -1651,10 +1746,17 @@ fn field_f64(record: &Map<String, Value>, field: Option<&str>) -> f64 {
 /// レコードの指定フィールドをカテゴリ文字列として読む。
 /// 文字列はそのまま、数値はその文字列表現、それ以外/欠落は ""。
 fn field_category(record: &Map<String, Value>, field: Option<&str>) -> String {
-    match field.and_then(|f| record.get(f)) {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        Some(Value::Bool(b)) => b.to_string(),
+    field
+        .and_then(|field| record.get(field))
+        .map(category_value)
+        .unwrap_or_default()
+}
+
+fn category_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        Value::Bool(value) => value.to_string(),
         _ => String::new(),
     }
 }
@@ -1722,6 +1824,9 @@ fn build_categorical(
         Some(_) => distinct_categories(records, color_field.as_deref()),
         None => vec![y_field.clone().unwrap_or_default()],
     };
+    if matches!(kind, ChartKind::Bar { .. }) {
+        preflight_categorical_bar_shape(categories.len(), group_names.len(), limits)?;
+    }
     if is_trail {
         preflight_trail_shape(categories.len(), group_names.len(), limits)?;
     }
