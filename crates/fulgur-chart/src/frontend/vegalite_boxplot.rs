@@ -25,6 +25,11 @@ pub(super) fn parse_boxplot_spec(
     top: &mut Map<String, Value>,
     limits: &crate::guard::InputLimits,
 ) -> Result<ChartSpec, String> {
+    crate::frontend::preflight_vegalite_stroke_dash_lengths(
+        top.get("mark"),
+        &["box", "median", "outliers", "rule", "ticks"],
+        "boxplot",
+    )?;
     if top.contains_key("transform") {
         return Err("boxplot transform is not supported".into());
     }

@@ -99,9 +99,11 @@ pub const MAX_MARKER_RADIUS_PX: f64 = DEFAULT_MAX_DIMENSION_PX;
 /// Dataset `borderDash` の要素数上限。
 /// gap ごとの線分に dash を複製する際のメモリ・出力サイズ増幅を定数倍に制限する。
 pub const MAX_BORDER_DASH_ELEMENTS: usize = 64;
-/// Upper bound for rule dash values copied into all Scene line primitives.
-/// This limits allocation amplification when many rules share one dash pattern.
-pub const MAX_RULE_DASH_EXPANSION_ELEMENTS: usize = 1_000_000;
+/// Upper bound for explicit stroke dash values copied into Scene primitives.
+/// This limits allocation amplification when many marks share one dash pattern.
+pub const MAX_STROKE_DASH_EXPANSION_ELEMENTS: usize = 1_000_000;
+/// Backward-compatible name for the rule mark expansion limit.
+pub const MAX_RULE_DASH_EXPANSION_ELEMENTS: usize = MAX_STROKE_DASH_EXPANSION_ELEMENTS;
 
 /// spec の width/height 下限(px)。
 /// ゼロ・負値はレイアウトで除算異常を起こし得るため拒否する。
@@ -522,6 +524,36 @@ fn estimate_geo_primitives(geometry: &crate::ir::GeoGeometry) -> usize {
     }
 }
 
+fn validate_vega_stroke_dash_pattern(
+    mark_name: &str,
+    part_name: &str,
+    pattern: &[f64],
+) -> Result<(), String> {
+    if pattern.len() > MAX_BORDER_DASH_ELEMENTS {
+        return Err(format!(
+            "{mark_name} {part_name}.strokeDash must contain at most {MAX_BORDER_DASH_ELEMENTS} finite non-negative numbers"
+        ));
+    }
+    if pattern
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(format!(
+            "{mark_name} {part_name}.strokeDash values must be finite and nonnegative"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_stroke_dash_expansion(mark_name: &str, elements: usize) -> Result<(), String> {
+    if elements > MAX_STROKE_DASH_EXPANSION_ELEMENTS {
+        return Err(format!(
+            "{mark_name} strokeDash expansion {elements} exceeds limit {MAX_STROKE_DASH_EXPANSION_ELEMENTS}"
+        ));
+    }
+    Ok(())
+}
+
 /// Validate normalized error-mark ranges and their worst-case Scene primitive count.
 pub(crate) fn validate_error_mark(spec: &ChartSpec, primitive_limit: usize) -> Result<(), String> {
     let ChartKind::ErrorMark(data) = &spec.kind else {
@@ -669,15 +701,7 @@ pub(crate) fn validate_error_mark(spec: &ChartSpec, primitive_limit: usize) -> R
         {
             return Err(format!("error mark {name}.opacity must be within 0..=1"));
         }
-        if style
-            .stroke_dash
-            .iter()
-            .any(|value| !value.is_finite() || *value < 0.0)
-        {
-            return Err(format!(
-                "error mark {name}.strokeDash must be finite and nonnegative"
-            ));
-        }
+        validate_vega_stroke_dash_pattern("error mark", name, &style.stroke_dash)?;
         for color in [style.fill, style.stroke].into_iter().flatten() {
             if !color.a.is_finite() || !(0.0..=1.0).contains(&color.a) {
                 return Err(format!(
@@ -693,6 +717,44 @@ pub(crate) fn validate_error_mark(spec: &ChartSpec, primitive_limit: usize) -> R
             }
         }
     }
+    let dash_expansion_elements = match data.kind {
+        crate::ir::ErrorMarkKind::ErrorBar => {
+            let rule_per_range = if data.style.rule.visible {
+                data.style.rule.stroke_dash.len()
+            } else {
+                0
+            };
+            let ticks_per_range = if data.style.ticks.visible {
+                data.style.ticks.stroke_dash.len().saturating_mul(2)
+            } else {
+                0
+            };
+            data.ranges
+                .len()
+                .saturating_mul(rule_per_range.saturating_add(ticks_per_range))
+        }
+        crate::ir::ErrorMarkKind::ErrorBand => {
+            let group_count = data
+                .ranges
+                .iter()
+                .map(|range| (range.series_index, range.detail.as_deref()))
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            let band_per_group = if data.style.band.visible && data.style.band.stroke.is_some() {
+                data.style.band.stroke_dash.len()
+            } else {
+                0
+            };
+            let borders_per_group = if data.style.borders.visible {
+                data.style.borders.stroke_dash.len().saturating_mul(2)
+            } else {
+                0
+            };
+            group_count.saturating_mul(band_per_group.saturating_add(borders_per_group))
+        }
+    };
+    validate_stroke_dash_expansion("error mark", dash_expansion_elements)?;
+
     let per_range = match data.kind {
         crate::ir::ErrorMarkKind::ErrorBar => usize::from(data.style.rule.visible)
             .saturating_add(usize::from(data.style.ticks.visible).saturating_mul(2)),
@@ -764,15 +826,7 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
                 "Vega-Lite boxplot {name}.opacity must be within 0..=1"
             ));
         }
-        if style
-            .stroke_dash
-            .iter()
-            .any(|value| !value.is_finite() || *value < 0.0)
-        {
-            return Err(format!(
-                "Vega-Lite boxplot {name}.strokeDash must be finite and nonnegative"
-            ));
-        }
+        validate_vega_stroke_dash_pattern("Vega-Lite boxplot", name, &style.stroke_dash)?;
         for color in [style.fill, style.stroke].into_iter().flatten() {
             if !color.a.is_finite() || !(0.0..=1.0).contains(&color.a) {
                 return Err(format!(
@@ -784,6 +838,7 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
 
     let mut points = 0usize;
     let mut primitives = 0usize;
+    let mut dash_expansion_elements = 0usize;
     for (index, group) in data.groups.iter().enumerate() {
         points = points.saturating_add(group.point_count);
         if group.point_count == 0 || group.summary.outliers.len() > group.point_count {
@@ -866,6 +921,8 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
                 "Vega-Lite boxplot group {index} endpoints are invalid"
             ));
         }
+        dash_expansion_elements = dash_expansion_elements
+            .saturating_add(vega_boxplot_group_stroke_dash_expansion(data, group));
         primitives = primitives.saturating_add(vega_boxplot_group_primitive_count(data, group));
     }
     if points > limits.max_total_data_points {
@@ -880,6 +937,7 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
             limits.max_categorical_primitives
         ));
     }
+    validate_stroke_dash_expansion("Vega-Lite boxplot", dash_expansion_elements)?;
     Ok(())
 }
 
@@ -1171,6 +1229,47 @@ pub(crate) fn vega_boxplot_primitive_count(data: &crate::ir::VegaBoxPlotData) ->
     data.groups.iter().fold(0usize, |total, group| {
         total.saturating_add(vega_boxplot_group_primitive_count(data, group))
     })
+}
+
+fn vega_boxplot_group_stroke_dash_expansion(
+    data: &crate::ir::VegaBoxPlotData,
+    group: &crate::ir::VegaBoxPlotGroup,
+) -> usize {
+    let style = &data.style;
+    let has_whiskers = group.summary.whisker_low.is_some();
+    let rule_line_count = if has_whiskers && style.rule_part.visible {
+        if style.box_part.visible {
+            2usize
+        } else {
+            1usize
+        }
+    } else {
+        0
+    };
+    let box_line_count = if style.box_part.visible && style.box_part.stroke.is_some() {
+        4usize
+    } else {
+        0
+    };
+    let median_line_count = usize::from(style.median_part.visible);
+    let tick_line_count = if has_whiskers && style.ticks_part.visible {
+        2usize
+    } else {
+        0
+    };
+    let outlier_line_count =
+        if style.outliers_part.visible && style.outliers_part.stroke_width.unwrap_or(1.0) > 0.0 {
+            group.summary.outliers.len()
+        } else {
+            0
+        };
+
+    rule_line_count
+        .saturating_mul(style.rule_part.stroke_dash.len())
+        .saturating_add(box_line_count.saturating_mul(style.box_part.stroke_dash.len()))
+        .saturating_add(median_line_count.saturating_mul(style.median_part.stroke_dash.len()))
+        .saturating_add(tick_line_count.saturating_mul(style.ticks_part.stroke_dash.len()))
+        .saturating_add(outlier_line_count.saturating_mul(style.outliers_part.stroke_dash.len()))
 }
 
 fn vega_boxplot_group_primitive_count(

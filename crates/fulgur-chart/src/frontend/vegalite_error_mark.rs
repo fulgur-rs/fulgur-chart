@@ -306,6 +306,11 @@ pub(super) fn parse_error_mark_spec(
     limits: &crate::guard::InputLimits,
 ) -> Result<ChartSpec, String> {
     check_unknown_keys(top)?;
+    crate::frontend::preflight_vegalite_stroke_dash_lengths(
+        top.get("mark"),
+        &["rule", "ticks", "band", "borders"],
+        "error mark",
+    )?;
     let input_values = top
         .get("data")
         .and_then(Value::as_object)
