@@ -5,6 +5,34 @@ mod vegalite_boxplot;
 mod vegalite_composition;
 mod vegalite_error;
 
+/// Reject oversized dash arrays before a Vega-Lite parser copies their numeric entries.
+pub(crate) fn preflight_vegalite_stroke_dash_lengths(
+    mark: Option<&serde_json::Value>,
+    parts: &[&str],
+    mark_name: &str,
+) -> Result<(), String> {
+    let Some(mark) = mark.and_then(serde_json::Value::as_object) else {
+        return Ok(());
+    };
+    for part in parts {
+        let Some(pattern) = mark
+            .get(*part)
+            .and_then(serde_json::Value::as_object)
+            .and_then(|style| style.get("strokeDash"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        if pattern.len() > crate::guard::MAX_BORDER_DASH_ELEMENTS {
+            return Err(format!(
+                "{mark_name} {part}.strokeDash must contain at most {} entries",
+                crate::guard::MAX_BORDER_DASH_ELEMENTS
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Distinguishes invalid input from strict-only validation failures for language bindings.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseError {

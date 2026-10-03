@@ -1,6 +1,6 @@
 use fulgur_chart::font::DEFAULT_FONT;
 use fulgur_chart::frontend::vegalite;
-use fulgur_chart::ir::Color;
+use fulgur_chart::ir::{ChartKind, Color};
 use fulgur_chart::layout;
 use fulgur_chart::model::build_model;
 use fulgur_chart::scene::{Prim, Scene};
@@ -436,6 +436,39 @@ fn dashed_boxplot_outliers_count_fill_and_outline_against_primitive_limits() {
         fulgur_chart::guard::validate_spec(&spec, &limits).is_err(),
         "spec guard must count the dashed outline in addition to its fill"
     );
+}
+
+#[test]
+fn boxplot_rejects_oversized_stroke_dash_before_converting_entries() {
+    let dash = vec!["1"; 65].join(",");
+    let json = format!(
+        r##"{{"mark":{{"type":"boxplot","outliers":{{"strokeDash":[{dash}]}}}},"data":{{"values":[{{"value":1}},{{"value":2}},{{"value":3}},{{"value":4}},{{"value":100}}]}},"encoding":{{"y":{{"field":"value","type":"quantitative"}}}}}}"##
+    );
+
+    let Err(error) = vegalite::parse(&json, true) else {
+        panic!("dash arrays above the element limit must fail");
+    };
+    assert!(error.contains("64"), "{error}");
+    assert!(error.contains("strokeDash"), "{error}");
+}
+
+#[test]
+fn boxplot_rejects_excessive_outlier_stroke_dash_expansion_before_layout() {
+    let dash = vec!["1"; 64].join(",");
+    let json = format!(
+        r##"{{"mark":{{"type":"boxplot","box":false,"median":false,"rule":false,"ticks":false,"outliers":{{"strokeDash":[{dash}]}}}},"data":{{"values":[{{"value":1}},{{"value":2}},{{"value":3}},{{"value":4}},{{"value":100}}]}},"encoding":{{"y":{{"field":"value","type":"quantitative"}}}}}}"##
+    );
+    let mut spec = parse(&json);
+    let ChartKind::VegaBoxPlot(data) = &mut spec.kind else {
+        panic!("boxplot kind expected");
+    };
+    data.groups[0].point_count = 15_626;
+    data.groups[0].summary.outliers = vec![100.0; 15_626];
+
+    let Err(error) = layout::build_scene_checked(&spec, &measurer()) else {
+        panic!("dash copies for many outlier outlines must be bounded");
+    };
+    assert!(error.contains("strokeDash expansion"), "{error}");
 }
 
 #[test]

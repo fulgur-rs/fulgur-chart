@@ -263,6 +263,76 @@ fn error_mark_guard_bounds_generated_primitives() {
 }
 
 #[test]
+fn error_mark_rejects_oversized_stroke_dash_before_converting_entries() {
+    let dash = vec!["1"; 65].join(",");
+    let json = format!(
+        r##"{{"mark":{{"type":"errorbar","rule":{{"strokeDash":[{dash}]}}}},"data":{{"values":[{{"x":"A","low":2,"high":8}}]}},"encoding":{{"x":{{"field":"x","type":"nominal"}},"y":{{"field":"low","type":"quantitative"}},"y2":{{"field":"high"}}}}}}"##
+    );
+
+    for strict in [false, true] {
+        let Err(error) = vegalite::parse(&json, strict) else {
+            panic!("dash arrays above the element limit must fail");
+        };
+        assert!(error.contains("64"), "strict={strict}: {error}");
+        assert!(error.contains("strokeDash"), "strict={strict}: {error}");
+    }
+}
+
+#[test]
+fn error_mark_rejects_excessive_total_stroke_dash_expansion_before_layout() {
+    let dash = vec!["1"; 64].join(",");
+    let json = format!(
+        r##"{{"mark":{{"type":"errorbar","rule":{{"strokeDash":[{dash}]}},"ticks":false}},"data":{{"values":[{{"x":"A","low":2,"high":8}}]}},"encoding":{{"x":{{"field":"x","type":"nominal"}},"y":{{"field":"low","type":"quantitative"}},"y2":{{"field":"high"}}}}}}"##
+    );
+    let mut spec = parse(&json);
+    let (range, center) = match &spec.kind {
+        ChartKind::ErrorMark(data) => (data.ranges[0].clone(), spec.series[0].values[0]),
+        _ => panic!("error-mark kind expected"),
+    };
+    let expanded_ranges = 15_626;
+    if let ChartKind::ErrorMark(data) = &mut spec.kind {
+        data.ranges = vec![range; expanded_ranges];
+    }
+    spec.series[0].values = vec![center; expanded_ranges];
+
+    let Err(error) = layout::build_scene_checked(&spec, &measurer()) else {
+        panic!("dash copies across many rule segments must be bounded");
+    };
+    assert!(error.contains("strokeDash expansion"), "{error}");
+}
+
+#[test]
+fn errorband_rejects_excessive_grouped_stroke_dash_expansion_before_layout() {
+    let dash = vec!["1"; 64].join(",");
+    let json = format!(
+        r##"{{"mark":{{"type":"errorband","band":{{"stroke":"red","strokeDash":[{dash}]}},"borders":{{"stroke":"blue","strokeDash":[{dash}]}}}},"data":{{"values":[{{"x":"A","low":1,"high":4}},{{"x":"B","low":2,"high":5}}]}},"encoding":{{"x":{{"field":"x","type":"nominal"}},"y":{{"field":"low","type":"quantitative"}},"y2":{{"field":"high"}}}}}}"##
+    );
+    let mut spec = parse(&json);
+    let ChartKind::ErrorMark(data) = &mut spec.kind else {
+        panic!("error-mark kind expected");
+    };
+    let templates = data.ranges.clone();
+    let expanded_groups = 15_626;
+    let mut ranges = Vec::with_capacity(templates.len() * expanded_groups);
+    for group in 0..expanded_groups {
+        for template in &templates {
+            let mut range = template.clone();
+            range.detail = Some(format!("detail-{group}"));
+            ranges.push(range);
+        }
+    }
+    spec.series[0].values = ranges.iter().map(|range| range.center).collect();
+    if let ChartKind::ErrorMark(data) = &mut spec.kind {
+        data.ranges = ranges;
+    }
+
+    let Err(error) = layout::build_scene_checked(&spec, &measurer()) else {
+        panic!("dash copies for many errorband groups must be bounded");
+    };
+    assert!(error.contains("strokeDash expansion"), "{error}");
+}
+
+#[test]
 fn error_mark_model_reports_chart_type_and_axes() {
     let spec = parse(
         r##"{"mark":"errorbar","data":{"values":[{"x":"A","low":2,"high":8}]},
