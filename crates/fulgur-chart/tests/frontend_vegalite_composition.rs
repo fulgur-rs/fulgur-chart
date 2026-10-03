@@ -221,6 +221,27 @@ fn composition_preflight_counts_expanded_text_label_bytes_across_leaves() {
 }
 
 #[test]
+fn composition_preflight_counts_expanded_font_attribute_bytes_across_leaves() {
+    let json = r#"{"data":{"values":[{"x":0,"y":0,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}},"layer":[{"mark":{"type":"text","font":"&"}},{"mark":{"type":"text","font":"&"}}]}"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: 11,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("expanded font attributes across layer leaves exceed the shared budget");
+    assert!(error.contains("bytes 12"), "{error}");
+
+    let exact_limit = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: 12,
+        ..Default::default()
+    };
+    assert!(
+        vegalite::parse_with_limits(json, true, &exact_limit).is_ok(),
+        "expanded labels and font attributes at the shared limit should parse"
+    );
+}
+
+#[test]
 fn shared_measurement_scales_infer_horizontal_boxplot_and_error_mark_types() {
     let horizontal_boxplot = r#"{
       "resolve":{"scale":{"x":"shared"}},

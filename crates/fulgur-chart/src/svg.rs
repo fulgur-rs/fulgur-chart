@@ -529,6 +529,18 @@ fn xml_escape_attr(s: &str) -> String {
     xml_escape(s).replace('"', "&quot;")
 }
 
+/// Count the UTF-8 bytes written by `xml_escape_attr` without allocating the escaped value.
+pub(crate) fn xml_escape_attr_len(s: &str) -> usize {
+    s.chars().fold(0usize, |total, ch| {
+        total.saturating_add(match ch {
+            '&' => 5,
+            '<' | '>' => 4,
+            '"' => 6,
+            _ => ch.len_utf8(),
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1005,6 +1017,13 @@ mod tests {
             !svg.contains(r#"font-family="Evil" onload="#),
             "属性が早期終端していない: {svg}"
         );
+    }
+
+    #[test]
+    fn escaped_attribute_length_matches_xml_escaping() {
+        for value in ["", "plain", "<&>\"", "フォント& "] {
+            assert_eq!(xml_escape_attr_len(value), xml_escape_attr(value).len());
+        }
     }
 
     #[test]

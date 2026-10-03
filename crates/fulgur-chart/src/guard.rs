@@ -75,7 +75,7 @@ pub const DEFAULT_MAX_CATEGORICAL_PRIMITIVES: usize = 1_000_000;
 /// ラベル・タイトル文字列の上限(バイト)。
 pub const DEFAULT_MAX_LABEL_BYTES: usize = 4_096;
 
-/// Vega-Lite text marks の展開後ラベル文字数上限(バイト)。
+/// Expanded byte budget for Vega-Lite text labels and escaped font-family SVG attributes.
 pub const DEFAULT_MAX_TOTAL_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Maximum number of explicit lines in one Chart.js title or subtitle.
@@ -151,7 +151,7 @@ pub struct InputLimits {
     pub max_geo_primitives: usize,
     /// ラベル・タイトル文字列の上限(バイト)。
     pub max_label_bytes: usize,
-    /// Vega-Lite text mark labels' expanded total size in bytes.
+    /// Vega-Lite text labels plus escaped font-family SVG attributes' expanded bytes.
     pub max_total_text_bytes: usize,
     /// Vega-Lite composition nesting depth (root composition has depth 1).
     pub max_vega_composition_depth: usize,
@@ -317,6 +317,7 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
         primitives: usize,
         geo_primitives: usize,
         text_bytes: usize,
+        font_attribute_bytes: usize,
     }
 
     fn visit(
@@ -346,6 +347,26 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                         return Err(format!(
                             "Vega-Lite composition text label bytes {} exceeds max_total_text_bytes ({}) at {}",
                             counts.text_bytes, limits.max_total_text_bytes, leaf.path
+                        ));
+                    }
+                    let leaf_font_attribute_bytes =
+                        data.marks.iter().fold(0usize, |total, mark| {
+                            total.saturating_add(
+                                mark.font_family
+                                    .as_deref()
+                                    .map_or(0, crate::svg::xml_escape_attr_len),
+                            )
+                        });
+                    counts.font_attribute_bytes = counts
+                        .font_attribute_bytes
+                        .saturating_add(leaf_font_attribute_bytes);
+                    let expanded_text_bytes = counts
+                        .text_bytes
+                        .saturating_add(counts.font_attribute_bytes);
+                    if expanded_text_bytes > limits.max_total_text_bytes {
+                        return Err(format!(
+                            "Vega-Lite composition text and font-family SVG attribute bytes {expanded_text_bytes} exceed max_total_text_bytes ({}) at {}",
+                            limits.max_total_text_bytes, leaf.path
                         ));
                     }
                 }
@@ -1080,6 +1101,7 @@ pub(crate) fn validate_vega_text(spec: &ChartSpec, limits: &InputLimits) -> Resu
         ));
     }
     let mut total_text_bytes = 0usize;
+    let mut total_font_attribute_bytes = 0usize;
     for (index, mark) in data.marks.iter().enumerate() {
         if mark.text.len() > limits.max_label_bytes {
             return Err(format!(
@@ -1087,6 +1109,17 @@ pub(crate) fn validate_vega_text(spec: &ChartSpec, limits: &InputLimits) -> Resu
                 mark.text.len(),
                 limits.max_label_bytes
             ));
+        }
+        if let Some(font_family) = mark.font_family.as_deref() {
+            if font_family.len() > limits.max_label_bytes {
+                return Err(format!(
+                    "Vega-Lite text mark.font length {} bytes exceeds max_label_bytes limit {} at mark {index}",
+                    font_family.len(),
+                    limits.max_label_bytes
+                ));
+            }
+            total_font_attribute_bytes = total_font_attribute_bytes
+                .saturating_add(crate::svg::xml_escape_attr_len(font_family));
         }
         total_text_bytes = total_text_bytes.saturating_add(mark.text.len());
         if total_text_bytes > limits.max_total_text_bytes {
@@ -1119,6 +1152,13 @@ pub(crate) fn validate_vega_text(spec: &ChartSpec, limits: &InputLimits) -> Resu
                 "Vega-Lite text mark {index} alpha must be within 0..=1"
             ));
         }
+    }
+    let expanded_text_bytes = total_text_bytes.saturating_add(total_font_attribute_bytes);
+    if expanded_text_bytes > limits.max_total_text_bytes {
+        return Err(format!(
+            "Vega-Lite text labels and font-family SVG attribute bytes {expanded_text_bytes} exceeds max_total_text_bytes limit {}",
+            limits.max_total_text_bytes
+        ));
     }
     Ok(())
 }
@@ -2351,6 +2391,33 @@ mod tests {
         let error = validate_spec(&standalone, &total_text_limit).unwrap_err();
         assert!(error.contains("text label bytes 2"), "{error}");
 
+        let font_chart = vegalite::parse(
+            r#"{"mark":{"type":"text","font":"&"},"data":{"values":[{"x":0,"y":1,"label":"A"},{"x":1,"y":2,"label":"B"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}}}"#,
+            true,
+        )
+        .unwrap();
+        let font_attribute_limit = InputLimits {
+            max_total_text_bytes: 11,
+            ..default_limits()
+        };
+        let error = validate_spec(&font_chart, &font_attribute_limit).unwrap_err();
+        assert!(
+            error.contains("font-family SVG attribute bytes 12"),
+            "{error}"
+        );
+
+        let long_font = vegalite::parse(
+            r#"{"mark":{"type":"text","font":"serif"},"data":{"values":[{"x":0,"y":1,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}}}"#,
+            true,
+        )
+        .unwrap();
+        let font_label_limit = InputLimits {
+            max_label_bytes: 4,
+            ..default_limits()
+        };
+        let error = validate_spec(&long_font, &font_label_limit).unwrap_err();
+        assert!(error.contains("mark.font length 5 bytes"), "{error}");
+
         let measurer = crate::text::TextMeasurer::new(crate::font::TEST_FONT).unwrap();
         let error = crate::layout::build_scene_checked_with_limits(
             &standalone,
@@ -2397,6 +2464,21 @@ mod tests {
         };
         let error = validate_spec(&composition, &composition_text_limit).unwrap_err();
         assert!(error.contains("composition text label bytes 2"), "{error}");
+
+        let font_composition = vegalite::parse(
+            r#"{"data":{"values":[{"x":0,"y":1,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}},"layer":[{"mark":{"type":"text","font":"&"}},{"mark":{"type":"text","font":"&"}}]}"#,
+            true,
+        )
+        .unwrap();
+        let composition_font_limit = InputLimits {
+            max_total_text_bytes: 11,
+            ..default_limits()
+        };
+        let error = validate_spec(&font_composition, &composition_font_limit).unwrap_err();
+        assert!(
+            error.contains("composition text and font-family SVG attribute bytes 12"),
+            "{error}"
+        );
 
         let composition_label = vegalite::parse(
             r#"{"layer":[{"mark":"text","data":{"values":[{"x":0,"y":1,"label":"あ"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}}]}"#,

@@ -39,6 +39,14 @@ pub(super) fn preflight_text_label_bytes(
     text::preflight_label_bytes(data, encoding, mark, limits)
 }
 
+pub(super) fn preflight_text_font_attribute_bytes(
+    mark: Option<&Value>,
+    mark_count: usize,
+    limits: &crate::guard::InputLimits,
+) -> Result<usize, String> {
+    text::preflight_font_family_attribute_bytes(mark, mark_count, limits)
+}
+
 pub(crate) fn validate_vega_image_url(url: &str, max_bytes: usize) -> Result<(), String> {
     image::validate_image_url(url, max_bytes)
 }

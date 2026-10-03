@@ -31,6 +31,7 @@ struct CompositionBudget {
     views: usize,
     rows: usize,
     text_bytes: usize,
+    font_attribute_bytes: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2288,6 +2289,7 @@ fn preflight_node(
                 .and_then(|mark| mark.get("type"))
                 .and_then(Value::as_str)
         });
+        let rows = inline_row_count(effective_data);
         if mark_type == Some("text") {
             let encoding =
                 merge_encoding(inherited.encoding.as_ref(), object.get("encoding"), path)?;
@@ -2307,8 +2309,23 @@ fn preflight_node(
                     limits.max_total_text_bytes
                 ));
             }
+            let font_attribute_bytes =
+                super::vegalite::preflight_text_font_attribute_bytes(mark, rows, limits)
+                    .map_err(|error| prefix_path(path, error))?;
+            budget.font_attribute_bytes = budget
+                .font_attribute_bytes
+                .saturating_add(font_attribute_bytes);
+            let expanded_text_bytes = budget
+                .text_bytes
+                .saturating_add(budget.font_attribute_bytes);
+            if expanded_text_bytes > limits.max_total_text_bytes {
+                return Err(format!(
+                    "{}composition text label and font-family SVG attribute bytes {expanded_text_bytes} exceed max_total_text_bytes ({})",
+                    node_path(path),
+                    limits.max_total_text_bytes
+                ));
+            }
         }
-        let rows = inline_row_count(effective_data);
         budget.views = budget.views.saturating_add(1);
         budget.rows = budget.rows.saturating_add(rows);
         if budget.views > limits.max_vega_composition_views {
