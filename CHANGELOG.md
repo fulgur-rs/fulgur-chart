@@ -6,6 +6,236 @@
 
 ## [Unreleased]
 
+## [0.1.22](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.21...fulgur-chart-cli-v0.1.22) - 2026-10-03
+
+### Added
+
+- *(vegalite)* add tick mark support
+- *(vegalite)* support one-axis ranged rules
+- *(vegalite)* support rule marks
+- *(vegalite)* add text mark example and cross-runtime tests
+- *(vegalite)* add composition examples and docs
+- *(vegalite)* support SVG image marks
+- *(vegalite)* implement trail mark
+- add Vega-Lite square mark size encoding
+- *(chart)* support Chart.js temporal scales
+
+### Fixed
+
+- *(cli)* distinguish native and qemu worker launches
+- *(cli)* respect inherited Jsonnet worker limits
+- *(cli)* use cross runner for Jsonnet worker
+- *(cli)* launch Jsonnet worker under QEMU
+- *(cli)* account for macOS worker VM baseline
+- *(cli)* preserve Windows Jsonnet worker output
+- *(cli)* bound Jsonnet evaluation resources
+- *(line)* match Chart.js dense-line drawing and inspect geometry
+- *(vegalite)* reject ambiguous rule categories
+- *(vegalite)* resolve text mark scales and limits
+- *(vegalite)* align image mark schema and rendering
+- bound geoshape projection rendering
+- address geoshape projection edge cases
+
+### Other
+
+- Merge pull request #206 from fulgur-rs/fix/fulgur-chart-qyrr-title-font-limits
+- *(vegalite)* include size encoding in support list
+- *(vegalite)* document errorbar and errorband marks
+- cover Vega-Lite geoshape rendering on native and wasm
+- add violin examples and golden coverage
+
+## [0.13.3](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-v0.13.2...fulgur-chart-v0.13.3) - 2026-10-03
+
+### Added
+
+- *(vegalite)* add tick mark support
+- *(vegalite)* support one-axis ranged rules
+- *(vegalite)* support rule marks
+- *(vegalite)* add text mark example and cross-runtime tests
+- *(vegalite)* support text marks in layers
+- *(vegalite)* render coordinate text marks
+- *(vegalite)* parse text mark labels
+- *(vegalite)* add composition examples and docs
+- *(vegalite)* render layer and concat compositions
+- *(vegalite)* resolve composition scales
+- *(vegalite)* expand nested composition specs
+- *(vegalite)* add recursive composition schema
+- *(vegalite)* support SVG image marks
+- *(layout)* render errorband paths
+- *(layout)* add errorbar Scene geometry
+- *(vegalite)* normalize error mark input
+- *(vegalite)* add error mark statistics
+- *(vegalite)* define error mark schemas and IR
+- *(vegalite)* implement trail mark
+- *(chartjs)* reserve shared title and subtitle margins
+- *(scene)* support translated primitive groups
+- *(chartjs)* map independent title and subtitle IR
+- *(chartjs)* type title and subtitle options
+- *(chartjs)* support sankey chart-level parsing
+- add Vega-Lite square mark size encoding
+- *(bar)* honor x-axis offset false
+- *(vegalite)* support point size encoding
+- support pie rotation and circumference
+- integrate violin model and input guards
+- render vertical and horizontal violin charts
+- parse QuickChart violin chart inputs
+- *(wasm)* add no-default-font build
+- *(mixed)* decimate large line datasets
+- *(chart)* support Chart.js temporal scales
+- *(chartjs)* support linear axis tick options
+- *(chartjs)* support line dataset styles
+- *(chartjs)* support monotone cubic interpolation
+- *(chartjs)* support pie arc geometry options
+- *(chartjs)* support per-dataset bar border radius
+- *(chartjs)* add per-dataset bar geometry options
+- *(chartjs)* support area fill targets
+- *(chartjs)* support mixed dataset ordering
+- support Chart.js legend styling
+- *(chartjs)* support logarithmic scatter and bubble axes
+
+### Fixed
+
+- *(chartjs)* bound dataset fill layout work
+- *(vegalite)* include fallback font in text budget
+- *(vegalite)* bound text font expansion
+- *(vegalite)* bound sparse bar expansion
+- *(line)* match Chart.js dense-line drawing and inspect geometry
+- *(vegalite)* update tick schema and clippy
+- *(vegalite)* reject tick category type collisions
+- *(vegalite)* preflight composed tick domains
+- *(vegalite)* honor shared tick scales
+- *(vegalite)* include rule endpoints in category checks
+- *(vegalite)* reject ambiguous rule categories
+- *(vegalite)* bound rule stroke dash expansion
+- *(vegalite)* validate composed rule leaves strictly
+- *(vegalite)* honor rule endpoint and style semantics
+- *(vegalite)* resolve text mark scales and limits
+- *(vegalite)* render boxplot axis and outlier styles
+- use clippy-compatible path chunks
+- preserve nested composition legends
+- satisfy clippy lint in composition test
+- satisfy current clippy lint
+- align Vega-Lite composition layers
+- *(vegalite)* keep shared guides and composite marks
+- *(vegalite)* preserve composition legend resolution
+- *(vegalite)* satisfy composition clippy checks
+- *(vegalite)* reject Unicode whitespace in image URLs
+- *(vegalite)* align image mark schema and rendering
+- *(vegalite)* address PR review feedback
+- *(vegalite)* resolve error mark review findings
+- *(chartjs)* bound dataset borderDash length
+- *(violin)* bound offscreen geometry for extreme strokes
+- *(vegalite)* compact trail storage and refresh wasm schema
+- *(chartjs)* resolve CI lint and wasm formatting
+- *(chartjs)* address title review findings
+- *(scene)* intersect group and clipped-circle masks
+- *(chartjs)* bound title and subtitle text
+- *(scene)* preserve translated clipped circles
+- *(vegalite)* guard stacked area dimensions
+- *(vegalite)* prioritize area point rejection
+- *(vegalite)* reject point overlays on area
+- *(vegalite)* constrain point size schema type
+- normalize pie angles and skip empty labels
+- render overfull pie circumferences
+- align violin groups with temporal categories
+- count empty violin groups in input limits
+- preserve horizontal violin timeseries scale
+- honor violin axis scales and raster bounds
+- retain large violin stroke extents
+- preserve violin strokes at hard bounds
+- clip violin rendering to plot bounds
+- *(wasm)* enforce slim font behavior
+- *(mixed)* align labels with decimated marker radius
+- *(chart)* address temporal review findings
+- *(chart)* preserve exact compact tick decimals
+- *(chart)* use scientific labels for tiny compact ticks
+- *(chart-server)* preserve compact tick precision
+- *(chartjs)* bound tick label rendering
+- *(chartjs)* preserve stepSize tick spacing
+- *(chartjs)* honor linear tick option semantics
+- *(chartjs)* scope default tick limit to chartjs axes
+- *(chartjs)* retain markers when showLine is false
+- *(chartjs)* preserve permissive bar parsing
+- *(chartjs)* align cubic mode null validation
+- *(chartjs)* cover mixed monotone interpolation
+- *(chartjs)* preserve stacked line gaps
+- *(chartjs)* honor stacked line value axis
+- *(layout)* include stacked lines in log domains
+- *(vegalite)* reject ignored interpolate on categorical area
+- *(chartjs)* handle narrow arc and cutout boundaries
+- *(chartjs)* preserve finite cutout schema boundary
+- *(chartjs)* align pie corner limits and cutout schema
+- *(chartjs)* skip arcs for oversized pie spacing
+- *(schema)* restrict pie arc options to pie charts
+- *(chartjs)* ignore clipped stack tails when rounding
+- *(chartjs)* validate bar radius only on bar datasets
+- *(chartjs)* satisfy clippy for rounded bars
+- *(chartjs)* preserve rounded stack endpoints
+- *(chartjs)* skip min lengths outside axis bounds
+- *(chartjs)* carry minimum bar length through stacks
+- *(chartjs)* place short bar labels by value sign
+- *(chartjs)* keep mixed dataset bar slots aligned
+- *(chartjs)* align fills to target series geometry
+- *(chartjs)* align area fills with line geometry
+- *(chartjs)* accept fractional dataset order
+- center horizontal legend title baseline
+- keep styled legend text out of prim storage
+- *(chartjs)* widen degenerate log domains downward
+- *(chartjs)* support stacked logarithmic bars
+- *(layout)* skip clipped stacked bar labels
+- *(layout)* clip data to hard axis bounds
+- *(chartjs)* honor axis min and max bounds
+
+### Other
+
+- Bound composition-wide Vega-Lite stroke dash expansion
+- Bound Vega-Lite stroke dash expansion
+- Bound nested group clip-mask memory
+- *(frontend)* reuse decoded JSON and avoid repeated strict parsing
+- *(line)* retain Chart.js fast-path license notice
+- Merge pull request #206 from fulgur-rs/fix/fulgur-chart-qyrr-title-font-limits
+- use bundled test font without default font
+- Merge pull request #218 from fulgur-rs/feat/fulgur-chart-gth-rule
+- *(vegalite)* simplify rule line test type
+- use embedded font in no-font builds
+- Merge pull request #212 from fulgur-rs/perf/linear-stacked-endpoints
+- *(bar)* detect stacked endpoints in a single reverse pass
+- *(vegalite)* include size encoding in support list
+- *(vegalite)* document errorbar and errorband marks
+- *(vegalite)* add error mark examples and goldens
+- *(vegalite)* refresh temporal trail golden
+- *(vegalite)* index trail sparse validation
+- *(vegalite)* aggregate trail data in one pass
+- *(raster)* skip redundant nested clip masks
+- *(chartjs)* cover title and subtitle rendering
+- Merge pull request #202 from fulgur-rs/feat/kjx-tick-fields
+- Merge pull request #201 from fulgur-rs/feat/fulgur-chart-312-geoshape
+- share RGBA fixture with Rust
+- add decimated sparkline fixture
+- cover horizontal linear baseline at hard bounds
+- stabilize vertical log stack fixture
+- cover vertical stacked log labels
+- *(scale)* centralize log axis tick adaptation
+- cover temporal line logarithmic y axis
+- allow targeted golden PNG updates
+- *(bar)* limit stacked endpoint scan to category
+- box violin clip rectangle
+- satisfy workspace clippy checks
+- add violin examples and golden coverage
+- *(chart)* reduce temporal parser allocations
+- box optional dataset line styles
+- *(chartjs)* assert monotone ignores tension
+- *(chartjs)* cover stacked fill target gaps
+- *(chartjs)* keep pie options allocation compact
+- *(chartjs)* cover pie geometry edge paths
+- *(chartjs)* assert parsed bar geometry values
+- Reuse stack domain accumulators
+- Add Chart.js stack group IDs
+- *(chartjs)* skip empty dataset area fills
+- *(chartjs)* index area fill target ranges
+- *(chartjs)* cache span gap fill targets
+- *(chartjs)* scan fill geometry linearly
+
 ## [0.1.21](https://github.com/fulgur-rs/fulgur-chart/compare/fulgur-chart-cli-v0.1.20...fulgur-chart-cli-v0.1.21) - 2026-08-30
 
 ### Other
