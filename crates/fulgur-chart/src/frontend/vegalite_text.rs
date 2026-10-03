@@ -360,23 +360,18 @@ pub(super) fn preflight_font_family_attribute_bytes(
     mark_count: usize,
     limits: &crate::guard::InputLimits,
 ) -> Result<usize, String> {
-    let font_family = mark
+    let font_value = mark
         .and_then(Value::as_object)
         .and_then(|mark| mark.get("font"))
-        .and_then(Value::as_str)
-        .filter(|font_family| !font_family.is_empty());
-    font_family_attribute_bytes(font_family, mark_count, limits)
-}
-
-fn font_family_attribute_bytes(
-    font_family: Option<&str>,
-    mark_count: usize,
-    limits: &crate::guard::InputLimits,
-) -> Result<usize, String> {
-    let Some(font_family) = font_family else {
-        return Ok(0);
+        .filter(|value| !value.is_null());
+    let (font_family, is_explicit) = match font_value {
+        None => (crate::font::DEFAULT_SVG_FONT_FAMILY, false),
+        Some(Value::String(font_family)) if !font_family.is_empty() => (font_family.as_str(), true),
+        Some(Value::String(_)) => (crate::font::DEFAULT_SVG_FONT_FAMILY, false),
+        // Invalid font values are reported by the normal parser before any font copy is made.
+        Some(_) => return Ok(0),
     };
-    if font_family.len() > limits.max_label_bytes {
+    if is_explicit && font_family.len() > limits.max_label_bytes {
         return Err(format!(
             "mark.font length {} bytes exceeds max_label_bytes limit {}",
             font_family.len(),

@@ -5165,6 +5165,32 @@ fn vegalite_text_rejects_font_family_over_label_limit() {
 }
 
 #[test]
+fn vegalite_text_preflights_default_font_attribute_bytes() {
+    let json = r#"{"mark":"text","data":{"values":[{"x":1,"y":2,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}}}"#;
+    let default_font_family = "Noto Sans JP, sans-serif";
+    let expanded_bytes = default_font_family.len() + 1;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: expanded_bytes - 1,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("default font attribute bytes are included in the expanded text budget");
+    assert!(
+        error.contains(&format!("bytes {expanded_bytes}")),
+        "{error}"
+    );
+
+    let exact_limit = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: expanded_bytes,
+        ..Default::default()
+    };
+    assert!(
+        vegalite::parse_with_limits(json, true, &exact_limit).is_ok(),
+        "labels plus default font attributes at the limit should parse"
+    );
+}
+
+#[test]
 fn vegalite_text_rejects_unsupported_inputs() {
     let base = serde_json::json!({
         "mark":"text",

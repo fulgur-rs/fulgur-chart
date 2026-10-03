@@ -351,11 +351,11 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                     }
                     let leaf_font_attribute_bytes =
                         data.marks.iter().fold(0usize, |total, mark| {
-                            total.saturating_add(
+                            total.saturating_add(crate::svg::xml_escape_attr_len(
                                 mark.font_family
                                     .as_deref()
-                                    .map_or(0, crate::svg::xml_escape_attr_len),
-                            )
+                                    .unwrap_or(crate::font::DEFAULT_SVG_FONT_FAMILY),
+                            ))
                         });
                     counts.font_attribute_bytes = counts
                         .font_attribute_bytes
@@ -1110,17 +1110,21 @@ pub(crate) fn validate_vega_text(spec: &ChartSpec, limits: &InputLimits) -> Resu
                 limits.max_label_bytes
             ));
         }
-        if let Some(font_family) = mark.font_family.as_deref() {
-            if font_family.len() > limits.max_label_bytes {
-                return Err(format!(
-                    "Vega-Lite text mark.font length {} bytes exceeds max_label_bytes limit {} at mark {index}",
-                    font_family.len(),
-                    limits.max_label_bytes
-                ));
-            }
-            total_font_attribute_bytes = total_font_attribute_bytes
-                .saturating_add(crate::svg::xml_escape_attr_len(font_family));
+        if let Some(font_family) = mark.font_family.as_deref()
+            && font_family.len() > limits.max_label_bytes
+        {
+            return Err(format!(
+                "Vega-Lite text mark.font length {} bytes exceeds max_label_bytes limit {} at mark {index}",
+                font_family.len(),
+                limits.max_label_bytes
+            ));
         }
+        let font_family = mark
+            .font_family
+            .as_deref()
+            .unwrap_or(crate::font::DEFAULT_SVG_FONT_FAMILY);
+        total_font_attribute_bytes =
+            total_font_attribute_bytes.saturating_add(crate::svg::xml_escape_attr_len(font_family));
         total_text_bytes = total_text_bytes.saturating_add(mark.text.len());
         if total_text_bytes > limits.max_total_text_bytes {
             return Err(format!(
@@ -2440,7 +2444,7 @@ mod tests {
         assert!(error.contains("text label length 3 bytes"), "{error}");
 
         let composition = vegalite::parse(
-            r#"{"layer":[{"mark":"text","data":{"values":[{"x":0,"y":1,"label":"A"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}},{"mark":"text","data":{"values":[{"x":1,"y":2,"label":"B"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}}]}"#,
+            r#"{"layer":[{"mark":{"type":"text","font":"x"},"data":{"values":[{"x":0,"y":1,"label":"AB"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}},{"mark":{"type":"text","font":"x"},"data":{"values":[{"x":1,"y":2,"label":"AB"}]},"encoding":{"x":{"field":"x","type":"quantitative"},"y":{"field":"y","type":"quantitative"},"text":{"field":"label"}}}]}"#,
             true,
         )
         .unwrap();
@@ -2459,11 +2463,11 @@ mod tests {
         assert!(error.contains("composition primitive count 2"), "{error}");
 
         let composition_text_limit = InputLimits {
-            max_total_text_bytes: 1,
+            max_total_text_bytes: 3,
             ..default_limits()
         };
         let error = validate_spec(&composition, &composition_text_limit).unwrap_err();
-        assert!(error.contains("composition text label bytes 2"), "{error}");
+        assert!(error.contains("composition text label bytes 4"), "{error}");
 
         let font_composition = vegalite::parse(
             r#"{"data":{"values":[{"x":0,"y":1,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}},"layer":[{"mark":{"type":"text","font":"&"}},{"mark":{"type":"text","font":"&"}}]}"#,
@@ -2492,6 +2496,46 @@ mod tests {
         let error = validate_spec(&composition_label, &composition_label_limit).unwrap_err();
         assert!(error.contains("layer[0]"), "{error}");
         assert!(error.contains("text label length 3 bytes"), "{error}");
+    }
+
+    #[test]
+    fn vega_text_guard_counts_default_font_attribute_bytes() {
+        let default_font_family = "Noto Sans JP, sans-serif";
+        let standalone = vegalite::parse(
+            r#"{"mark":"text","data":{"values":[{"x":0,"y":1,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}}}"#,
+            true,
+        )
+        .unwrap();
+        let standalone_bytes = default_font_family.len() + 1;
+        let standalone_limit = InputLimits {
+            max_total_text_bytes: standalone_bytes - 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&standalone, &standalone_limit).unwrap_err();
+        assert!(
+            error.contains(&format!(
+                "font-family SVG attribute bytes {standalone_bytes}"
+            )),
+            "{error}"
+        );
+
+        let composition = vegalite::parse(
+            r#"{"data":{"values":[{"x":0,"y":1,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}},"layer":[{"mark":"text"},{"mark":"text"}]}"#,
+            true,
+        )
+        .unwrap();
+        let composition_bytes = default_font_family.len() * 2 + 2;
+        let composition_limit = InputLimits {
+            max_total_text_bytes: composition_bytes - 1,
+            ..default_limits()
+        };
+        let error = validate_spec(&composition, &composition_limit).unwrap_err();
+        assert!(
+            error.contains(&format!(
+                "composition text and font-family SVG attribute bytes {composition_bytes}"
+            )),
+            "{error}"
+        );
     }
 
     fn effective_dataset_radius_specs(point_radius: Option<f64>) -> Vec<ChartSpec> {
