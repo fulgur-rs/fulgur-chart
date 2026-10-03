@@ -153,6 +153,8 @@ impl FileShortlinkStore {
     /// 構造的に削除されない（Cache-Control: max-age の下限保証を厳守）。
     /// 削除したファイル数/バイトぶんカウンタを減算する。I/O エラーは best-effort で無視
     /// （次回 sweep で再試行される。janitor なので単発失敗を致命にしない）。
+    // Rust 1.89 の MSRV を維持するため `fetch_update` を使う（代替の `try_update` は 1.95 以降）。
+    #[allow(deprecated)]
     pub async fn sweep_expired(&self, now_ms: u64) {
         let ttl_ms = self.ttl_seconds.saturating_mul(1_000);
         let mut buckets = match fs::read_dir(&self.root).await {

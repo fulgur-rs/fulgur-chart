@@ -44,6 +44,8 @@ impl std::error::Error for BackendError {
 /// メソッドは durable 実装(I/O を伴う)に合わせて async + fallible。既定の
 /// `FileShortlinkStore` はディスク I/O を行い、純粋なメモリ adapter は await 無しでも
 /// 同じ seam を共有できる。
+// `async_trait` が生成する boxed future 自体が `must_use` なので、二重警告を抑制する。
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait ShortlinkBackend: Send + Sync {
     /// `id` に `query` を保存する。容量超過時は `TooLarge` / `Full`。
