@@ -157,7 +157,9 @@ fn build_chart_scene(
 ) -> Result<Scene, String> {
     let scene = match spec.kind {
         ChartKind::Bar { .. } => bar::build(spec, m),
-        ChartKind::Line { .. } | ChartKind::Trail => line::build(spec, m),
+        ChartKind::Line { .. } | ChartKind::Trail => {
+            line::build_checked_with_limits(spec, m, limits)?
+        }
         ChartKind::Pie { .. } => pie::build(spec, m),
         ChartKind::PolarArea => polar_area::build(spec, m),
         // scatter/bubble/square は同じレイアウト。マーカー形状・サイズは scatter.rs で分岐。
@@ -168,7 +170,7 @@ fn build_chart_scene(
         ChartKind::VegaTick(_) => vega_tick::build_checked(spec, m, limits)?,
         ChartKind::VegaRule(_) => vega_rule::build_checked(spec, m, limits)?,
         ChartKind::Radar => radar::build(spec, m),
-        ChartKind::Mixed => mixed::build(spec, m),
+        ChartKind::Mixed => mixed::build_checked_with_limits(spec, m, limits)?,
         ChartKind::Matrix { .. } => matrix::build(spec, m),
         ChartKind::VegaRect { .. } => vega_rect::build(spec, m),
         ChartKind::GeoShape { .. } => {

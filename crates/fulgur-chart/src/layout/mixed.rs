@@ -16,6 +16,15 @@ const MARKER_R: f64 = 3.0;
 
 /// Builds a mixed chart, painting datasets from higher order to lower order.
 pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
+    build_checked_with_limits(spec, m, &crate::guard::InputLimits::default())
+        .expect("mixed chart layout failed")
+}
+
+pub(crate) fn build_checked_with_limits(
+    spec: &ChartSpec,
+    m: &TextMeasurer,
+    limits: &crate::guard::InputLimits,
+) -> Result<Scene, String> {
     // 共有フレーム(カテゴリ x・全系列 values からの y ドメイン)。
     let frame = common::compute(spec, m);
 
@@ -56,15 +65,17 @@ pub fn build(spec: &ChartSpec, m: &TextMeasurer) -> Scene {
                     );
                 }
             }
-            SeriesType::Line => draw_line_dataset(&mut items, spec, &frame, n, series_index, ser),
+            SeriesType::Line => {
+                draw_line_dataset(&mut items, spec, &frame, n, series_index, ser, limits)?
+            }
         }
     }
 
-    Scene {
+    Ok(Scene {
         width: spec.width,
         height: spec.height,
         items,
-    }
+    })
 }
 
 /// Paints one bar dataset at its slot in ascending Chart.js order.
@@ -161,7 +172,8 @@ fn draw_line_dataset(
     n: usize,
     series_index: usize,
     ser: &crate::ir::Series,
-) {
+    limits: &crate::guard::InputLimits,
+) -> Result<(), String> {
     // 有効点列: (x, y, 元カテゴリインデックス)。欠損・非有限値を除外。
     // 元インデックスは gap 検出とラベル lookup に使う。
     let valid: Vec<(f64, f64, usize)> = (0..spec.categories.len())
@@ -202,7 +214,8 @@ fn draw_line_dataset(
                 &segments,
                 None,
                 decimated,
-            ));
+                limits.max_categorical_primitives,
+            )?);
         } else {
             let baseline_y = frame
                 .ys
@@ -366,6 +379,8 @@ fn draw_line_dataset(
             }
         }
     }
+
+    Ok(())
 }
 
 /// Catmull-Rom スプラインを 3 次ベジエの SVG path data へ変換する(line.rs から複製)。
