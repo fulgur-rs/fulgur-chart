@@ -37,6 +37,11 @@ type ClipMaskKey = (u64, u64, u64, u64, u32, u32);
 /// (→ [`demultiply_in_place`])。
 const MAX_PNG_AREA_PIXELS: u64 = 64_000_000;
 
+/// Maximum additional memory reserved for simultaneously live group clip masks.
+/// A tiny-skia mask stores one byte per output pixel, and nested clipped groups
+/// retain their inherited masks while rendering their children.
+const MAX_GROUP_CLIP_MASK_BYTES: u64 = 64_000_000;
+
 /// WebP 出力の最大ピクセル面積(幅 × 高さ)。
 ///
 /// WebP ロスレスのエンコードは、pixmap(in-place demultiply 済み, area×4)を生かした
@@ -545,6 +550,7 @@ fn scene_to_pixmap_with(
     let h = (scene.height as f32 * scale).round().max(1.0) as u32;
     let area = w as u64 * h as u64;
     limits.check(w, h, area)?;
+    check_group_clip_mask_budget(&scene.items, w, h, area, limits)?;
     validate_circle_device_bounds(scene, scale)?;
     validate_clipped_path_device_bounds(scene, scale)?;
 
@@ -581,6 +587,38 @@ fn validate_raster_supported_prims(items: &[Prim]) -> Result<(), String> {
             Prim::Group { children, .. } => validate_raster_supported_prims(children)?,
             _ => {}
         }
+    }
+    Ok(())
+}
+
+fn check_group_clip_mask_budget(
+    items: &[Prim],
+    width: u32,
+    height: u32,
+    area: u64,
+    limits: &RasterLimits,
+) -> Result<(), String> {
+    fn max_nested_clipped_group_depth(items: &[Prim]) -> u64 {
+        items
+            .iter()
+            .map(|item| match item {
+                Prim::Group { clip, children, .. } => {
+                    let own_mask = u64::from(clip.is_some());
+                    max_nested_clipped_group_depth(children).saturating_add(own_mask)
+                }
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
+    let depth = max_nested_clipped_group_depth(items);
+    let required_bytes = area.saturating_mul(depth);
+    if required_bytes > MAX_GROUP_CLIP_MASK_BYTES {
+        return Err(format!(
+            "{} output {width}×{height} px with {depth} nested group clips requires {required_bytes} bytes of group clip masks, exceeding the {MAX_GROUP_CLIP_MASK_BYTES}-byte limit",
+            limits.output
+        ));
     }
     Ok(())
 }
@@ -4174,6 +4212,74 @@ mod tests {
         assert!(
             alpha_at(24, 4) > 0,
             "second translated circle should render"
+        );
+    }
+
+    fn nested_group_clip_scene(
+        width: f64,
+        height: f64,
+        clip_depth: usize,
+        interleave_unclipped_groups: bool,
+    ) -> Scene {
+        let clip = crate::scene::ClipRect {
+            x: 0.0,
+            y: 0.0,
+            w: width,
+            h: height,
+        };
+        let mut child = circle(width / 2.0, height / 2.0, 3.0, RED);
+        for depth in 0..clip_depth {
+            child = Prim::Group {
+                translate_x: 0.0,
+                translate_y: 0.0,
+                clip: Some(Box::new(clip)),
+                children: vec![child],
+            };
+            if interleave_unclipped_groups && depth + 1 < clip_depth {
+                child = Prim::Group {
+                    translate_x: 0.0,
+                    translate_y: 0.0,
+                    clip: None,
+                    children: vec![child],
+                };
+            }
+        }
+        Scene {
+            width,
+            height,
+            items: vec![child],
+        }
+    }
+
+    #[test]
+    fn nested_group_clip_masks_reject_excessive_depth_for_png_and_webp() {
+        // 1,500² pixels × 32 full-frame masks = 72,000,000 bytes, over the
+        // 64,000,000-byte policy while staying far below both output area caps.
+        let scene = nested_group_clip_scene(1_500.0, 1_500.0, 32, true);
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+
+        for limits in [&PNG_LIMITS, &WEBP_LIMITS] {
+            let result = scene_to_pixmap(&scene, 1.0, &face, limits);
+            let Err(error) = result else {
+                panic!("nested group clip masks should be rejected before raster allocation");
+            };
+            assert!(error.contains("group clip mask"), "error: {error}");
+            assert!(error.contains("64000000"), "error: {error}");
+        }
+    }
+
+    #[test]
+    fn nested_group_clip_masks_within_budget_still_render_for_png_and_webp() {
+        let scene = nested_group_clip_scene(16.0, 16.0, 32, false);
+        let face = ttf_parser::Face::parse(DEFAULT_FONT, 0).unwrap();
+        let png = scene_to_pixmap(&scene, 1.0, &face, &PNG_LIMITS).unwrap();
+        let webp = scene_to_pixmap(&scene, 1.0, &face, &WEBP_LIMITS).unwrap();
+
+        assert_eq!(png.data(), webp.data());
+        let center_alpha = png.data()[(8 * png.width() as usize + 8) * 4 + 3];
+        assert!(
+            center_alpha > 0,
+            "nested clips should preserve visible content"
         );
     }
 
