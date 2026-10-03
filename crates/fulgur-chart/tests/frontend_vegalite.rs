@@ -5130,6 +5130,67 @@ fn vegalite_text_rejects_expanded_label_bytes_over_limit() {
 }
 
 #[test]
+fn vegalite_text_rejects_expanded_font_attribute_bytes_over_limit() {
+    let json = r#"{"mark":{"type":"text","font":"&"},"data":{"values":[{"x":1,"y":2,"label":"A"},{"x":2,"y":3,"label":"B"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}}}"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: 11,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("escaped font family bytes across marks exceed the total byte budget");
+    assert!(error.contains("bytes 12"), "{error}");
+
+    let exact_limit = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: 12,
+        ..Default::default()
+    };
+    let parsed = vegalite::parse_with_limits(json, true, &exact_limit)
+        .expect("expanded labels and font attributes at the limit should parse");
+    let ChartKind::VegaText(data) = parsed.kind else {
+        panic!("VegaText expected")
+    };
+    assert_eq!(data.marks.len(), 2);
+}
+
+#[test]
+fn vegalite_text_rejects_font_family_over_label_limit() {
+    let json = r#"{"mark":{"type":"text","font":"long"},"data":{"values":[]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"value":"A"}}}"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_label_bytes: 3,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("font family exceeds the individual string budget even with no rows");
+    assert!(error.contains("mark.font"), "{error}");
+}
+
+#[test]
+fn vegalite_text_preflights_default_font_attribute_bytes() {
+    let json = r#"{"mark":"text","data":{"values":[{"x":1,"y":2,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}}}"#;
+    let default_font_family = "Noto Sans JP, sans-serif";
+    let expanded_bytes = default_font_family.len() + 1;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: expanded_bytes - 1,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("default font attribute bytes are included in the expanded text budget");
+    assert!(
+        error.contains(&format!("bytes {expanded_bytes}")),
+        "{error}"
+    );
+
+    let exact_limit = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: expanded_bytes,
+        ..Default::default()
+    };
+    assert!(
+        vegalite::parse_with_limits(json, true, &exact_limit).is_ok(),
+        "labels plus default font attributes at the limit should parse"
+    );
+}
+
+#[test]
 fn vegalite_text_rejects_unsupported_inputs() {
     let base = serde_json::json!({
         "mark":"text",

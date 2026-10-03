@@ -58,6 +58,8 @@ pub(super) fn parse_text_spec(
             limits.max_categorical_primitives
         ));
     }
+    let font_attribute_bytes =
+        preflight_font_family_attribute_bytes(Some(mark), row_count, limits)?;
     let records = super::parse_data_values(top.get("data"))?;
 
     let encoding = top
@@ -67,7 +69,14 @@ pub(super) fn parse_text_spec(
     let x_field = parse_position_field(encoding.get("x"), "x")?;
     let y_field = parse_position_field(encoding.get("y"), "y")?;
     let text_source = parse_text_source(encoding.get("text"), mark_object)?;
-    total_label_bytes_for_records(&records, &text_source, limits)?;
+    let label_bytes = total_label_bytes_for_records(&records, &text_source, limits)?;
+    let expanded_text_bytes = label_bytes.saturating_add(font_attribute_bytes);
+    if expanded_text_bytes > limits.max_total_text_bytes {
+        return Err(total_text_and_font_bytes_error(
+            expanded_text_bytes,
+            limits.max_total_text_bytes,
+        ));
+    }
 
     let points = records
         .iter()
@@ -344,6 +353,38 @@ fn total_label_bytes_for_records(
         return Err(total_text_bytes_error(total, limits.max_total_text_bytes));
     }
     Ok(total)
+}
+
+pub(super) fn preflight_font_family_attribute_bytes(
+    mark: Option<&Value>,
+    mark_count: usize,
+    limits: &crate::guard::InputLimits,
+) -> Result<usize, String> {
+    let font_value = mark
+        .and_then(Value::as_object)
+        .and_then(|mark| mark.get("font"))
+        .filter(|value| !value.is_null());
+    let (font_family, is_explicit) = match font_value {
+        None => (crate::font::DEFAULT_SVG_FONT_FAMILY, false),
+        Some(Value::String(font_family)) if !font_family.is_empty() => (font_family.as_str(), true),
+        Some(Value::String(_)) => (crate::font::DEFAULT_SVG_FONT_FAMILY, false),
+        // Invalid font values are reported by the normal parser before any font copy is made.
+        Some(_) => return Ok(0),
+    };
+    if is_explicit && font_family.len() > limits.max_label_bytes {
+        return Err(format!(
+            "mark.font length {} bytes exceeds max_label_bytes limit {}",
+            font_family.len(),
+            limits.max_label_bytes
+        ));
+    }
+    Ok(crate::svg::xml_escape_attr_len(font_family).saturating_mul(mark_count))
+}
+
+fn total_text_and_font_bytes_error(total: usize, limit: usize) -> String {
+    format!(
+        "text mark label and font-family SVG attribute bytes {total} exceeds max_total_text_bytes limit {limit}"
+    )
 }
 
 fn scalar_text_byte_len(value: Option<&Value>, path: &str) -> Result<usize, String> {

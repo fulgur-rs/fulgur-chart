@@ -2,7 +2,7 @@
 
 #[cfg(feature = "default-font")]
 use crate::font::DEFAULT_FONT;
-use crate::font::{DEFAULT_FAMILY, family_name};
+use crate::font::{DEFAULT_FAMILY, DEFAULT_SVG_FONT_FAMILY, family_name};
 use crate::text::TextMeasurer;
 
 /// 既定フォント(Noto Sans JP)で描画する legacy の low-level 経路。
@@ -16,7 +16,7 @@ pub fn render_chart(spec: &crate::ir::ChartSpec) -> String {
     render_with(
         spec,
         &m,
-        "Noto Sans JP, sans-serif",
+        DEFAULT_SVG_FONT_FAMILY,
         &crate::guard::InputLimits::default(),
     )
     .expect("chart rendering failed")
@@ -33,7 +33,7 @@ pub fn render_chart_with_limits(
     let m = TextMeasurer::new(DEFAULT_FONT).map_err(|e| format!("フォント読込失敗: {e}"))?;
     crate::guard::validate_marker_radii(spec)?;
     crate::guard::validate_plot_area_scene_with_measurer(spec, limits, &m)?;
-    render_with(spec, &m, "Noto Sans JP, sans-serif", limits)
+    render_with(spec, &m, DEFAULT_SVG_FONT_FAMILY, limits)
 }
 
 /// 任意フォントで描画。font_bytes がパース不能なら Err。

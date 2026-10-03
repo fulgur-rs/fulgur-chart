@@ -18,6 +18,9 @@ pub(crate) static TEST_FONT: &[u8] = include_bytes!("../assets/fonts/NotoSansJP-
 /// 既定フォントのファミリ名(font-family の主名)。
 pub const DEFAULT_FAMILY: &str = "Noto Sans JP";
 
+/// SVG `font-family` attribute used when a text mark does not choose a family.
+pub(crate) const DEFAULT_SVG_FONT_FAMILY: &str = "Noto Sans JP, sans-serif";
+
 /// フォントバイト列からファミリ名(name table の name_id 1)を取り出す。
 ///
 /// パース不能・ファミリ名が無い場合は `None`。Unicode/英語のレコードを優先し、

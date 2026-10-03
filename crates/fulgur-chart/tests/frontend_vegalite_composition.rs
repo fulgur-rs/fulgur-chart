@@ -210,7 +210,7 @@ fn vegalite_layer_accepts_text_leaf_with_inherited_data() {
 
 #[test]
 fn composition_preflight_counts_expanded_text_label_bytes_across_leaves() {
-    let json = r#"{"data":{"values":[{"x":0,"y":0,"label":"AB"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}},"layer":[{"mark":"text"},{"mark":"text"}]}"#;
+    let json = r#"{"data":{"values":[{"x":0,"y":0,"label":"AB"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}},"layer":[{"mark":{"type":"text","font":"x"}},{"mark":{"type":"text","font":"x"}}]}"#;
     let limits = fulgur_chart::guard::InputLimits {
         max_total_text_bytes: 3,
         ..Default::default()
@@ -218,6 +218,53 @@ fn composition_preflight_counts_expanded_text_label_bytes_across_leaves() {
     let error = vegalite::parse_with_limits(json, true, &limits)
         .expect_err("expanded labels across layer leaves exceed the shared budget");
     assert!(error.contains("text label bytes 4"), "{error}");
+}
+
+#[test]
+fn composition_preflight_counts_expanded_font_attribute_bytes_across_leaves() {
+    let json = r#"{"data":{"values":[{"x":0,"y":0,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}},"layer":[{"mark":{"type":"text","font":"&"}},{"mark":{"type":"text","font":"&"}}]}"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: 11,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("expanded font attributes across layer leaves exceed the shared budget");
+    assert!(error.contains("bytes 12"), "{error}");
+
+    let exact_limit = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: 12,
+        ..Default::default()
+    };
+    assert!(
+        vegalite::parse_with_limits(json, true, &exact_limit).is_ok(),
+        "expanded labels and font attributes at the shared limit should parse"
+    );
+}
+
+#[test]
+fn composition_preflight_counts_default_font_attributes_across_leaves() {
+    let json = r#"{"data":{"values":[{"x":0,"y":0,"label":"A"}]},"encoding":{"x":{"field":"x"},"y":{"field":"y"},"text":{"field":"label"}},"layer":[{"mark":"text"},{"mark":"text"}]}"#;
+    let default_font_family = "Noto Sans JP, sans-serif";
+    let expanded_bytes = default_font_family.len() * 2 + 2;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: expanded_bytes - 1,
+        ..Default::default()
+    };
+    let error = vegalite::parse_with_limits(json, true, &limits)
+        .expect_err("default font attributes across leaves exceed the shared text budget");
+    assert!(
+        error.contains(&format!("bytes {expanded_bytes}")),
+        "{error}"
+    );
+
+    let exact_limit = fulgur_chart::guard::InputLimits {
+        max_total_text_bytes: expanded_bytes,
+        ..Default::default()
+    };
+    assert!(
+        vegalite::parse_with_limits(json, true, &exact_limit).is_ok(),
+        "labels plus default font attributes at the composition limit should parse"
+    );
 }
 
 #[test]
