@@ -609,8 +609,108 @@ fn join_pipe_reader(handle: JoinHandle<io::Result<CapturedPipe>>) -> io::Result<
         .map_err(|_| io::Error::other("Jsonnet worker output reader panicked"))?
 }
 
+fn worker_executable() -> io::Result<PathBuf> {
+    let executable = std::env::current_exe()?;
+    #[cfg(target_os = "linux")]
+    if let Some(machine) = linux_target_elf_machine() {
+        let argv0 = std::env::args_os().next();
+        return select_linux_worker_executable(&executable, argv0.as_deref(), machine);
+    }
+    Ok(executable)
+}
+
+#[cfg(target_os = "linux")]
+fn select_linux_worker_executable(
+    current_exe: &Path,
+    argv0: Option<&std::ffi::OsStr>,
+    expected_machine: u16,
+) -> io::Result<PathBuf> {
+    if elf_machine(current_exe).ok().flatten() == Some(expected_machine) {
+        return Ok(current_exe.to_path_buf());
+    }
+
+    if let Some(argv0) = argv0 {
+        let candidate = Path::new(argv0);
+        if elf_machine(candidate).ok().flatten() == Some(expected_machine) {
+            return fs::canonicalize(candidate);
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "current executable and argv[0] do not match the target ELF architecture",
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn elf_machine(path: &Path) -> io::Result<Option<u16>> {
+    let mut file = File::open(path)?;
+    let mut header = [0u8; 20];
+    match file.read_exact(&mut header) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(error) => return Err(error),
+    }
+    if &header[..4] != b"\x7fELF" || !matches!(header[4], 1 | 2) {
+        return Ok(None);
+    }
+
+    let machine = match header[5] {
+        1 => u16::from_le_bytes([header[18], header[19]]),
+        2 => u16::from_be_bytes([header[18], header[19]]),
+        _ => return Ok(None),
+    };
+    Ok(Some(machine))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_target_elf_machine() -> Option<u16> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        return Some(62); // EM_X86_64
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        return Some(183); // EM_AARCH64
+    }
+    #[cfg(target_arch = "x86")]
+    {
+        return Some(3); // EM_386
+    }
+    #[cfg(target_arch = "arm")]
+    {
+        return Some(40); // EM_ARM
+    }
+    #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
+    {
+        return Some(243); // EM_RISCV
+    }
+    #[cfg(target_arch = "powerpc")]
+    {
+        return Some(20); // EM_PPC
+    }
+    #[cfg(target_arch = "powerpc64")]
+    {
+        return Some(21); // EM_PPC64
+    }
+    #[cfg(target_arch = "s390x")]
+    {
+        return Some(22); // EM_S390
+    }
+    #[cfg(any(target_arch = "mips", target_arch = "mips64"))]
+    {
+        return Some(8); // EM_MIPS
+    }
+    #[cfg(target_arch = "loongarch64")]
+    {
+        return Some(258); // EM_LOONGARCH
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
 fn run_worker_process(input: WorkerInput<'_>) -> Result<String, String> {
-    let executable = std::env::current_exe().map_err(|e| format!("failed to locate CLI: {e}"))?;
+    let executable = worker_executable().map_err(|e| format!("failed to locate CLI: {e}"))?;
     let mut command = Command::new(executable);
     command
         .arg("__jsonnet-worker")
@@ -864,6 +964,51 @@ mod resolver_tests {
         assert!(start.elapsed().as_secs() < 1, "FIFO resolution blocked");
 
         fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod worker_executable_tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::select_linux_worker_executable;
+
+    fn write_elf(path: &Path, machine: u16) {
+        let mut header = [0u8; 20];
+        header[..4].copy_from_slice(b"\x7fELF");
+        header[4] = 2; // ELFCLASS64
+        header[5] = 1; // little endian
+        header[6] = 1; // current ELF version
+        header[18..20].copy_from_slice(&machine.to_le_bytes());
+        fs::write(path, header).unwrap();
+    }
+
+    #[test]
+    fn uses_guest_argv0_when_qemu_current_exe_is_the_host_runner() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "fulgur-jsonnet-worker-executable-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let host_runner = directory.join("qemu-runner");
+        let guest_cli = directory.join("fulgur-chart");
+        write_elf(&host_runner, 62); // EM_X86_64
+        write_elf(&guest_cli, 183); // EM_AARCH64
+
+        let selected =
+            select_linux_worker_executable(&host_runner, Some(guest_cli.as_os_str()), 183).unwrap();
+        let expected: PathBuf = fs::canonicalize(&guest_cli).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+
+        assert_eq!(selected, expected);
     }
 }
 
