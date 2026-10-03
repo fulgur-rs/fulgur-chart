@@ -622,13 +622,34 @@ fn worker_executable() -> io::Result<PathBuf> {
 fn worker_command(executable: &Path) -> io::Result<Command> {
     #[cfg(target_os = "linux")]
     {
+        let current_executable = std::env::current_exe()?;
         let runner = linux_target_runner();
-        command_with_runner(executable, runner.as_deref())
+        command_for_worker(&current_executable, executable, runner.as_deref())
     }
     #[cfg(not(target_os = "linux"))]
     {
         Ok(Command::new(executable))
     }
+}
+
+#[cfg(target_os = "linux")]
+fn command_for_worker(
+    current_executable: &Path,
+    executable: &Path,
+    runner: Option<&std::ffi::OsStr>,
+) -> io::Result<Command> {
+    if current_executable == executable {
+        return Ok(Command::new(executable));
+    }
+    if runner.is_some() {
+        return command_with_runner(executable, runner);
+    }
+
+    // Without a Cargo runner, current_exe is the QEMU user-mode emulator.
+    // Reuse it directly and inherit its loader environment for the guest ELF.
+    let mut command = Command::new(current_executable);
+    command.arg(executable);
+    Ok(command)
 }
 
 #[cfg(target_os = "linux")]
@@ -956,19 +977,57 @@ mod platform_limits {
         let limit = current_virtual_size
             .checked_add(memory)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "memory limit overflow"))?;
-        set_limit(libc::RLIMIT_AS, limit, limit)
+        match set_limit(libc::RLIMIT_AS, limit, limit) {
+            Ok(()) => Ok(()),
+            // Under a restrictive inherited limit, macOS can reject the
+            // address-space cap because the existing VM map is already larger.
+            Err(error) if error.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     fn set_limit(resource: RLimitResource, soft: u64, hard: u64) -> io::Result<()> {
-        let limit = libc::rlimit {
-            rlim_cur: soft as libc::rlim_t,
-            rlim_max: hard as libc::rlim_t,
+        let mut inherited = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
         };
-        // SAFETY: setrlimit only reads the initialized rlimit structure.
+        // SAFETY: getrlimit writes both fields into the initialized structure.
+        if unsafe { libc::getrlimit(resource, &mut inherited) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let limit = capped_limit(soft, hard, inherited.rlim_cur, inherited.rlim_max);
+        // SAFETY: setrlimit only reads the initialized, hard-limit-capped structure.
         if unsafe { libc::setrlimit(resource, &limit) } == 0 {
             Ok(())
         } else {
             Err(io::Error::last_os_error())
+        }
+    }
+
+    fn capped_limit(
+        soft: u64,
+        hard: u64,
+        inherited_soft: libc::rlim_t,
+        inherited_hard: libc::rlim_t,
+    ) -> libc::rlimit {
+        let hard = (hard as libc::rlim_t).min(inherited_hard);
+        let soft = (soft as libc::rlim_t).min(inherited_soft).min(hard);
+        libc::rlimit {
+            rlim_cur: soft,
+            rlim_max: hard,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::capped_limit;
+
+        #[test]
+        fn resource_limits_do_not_raise_inherited_limits() {
+            let limit = capped_limit(29, 30, 10, 20);
+
+            assert_eq!(limit.rlim_cur, 10);
+            assert_eq!(limit.rlim_max, 20);
         }
     }
 }
@@ -1020,7 +1079,7 @@ mod worker_executable_tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use super::{command_with_runner, select_linux_worker_executable};
+    use super::{command_for_worker, select_linux_worker_executable};
 
     fn write_elf(path: &Path, machine: u16) {
         let mut header = [0u8; 20];
@@ -1058,9 +1117,14 @@ mod worker_executable_tests {
 
     #[test]
     fn runs_worker_through_the_configured_cross_runner() {
+        let current_executable = Path::new("/qemu-runner");
         let executable = Path::new("/target/aarch64-unknown-linux-musl/debug/fulgur-chart");
-        let command =
-            command_with_runner(executable, Some(OsStr::new("/qemu-runner aarch64"))).unwrap();
+        let command = command_for_worker(
+            current_executable,
+            executable,
+            Some(OsStr::new("/qemu-runner aarch64")),
+        )
+        .unwrap();
 
         assert_eq!(command.get_program(), OsStr::new("/qemu-runner"));
         assert_eq!(
@@ -1069,6 +1133,33 @@ mod worker_executable_tests {
                 OsStr::new("aarch64"),
                 OsStr::new("/target/aarch64-unknown-linux-musl/debug/fulgur-chart"),
             ]
+        );
+    }
+
+    #[test]
+    fn launches_native_worker_directly_even_when_a_runner_is_configured() {
+        let executable = Path::new("/usr/bin/fulgur-chart");
+        let command = command_for_worker(
+            executable,
+            executable,
+            Some(OsStr::new("/unavailable-runner")),
+        )
+        .unwrap();
+
+        assert_eq!(command.get_program(), executable.as_os_str());
+        assert_eq!(command.get_args().count(), 0);
+    }
+
+    #[test]
+    fn uses_the_current_qemu_emulator_when_no_runner_variable_is_available() {
+        let emulator = Path::new("/usr/bin/qemu-aarch64");
+        let executable = Path::new("/target/aarch64-unknown-linux-musl/debug/fulgur-chart");
+        let command = command_for_worker(emulator, executable, None).unwrap();
+
+        assert_eq!(command.get_program(), emulator.as_os_str());
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [executable.as_os_str()]
         );
     }
 }
