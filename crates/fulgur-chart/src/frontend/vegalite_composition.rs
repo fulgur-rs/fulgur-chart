@@ -1060,7 +1060,7 @@ pub(super) fn parse_composition_value(
 ) -> Result<crate::ir::ChartSpec, String> {
     preflight_composition(value, limits)?;
     let expanded = expand_composition(value, strict)?;
-    preflight_composition_tick_units(&expanded, limits)?;
+    preflight_composition_allocation_limits(&expanded, limits)?;
     let resolved_scales = resolve_raw_color_size_scales_with_limits(&expanded, limits)?;
     let node = parse_resolved_composition(expanded, &resolved_scales, strict, limits)?;
     let (width, height) = composition_node_dimensions(&node);
@@ -1080,23 +1080,54 @@ pub(super) fn parse_composition_value(
     Ok(root)
 }
 
-fn preflight_composition_tick_units(
+fn preflight_composition_allocation_limits(
     node: &ExpandedCompositionNode,
     limits: &crate::guard::InputLimits,
 ) -> Result<(), String> {
-    match node {
-        ExpandedCompositionNode::Unit(unit) => {
-            super::vegalite::preflight_composition_unit(&unit.effective_spec, limits)
-        }
-        ExpandedCompositionNode::Layer(container)
-        | ExpandedCompositionNode::HConcat(container)
-        | ExpandedCompositionNode::VConcat(container) => {
-            for child in &container.children {
-                preflight_composition_tick_units(child, limits)?;
+    fn visit(
+        node: &ExpandedCompositionNode,
+        limits: &crate::guard::InputLimits,
+        bar_expansion_points: &mut usize,
+    ) -> Result<(), String> {
+        match node {
+            ExpandedCompositionNode::Unit(unit) => {
+                let unit_bar_points =
+                    super::vegalite::preflight_composition_unit(&unit.effective_spec, limits)
+                        .map_err(|error| prefix_path(&unit.path, error))?;
+                *bar_expansion_points = (*bar_expansion_points).saturating_add(unit_bar_points);
+                if *bar_expansion_points > limits.max_categorical_primitives {
+                    return Err(prefix_path(
+                        &unit.path,
+                        format!(
+                            "categorical bar expansion count {} exceeds max_categorical_primitives limit {}",
+                            *bar_expansion_points, limits.max_categorical_primitives
+                        ),
+                    ));
+                }
+                if *bar_expansion_points > limits.max_total_data_points {
+                    return Err(prefix_path(
+                        &unit.path,
+                        format!(
+                            "categorical bar expansion count {} exceeds max_total_data_points limit {}",
+                            *bar_expansion_points, limits.max_total_data_points
+                        ),
+                    ));
+                }
+                Ok(())
             }
-            Ok(())
+            ExpandedCompositionNode::Layer(container)
+            | ExpandedCompositionNode::HConcat(container)
+            | ExpandedCompositionNode::VConcat(container) => {
+                for child in &container.children {
+                    visit(child, limits, bar_expansion_points)?;
+                }
+                Ok(())
+            }
         }
     }
+
+    let mut bar_expansion_points = 0;
+    visit(node, limits, &mut bar_expansion_points)
 }
 
 fn first_unit_leaf(

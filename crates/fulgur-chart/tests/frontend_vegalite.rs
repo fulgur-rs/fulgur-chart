@@ -1845,7 +1845,12 @@ fn color_split_creates_one_series_per_group() {
             "color": {"field":"g"}
         }
     }"#;
-    let spec = vegalite::parse(json, false).unwrap();
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_data_points: 6,
+        max_categorical_primitives: 6,
+        ..Default::default()
+    };
+    let spec = vegalite::parse_with_limits(json, false, &limits).unwrap();
     assert_eq!(spec.categories, vec!["A", "B", "C"]);
     assert_eq!(spec.series.len(), 2);
     // 系列名は g の first-seen 順: x, y
@@ -1855,6 +1860,32 @@ fn color_split_creates_one_series_per_group() {
     assert_eq!(spec.series[0].values, vec![3.0, 0.0, 2.0]);
     // y グループ: A=1, B=5, C=0(欠落)
     assert_eq!(spec.series[1].values, vec![1.0, 5.0, 0.0]);
+}
+
+#[test]
+fn sparse_color_bar_preflights_dense_expansion_limit() {
+    let values = (0..1_001)
+        .map(|index| {
+            serde_json::json!({
+                "cat": format!("category-{index}"),
+                "val": 1,
+                "group": format!("group-{}", index % 1_000),
+            })
+        })
+        .collect::<Vec<_>>();
+    let value = serde_json::json!({
+        "mark": {"type": "bar"},
+        "data": {"values": values},
+        "encoding": {
+            "x": {"field": "cat", "type": "nominal"},
+            "y": {"field": "val", "type": "quantitative"},
+            "color": {"field": "group", "type": "nominal"},
+        }
+    });
+
+    let error = vegalite::parse_value(value, false).unwrap_err();
+    assert!(error.contains("categorical bar"), "{error}");
+    assert!(error.contains("max_categorical_primitives"), "{error}");
 }
 
 #[test]

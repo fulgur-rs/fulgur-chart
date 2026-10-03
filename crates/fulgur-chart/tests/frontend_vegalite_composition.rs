@@ -337,6 +337,36 @@ fn composition_guard_counts_reused_data_and_primitives_across_leaves() {
 }
 
 #[test]
+fn composition_preflights_sparse_bar_expansion_across_leaves() {
+    let json = r#"{
+      "encoding": {
+        "x": {"field":"cat","type":"nominal"},
+        "y": {"field":"val","type":"quantitative"},
+        "color": {"field":"group","type":"nominal"}
+      },
+      "layer": [
+        {"mark":"bar","data":{"values":[
+          {"cat":"A","val":1,"group":"x"},
+          {"cat":"B","val":1,"group":"y"}
+        ]}},
+        {"mark":{"type":"bar"},"data":{"values":[
+          {"cat":"A","val":1,"group":"x"},
+          {"cat":"B","val":1,"group":"y"}
+        ]}}
+      ]
+    }"#;
+    let limits = fulgur_chart::guard::InputLimits {
+        max_total_data_points: 5,
+        max_categorical_primitives: 5,
+        ..Default::default()
+    };
+
+    let error = vegalite::parse_with_limits(json, false, &limits).unwrap_err();
+    assert!(error.contains("categorical bar"), "{error}");
+    assert!(error.contains("8"), "{error}");
+}
+
+#[test]
 fn composition_guard_aggregates_geoshape_points_and_primitives_across_views() {
     let json = r#"{
       "data":{"values":{"type":"FeatureCollection","features":[
