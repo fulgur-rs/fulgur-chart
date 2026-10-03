@@ -318,6 +318,7 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
         points: usize,
         primitives: usize,
         geo_primitives: usize,
+        stroke_dash_expansion: usize,
         text_bytes: usize,
         font_attribute_bytes: usize,
     }
@@ -339,6 +340,15 @@ pub fn validate_vega_composition(spec: &ChartSpec, limits: &InputLimits) -> Resu
                 }
                 validate_spec_base(&leaf.spec, limits)
                     .map_err(|error| format!("{}: {error}", leaf.path))?;
+                counts.stroke_dash_expansion = counts
+                    .stroke_dash_expansion
+                    .saturating_add(vega_stroke_dash_expansion(&leaf.spec));
+                if counts.stroke_dash_expansion > MAX_STROKE_DASH_EXPANSION_ELEMENTS {
+                    return Err(format!(
+                        "Vega-Lite composition strokeDash expansion {} exceeds limit {} at {}",
+                        counts.stroke_dash_expansion, MAX_STROKE_DASH_EXPANSION_ELEMENTS, leaf.path
+                    ));
+                }
                 if let ChartKind::VegaText(data) = &leaf.spec.kind {
                     let leaf_text_bytes = data
                         .marks
@@ -554,6 +564,58 @@ fn validate_stroke_dash_expansion(mark_name: &str, elements: usize) -> Result<()
     Ok(())
 }
 
+fn vega_stroke_dash_expansion(spec: &ChartSpec) -> usize {
+    match &spec.kind {
+        ChartKind::ErrorMark(data) => error_mark_stroke_dash_expansion(data),
+        ChartKind::VegaBoxPlot(data) => vega_boxplot_stroke_dash_expansion(data),
+        ChartKind::VegaRule(data) => vega_rule_stroke_dash_expansion(data),
+        _ => 0,
+    }
+}
+
+fn error_mark_stroke_dash_expansion(data: &crate::ir::ErrorMarkData) -> usize {
+    match data.kind {
+        crate::ir::ErrorMarkKind::ErrorBar => {
+            let rule_per_range = if data.style.rule.visible {
+                data.style.rule.stroke_dash.len()
+            } else {
+                0
+            };
+            let ticks_per_range = if data.style.ticks.visible {
+                data.style.ticks.stroke_dash.len().saturating_mul(2)
+            } else {
+                0
+            };
+            data.ranges
+                .len()
+                .saturating_mul(rule_per_range.saturating_add(ticks_per_range))
+        }
+        crate::ir::ErrorMarkKind::ErrorBand => {
+            let group_count = data
+                .ranges
+                .iter()
+                .map(|range| (range.series_index, range.detail.as_deref()))
+                .collect::<std::collections::HashSet<_>>()
+                .len();
+            let band_per_group = if data.style.band.visible && data.style.band.stroke.is_some() {
+                data.style.band.stroke_dash.len()
+            } else {
+                0
+            };
+            let borders_per_group = if data.style.borders.visible {
+                data.style.borders.stroke_dash.len().saturating_mul(2)
+            } else {
+                0
+            };
+            group_count.saturating_mul(band_per_group.saturating_add(borders_per_group))
+        }
+    }
+}
+
+fn vega_rule_stroke_dash_expansion(data: &crate::ir::VegaRuleData) -> usize {
+    data.stroke_dash.len().saturating_mul(data.segments.len())
+}
+
 /// Validate normalized error-mark ranges and their worst-case Scene primitive count.
 pub(crate) fn validate_error_mark(spec: &ChartSpec, primitive_limit: usize) -> Result<(), String> {
     let ChartKind::ErrorMark(data) = &spec.kind else {
@@ -717,42 +779,7 @@ pub(crate) fn validate_error_mark(spec: &ChartSpec, primitive_limit: usize) -> R
             }
         }
     }
-    let dash_expansion_elements = match data.kind {
-        crate::ir::ErrorMarkKind::ErrorBar => {
-            let rule_per_range = if data.style.rule.visible {
-                data.style.rule.stroke_dash.len()
-            } else {
-                0
-            };
-            let ticks_per_range = if data.style.ticks.visible {
-                data.style.ticks.stroke_dash.len().saturating_mul(2)
-            } else {
-                0
-            };
-            data.ranges
-                .len()
-                .saturating_mul(rule_per_range.saturating_add(ticks_per_range))
-        }
-        crate::ir::ErrorMarkKind::ErrorBand => {
-            let group_count = data
-                .ranges
-                .iter()
-                .map(|range| (range.series_index, range.detail.as_deref()))
-                .collect::<std::collections::HashSet<_>>()
-                .len();
-            let band_per_group = if data.style.band.visible && data.style.band.stroke.is_some() {
-                data.style.band.stroke_dash.len()
-            } else {
-                0
-            };
-            let borders_per_group = if data.style.borders.visible {
-                data.style.borders.stroke_dash.len().saturating_mul(2)
-            } else {
-                0
-            };
-            group_count.saturating_mul(band_per_group.saturating_add(borders_per_group))
-        }
-    };
+    let dash_expansion_elements = error_mark_stroke_dash_expansion(data);
     validate_stroke_dash_expansion("error mark", dash_expansion_elements)?;
 
     let per_range = match data.kind {
@@ -838,7 +865,6 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
 
     let mut points = 0usize;
     let mut primitives = 0usize;
-    let mut dash_expansion_elements = 0usize;
     for (index, group) in data.groups.iter().enumerate() {
         points = points.saturating_add(group.point_count);
         if group.point_count == 0 || group.summary.outliers.len() > group.point_count {
@@ -921,8 +947,6 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
                 "Vega-Lite boxplot group {index} endpoints are invalid"
             ));
         }
-        dash_expansion_elements = dash_expansion_elements
-            .saturating_add(vega_boxplot_group_stroke_dash_expansion(data, group));
         primitives = primitives.saturating_add(vega_boxplot_group_primitive_count(data, group));
     }
     if points > limits.max_total_data_points {
@@ -937,7 +961,10 @@ pub(crate) fn validate_vega_boxplot(spec: &ChartSpec, limits: &InputLimits) -> R
             limits.max_categorical_primitives
         ));
     }
-    validate_stroke_dash_expansion("Vega-Lite boxplot", dash_expansion_elements)?;
+    validate_stroke_dash_expansion(
+        "Vega-Lite boxplot",
+        vega_boxplot_stroke_dash_expansion(data),
+    )?;
     Ok(())
 }
 
@@ -989,7 +1016,7 @@ pub(crate) fn validate_vega_rule(spec: &ChartSpec, limits: &InputLimits) -> Resu
             "Vega-Lite rule strokeDash must contain at most {MAX_BORDER_DASH_ELEMENTS} finite non-negative numbers"
         ));
     }
-    let dash_expansion_elements = data.stroke_dash.len().saturating_mul(data.segments.len());
+    let dash_expansion_elements = vega_rule_stroke_dash_expansion(data);
     if dash_expansion_elements > MAX_RULE_DASH_EXPANSION_ELEMENTS {
         return Err(format!(
             "Vega-Lite rule strokeDash expansion {dash_expansion_elements} exceeds limit {MAX_RULE_DASH_EXPANSION_ELEMENTS}"
@@ -1270,6 +1297,12 @@ fn vega_boxplot_group_stroke_dash_expansion(
         .saturating_add(median_line_count.saturating_mul(style.median_part.stroke_dash.len()))
         .saturating_add(tick_line_count.saturating_mul(style.ticks_part.stroke_dash.len()))
         .saturating_add(outlier_line_count.saturating_mul(style.outliers_part.stroke_dash.len()))
+}
+
+fn vega_boxplot_stroke_dash_expansion(data: &crate::ir::VegaBoxPlotData) -> usize {
+    data.groups.iter().fold(0usize, |total, group| {
+        total.saturating_add(vega_boxplot_group_stroke_dash_expansion(data, group))
+    })
 }
 
 fn vega_boxplot_group_primitive_count(

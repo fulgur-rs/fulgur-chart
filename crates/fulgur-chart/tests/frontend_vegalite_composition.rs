@@ -384,6 +384,45 @@ fn composition_guard_counts_reused_data_and_primitives_across_leaves() {
 }
 
 #[test]
+fn composition_guard_aggregates_stroke_dash_expansion_across_error_marks() {
+    let dash = vec!["1"; 64].join(",");
+    let json = format!(
+        r##"{{"data":{{"values":[{{"x":"A","low":2,"high":8}}]}},"encoding":{{"x":{{"field":"x","type":"nominal"}},"y":{{"field":"low","type":"quantitative"}},"y2":{{"field":"high"}}}},"layer":[{{"mark":{{"type":"errorbar","rule":{{"strokeDash":[{dash}]}},"ticks":false}}}},{{"mark":{{"type":"errorbar","rule":{{"strokeDash":[{dash}]}},"ticks":false}}}}]}}"##
+    );
+    let mut spec = vegalite::parse(&json, false).expect("two errorbar leaves parse");
+    let ChartKind::VegaComposition(root) = &mut spec.kind else {
+        panic!("composition root expected");
+    };
+    let VegaCompositionNode::Layer(layer) = root.as_mut() else {
+        panic!("layer root expected");
+    };
+    let expanded_ranges = 7_813;
+    for child in &mut layer.children {
+        let VegaCompositionNode::Unit(leaf) = child else {
+            panic!("errorbar leaf expected");
+        };
+        let center = leaf.spec.series[0].values[0];
+        let ChartKind::ErrorMark(data) = &mut leaf.spec.kind else {
+            panic!("error mark kind expected");
+        };
+        let range = data.ranges[0].clone();
+        data.ranges = vec![range; expanded_ranges];
+        leaf.spec.series[0].values = vec![center; expanded_ranges];
+    }
+
+    let error = fulgur_chart::guard::validate_vega_composition(
+        &spec,
+        &fulgur_chart::guard::InputLimits::default(),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("composition strokeDash expansion"),
+        "{error}"
+    );
+    assert!(error.contains("1000064"), "{error}");
+}
+
+#[test]
 fn composition_preflights_sparse_bar_expansion_across_leaves() {
     let json = r#"{
       "encoding": {
