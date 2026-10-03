@@ -1089,6 +1089,81 @@ fn jsonnet_file_size_limit_exits_1() {
 }
 
 #[test]
+fn jsonnet_manifest_output_budget_rejects_expanded_string() {
+    // A small source can expand into more than the manifest output budget.
+    let source = r#"std.repeat("\u0000", 6000000)"#;
+    let output = bin()
+        .args(["render", "-", "-o", "-", "--jsonnet"])
+        .write_stdin(source)
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    let detail = stderr.chars().take(512).collect::<String>();
+    assert!(
+        stderr.contains("Jsonnet output budget exceeded"),
+        "expected the output budget error, stderr starts with: {detail}"
+    );
+}
+
+#[test]
+fn jsonnet_import_count_budget_rejects_too_many_files() {
+    let dir = tempfile_dir_for("jsonnet_import_count_budget_rejects_too_many_files");
+    let spec_path = dir.join("spec.jsonnet");
+    let mut source = String::from("[");
+    for index in 0..129 {
+        std::fs::write(dir.join(format!("part-{index}.txt")), "x").unwrap();
+        if index != 0 {
+            source.push(',');
+        }
+        source.push_str(&format!("importstr \"part-{index}.txt\""));
+    }
+    source.push_str("]\n");
+    std::fs::write(&spec_path, source).unwrap();
+
+    let output = bin()
+        .args(["render", spec_path.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    let detail = stderr.chars().take(512).collect::<String>();
+    assert!(
+        stderr.contains("Jsonnet import count limit exceeded"),
+        "expected the import count error, stderr starts with: {detail}"
+    );
+}
+
+#[test]
+fn jsonnet_total_import_budget_rejects_too_many_source_bytes() {
+    let dir = tempfile_dir_for("jsonnet_total_import_budget_rejects_too_many_source_bytes");
+    let spec_path = dir.join("spec.jsonnet");
+    let imported = "x".repeat(1024 * 1024);
+    let mut source = String::from("[");
+    for index in 0..17 {
+        std::fs::write(dir.join(format!("part-{index}.txt")), &imported).unwrap();
+        if index != 0 {
+            source.push(',');
+        }
+        source.push_str(&format!("importstr \"part-{index}.txt\""));
+    }
+    source.push_str("]\n");
+    std::fs::write(&spec_path, source).unwrap();
+
+    let output = bin()
+        .args(["render", spec_path.to_str().unwrap(), "-o", "-"])
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    let detail = stderr.chars().take(512).collect::<String>();
+    assert!(
+        stderr.contains("Jsonnet total source byte limit exceeded"),
+        "expected the total source byte error, stderr starts with: {detail}"
+    );
+}
+
+#[test]
 fn batch_renders_jsonnet_files() {
     let dir = batch_dir("batch_renders_jsonnet_files");
     let in_dir = dir.join("in");
