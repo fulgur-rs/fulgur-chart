@@ -851,10 +851,9 @@ mod platform_limits {
         Foundation::{GetLastError, HANDLE},
         System::{
             JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-                JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_LIMIT_PROCESS_TIME,
-                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-                SetInformationJobObject,
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+                JOB_OBJECT_LIMIT_PROCESS_TIME, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JobObjectExtendedLimitInformation, SetInformationJobObject,
             },
             Threading::{GetCurrentProcess, TerminateProcess},
         },
@@ -865,16 +864,15 @@ mod platform_limits {
     }
 
     pub fn apply() -> io::Result<ResourceGuard> {
-        // The handle stays alive for the worker lifetime; KILL_ON_JOB_CLOSE also covers crashes.
+        // The handle keeps the resource limits active for the worker lifetime.
         let raw = unsafe { CreateJobObjectW(null(), null()) };
         if raw.is_null() {
             return Err(last_error());
         }
         let job = unsafe { OwnedHandle::from_raw_handle(raw) };
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            | JOB_OBJECT_LIMIT_PROCESS_MEMORY
-            | JOB_OBJECT_LIMIT_PROCESS_TIME;
+        limits.BasicLimitInformation.LimitFlags =
+            JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_PROCESS_TIME;
         limits.BasicLimitInformation.PerProcessUserTimeLimit =
             (super::MAX_JSONNET_WORKER_CPU_SECONDS as i64) * 10_000_000;
         limits.ProcessMemoryLimit = super::MAX_JSONNET_WORKER_MEMORY_BYTES;
