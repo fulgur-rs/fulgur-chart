@@ -773,6 +773,9 @@ mod platform_limits {
 
     pub fn apply() -> io::Result<ResourceGuard> {
         let memory = super::MAX_JSONNET_WORKER_MEMORY_BYTES as u64;
+        #[cfg(target_os = "macos")]
+        set_macos_address_space_limit(memory)?;
+        #[cfg(not(target_os = "macos"))]
         set_limit(libc::RLIMIT_AS, memory, memory)?;
         let cpu = super::MAX_JSONNET_WORKER_CPU_SECONDS;
         set_limit(libc::RLIMIT_CPU, cpu.saturating_sub(1), cpu)?;
@@ -782,6 +785,34 @@ mod platform_limits {
             libc::alarm(super::MAX_JSONNET_WORKER_WALL_SECONDS as libc::c_uint);
         }
         Ok(ResourceGuard)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_macos_address_space_limit(memory: u64) -> io::Result<()> {
+        let mut info = unsafe { std::mem::zeroed::<libc::mach_task_basic_info_data_t>() };
+        let mut count = libc::MACH_TASK_BASIC_INFO_COUNT;
+        // SAFETY: info is a correctly sized output buffer for MACH_TASK_BASIC_INFO.
+        #[allow(deprecated)]
+        let status = unsafe {
+            libc::task_info(
+                libc::mach_task_self(),
+                libc::MACH_TASK_BASIC_INFO,
+                (&mut info as *mut libc::mach_task_basic_info_data_t).cast(),
+                &mut count,
+            )
+        };
+        if status != 0 {
+            return Err(io::Error::other(format!(
+                "task_info(MACH_TASK_BASIC_INFO) failed with Mach status {status}"
+            )));
+        }
+
+        // macOS rejects RLIMIT_AS values below the worker's existing VM map size.
+        let current_virtual_size = info.virtual_size;
+        let limit = current_virtual_size
+            .checked_add(memory)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "memory limit overflow"))?;
+        set_limit(libc::RLIMIT_AS, limit, limit)
     }
 
     fn set_limit(resource: RLimitResource, soft: u64, hard: u64) -> io::Result<()> {
