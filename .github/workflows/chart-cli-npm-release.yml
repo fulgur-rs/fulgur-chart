@@ -143,7 +143,7 @@ jobs:
 
       - name: Install cross
         if: matrix.platform == 'linux-arm64'
-        uses: taiki-e/install-action@b6ff580856c41316412a0b9b60540fbc6f8c82cc # v2.86.7
+        uses: taiki-e/install-action@183e4297cca2404691e9380e1307288dced5c82a # v2.87.25
         with:
           tool: cross
 
