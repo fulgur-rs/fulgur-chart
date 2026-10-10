@@ -123,8 +123,17 @@ pub(super) fn parse_text_spec(
     let font_family = mark_object
         .and_then(|mark| mark.get("font"))
         .filter(|value| !value.is_null())
-        .map(|value| parse_nonempty_string(value, "mark.font"))
+        .map(|value| parse_bounded_string(value, "mark.font", limits.max_label_bytes))
         .transpose()?;
+    if let Some(font_family) = font_family.as_deref() {
+        let retained_bytes = font_family.len().saturating_mul(row_count);
+        if retained_bytes > limits.max_total_text_bytes {
+            return Err(format!(
+                "text mark font bytes {retained_bytes} exceed max_total_text_bytes limit {}",
+                limits.max_total_text_bytes
+            ));
+        }
+    }
     let font_weight = mark_object
         .and_then(|mark| mark.get("fontWeight"))
         .filter(|value| !value.is_null())
@@ -709,12 +718,18 @@ fn parse_finite_number(value: &Value, path: &str) -> Result<f64, String> {
         .ok_or_else(|| format!("text mark {path} must be a finite number"))
 }
 
-fn parse_nonempty_string(value: &Value, path: &str) -> Result<String, String> {
-    value
+fn parse_bounded_string(value: &Value, path: &str, max_bytes: usize) -> Result<String, String> {
+    let value = value
         .as_str()
         .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| format!("text mark {path} must be a non-empty string"))
+        .ok_or_else(|| format!("text mark {path} must be a non-empty string"))?;
+    if value.len() > max_bytes {
+        return Err(format!(
+            "text mark {path} length {} exceeds max_label_bytes limit {max_bytes}",
+            value.len()
+        ));
+    }
+    Ok(value.to_owned())
 }
 
 fn parse_font_weight(value: &Value) -> Result<String, String> {
