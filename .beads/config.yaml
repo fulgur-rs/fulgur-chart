@@ -54,4 +54,4 @@ backup:
 # - github.repo
 sync.remote: "https://github.com/fulgur-rs/fulgur-chart.git"
 dolt:
-    auto-commit: "off"
+    auto-commit: "on"
